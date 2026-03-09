@@ -1,0 +1,781 @@
+import { useState, useEffect } from 'react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Badge } from '@/components/ui/badge';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Separator } from '@/components/ui/separator';
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog';
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
+import { cn } from '@/lib/utils';
+import { User, TringSettings } from '@/types';
+import {
+  UserPlus, Wifi, WifiOff, Save, Trash2, Pencil,
+  Users, Printer, Building2, Shield, Hash, KeyRound,
+  MapPin, FileText, Image, CheckCircle2, AlertTriangle,
+  HardDrive, Download,
+} from 'lucide-react';
+
+type SettingsTab = 'korisnici' | 'fiskalni' | 'firma';
+
+export default function PostavkeScreen() {
+  // ── Korisnici state ──
+  const [users, setUsers] = useState<User[]>([]);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [formIme, setFormIme] = useState('');
+  const [formPin, setFormPin] = useState('');
+  const [formUloga, setFormUloga] = useState<'kasir' | 'admin'>('kasir');
+
+  // ── Tring state ──
+  const [tringHost, setTringHost] = useState('localhost');
+  const [tringPort, setTringPort] = useState(8085);
+  const [tringOperatorId, setTringOperatorId] = useState(0);
+  const [tringPassword, setTringPassword] = useState('0');
+  const [tringStatus, setTringStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  // ── Firma state ──
+  const [firmaNaziv, setFirmaNaziv] = useState('');
+  const [firmaAdresa, setFirmaAdresa] = useState('');
+  const [firmaGrad, setFirmaGrad] = useState('');
+  const [firmaIdBroj, setFirmaIdBroj] = useState('');
+  const [firmaPdvBroj, setFirmaPdvBroj] = useState('');
+  const [firmaSkladiste, setFirmaSkladiste] = useState('');
+  const [firmaLogo, setFirmaLogo] = useState('');
+  const [firmaStatus, setFirmaStatus] = useState('');
+  const [backupStatus, setBackupStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  // ── Tab state ──
+  const [activeTab, setActiveTab] = useState<SettingsTab>('korisnici');
+
+  // ── Load users ──
+  const loadUsers = async () => {
+    const data = await window.api.getUsers();
+    setUsers(data);
+  };
+
+  useEffect(() => {
+    loadUsers();
+  }, []);
+
+  // ── Load Firma settings ──
+  useEffect(() => {
+    window.api.getFirmaSettings().then((s) => {
+      setFirmaNaziv(s.naziv);
+      setFirmaAdresa(s.adresa);
+      setFirmaGrad(s.grad);
+      setFirmaIdBroj(s.idBroj);
+      setFirmaPdvBroj(s.pdvBroj);
+      setFirmaSkladiste(s.skladiste);
+      setFirmaLogo(s.logo);
+    });
+  }, []);
+
+  // ── Load Tring settings ──
+  useEffect(() => {
+    (async () => {
+      try {
+        const settings: TringSettings = await window.api.getTringSettings();
+        if (settings) {
+          setTringHost(settings.host || 'localhost');
+          setTringPort(settings.port ?? 8085);
+          setTringOperatorId(settings.operatorId ?? 0);
+          setTringPassword(settings.operatorPassword || '0');
+        }
+      } catch {
+        // Use defaults
+      }
+    })();
+  }, []);
+
+  // ── User dialog helpers ──
+  const openNewUserDialog = () => {
+    setEditingUser(null);
+    setFormIme('');
+    setFormPin('');
+    setFormUloga('kasir');
+    setDialogOpen(true);
+  };
+
+  const openEditUserDialog = (user: User) => {
+    setEditingUser(user);
+    setFormIme(user.ime);
+    setFormPin(user.pin);
+    setFormUloga(user.uloga);
+    setDialogOpen(true);
+  };
+
+  const handleSaveUser = async () => {
+    if (!formIme.trim() || !formPin.trim()) return;
+
+    if (editingUser) {
+      await window.api.updateUser(editingUser.id, { ime: formIme, pin: formPin, uloga: formUloga });
+    } else {
+      await window.api.createUser({ ime: formIme, pin: formPin, uloga: formUloga });
+    }
+
+    setDialogOpen(false);
+    loadUsers();
+  };
+
+  const handleDeleteUser = async (user: User) => {
+    const ac = users.filter(u => u.uloga === 'admin').length;
+    if (user.uloga === 'admin' && ac <= 1) return;
+
+    await window.api.deleteUser(user.id);
+    loadUsers();
+  };
+
+  const maskPin = (pin: string) => {
+    if (pin.length <= 2) return pin;
+    return '\u2022'.repeat(pin.length - 2) + pin.slice(-2);
+  };
+
+  const formatDate = (dateStr: string) => {
+    const d = new Date(dateStr);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`;
+  };
+
+  // ── Firma handlers ──
+  const handleSaveFirma = async () => {
+    await window.api.saveFirmaSettings({
+      naziv: firmaNaziv, adresa: firmaAdresa, grad: firmaGrad,
+      idBroj: firmaIdBroj, pdvBroj: firmaPdvBroj,
+      skladiste: firmaSkladiste, logo: firmaLogo,
+    });
+    setFirmaStatus('Postavke firme spremljene!');
+    setTimeout(() => setFirmaStatus(''), 3000);
+  };
+
+  const handleLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => setFirmaLogo(reader.result as string);
+    reader.readAsDataURL(file);
+  };
+
+  // ── Tring handlers ──
+  const handleSaveTring = async () => {
+    try {
+      await window.api.saveTringSettings({
+        host: tringHost,
+        port: tringPort,
+        operatorId: tringOperatorId,
+        operatorPassword: tringPassword,
+      });
+      setTringStatus({ type: 'success', message: 'Postavke uspješno sačuvane.' });
+    } catch {
+      setTringStatus({ type: 'error', message: 'Greška pri čuvanju postavki.' });
+    }
+  };
+
+  const handleBackup = async () => {
+    setBackupStatus(null);
+    try {
+      const filePath = await window.api.backupDatabase();
+      if (filePath) {
+        setBackupStatus({ type: 'success', message: `Backup spremljen: ${filePath}` });
+        setTimeout(() => setBackupStatus(null), 5000);
+      }
+    } catch {
+      setBackupStatus({ type: 'error', message: 'Greška pri kreiranju backup-a.' });
+    }
+  };
+
+  const handleTestConnection = async () => {
+    setTringStatus(null);
+    try {
+      await window.api.tringInit();
+      setTringStatus({ type: 'success', message: 'Konekcija uspješna.' });
+    } catch {
+      setTringStatus({ type: 'error', message: 'Konekcija neuspješna. Provjerite postavke.' });
+    }
+  };
+
+  const adminCount = users.filter(u => u.uloga === 'admin').length;
+
+  const tabs: { id: SettingsTab; label: string; icon: typeof Users }[] = [
+    { id: 'korisnici', label: 'Korisnici', icon: Users },
+    { id: 'fiskalni', label: 'Fiskalni printer', icon: Printer },
+    { id: 'firma', label: 'Firma', icon: Building2 },
+  ];
+
+  return (
+    <div className="flex flex-col h-full bg-[hsl(220,20%,97%)]">
+      {/* ── Top bar with tabs ── */}
+      <div className="flex-shrink-0 bg-white border-b px-6 py-4">
+        <div className="flex items-center gap-1 bg-slate-100 rounded-xl p-1 w-fit">
+          {tabs.map(tab => {
+            const Icon = tab.icon;
+            const isActive = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={cn(
+                  'flex items-center gap-2 px-4 py-2 rounded-lg text-[13px] font-medium transition-all duration-150',
+                  isActive
+                    ? 'bg-white text-slate-900 shadow-sm'
+                    : 'text-slate-500 hover:text-slate-700',
+                )}
+              >
+                <Icon size={15} strokeWidth={isActive ? 2 : 1.5} />
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ── Content ── */}
+      <div className="flex-1 min-h-0 overflow-hidden">
+
+        {/* ═══ KORISNICI TAB ═══ */}
+        {activeTab === 'korisnici' && (
+          <div className="flex flex-col h-full">
+            {/* Metric cards */}
+            <div className="flex-shrink-0 px-6 pt-5 pb-4">
+              <div className="grid grid-cols-3 gap-4">
+                <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm shadow-slate-200/50">
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Korisnici</span>
+                    <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center">
+                      <Users size={16} className="text-blue-500" />
+                    </div>
+                  </div>
+                  <p className="text-[22px] font-bold font-mono tracking-tight text-slate-900 leading-none">
+                    {users.length}
+                  </p>
+                  <p className="text-[11px] text-slate-400 mt-2">ukupno registrovanih</p>
+                </div>
+                <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm shadow-slate-200/50">
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Admini</span>
+                    <div className="w-8 h-8 rounded-lg bg-amber-50 flex items-center justify-center">
+                      <Shield size={16} className="text-amber-500" />
+                    </div>
+                  </div>
+                  <p className="text-[22px] font-bold font-mono tracking-tight text-slate-900 leading-none">
+                    {adminCount}
+                  </p>
+                  <p className="text-[11px] text-slate-400 mt-2">administratora</p>
+                </div>
+                <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm shadow-slate-200/50">
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Kasiri</span>
+                    <div className="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center">
+                      <KeyRound size={16} className="text-emerald-500" />
+                    </div>
+                  </div>
+                  <p className="text-[22px] font-bold font-mono tracking-tight text-slate-900 leading-none">
+                    {users.filter(u => u.uloga === 'kasir').length}
+                  </p>
+                  <p className="text-[11px] text-slate-400 mt-2">blagajnika</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Table card */}
+            <div className="flex-1 min-h-0 px-6 pb-5">
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm shadow-slate-200/50 h-full flex flex-col overflow-hidden">
+                <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[13px] font-semibold text-slate-700">Korisnici sistema</span>
+                    {users.length > 0 && (
+                      <Badge variant="secondary" className="text-[10px] font-mono px-1.5 py-0 h-5">
+                        {users.length}
+                      </Badge>
+                    )}
+                  </div>
+                  <Button size="sm" onClick={openNewUserDialog} className="h-8 gap-1.5 text-[12px]">
+                    <UserPlus className="h-3.5 w-3.5" />
+                    Novi korisnik
+                  </Button>
+                </div>
+
+                {users.length === 0 ? (
+                  <div className="flex-1 flex flex-col items-center justify-center text-slate-400 select-none">
+                    <div className="w-14 h-14 rounded-2xl bg-slate-50 flex items-center justify-center mb-3">
+                      <Users size={24} className="text-slate-300" />
+                    </div>
+                    <p className="text-[13px] font-medium text-slate-500">Nema korisnika</p>
+                    <p className="text-[12px] text-slate-400 mt-0.5">Dodajte prvog korisnika klikom na dugme iznad</p>
+                  </div>
+                ) : (
+                  <ScrollArea className="flex-1">
+                    <table className="w-full">
+                      <thead className="sticky top-0 bg-slate-50/80 backdrop-blur-sm">
+                        <tr className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
+                          <th className="text-left pl-5 pr-2 py-2.5">Ime</th>
+                          <th className="text-left px-2 py-2.5 w-[100px]">PIN</th>
+                          <th className="text-left px-2 py-2.5 w-[100px]">Uloga</th>
+                          <th className="text-left px-2 py-2.5 w-[120px]">Kreiran</th>
+                          <th className="text-right pr-5 pl-2 py-2.5 w-[120px]" />
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {users.map(user => (
+                          <tr
+                            key={user.id}
+                            className="group border-t border-slate-50 transition-colors hover:bg-slate-50/50"
+                          >
+                            <td className="pl-5 pr-2 py-2.5 text-[12px] font-medium text-slate-700">{user.ime}</td>
+                            <td className="px-2 py-2.5 text-[12px] font-mono text-slate-400">
+                              {maskPin(user.pin)}
+                            </td>
+                            <td className="px-2 py-2.5">
+                              <span className={cn(
+                                'inline-flex items-center gap-1 text-[10px] font-semibold rounded-full px-2 py-0.5',
+                                user.uloga === 'admin'
+                                  ? 'bg-amber-50 text-amber-700 border border-amber-100'
+                                  : 'bg-slate-50 text-slate-500 border border-slate-100'
+                              )}>
+                                {user.uloga === 'admin' && <Shield size={10} />}
+                                {user.uloga}
+                              </span>
+                            </td>
+                            <td className="px-2 py-2.5 text-[12px] text-slate-400 tabular-nums">
+                              {formatDate(user.createdAt)}
+                            </td>
+                            <td className="pr-5 pl-2 py-2.5 text-right">
+                              <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 text-xs px-2"
+                                  onClick={() => openEditUserDialog(user)}
+                                >
+                                  <Pencil className="h-3 w-3 mr-1" />
+                                  Uredi
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 text-xs px-2 text-red-500 hover:text-red-600 hover:bg-red-50"
+                                  onClick={() => handleDeleteUser(user)}
+                                  disabled={user.uloga === 'admin' && adminCount <= 1}
+                                >
+                                  <Trash2 className="h-3 w-3" />
+                                </Button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </ScrollArea>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ═══ FISKALNI TAB ═══ */}
+        {activeTab === 'fiskalni' && (
+          <div className="flex flex-col h-full">
+            <div className="flex-shrink-0 px-6 pt-5 pb-4">
+              <div className="max-w-xl">
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm shadow-slate-200/50 overflow-hidden">
+                  {/* Header */}
+                  <div className="px-6 py-4 border-b border-slate-100">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center">
+                        <Printer size={20} className="text-blue-500" />
+                      </div>
+                      <div>
+                        <h3 className="text-[15px] font-semibold text-slate-800">Tring.Fiscal.Server</h3>
+                        <p className="text-[12px] text-slate-400 mt-0.5">Konfiguracija konekcije na fiskalni server</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Form */}
+                  <div className="px-6 py-5 space-y-5">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="tring-host" className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                          Host
+                        </Label>
+                        <Input
+                          id="tring-host"
+                          value={tringHost}
+                          onChange={e => setTringHost(e.target.value)}
+                          className="font-mono text-[13px] h-9 bg-slate-50 border-slate-200"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="tring-port" className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                          Port
+                        </Label>
+                        <Input
+                          id="tring-port"
+                          type="number"
+                          value={tringPort}
+                          onChange={e => setTringPort(Number(e.target.value))}
+                          className="font-mono text-[13px] h-9 bg-slate-50 border-slate-200"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="tring-operator" className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                          Operator ID
+                        </Label>
+                        <Input
+                          id="tring-operator"
+                          type="number"
+                          value={tringOperatorId}
+                          onChange={e => setTringOperatorId(Number(e.target.value))}
+                          className="font-mono text-[13px] h-9 bg-slate-50 border-slate-200"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="tring-password" className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                          Lozinka
+                        </Label>
+                        <Input
+                          id="tring-password"
+                          value={tringPassword}
+                          onChange={e => setTringPassword(e.target.value)}
+                          className="font-mono text-[13px] h-9 bg-slate-50 border-slate-200"
+                        />
+                      </div>
+                    </div>
+
+                    <Separator className="bg-slate-100" />
+
+                    <div className="flex items-center gap-2">
+                      <Button size="sm" onClick={handleSaveTring} className="h-8 gap-1.5 text-[12px]">
+                        <Save className="h-3.5 w-3.5" />
+                        Sačuvaj
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={handleTestConnection} className="h-8 gap-1.5 text-[12px]">
+                        <Wifi className="h-3.5 w-3.5" />
+                        Testiraj konekciju
+                      </Button>
+                    </div>
+
+                    {tringStatus && (
+                      <div className={cn(
+                        'flex items-center gap-2 rounded-xl px-4 py-3 text-[12px] font-medium',
+                        tringStatus.type === 'success'
+                          ? 'bg-emerald-50/60 border border-emerald-100 text-emerald-600'
+                          : 'bg-red-50/60 border border-red-100 text-red-600',
+                      )}>
+                        {tringStatus.type === 'success'
+                          ? <CheckCircle2 size={14} />
+                          : <WifiOff size={14} />
+                        }
+                        {tringStatus.message}
+                      </div>
+                    )}
+
+                    <p className="text-[11px] text-slate-400 leading-relaxed">
+                      Tring.Fiscal.Server mora biti pokrenut na navedenom hostu i portu da bi fiskalni printer radio ispravno.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ═══ FIRMA TAB ═══ */}
+        {activeTab === 'firma' && (
+          <ScrollArea className="h-full">
+            <div className="px-6 pt-5 pb-6">
+              <div className="max-w-xl space-y-4">
+
+                {/* Logo card */}
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm shadow-slate-200/50 overflow-hidden">
+                  <div className="px-6 py-4 border-b border-slate-100">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-violet-50 flex items-center justify-center">
+                        <Image size={20} className="text-violet-500" />
+                      </div>
+                      <div>
+                        <h3 className="text-[15px] font-semibold text-slate-800">Logo firme</h3>
+                        <p className="text-[12px] text-slate-400 mt-0.5">Prikazuje se na PDF računima i dokumentima</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="px-6 py-5">
+                    <div className="flex items-center gap-5">
+                      {firmaLogo ? (
+                        <div className="w-20 h-20 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center overflow-hidden">
+                          <img src={firmaLogo} alt="Logo" className="max-w-full max-h-full object-contain" />
+                        </div>
+                      ) : (
+                        <div className="w-20 h-20 rounded-xl bg-slate-50 border border-dashed border-slate-200 flex items-center justify-center">
+                          <Image size={24} className="text-slate-300" />
+                        </div>
+                      )}
+                      <div className="flex-1">
+                        <Input type="file" accept="image/*" onChange={handleLogoChange} className="text-[12px] h-9 bg-slate-50 border-slate-200" />
+                        <p className="text-[11px] text-slate-400 mt-1.5">PNG, JPG ili SVG. Preporučena veličina 200x200px.</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Company info card */}
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm shadow-slate-200/50 overflow-hidden">
+                  <div className="px-6 py-4 border-b border-slate-100">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center">
+                        <Building2 size={20} className="text-blue-500" />
+                      </div>
+                      <div>
+                        <h3 className="text-[15px] font-semibold text-slate-800">Podaci o firmi</h3>
+                        <p className="text-[12px] text-slate-400 mt-0.5">Osnovni podaci koji se prikazuju na dokumentima</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="px-6 py-5 space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-1.5">
+                        <Label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                          Naziv firme
+                        </Label>
+                        <Input
+                          value={firmaNaziv}
+                          onChange={e => setFirmaNaziv(e.target.value)}
+                          placeholder="Moja Firma d.o.o."
+                          className="text-[13px] h-9 bg-slate-50 border-slate-200"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                          Naziv skladišta
+                        </Label>
+                        <Input
+                          value={firmaSkladiste}
+                          onChange={e => setFirmaSkladiste(e.target.value)}
+                          placeholder="Glavno skladište"
+                          className="text-[13px] h-9 bg-slate-50 border-slate-200"
+                        />
+                      </div>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                        <MapPin className="h-3 w-3" />
+                        Adresa
+                      </Label>
+                      <Input
+                        value={firmaAdresa}
+                        onChange={e => setFirmaAdresa(e.target.value)}
+                        placeholder="Ulica bb"
+                        className="text-[13px] h-9 bg-slate-50 border-slate-200"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                        Grad
+                      </Label>
+                      <Input
+                        value={firmaGrad}
+                        onChange={e => setFirmaGrad(e.target.value)}
+                        placeholder="Sarajevo"
+                        className="text-[13px] h-9 bg-slate-50 border-slate-200"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Fiscal identifiers card */}
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm shadow-slate-200/50 overflow-hidden">
+                  <div className="px-6 py-4 border-b border-slate-100">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center">
+                        <Hash size={20} className="text-emerald-500" />
+                      </div>
+                      <div>
+                        <h3 className="text-[15px] font-semibold text-slate-800">Fiskalni identifikatori</h3>
+                        <p className="text-[12px] text-slate-400 mt-0.5">ID i PDV brojevi za fiskalne dokumente</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="px-6 py-5 space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-1.5">
+                        <Label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                          ID broj
+                        </Label>
+                        <Input
+                          value={firmaIdBroj}
+                          onChange={e => setFirmaIdBroj(e.target.value)}
+                          placeholder="4200000000000"
+                          maxLength={13}
+                          className="font-mono text-[13px] h-9 bg-slate-50 border-slate-200"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                          PDV broj
+                        </Label>
+                        <Input
+                          value={firmaPdvBroj}
+                          onChange={e => setFirmaPdvBroj(e.target.value)}
+                          placeholder="200000000000"
+                          maxLength={12}
+                          className="font-mono text-[13px] h-9 bg-slate-50 border-slate-200"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Save button + status */}
+                <div className="flex items-center gap-3">
+                  <Button onClick={handleSaveFirma} className="h-9 gap-2 text-[13px]">
+                    <Save size={14} />
+                    Spremi postavke firme
+                  </Button>
+                  {firmaStatus && (
+                    <div className="flex items-center gap-1.5 text-[12px] font-medium text-emerald-600">
+                      <CheckCircle2 size={14} />
+                      {firmaStatus}
+                    </div>
+                  )}
+                </div>
+
+                {/* Database backup card */}
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm shadow-slate-200/50 overflow-hidden">
+                  <div className="px-6 py-4 border-b border-slate-100">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center">
+                        <HardDrive size={20} className="text-amber-500" />
+                      </div>
+                      <div>
+                        <h3 className="text-[15px] font-semibold text-slate-800">Backup baze podataka</h3>
+                        <p className="text-[12px] text-slate-400 mt-0.5">Kreirajte kopiju baze na odabranu lokaciju</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="px-6 py-5">
+                    <div className="flex items-center gap-3">
+                      <Button onClick={handleBackup} variant="outline" className="h-9 gap-2 text-[13px] border-slate-200">
+                        <Download size={14} />
+                        Kreiraj backup
+                      </Button>
+                      {backupStatus && (
+                        <div className={cn(
+                          'flex items-center gap-1.5 text-[12px] font-medium',
+                          backupStatus.type === 'success' ? 'text-emerald-600' : 'text-red-500'
+                        )}>
+                          {backupStatus.type === 'success' ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}
+                          {backupStatus.message}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+          </ScrollArea>
+        )}
+      </div>
+
+      {/* ── User Dialog ── */}
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent className="sm:max-w-[420px] p-0 gap-0 overflow-hidden">
+          <div className="px-6 pt-6 pb-4">
+            <DialogHeader>
+              <div className="flex items-center gap-3">
+                <div className={cn(
+                  'w-10 h-10 rounded-xl flex items-center justify-center',
+                  editingUser ? 'bg-blue-50 text-blue-600' : 'bg-emerald-50 text-emerald-600'
+                )}>
+                  {editingUser ? <Pencil className="h-5 w-5" /> : <UserPlus className="h-5 w-5" />}
+                </div>
+                <div>
+                  <DialogTitle className="text-lg">{editingUser ? 'Uredi korisnika' : 'Novi korisnik'}</DialogTitle>
+                  <DialogDescription className="text-xs mt-0.5">
+                    {editingUser ? 'Izmijenite podatke korisnika' : 'Unesite podatke za novog korisnika'}
+                  </DialogDescription>
+                </div>
+              </div>
+            </DialogHeader>
+          </div>
+
+          <Separator />
+
+          <div className="px-6 py-5 space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="user-ime" className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                Ime
+              </Label>
+              <Input
+                id="user-ime"
+                value={formIme}
+                onChange={e => setFormIme(e.target.value)}
+                placeholder="Ime korisnika"
+                className="h-10 text-[14px] bg-slate-50 border-slate-200"
+                autoFocus
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="user-pin" className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                PIN
+              </Label>
+              <Input
+                id="user-pin"
+                value={formPin}
+                onChange={e => setFormPin(e.target.value)}
+                maxLength={6}
+                className="font-mono h-10 text-[14px] bg-slate-50 border-slate-200"
+                placeholder="Unesite PIN"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                Uloga
+              </Label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setFormUloga('kasir')}
+                  className={cn(
+                    'h-10 rounded-lg border text-sm font-medium transition-all duration-150',
+                    formUloga === 'kasir'
+                      ? 'border-blue-500 bg-blue-50 text-blue-700 shadow-sm shadow-blue-100'
+                      : 'border-slate-200 text-slate-500 hover:border-slate-300'
+                  )}
+                >
+                  Kasir
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFormUloga('admin')}
+                  className={cn(
+                    'h-10 rounded-lg border text-sm font-medium transition-all duration-150 flex items-center justify-center gap-1.5',
+                    formUloga === 'admin'
+                      ? 'border-amber-500 bg-amber-50 text-amber-700 shadow-sm shadow-amber-100'
+                      : 'border-slate-200 text-slate-500 hover:border-slate-300'
+                  )}
+                >
+                  <Shield size={14} />
+                  Admin
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="border-t bg-slate-50/50 px-6 py-4 flex items-center justify-end gap-3">
+            <Button variant="ghost" onClick={() => setDialogOpen(false)}>
+              Otkaži
+            </Button>
+            <Button onClick={handleSaveUser} disabled={!formIme.trim() || !formPin.trim()} className="min-w-[100px]">
+              Sačuvaj
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
