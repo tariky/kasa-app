@@ -22,11 +22,18 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Rebuild native modules for Electron
-        run: npx electron-rebuild -f -w better-sqlite3
-
       - name: Convert PNG icon to ICO
         run: npx png-to-ico src/assets/icon.png > src/assets/icon.ico
+
+      - name: Package app
+        run: npm run package
+
+      - name: Verify better-sqlite3 in packaged app
+        run: |
+          echo "=== Checking for better-sqlite3 ==="
+          dir out\kasa-win32-x64\resources\app\node_modules\better-sqlite3 /s /b 2>NUL || echo "NOT FOUND in resources/app"
+          dir out\kasa-win32-x64\resources\app\node_modules\better-sqlite3\build 2>NUL || echo "No build dir"
+        shell: cmd
 
       - name: Make Windows installer
         run: npm run make

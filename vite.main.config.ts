@@ -7,7 +7,6 @@ export default defineConfig({
     },
   },
   resolve: {
-    // Ensure native modules aren't bundled
     browserField: false,
     mainFields: ['module', 'jsnext:main', 'jsnext'],
   },
