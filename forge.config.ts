@@ -1,4 +1,5 @@
 import path from 'path';
+import fs from 'fs';
 import type { ForgeConfig } from '@electron-forge/shared-types';
 import { MakerSquirrel } from '@electron-forge/maker-squirrel';
 import { MakerZIP } from '@electron-forge/maker-zip';
@@ -24,6 +25,29 @@ const config: ForgeConfig = {
     new MakerRpm({}),
     new MakerDeb({}),
   ],
+  hooks: {
+    packageAfterCopy: async (_forgeConfig, buildPath) => {
+      // The Vite plugin doesn't copy node_modules for externalized native modules.
+      // We need to manually copy better-sqlite3 and its runtime dependencies.
+      const projectRoot = path.resolve(__dirname);
+      const destModules = path.join(buildPath, 'node_modules');
+
+      if (!fs.existsSync(destModules)) {
+        fs.mkdirSync(destModules, { recursive: true });
+      }
+
+      const nativeModules = ['better-sqlite3', 'bindings', 'file-uri-to-path'];
+      for (const mod of nativeModules) {
+        const src = path.join(projectRoot, 'node_modules', mod);
+        const dest = path.join(destModules, mod);
+        if (fs.existsSync(src) && !fs.existsSync(dest)) {
+          fs.cpSync(src, dest, { recursive: true });
+        }
+      }
+
+      console.log('[forge hook] Copied native modules:', nativeModules.join(', '));
+    },
+  },
   plugins: [
     new VitePlugin({
       build: [
