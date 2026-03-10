@@ -82,28 +82,53 @@ export default function IzvjestajiScreen() {
     setFiskalniError(isError);
   };
 
+  const formatTringResult = (label: string, result: any): string => {
+    if (!result) return `${label}: Nema odgovora`;
+    const parts = [`${label}: ${result.vrstaOdgovora}`];
+    if (result.error) parts.push(result.error);
+    if (result.odgovori && Object.keys(result.odgovori).length > 0) {
+      parts.push(Object.entries(result.odgovori).map(([k, v]) => `${k}=${v}`).join(', '));
+    }
+    return parts.join(' — ');
+  };
+
   const handleXReport = async () => {
     setFiskalniMsg('Štampam X izvještaj...');
     try {
-      await window.api.tringXReport();
-      setFiskalniMsg('X izvještaj uspješno odštampan.');
-    } catch { setFiskalniMsg('Greška pri štampanju X izvještaja.', true); }
+      const result = await window.api.tringXReport();
+      console.log('Tring xReport result:', result);
+      if (result?.success) {
+        setFiskalniMsg(formatTringResult('X izvještaj uspješno odštampan', result));
+      } else {
+        setFiskalniMsg(formatTringResult('X izvještaj greška', result), true);
+      }
+    } catch (err: any) { setFiskalniMsg(`Greška pri štampanju X izvještaja: ${err?.message || ''}`, true); }
   };
 
   const handleZReport = async () => {
     setFiskalniMsg('Štampam Z izvještaj...');
     try {
-      await window.api.tringZReport();
-      setFiskalniMsg('Z izvještaj uspješno odštampan.');
-    } catch { setFiskalniMsg('Greška pri štampanju Z izvještaja.', true); }
+      const result = await window.api.tringZReport();
+      console.log('Tring zReport result:', result);
+      if (result?.success) {
+        setFiskalniMsg(formatTringResult('Z izvještaj uspješno odštampan', result));
+      } else {
+        setFiskalniMsg(formatTringResult('Z izvještaj greška', result), true);
+      }
+    } catch (err: any) { setFiskalniMsg(`Greška pri štampanju Z izvještaja: ${err?.message || ''}`, true); }
   };
 
   const handlePeriodicReport = async () => {
     setFiskalniMsg('Štampam periodični izvještaj...');
     try {
-      await window.api.tringPeriodicReport(toDateStr(dateFrom), toDateStr(dateTo));
-      setFiskalniMsg('Periodični izvještaj uspješno odštampan.');
-    } catch { setFiskalniMsg('Greška pri štampanju periodičnog izvještaja.', true); }
+      const result = await window.api.tringPeriodicReport(toDateStr(dateFrom), toDateStr(dateTo));
+      console.log('Tring periodicReport result:', result);
+      if (result?.success) {
+        setFiskalniMsg(formatTringResult('Periodični izvještaj uspješno odštampan', result));
+      } else {
+        setFiskalniMsg(formatTringResult('Periodični izvještaj greška', result), true);
+      }
+    } catch (err: any) { setFiskalniMsg(`Greška pri štampanju periodičnog izvještaja: ${err?.message || ''}`, true); }
   };
 
   const tabs: { id: Tab; label: string; icon: typeof TrendingUp }[] = [

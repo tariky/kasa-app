@@ -23,6 +23,7 @@ export default function NarudzbeScreen() {
   const [reklamacijaOpen, setReklamacijaOpen] = useState(false);
   const [reklamacijaBroj, setReklamacijaBroj] = useState('');
   const [reklamacijaLoading, setReklamacijaLoading] = useState(false);
+  const [reklamacijaMsg, setReklamacijaMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
     loadOrders();
@@ -42,6 +43,7 @@ export default function NarudzbeScreen() {
     if (!selectedOrder || !selectedOrder.brojFiskalnogRacuna) return;
 
     setReklamacijaLoading(true);
+    setReklamacijaMsg(null);
     try {
       const data = {
         brojRacuna: selectedOrder.brojFiskalnogRacuna,
@@ -56,24 +58,32 @@ export default function NarudzbeScreen() {
       };
 
       const result = await window.api.tringPrintRefund(data);
+      console.log('Tring printRefund result:', result);
 
-      if (result) {
-        await window.api.refundOrder(selectedOrder.id);
-
-        if (reklamacijaBroj) {
-          await window.api.updateOrderReklamacija(selectedOrder.id, reklamacijaBroj);
-        }
-
-        setReklamacijaOpen(false);
-        setReklamacijaBroj('');
-        await loadOrders();
-
-        const updated = await window.api.getOrders();
-        const refreshed = updated.find((o: Order) => o.id === selectedOrder.id);
-        if (refreshed) setSelectedOrder(refreshed);
+      if (!result || !result.success) {
+        const details = result?.odgovori ? Object.entries(result.odgovori).map(([k, v]) => `${k}: ${v}`).join(', ') : '';
+        setReklamacijaMsg({ type: 'error', text: `Greška: ${result?.error || result?.vrstaOdgovora || 'Nepoznata greška'}${details ? ` (${details})` : ''}` });
+        return;
       }
-    } catch (err) {
+
+      const brojRekl = result.odgovori?.BrojFiskalnogRacuna || '';
+      await window.api.refundOrder(selectedOrder.id);
+
+      if (reklamacijaBroj || brojRekl) {
+        await window.api.updateOrderReklamacija(selectedOrder.id, reklamacijaBroj || brojRekl);
+      }
+
+      setReklamacijaOpen(false);
+      setReklamacijaBroj('');
+      setReklamacijaMsg({ type: 'success', text: `Reklamacija #${brojRekl} uspješno kreirana` });
+      await loadOrders();
+
+      const updated = await window.api.getOrders();
+      const refreshed = updated.find((o: Order) => o.id === selectedOrder.id);
+      if (refreshed) setSelectedOrder(refreshed);
+    } catch (err: any) {
       console.error('Reklamacija error:', err);
+      setReklamacijaMsg({ type: 'error', text: `Greška: ${err?.message || 'Nepoznata greška'}` });
     } finally {
       setReklamacijaLoading(false);
     }
@@ -435,10 +445,23 @@ export default function NarudzbeScreen() {
                     </div>
                   </div>
 
+                  {/* Reklamacija result */}
+                  {reklamacijaMsg && !reklamacijaOpen && (
+                    <div className={cn(
+                      'flex items-center gap-2 rounded-lg px-3 py-2 text-[11px] font-medium',
+                      reklamacijaMsg.type === 'error'
+                        ? 'bg-red-50 border border-red-100 text-red-600'
+                        : 'bg-emerald-50 border border-emerald-100 text-emerald-600',
+                    )}>
+                      {reklamacijaMsg.type === 'error' ? <AlertTriangle size={12} /> : <Receipt size={12} />}
+                      {reklamacijaMsg.text}
+                    </div>
+                  )}
+
                   {/* Reklamacija */}
                   {selectedOrder.status === 'completed' && selectedOrder.brojFiskalnogRacuna && (
                     <button
-                      onClick={() => setReklamacijaOpen(true)}
+                      onClick={() => { setReklamacijaMsg(null); setReklamacijaOpen(true); }}
                       className="w-full h-9 flex items-center justify-center gap-2 rounded-lg border border-red-200 text-[12px] font-medium text-red-500 hover:bg-red-50 hover:border-red-300 transition-all"
                     >
                       <RotateCcw size={13} />
@@ -505,6 +528,18 @@ export default function NarudzbeScreen() {
               />
             </div>
           </div>
+
+          {reklamacijaMsg && (
+            <div className={cn(
+              'mx-6 mb-2 flex items-center gap-2 rounded-xl px-4 py-3 text-[12px] font-medium',
+              reklamacijaMsg.type === 'error'
+                ? 'bg-red-50/60 border border-red-100 text-red-600'
+                : 'bg-emerald-50/60 border border-emerald-100 text-emerald-600',
+            )}>
+              {reklamacijaMsg.type === 'error' ? <AlertTriangle size={14} /> : <Receipt size={14} />}
+              {reklamacijaMsg.text}
+            </div>
+          )}
 
           <div className="border-t bg-slate-50/50 px-6 py-4 flex items-center justify-end gap-3">
             <Button variant="ghost" onClick={() => setReklamacijaOpen(false)}>

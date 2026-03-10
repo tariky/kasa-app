@@ -251,13 +251,17 @@ export default function KasaScreen({ user }: KasaScreenProps) {
       };
 
       const tringResult = await window.api.tringPrintReceipt(tringData);
+      console.log('Tring printReceipt result:', tringResult);
       if (!tringResult || !tringResult.success) {
-        setMessage({ type: 'error', text: `Greška pri štampanju: ${tringResult?.error || tringResult?.vrstaOdgovora || 'Nepoznata greška'}` });
+        const details = tringResult?.odgovori ? Object.entries(tringResult.odgovori).map(([k, v]) => `${k}: ${v}`).join(', ') : '';
+        setMessage({ type: 'error', text: `Greška pri štampanju: ${tringResult?.error || tringResult?.vrstaOdgovora || 'Nepoznata greška'}${details ? ` (${details})` : ''}` });
         setLoading(false);
         return;
       }
 
       const brojFiskalnogRacuna = tringResult.odgovori?.BrojFiskalnogRacuna || null;
+      const datumRacuna = tringResult.odgovori?.DatumFiskalnogRacuna || '';
+      const vrijemeRacuna = tringResult.odgovori?.VrijemeFiskalnogRacuna || '';
       await window.api.createOrder({
         korisnikId: user.id, ukupno: total, pdvIznos: pdvAmount, nacinPlacanja: paymentType,
         brojFiskalnogRacuna, kupac,
@@ -266,7 +270,7 @@ export default function KasaScreen({ user }: KasaScreenProps) {
 
       setCart([]); setPaymentAmount(''); setKupacOpen(false); clearKupac();
       setQuery(''); setProducts([]);
-      setMessage({ type: 'success', text: `Račun ${brojFiskalnogRacuna} uspješno kreiran` });
+      setMessage({ type: 'success', text: `Račun #${brojFiskalnogRacuna} uspješno kreiran${datumRacuna ? ` — ${datumRacuna} ${vrijemeRacuna}` : ''}` });
       setTimeout(() => searchInputRef.current?.focus(), 50);
     } catch (err: any) {
       setMessage({ type: 'error', text: `Greška: ${err?.message || 'Nepoznata greška'}` });

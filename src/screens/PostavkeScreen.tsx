@@ -17,7 +17,7 @@ import {
   UserPlus, Wifi, WifiOff, Save, Trash2, Pencil,
   Users, Printer, Building2, Shield, Hash, KeyRound,
   MapPin, FileText, Image, CheckCircle2, AlertTriangle,
-  HardDrive, Download,
+  HardDrive, Download, Bug, RefreshCw, X, ChevronDown, ChevronUp,
 } from 'lucide-react';
 
 type SettingsTab = 'korisnici' | 'fiskalni' | 'firma';
@@ -48,6 +48,26 @@ export default function PostavkeScreen() {
   const [firmaLogo, setFirmaLogo] = useState('');
   const [firmaStatus, setFirmaStatus] = useState('');
   const [backupStatus, setBackupStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  // ── Debug state ──
+  const [debugOpen, setDebugOpen] = useState(false);
+  const [debugLogs, setDebugLogs] = useState<any[]>([]);
+  const [debugLoading, setDebugLoading] = useState(false);
+  const [expandedLogId, setExpandedLogId] = useState<number | null>(null);
+
+  const loadDebugLogs = async () => {
+    setDebugLoading(true);
+    try {
+      const logs = await window.api.tringGetLogs();
+      setDebugLogs(logs.reverse());
+    } catch { /* ignore */ }
+    setDebugLoading(false);
+  };
+
+  const clearDebugLogs = async () => {
+    await window.api.tringClearLogs();
+    setDebugLogs([]);
+  };
 
   // ── Tab state ──
   const [activeTab, setActiveTab] = useState<SettingsTab>('korisnici');
@@ -191,10 +211,15 @@ export default function PostavkeScreen() {
   const handleTestConnection = async () => {
     setTringStatus(null);
     try {
-      await window.api.tringInit();
-      setTringStatus({ type: 'success', message: 'Konekcija uspješna.' });
-    } catch {
-      setTringStatus({ type: 'error', message: 'Konekcija neuspješna. Provjerite postavke.' });
+      const result = await window.api.tringInit();
+      if (result?.success) {
+        setTringStatus({ type: 'success', message: `Konekcija uspješna. (${result.vrstaOdgovora})` });
+      } else {
+        const details = result?.odgovori ? Object.entries(result.odgovori).map(([k, v]) => `${k}: ${v}`).join(', ') : '';
+        setTringStatus({ type: 'error', message: `Konekcija neuspješna: ${result?.error || result?.vrstaOdgovora || 'Nepoznata greška'}${details ? ` (${details})` : ''}` });
+      }
+    } catch (err: any) {
+      setTringStatus({ type: 'error', message: `Konekcija neuspješna: ${err?.message || 'Provjerite postavke.'}` });
     }
   };
 
@@ -378,7 +403,8 @@ export default function PostavkeScreen() {
 
         {/* ═══ FISKALNI TAB ═══ */}
         {activeTab === 'fiskalni' && (
-          <div className="flex flex-col h-full">
+          <ScrollArea className="h-full">
+          <div className="flex flex-col">
             <div className="flex-shrink-0 px-6 pt-5 pb-4">
               <div className="max-w-xl">
                 <div className="bg-white rounded-2xl border border-slate-100 shadow-sm shadow-slate-200/50 overflow-hidden">
@@ -481,7 +507,146 @@ export default function PostavkeScreen() {
                 </div>
               </div>
             </div>
+
+            {/* ── Debug Log Panel ── */}
+            <div className="px-6 pb-5">
+              <div className="max-w-4xl">
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm shadow-slate-200/50 overflow-hidden">
+                  <div className="px-6 py-4 border-b border-slate-100">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center">
+                          <Bug size={20} className="text-amber-500" />
+                        </div>
+                        <div>
+                          <h3 className="text-[15px] font-semibold text-slate-800">Debug Log</h3>
+                          <p className="text-[12px] text-slate-400 mt-0.5">Svi Tring HTTP zahtjevi i odgovori</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={loadDebugLogs}
+                          disabled={debugLoading}
+                          className="h-8 gap-1.5 text-[12px]"
+                        >
+                          <RefreshCw size={13} className={debugLoading ? 'animate-spin' : ''} />
+                          Učitaj logove
+                        </Button>
+                        {debugLogs.length > 0 && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={clearDebugLogs}
+                            className="h-8 gap-1.5 text-[12px] text-red-500 hover:text-red-600"
+                          >
+                            <Trash2 size={13} />
+                            Očisti
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {debugLogs.length === 0 ? (
+                    <div className="px-6 py-8 text-center">
+                      <p className="text-[13px] text-slate-400">Nema logova. Kliknite "Učitaj logove" nakon slanja komande Tring serveru.</p>
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-slate-50 max-h-[500px] overflow-y-auto">
+                      {debugLogs.map((log) => {
+                        const isExpanded = expandedLogId === log.id;
+                        const isOk = log.parsed?.success;
+                        const time = new Date(log.timestamp);
+                        const timeStr = `${String(time.getHours()).padStart(2, '0')}:${String(time.getMinutes()).padStart(2, '0')}:${String(time.getSeconds()).padStart(2, '0')}`;
+
+                        return (
+                          <div key={log.id}>
+                            <button
+                              onClick={() => setExpandedLogId(isExpanded ? null : log.id)}
+                              className="w-full px-6 py-3 flex items-center gap-3 text-left hover:bg-slate-50/50 transition-colors"
+                            >
+                              <div className={cn(
+                                'w-2 h-2 rounded-full flex-shrink-0',
+                                isOk ? 'bg-emerald-400' : 'bg-red-400',
+                              )} />
+                              <span className="text-[11px] font-mono text-slate-400 w-[65px] flex-shrink-0">{timeStr}</span>
+                              <span className="text-[12px] font-mono font-semibold text-slate-700 w-[50px] flex-shrink-0">POST</span>
+                              <span className="text-[12px] font-mono text-blue-600 flex-shrink-0">{log.path}</span>
+                              <span className={cn(
+                                'text-[11px] font-mono font-medium ml-auto flex-shrink-0',
+                                isOk ? 'text-emerald-500' : 'text-red-500',
+                              )}>
+                                {log.statusCode ?? '—'} {log.parsed?.vrstaOdgovora}
+                              </span>
+                              <span className="text-[10px] font-mono text-slate-300 w-[50px] text-right flex-shrink-0">{log.durationMs}ms</span>
+                              {isExpanded ? <ChevronUp size={14} className="text-slate-300" /> : <ChevronDown size={14} className="text-slate-300" />}
+                            </button>
+
+                            {isExpanded && (
+                              <div className="px-6 pb-4 space-y-3">
+                                {/* Parsed response */}
+                                {log.parsed && (
+                                  <div className="space-y-2">
+                                    <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Parsed Response</p>
+                                    <div className="bg-slate-50 rounded-lg p-3 space-y-1">
+                                      <div className="flex gap-2 text-[11px] font-mono">
+                                        <span className="text-slate-400">success:</span>
+                                        <span className={isOk ? 'text-emerald-600' : 'text-red-600'}>{String(log.parsed.success)}</span>
+                                      </div>
+                                      <div className="flex gap-2 text-[11px] font-mono">
+                                        <span className="text-slate-400">vrstaOdgovora:</span>
+                                        <span className="text-slate-700">{log.parsed.vrstaOdgovora}</span>
+                                      </div>
+                                      {log.parsed.error && (
+                                        <div className="flex gap-2 text-[11px] font-mono">
+                                          <span className="text-slate-400">error:</span>
+                                          <span className="text-red-600">{log.parsed.error}</span>
+                                        </div>
+                                      )}
+                                      {log.parsed.odgovori && Object.keys(log.parsed.odgovori).length > 0 && (
+                                        <div className="mt-1 pt-1 border-t border-slate-200">
+                                          <p className="text-[10px] text-slate-400 mb-1">odgovori:</p>
+                                          {Object.entries(log.parsed.odgovori).map(([k, v]) => (
+                                            <div key={k} className="flex gap-2 text-[11px] font-mono pl-2">
+                                              <span className="text-slate-500">{k}:</span>
+                                              <span className="text-slate-800">{v as string}</span>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* Request XML */}
+                                <div>
+                                  <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">Request XML</p>
+                                  <pre className="bg-slate-900 text-emerald-300 text-[11px] font-mono p-3 rounded-lg overflow-x-auto whitespace-pre-wrap break-all max-h-[200px] overflow-y-auto">
+                                    {log.requestXml}
+                                  </pre>
+                                </div>
+
+                                {/* Response XML */}
+                                <div>
+                                  <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">Response XML</p>
+                                  <pre className="bg-slate-900 text-amber-300 text-[11px] font-mono p-3 rounded-lg overflow-x-auto whitespace-pre-wrap break-all max-h-[200px] overflow-y-auto">
+                                    {log.responseXml || '(empty — no response)'}
+                                  </pre>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
           </div>
+          </ScrollArea>
         )}
 
         {/* ═══ FIRMA TAB ═══ */}

@@ -53,6 +53,8 @@ contextBridge.exposeInMainWorld('api', {
   tringZReport: () => ipcRenderer.invoke('tring:zReport'),
   tringPeriodicReport: (from: string, to: string) => ipcRenderer.invoke('tring:periodicReport', from, to),
   tringWriteArticle: (data: any) => ipcRenderer.invoke('tring:writeArticle', data),
+  tringGetLogs: () => ipcRenderer.invoke('tring:getLogs'),
+  tringClearLogs: () => ipcRenderer.invoke('tring:clearLogs'),
 
   // Settings
   getTringSettings: () => ipcRenderer.invoke('settings:getTring'),

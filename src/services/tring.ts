@@ -3,8 +3,43 @@ import * as http from "node:http";
 const DEFAULT_HOST = "localhost";
 const DEFAULT_PORT = 8085;
 const TIMEOUT_MS = 30_000;
+const MAX_LOG_ENTRIES = 200;
 
 let requestCounter = 0;
+
+export interface TringLogEntry {
+  id: number;
+  timestamp: string;
+  method: string;
+  path: string;
+  requestXml: string;
+  responseXml: string;
+  statusCode: number | null;
+  parsed: TringResponse | null;
+  durationMs: number;
+}
+
+let logIdCounter = 0;
+const logEntries: TringLogEntry[] = [];
+
+export function getLogs(): TringLogEntry[] {
+  return logEntries;
+}
+
+export function clearLogs(): void {
+  logEntries.length = 0;
+}
+
+function addLog(entry: Omit<TringLogEntry, 'id' | 'timestamp'>): void {
+  logEntries.push({
+    id: ++logIdCounter,
+    timestamp: new Date().toISOString(),
+    ...entry,
+  });
+  if (logEntries.length > MAX_LOG_ENTRIES) {
+    logEntries.splice(0, logEntries.length - MAX_LOG_ENTRIES);
+  }
+}
 
 export interface TringConfig {
   host?: string;
@@ -77,16 +112,17 @@ function nextRequestNumber(): number {
   return ++requestCounter;
 }
 
-function postXml(path: string, body: string): Promise<TringResponse> {
+function postXml(urlPath: string, body: string): Promise<TringResponse> {
   const host = config.host ?? DEFAULT_HOST;
   const port = config.port ?? DEFAULT_PORT;
+  const startTime = Date.now();
 
   return new Promise((resolve) => {
     const req = http.request(
       {
         hostname: host,
         port,
-        path,
+        path: urlPath,
         method: "POST",
         headers: {
           "Content-Type": "text/xml",
@@ -99,28 +135,58 @@ function postXml(path: string, body: string): Promise<TringResponse> {
         res.on("data", (chunk: Buffer) => chunks.push(chunk));
         res.on("end", () => {
           const xml = Buffer.concat(chunks).toString("utf-8");
-          resolve(parseResponse(xml));
+          const parsed = parseResponse(xml);
+          addLog({
+            method: "POST",
+            path: urlPath,
+            requestXml: body,
+            responseXml: xml,
+            statusCode: res.statusCode ?? null,
+            parsed,
+            durationMs: Date.now() - startTime,
+          });
+          resolve(parsed);
         });
       }
     );
 
     req.on("timeout", () => {
       req.destroy();
-      resolve({
+      const result: TringResponse = {
         success: false,
         vrstaOdgovora: "Greska",
         odgovori: {},
         error: "Request timed out",
+      };
+      addLog({
+        method: "POST",
+        path: urlPath,
+        requestXml: body,
+        responseXml: "",
+        statusCode: null,
+        parsed: result,
+        durationMs: Date.now() - startTime,
       });
+      resolve(result);
     });
 
     req.on("error", (err) => {
-      resolve({
+      const result: TringResponse = {
         success: false,
         vrstaOdgovora: "Greska",
         odgovori: {},
         error: err.message,
+      };
+      addLog({
+        method: "POST",
+        path: urlPath,
+        requestXml: body,
+        responseXml: "",
+        statusCode: null,
+        parsed: result,
+        durationMs: Date.now() - startTime,
       });
+      resolve(result);
     });
 
     req.write(body);

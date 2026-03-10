@@ -616,17 +616,19 @@ export function registerIpcHandlers(): void {
     };
   }
 
-  handle('tring:init', () => {
+  handle('tring:init', async () => {
     const { operatorId, operatorPassword } = loadTringConfig();
-    return Tring.inicijalizacija(operatorId, operatorPassword);
+    const result = await Tring.inicijalizacija(operatorId, operatorPassword);
+    console.log('[Tring] init:', JSON.stringify(result));
+    return result;
   });
 
-  handle('tring:printReceipt', (data: any) => {
+  handle('tring:printReceipt', async (data: any) => {
     loadTringConfig();
     // Transform screen data to Tring Racun format
     const ukupno = data.ukupno || 0;
 
-    // Build VrstePlacanja - Tring expects payment type with full amount
+    // Build VrstaPlacanja - Tring expects payment type with full amount
     let vrstePlacanja: Tring.VrstaPlacanja[];
     if (data.vrstePlacanja && data.vrstePlacanja.length > 0) {
       vrstePlacanja = data.vrstePlacanja;
@@ -659,10 +661,13 @@ export function registerIpcHandlers(): void {
       napomena: data.napomena,
       brojRacuna: data.brojRacuna,
     };
-    return Tring.stampatiFiskalniRacun(racun);
+    console.log('[Tring] printReceipt request:', JSON.stringify(racun));
+    const result = await Tring.stampatiFiskalniRacun(racun);
+    console.log('[Tring] printReceipt response:', JSON.stringify(result));
+    return result;
   });
 
-  handle('tring:printRefund', (data: any) => {
+  handle('tring:printRefund', async (data: any) => {
     loadTringConfig();
     // Transform screen data to Tring ReklamiraniRacun format
     const racun: Tring.ReklamiraniRacun = {
@@ -688,27 +693,47 @@ export function registerIpcHandlers(): void {
       } : undefined,
       brojRacuna: Number(data.brojRacuna),
     };
-    return Tring.stampatiReklamiraniRacun(racun);
+    console.log('[Tring] printRefund request:', JSON.stringify(racun));
+    const result = await Tring.stampatiReklamiraniRacun(racun);
+    console.log('[Tring] printRefund response:', JSON.stringify(result));
+    return result;
   });
 
-  handle('tring:xReport', () => {
+  handle('tring:xReport', async () => {
     loadTringConfig();
-    return Tring.stampatiPresjekStanja();
+    const result = await Tring.stampatiPresjekStanja();
+    console.log('[Tring] xReport:', JSON.stringify(result));
+    return result;
   });
 
-  handle('tring:zReport', () => {
+  handle('tring:zReport', async () => {
     loadTringConfig();
-    return Tring.stampatiDnevniIzvjestaj();
+    const result = await Tring.stampatiDnevniIzvjestaj();
+    console.log('[Tring] zReport:', JSON.stringify(result));
+    return result;
   });
 
-  handle('tring:periodicReport', (from: string, to: string) => {
+  handle('tring:periodicReport', async (from: string, to: string) => {
     loadTringConfig();
-    return Tring.stampatiPeriodicniIzvjestaj(from, to);
+    const result = await Tring.stampatiPeriodicniIzvjestaj(from, to);
+    console.log('[Tring] periodicReport:', JSON.stringify(result));
+    return result;
   });
 
-  handle('tring:writeArticle', (data: any) => {
+  handle('tring:writeArticle', async (data: any) => {
     loadTringConfig();
-    return Tring.upisiArtikal(data);
+    const result = await Tring.upisiArtikal(data);
+    console.log('[Tring] writeArticle:', JSON.stringify(result));
+    return result;
+  });
+
+  handle('tring:getLogs', () => {
+    return Tring.getLogs();
+  });
+
+  handle('tring:clearLogs', () => {
+    Tring.clearLogs();
+    return { success: true };
   });
 
   // ─── Dialog / File System ─────────────────────────────────

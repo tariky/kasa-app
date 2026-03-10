@@ -48,6 +48,8 @@ interface Window {
     tringZReport: () => Promise<any>;
     tringPeriodicReport: (from: string, to: string) => Promise<any>;
     tringWriteArticle: (data: any) => Promise<any>;
+    tringGetLogs: () => Promise<any[]>;
+    tringClearLogs: () => Promise<any>;
     getTringSettings: () => Promise<any>;
     saveTringSettings: (data: any) => Promise<any>;
     getFirmaSettings: () => Promise<{ naziv: string; adresa: string; grad: string; idBroj: string; pdvBroj: string; skladiste: string; logo: string }>;
