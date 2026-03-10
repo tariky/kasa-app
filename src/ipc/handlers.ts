@@ -393,7 +393,7 @@ export function registerIpcHandlers(): void {
 
     order.stavke = db
       .prepare(`
-        SELECT oi.*, p.naziv AS productNaziv, p.jm AS productJm
+        SELECT oi.*, p.naziv AS productNaziv, p.jm AS productJm, p.sifra AS productSifra, p.plu AS productPlu
         FROM order_items oi
         LEFT JOIN products p ON p.id = oi.productId
         WHERE oi.orderId = ?
@@ -573,14 +573,19 @@ export function registerIpcHandlers(): void {
     if (type === 'primke') {
       const primke = db
         .prepare(`
-          SELECT p.*,
-            (SELECT COUNT(*) FROM primka_stavke ps WHERE ps.primkaId = p.id) AS brojStavki,
-            (SELECT SUM(ps.kolicina * ps.cijena) FROM primka_stavke ps WHERE ps.primkaId = p.id) AS ukupno
+          SELECT p.*
           FROM primke p
           WHERE date(p.datum) BETWEEN date(?) AND date(?)
           ORDER BY p.datum DESC
         `)
-        .all(from, to);
+        .all(from, to) as any[];
+
+      // Attach stavke for each primka so the UI can calculate nabavna/prodajna per-item
+      for (const primka of primke) {
+        primka.stavke = db
+          .prepare('SELECT * FROM primka_stavke WHERE primkaId = ?')
+          .all(primka.id);
+      }
       return primke;
     }
 
@@ -589,7 +594,8 @@ export function registerIpcHandlers(): void {
 
   // ─── Tring ──────────────────────────────────────────────
 
-  handle('tring:init', () => {
+  // Load Tring settings from DB and configure the Tring client
+  function loadTringConfig(): { operatorId: number; operatorPassword: string } {
     const rows = db
       .prepare("SELECT key, value FROM settings WHERE key LIKE 'tring.%'")
       .all() as Array<{ key: string; value: string }>;
@@ -604,14 +610,31 @@ export function registerIpcHandlers(): void {
       port: parseInt(map.port ?? '8085', 10),
     });
 
-    const operatorId = parseInt(map.operatorId ?? '0', 10);
-    const operatorPassword = map.operatorPassword ?? '0';
+    return {
+      operatorId: parseInt(map.operatorId ?? '0', 10),
+      operatorPassword: map.operatorPassword ?? '0',
+    };
+  }
 
+  handle('tring:init', () => {
+    const { operatorId, operatorPassword } = loadTringConfig();
     return Tring.inicijalizacija(operatorId, operatorPassword);
   });
 
   handle('tring:printReceipt', (data: any) => {
+    loadTringConfig();
     // Transform screen data to Tring Racun format
+    const ukupno = data.ukupno || 0;
+
+    // Build VrstePlacanja - Tring expects payment type with full amount
+    let vrstePlacanja: Tring.VrstaPlacanja[];
+    if (data.vrstePlacanja && data.vrstePlacanja.length > 0) {
+      vrstePlacanja = data.vrstePlacanja;
+    } else {
+      const oznaka = data.nacinPlacanja || 'Gotovina';
+      vrstePlacanja = [{ oznaka, iznos: ukupno }];
+    }
+
     const racun: Tring.Racun = {
       stavke: (data.items || data.stavke || []).map((item: any) => ({
         artikal: {
@@ -625,7 +648,7 @@ export function registerIpcHandlers(): void {
         kolicina: item.kolicina,
         rabat: item.rabat || 0,
       })),
-      vrstePlacanja: data.vrstePlacanja || [{ oznaka: data.nacinPlacanja || 'Gotovina', iznos: 0 }],
+      vrstePlacanja,
       kupac: data.kupac ? {
         idBroj: data.kupac.idBroj || '',
         naziv: data.kupac.naziv || '',
@@ -640,39 +663,51 @@ export function registerIpcHandlers(): void {
   });
 
   handle('tring:printRefund', (data: any) => {
+    loadTringConfig();
     // Transform screen data to Tring ReklamiraniRacun format
     const racun: Tring.ReklamiraniRacun = {
       stavke: (data.items || data.stavke || []).map((item: any) => ({
         artikal: {
-          sifra: item.sifra || String(item.productId || ''),
+          sifra: item.sifra || item.productSifra || String(item.productId || ''),
           naziv: item.naziv || item.productNaziv || '',
           jm: item.jm || item.productJm || 'kom',
           cijena: item.cijena,
           stopa: item.pdvStopa || item.stopa || 'E',
-          plu: item.plu || 0,
+          plu: item.plu || item.productPlu || 0,
         },
         kolicina: item.kolicina,
         rabat: item.rabat || 0,
       })),
-      vrstePlacanja: data.vrstePlacanja || [],
+      vrstePlacanja: [],
+      kupac: data.kupac ? {
+        idBroj: data.kupac.idBroj || '',
+        naziv: data.kupac.naziv || '',
+        adresa: data.kupac.adresa || '',
+        postanskiBroj: data.kupac.postanskiBroj || '',
+        grad: data.kupac.grad || '',
+      } : undefined,
       brojRacuna: Number(data.brojRacuna),
     };
     return Tring.stampatiReklamiraniRacun(racun);
   });
 
   handle('tring:xReport', () => {
+    loadTringConfig();
     return Tring.stampatiPresjekStanja();
   });
 
   handle('tring:zReport', () => {
+    loadTringConfig();
     return Tring.stampatiDnevniIzvjestaj();
   });
 
   handle('tring:periodicReport', (from: string, to: string) => {
+    loadTringConfig();
     return Tring.stampatiPeriodicniIzvjestaj(from, to);
   });
 
   handle('tring:writeArticle', (data: any) => {
+    loadTringConfig();
     return Tring.upisiArtikal(data);
   });
 

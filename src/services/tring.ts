@@ -64,6 +64,9 @@ export interface ReklamiraniRacun {
   brojRacuna: number; // original fiscal receipt number
 }
 
+const XML_DECL = '<?xml version="1.0" encoding="utf-8"?>';
+const XMLNS = 'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"';
+
 let config: TringConfig = {};
 
 export function configure(cfg: TringConfig): void {
@@ -132,12 +135,13 @@ function parseResponse(xml: string): TringResponse {
   const vrstaMatch = xml.match(/<VrstaOdgovora>(.*?)<\/VrstaOdgovora>/);
   const vrstaOdgovora = vrstaMatch ? vrstaMatch[1] : "Greska";
 
-  // Extract all Odgovor name-value pairs (Vrijednost may have xsi:type attributes)
+  // Extract all Odgovor name-value pairs
+  // Vrijednost may have xsi:type attributes and can be self-closing (empty value)
   const odgovorRegex =
-    /<Odgovor>\s*<Naziv>(.*?)<\/Naziv>\s*<Vrijednost[^>]*>(.*?)<\/Vrijednost>\s*<\/Odgovor>/g;
+    /<Odgovor>\s*<Naziv>(.*?)<\/Naziv>\s*(?:<Vrijednost[^>]*\/>\s*|<Vrijednost[^>]*>(.*?)<\/Vrijednost>\s*)<\/Odgovor>/g;
   let match: RegExpExecArray | null;
   while ((match = odgovorRegex.exec(xml)) !== null) {
-    odgovori[match[1]] = match[2];
+    odgovori[match[1]] = match[2] ?? '';
   }
 
   return {
@@ -186,7 +190,8 @@ export function inicijalizacija(
   password: string
 ): Promise<TringResponse> {
   const body =
-    `<Operator>` +
+    `${XML_DECL}` +
+    `<Operator ${XMLNS}>` +
     `<BrojOperatora>${operatorId}</BrojOperatora>` +
     `<Lozinka>${password}</Lozinka>` +
     `</Operator>`;
@@ -198,7 +203,8 @@ export function inicijalizacija(
 export function upisiArtikal(artikal: Artikal): Promise<TringResponse> {
   const n = nextRequestNumber();
   const body =
-    `<RacunZahtjev>` +
+    `${XML_DECL}` +
+    `<RacunZahtjev ${XMLNS}>` +
     `<BrojZahtjeva>${n}</BrojZahtjeva>` +
     `<VrstaZahtjeva>105</VrstaZahtjeva>` +
     `<NoviObjekat>${artikalToXml(artikal)}</NoviObjekat>` +
@@ -235,7 +241,8 @@ export function stampatiFiskalniRacun(racun: Racun): Promise<TringResponse> {
   const kupacXml = racun.kupac ? kupacToXml(racun.kupac) : "";
 
   const body =
-    `<RacunZahtjev>` +
+    `${XML_DECL}` +
+    `<RacunZahtjev ${XMLNS}>` +
     `<BrojZahtjeva>${n}</BrojZahtjeva>` +
     `<VrstaZahtjeva>0</VrstaZahtjeva>` +
     `<NoviObjekat>` +
@@ -267,26 +274,17 @@ export function stampatiReklamiraniRacun(
     )
     .join("");
 
-  const placanjaXml = racun.vrstePlacanja
-    .map(
-      (v) =>
-        `<VrstaPlacanja>` +
-        `<Oznaka>${escapeXml(v.oznaka)}</Oznaka>` +
-        `<Iznos>${v.iznos}</Iznos>` +
-        `</VrstaPlacanja>`
-    )
-    .join("");
-
   const kupacXml = racun.kupac ? kupacToXml(racun.kupac) : "";
 
   const body =
-    `<RacunZahtjev>` +
+    `${XML_DECL}` +
+    `<RacunZahtjev ${XMLNS}>` +
     `<BrojZahtjeva>${n}</BrojZahtjeva>` +
     `<VrstaZahtjeva>2</VrstaZahtjeva>` +
     `<NoviObjekat>` +
     kupacXml +
     `<StavkeRacuna>${stavkeXml}</StavkeRacuna>` +
-    `<VrstePlacanja>${placanjaXml}</VrstePlacanja>` +
+    `<VrstePlacanja />` +
     `<Napomena>${racun.napomena ? escapeXml(racun.napomena) : ""}</Napomena>` +
     `<BrojRacuna>${racun.brojRacuna}</BrojRacuna>` +
     `</NoviObjekat>` +
@@ -299,10 +297,12 @@ export function stampatiReklamiraniRacun(
 export function stampatiPresjekStanja(): Promise<TringResponse> {
   const n = nextRequestNumber();
   const body =
-    `<RacunZahtjev>` +
+    `${XML_DECL}` +
+    `<Zahtjev ${XMLNS}>` +
     `<BrojZahtjeva>${n}</BrojZahtjeva>` +
     `<VrstaZahtjeva>3</VrstaZahtjeva>` +
-    `</RacunZahtjev>`;
+    `<Parametri />` +
+    `</Zahtjev>`;
 
   return postXml("/sps.xml", body);
 }
@@ -311,10 +311,12 @@ export function stampatiPresjekStanja(): Promise<TringResponse> {
 export function stampatiDnevniIzvjestaj(): Promise<TringResponse> {
   const n = nextRequestNumber();
   const body =
-    `<RacunZahtjev>` +
+    `${XML_DECL}` +
+    `<Zahtjev ${XMLNS}>` +
     `<BrojZahtjeva>${n}</BrojZahtjeva>` +
     `<VrstaZahtjeva>4</VrstaZahtjeva>` +
-    `</RacunZahtjev>`;
+    `<Parametri />` +
+    `</Zahtjev>`;
 
   return postXml("/sdi.xml", body);
 }
@@ -325,15 +327,23 @@ export function stampatiPeriodicniIzvjestaj(
   doDatuma: string
 ): Promise<TringResponse> {
   const n = nextRequestNumber();
+
+  // Convert YYYY-MM-DD to d.M.yyyy HH:mm:ss format expected by Tring
+  const fromParts = odDatuma.split('-');
+  const toParts = doDatuma.split('-');
+  const fromFormatted = `${parseInt(fromParts[2])}.${parseInt(fromParts[1])}.${fromParts[0]} 00:00:00`;
+  const toFormatted = `${parseInt(toParts[2])}.${parseInt(toParts[1])}.${toParts[0]} 23:59:59`;
+
   const body =
-    `<RacunZahtjev>` +
+    `${XML_DECL}` +
+    `<Zahtjev ${XMLNS}>` +
     `<BrojZahtjeva>${n}</BrojZahtjeva>` +
     `<VrstaZahtjeva>5</VrstaZahtjeva>` +
-    `<NoviObjekat>` +
-    `<OdDatuma>${escapeXml(odDatuma)}</OdDatuma>` +
-    `<DoDatuma>${escapeXml(doDatuma)}</DoDatuma>` +
-    `</NoviObjekat>` +
-    `</RacunZahtjev>`;
+    `<Parametri>` +
+    `<Parametar><Naziv>odDatuma</Naziv><Vrijednost>${fromFormatted}</Vrijednost></Parametar>` +
+    `<Parametar><Naziv>doDatuma</Naziv><Vrijednost>${toFormatted}</Vrijednost></Parametar>` +
+    `</Parametri>` +
+    `</Zahtjev>`;
 
   return postXml("/spi.xml", body);
 }

@@ -46,6 +46,13 @@ export default function NarudzbeScreen() {
       const data = {
         brojRacuna: selectedOrder.brojFiskalnogRacuna,
         stavke: selectedOrder.stavke || [],
+        kupac: selectedOrder.kupacIdBroj ? {
+          idBroj: selectedOrder.kupacIdBroj,
+          naziv: selectedOrder.kupacNaziv || '',
+          adresa: selectedOrder.kupacAdresa || '',
+          postanskiBroj: selectedOrder.kupacPostanskiBroj || '',
+          grad: selectedOrder.kupacGrad || '',
+        } : undefined,
       };
 
       const result = await window.api.tringPrintRefund(data);
