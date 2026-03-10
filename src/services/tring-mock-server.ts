@@ -141,13 +141,13 @@ function handleRequest(
   const path = url.split("?")[0];
 
   switch (path) {
-    case "/init.xml": {
+    case "/inicijalizacija": {
       const operator = extractTag(body, "BrojOperatora") ?? "?";
       console.log(`[mock-tring] Inicijalizacija operatora ${operator}`);
       return { status: 200, xml: okResponse() };
     }
 
-    case "/ua.xml": {
+    case "/ua": {
       const sifra = extractTag(body, "Sifra") ?? "?";
       const naziv = extractTag(body, "Naziv") ?? "?";
       const cijena = extractTag(body, "Cijena") ?? "?";
@@ -155,7 +155,7 @@ function handleRequest(
       return { status: 200, xml: okResponse() };
     }
 
-    case "/sfr.xml": {
+    case "/sfr": {
       receiptCounter++;
       const { date, time } = now();
       logReceipt("FISKALNI RAČUN", String(receiptCounter), body);
@@ -169,7 +169,7 @@ function handleRequest(
       };
     }
 
-    case "/srr.xml": {
+    case "/srr": {
       refundCounter++;
       const { date, time } = now();
       const origBroj = extractTag(body, "BrojRacuna") ?? "?";
@@ -184,20 +184,20 @@ function handleRequest(
       };
     }
 
-    case "/sps.xml": {
-      console.log("[mock-tring] sps.xml - Presjek stanja (X-report)");
+    case "/sps": {
+      console.log("[mock-tring] Presjek stanja (X-report)");
       console.log("[mock-tring] Body:", body);
       return { status: 200, xml: okResponse() };
     }
 
-    case "/sdi.xml": {
-      console.log("[mock-tring] sdi.xml - Dnevni izvjestaj (Z-report)");
+    case "/sdi": {
+      console.log("[mock-tring] Dnevni izvjestaj (Z-report)");
       console.log("[mock-tring] Body:", body);
       return { status: 200, xml: okResponse() };
     }
 
-    case "/spi.xml": {
-      console.log("[mock-tring] spi.xml - Periodicni izvjestaj");
+    case "/spi": {
+      console.log("[mock-tring] Periodicni izvjestaj");
       console.log("[mock-tring] Body:", body);
       return { status: 200, xml: okResponse() };
     }

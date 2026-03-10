@@ -89,7 +89,7 @@ function postXml(path: string, body: string): Promise<TringResponse> {
         path,
         method: "POST",
         headers: {
-          "Content-Type": "application/xml",
+          "Content-Type": "text/xml",
           "Content-Length": Buffer.byteLength(body, "utf-8"),
         },
         timeout: TIMEOUT_MS,
@@ -184,7 +184,7 @@ function kupacToXml(k: Kupac): string {
   );
 }
 
-// POST /init.xml
+// POST /inicijalizacija
 export function inicijalizacija(
   operatorId: number,
   password: string
@@ -196,10 +196,10 @@ export function inicijalizacija(
     `<Lozinka>${password}</Lozinka>` +
     `</Operator>`;
 
-  return postXml("/init.xml", body);
+  return postXml("/inicijalizacija", body);
 }
 
-// POST /ua.xml - VrstaZahtjeva=105
+// POST /ua - VrstaZahtjeva=105
 export function upisiArtikal(artikal: Artikal): Promise<TringResponse> {
   const n = nextRequestNumber();
   const body =
@@ -210,10 +210,10 @@ export function upisiArtikal(artikal: Artikal): Promise<TringResponse> {
     `<NoviObjekat>${artikalToXml(artikal)}</NoviObjekat>` +
     `</RacunZahtjev>`;
 
-  return postXml("/ua.xml", body);
+  return postXml("/ua", body);
 }
 
-// POST /sfr.xml - VrstaZahtjeva=0
+// POST /sfr - VrstaZahtjeva=0
 export function stampatiFiskalniRacun(racun: Racun): Promise<TringResponse> {
   const n = nextRequestNumber();
 
@@ -248,16 +248,16 @@ export function stampatiFiskalniRacun(racun: Racun): Promise<TringResponse> {
     `<NoviObjekat>` +
     kupacXml +
     `<StavkeRacuna>${stavkeXml}</StavkeRacuna>` +
-    `<VrstePlacanja>${placanjaXml}</VrstePlacanja>` +
+    `<VrstaPlacanja>${placanjaXml}</VrstaPlacanja>` +
     `<Napomena>${racun.napomena ? escapeXml(racun.napomena) : ""}</Napomena>` +
     `<BrojRacuna>${racun.brojRacuna ?? 0}</BrojRacuna>` +
     `</NoviObjekat>` +
     `</RacunZahtjev>`;
 
-  return postXml("/sfr.xml", body);
+  return postXml("/sfr", body);
 }
 
-// POST /srr.xml - VrstaZahtjeva=2
+// POST /srr - VrstaZahtjeva=2
 export function stampatiReklamiraniRacun(
   racun: ReklamiraniRacun
 ): Promise<TringResponse> {
@@ -290,10 +290,10 @@ export function stampatiReklamiraniRacun(
     `</NoviObjekat>` +
     `</RacunZahtjev>`;
 
-  return postXml("/srr.xml", body);
+  return postXml("/srr", body);
 }
 
-// POST /sps.xml - VrstaZahtjeva=3 (X-report)
+// POST /sps - VrstaZahtjeva=3 (X-report)
 export function stampatiPresjekStanja(): Promise<TringResponse> {
   const n = nextRequestNumber();
   const body =
@@ -304,10 +304,10 @@ export function stampatiPresjekStanja(): Promise<TringResponse> {
     `<Parametri />` +
     `</Zahtjev>`;
 
-  return postXml("/sps.xml", body);
+  return postXml("/sps", body);
 }
 
-// POST /sdi.xml - VrstaZahtjeva=4 (Z-report)
+// POST /sdi - VrstaZahtjeva=4 (Z-report)
 export function stampatiDnevniIzvjestaj(): Promise<TringResponse> {
   const n = nextRequestNumber();
   const body =
@@ -318,10 +318,10 @@ export function stampatiDnevniIzvjestaj(): Promise<TringResponse> {
     `<Parametri />` +
     `</Zahtjev>`;
 
-  return postXml("/sdi.xml", body);
+  return postXml("/sdi", body);
 }
 
-// POST /spi.xml - VrstaZahtjeva=5
+// POST /spi - VrstaZahtjeva=5
 export function stampatiPeriodicniIzvjestaj(
   odDatuma: string,
   doDatuma: string
@@ -345,5 +345,5 @@ export function stampatiPeriodicniIzvjestaj(
     `</Parametri>` +
     `</Zahtjev>`;
 
-  return postXml("/spi.xml", body);
+  return postXml("/spi", body);
 }
