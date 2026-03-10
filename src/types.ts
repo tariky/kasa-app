@@ -114,3 +114,31 @@ export interface TringSettings {
   operatorId: number;
   operatorPassword: string;
 }
+
+export interface NivelacijaStavka {
+  id: number;
+  nivelacijaId: number;
+  productId: number;
+  kolicina: number;
+  staraCijena: number;
+  novaCijena: number;
+  razlika: number;
+  ukupnaRazlika: number;
+  pdvStopa: string;
+  productNaziv?: string;
+  productSifra?: string;
+  productJm?: string;
+}
+
+export interface Nivelacija {
+  id: number;
+  brojNivelacije: string;
+  datum: string;
+  primkaId: number | null;
+  napomena: string | null;
+  createdAt: string;
+  stavke?: NivelacijaStavka[];
+  primkaBroj?: string;
+  stavkiCount?: number;
+  ukupnaRazlika?: number;
+}

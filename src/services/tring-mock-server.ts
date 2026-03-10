@@ -4,6 +4,7 @@
 import * as http from "node:http";
 
 const DEFAULT_PORT = 8085;
+const PRINT_DELAY_MS = 2500; // Simulate real printer delay
 
 let receiptCounter = 0;
 let refundCounter = 0;
@@ -223,11 +224,17 @@ export function startMockTringServer(port: number = DEFAULT_PORT): http.Server {
       const body = Buffer.concat(chunks).toString("utf-8");
       const { status, xml } = handleRequest(req.url ?? "/", body);
 
-      res.writeHead(status, {
-        "Content-Type": "application/xml",
-        "Content-Length": Buffer.byteLength(xml, "utf-8"),
-      });
-      res.end(xml);
+      // Simulate printer delay for receipt/refund endpoints
+      const path = (req.url ?? "/").split("?")[0];
+      const delay = ["/sfr", "/srr"].includes(path) ? PRINT_DELAY_MS : 300;
+
+      setTimeout(() => {
+        res.writeHead(status, {
+          "Content-Type": "application/xml",
+          "Content-Length": Buffer.byteLength(xml, "utf-8"),
+        });
+        res.end(xml);
+      }, delay);
     });
   });
 

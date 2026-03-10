@@ -36,6 +36,8 @@ interface Window {
     getNextBrojUlaza: () => Promise<string>;
     updatePrimka: (data: any) => Promise<any>;
     deletePrimka: (id: number) => Promise<any>;
+    getNivelacije: (from?: string, to?: string) => Promise<any[]>;
+    getNivelacija: (id: number) => Promise<any>;
     getOrders: () => Promise<any[]>;
     getOrder: (id: number) => Promise<any>;
     createOrder: (data: any) => Promise<any>;
@@ -50,6 +52,8 @@ interface Window {
     tringWriteArticle: (data: any) => Promise<any>;
     tringGetLogs: () => Promise<any[]>;
     tringClearLogs: () => Promise<any>;
+    getSetting: (key: string) => Promise<string | null>;
+    setSetting: (key: string, value: string) => Promise<any>;
     getTringSettings: () => Promise<any>;
     saveTringSettings: (data: any) => Promise<any>;
     getFirmaSettings: () => Promise<{ naziv: string; adresa: string; grad: string; idBroj: string; pdvBroj: string; skladiste: string; logo: string }>;

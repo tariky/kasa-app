@@ -35,9 +35,9 @@ export default function MainLayout({ user, onLogout }: Props) {
         {/* Brand */}
         <div className="p-5 pb-4">
           <div className="flex items-center gap-3">
-            <img src={appIcon} alt="Kasa" className="w-9 h-9 rounded-lg shadow-sm shadow-blue-500/20" />
+            <img src={appIcon} alt="Pazar" className="w-9 h-9 rounded-lg shadow-sm shadow-blue-500/20" />
             <div>
-              <h1 className="text-base font-bold tracking-tight leading-none">Kasa</h1>
+              <h1 className="text-base font-bold tracking-tight leading-none">Pazar</h1>
               <p className="text-[11px] text-slate-500 mt-0.5">{user.ime}</p>
             </div>
           </div>

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Search, Plus, Minus, X, ShoppingCart, ChevronDown, User as UserIcon, Banknote, CreditCard, Building, FileCheck, Loader2 } from 'lucide-react';
+import { Search, Plus, Minus, X, ShoppingCart, ChevronDown, User as UserIcon, Banknote, CreditCard, Building, FileCheck, Loader2, Printer } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -44,6 +44,7 @@ export default function KasaScreen({ user }: KasaScreenProps) {
   const [kupacSearching, setKupacSearching] = useState(false);
   const kupacDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [focusedIndex, setFocusedIndex] = useState(-1);
+  const [dailyTotal, setDailyTotal] = useState<number | null>(null);
   const qtyInputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -103,6 +104,18 @@ export default function KasaScreen({ user }: KasaScreenProps) {
     }, 200);
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   }, [query]);
+
+  // Load daily total setting + data
+  const loadDailyTotal = useCallback(async () => {
+    const enabled = await window.api.getSetting('kasa.showDailyTotal');
+    if (enabled !== 'true') { setDailyTotal(null); return; }
+    const today = new Date().toISOString().split('T')[0];
+    const orders = await window.api.getReportData('dnevni', today, today);
+    const completed = orders.filter((o: any) => o.status === 'completed');
+    setDailyTotal(completed.reduce((s: number, o: any) => s + o.ukupno, 0));
+  }, []);
+
+  useEffect(() => { loadDailyTotal(); }, [loadDailyTotal]);
 
   // Cart calculations
   const subtotal = cart.reduce((sum, item) =>
@@ -234,7 +247,7 @@ export default function KasaScreen({ user }: KasaScreenProps) {
   });
 
   const handleFinalize = async () => {
-    if (cart.length === 0) return;
+    if (cart.length === 0 || loading) return;
     setLoading(true);
     setMessage(null);
     try {
@@ -271,6 +284,7 @@ export default function KasaScreen({ user }: KasaScreenProps) {
       setCart([]); setPaymentAmount(''); setKupacOpen(false); clearKupac();
       setQuery(''); setProducts([]);
       setMessage({ type: 'success', text: `Račun #${brojFiskalnogRacuna} uspješno kreiran${datumRacuna ? ` — ${datumRacuna} ${vrijemeRacuna}` : ''}` });
+      loadDailyTotal();
       setTimeout(() => searchInputRef.current?.focus(), 50);
     } catch (err: any) {
       setMessage({ type: 'error', text: `Greška: ${err?.message || 'Nepoznata greška'}` });
@@ -401,6 +415,14 @@ export default function KasaScreen({ user }: KasaScreenProps) {
             </Button>
           )}
         </div>
+        {dailyTotal !== null && (
+          <div className="px-5 pb-3 -mt-1">
+            <div className="flex items-center justify-between bg-slate-50 rounded-lg px-3 py-2">
+              <span className="text-[11px] font-medium text-slate-400 uppercase tracking-wider">Danas</span>
+              <span className="text-[13px] font-bold font-mono tabular-nums text-slate-700">{formatKM(dailyTotal)}</span>
+            </div>
+          </div>
+        )}
 
         {/* Cart items */}
         <ScrollArea className="flex-1 min-h-0">
@@ -630,24 +652,57 @@ export default function KasaScreen({ user }: KasaScreenProps) {
               disabled={cart.length === 0 || loading}
               onClick={handleFinalize}
             >
-              {loading ? (
-                <span className="flex items-center gap-2">
-                  <Loader2 className="h-5 w-5 animate-spin" />
-                  Štampanje...
-                </span>
-              ) : (
-                <span className="flex items-center gap-2">
-                  Naplati
-                  {cart.length > 0 && (
-                    <span className="font-mono tabular-nums opacity-80">{formatKM(total)}</span>
-                  )}
-                  <kbd className="ml-1 px-1.5 py-0.5 rounded-md bg-white/15 text-[11px] font-mono font-normal">F5</kbd>
-                </span>
-              )}
+              <span className="flex items-center gap-2">
+                Naplati
+                {cart.length > 0 && (
+                  <span className="font-mono tabular-nums opacity-80">{formatKM(total)}</span>
+                )}
+                <kbd className="ml-1 px-1.5 py-0.5 rounded-md bg-white/15 text-[11px] font-mono font-normal">F5</kbd>
+              </span>
             </Button>
           </div>
         </div>
       </div>
+
+      {/* Printing overlay */}
+      {loading && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm printing-overlay-enter">
+          <div className="bg-white rounded-3xl shadow-2xl shadow-slate-900/20 p-10 flex flex-col items-center gap-6 printing-card-enter">
+            {/* Printer animation */}
+            <div className="relative w-24 h-24">
+              {/* Glow ring */}
+              <div className="absolute inset-0 rounded-full bg-blue-500/10 printing-pulse" />
+              {/* Icon container */}
+              <div className="absolute inset-2 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 shadow-lg shadow-blue-500/30 flex items-center justify-center">
+                <Printer className="h-9 w-9 text-white printing-icon" />
+              </div>
+              {/* Receipt paper coming out */}
+              <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-8 printing-receipt">
+                <div className="w-full bg-white border border-slate-200 rounded-b-sm shadow-sm">
+                  <div className="px-1 py-0.5 space-y-0.5">
+                    <div className="h-[2px] bg-slate-200 rounded-full w-full" />
+                    <div className="h-[2px] bg-slate-200 rounded-full w-3/4" />
+                    <div className="h-[2px] bg-slate-200 rounded-full w-full" />
+                    <div className="h-[2px] bg-slate-100 rounded-full w-1/2" />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="text-center">
+              <p className="text-lg font-semibold text-slate-800">Štampanje računa</p>
+              <p className="text-sm text-slate-400 mt-1">Molimo sačekajte...</p>
+            </div>
+
+            {/* Animated dots */}
+            <div className="flex items-center gap-1.5">
+              <div className="w-2 h-2 rounded-full bg-blue-500 printing-dot" style={{ animationDelay: '0ms' }} />
+              <div className="w-2 h-2 rounded-full bg-blue-500 printing-dot" style={{ animationDelay: '150ms' }} />
+              <div className="w-2 h-2 rounded-full bg-blue-500 printing-dot" style={{ animationDelay: '300ms' }} />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Quantity dialog */}
       <Dialog open={!!qtyProduct} onOpenChange={(open) => { if (!open) setQtyProduct(null); }}>
@@ -708,6 +763,58 @@ export default function KasaScreen({ user }: KasaScreenProps) {
         }
         .kasa-item-enter {
           animation: kasa-item-enter 0.2s ease-out both;
+        }
+
+        @keyframes printing-overlay-enter {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+        .printing-overlay-enter {
+          animation: printing-overlay-enter 0.25s ease-out both;
+        }
+
+        @keyframes printing-card-enter {
+          from { opacity: 0; transform: scale(0.9) translateY(10px); }
+          to { opacity: 1; transform: scale(1) translateY(0); }
+        }
+        .printing-card-enter {
+          animation: printing-card-enter 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+        }
+
+        @keyframes printing-pulse {
+          0%, 100% { transform: scale(1); opacity: 0.4; }
+          50% { transform: scale(1.15); opacity: 0.8; }
+        }
+        .printing-pulse {
+          animation: printing-pulse 1.8s ease-in-out infinite;
+        }
+
+        @keyframes printing-icon {
+          0%, 100% { transform: translateY(0); }
+          25% { transform: translateY(-1px); }
+          75% { transform: translateY(1px); }
+        }
+        .printing-icon {
+          animation: printing-icon 0.6s ease-in-out infinite;
+        }
+
+        @keyframes printing-receipt {
+          0% { height: 0; opacity: 0; }
+          30% { opacity: 1; }
+          100% { height: 28px; opacity: 1; }
+        }
+        .printing-receipt {
+          animation: printing-receipt 1.5s ease-out forwards;
+          overflow: hidden;
+          height: 0;
+        }
+
+        @keyframes printing-dot {
+          0%, 60%, 100% { transform: scale(0.6); opacity: 0.3; }
+          30% { transform: scale(1); opacity: 1; }
+        }
+        .printing-dot {
+          animation: printing-dot 1.2s ease-in-out infinite;
         }
       `}</style>
     </div>

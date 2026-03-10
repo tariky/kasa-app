@@ -115,6 +115,30 @@ export const schema = `
     value TEXT
   );
 
+  CREATE TABLE IF NOT EXISTS nivelacije (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    brojNivelacije TEXT NOT NULL UNIQUE,
+    datum TEXT NOT NULL,
+    primkaId INTEGER,
+    napomena TEXT,
+    createdAt TEXT DEFAULT (datetime('now','localtime')),
+    FOREIGN KEY (primkaId) REFERENCES primke(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS nivelacija_stavke (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nivelacijaId INTEGER NOT NULL,
+    productId INTEGER NOT NULL,
+    kolicina REAL NOT NULL,
+    staraCijena REAL NOT NULL,
+    novaCijena REAL NOT NULL,
+    razlika REAL NOT NULL,
+    ukupnaRazlika REAL NOT NULL,
+    pdvStopa TEXT NOT NULL,
+    FOREIGN KEY (nivelacijaId) REFERENCES nivelacije(id),
+    FOREIGN KEY (productId) REFERENCES products(id)
+  );
+
   CREATE INDEX IF NOT EXISTS idx_products_sifra ON products(sifra);
   CREATE INDEX IF NOT EXISTS idx_products_barkod ON products(barkod);
   CREATE INDEX IF NOT EXISTS idx_stock_movements_productId ON stock_movements(productId);
@@ -122,4 +146,5 @@ export const schema = `
   CREATE INDEX IF NOT EXISTS idx_order_items_productId ON order_items(productId);
   CREATE INDEX IF NOT EXISTS idx_primka_stavke_primkaId ON primka_stavke(primkaId);
   CREATE INDEX IF NOT EXISTS idx_primka_stavke_productId ON primka_stavke(productId);
+  CREATE INDEX IF NOT EXISTS idx_nivelacija_stavke_nivelacijaId ON nivelacija_stavke(nivelacijaId);
 `;

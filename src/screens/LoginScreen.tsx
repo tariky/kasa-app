@@ -61,8 +61,8 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
       <div className="relative z-10 w-80">
         {/* Logo area */}
         <div className="text-center mb-8">
-          <img src={appIcon} alt="Kasa" className="w-16 h-16 rounded-2xl mb-4 shadow-lg shadow-blue-500/20 mx-auto" />
-          <h1 className="text-2xl font-bold text-white tracking-tight">Kasa</h1>
+          <img src={appIcon} alt="Pazar" className="w-16 h-16 rounded-2xl mb-4 shadow-lg shadow-blue-500/20 mx-auto" />
+          <h1 className="text-2xl font-bold text-white tracking-tight">Pazar</h1>
           <p className="text-sm text-slate-500 mt-1">Unesite PIN za prijavu</p>
         </div>
 

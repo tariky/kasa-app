@@ -13,6 +13,7 @@ const config: ForgeConfig = {
   packagerConfig: {
     asar: false,
     icon: path.resolve(__dirname, 'src/assets/icon'),
+    extraResource: [path.resolve(__dirname, 'src/assets/icon.png')],
   },
   rebuildConfig: {
     force: true,
@@ -20,6 +21,7 @@ const config: ForgeConfig = {
   makers: [
     new MakerSquirrel({
       setupIcon: path.resolve(__dirname, 'src/assets/icon.ico'),
+      iconUrl: `file://${path.resolve(__dirname, 'src/assets/icon.ico')}`,
     }),
     new MakerZIP({}, ['darwin']),
     new MakerRpm({}),

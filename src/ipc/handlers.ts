@@ -310,12 +310,40 @@ export function registerIpcHandlers(): void {
         "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'ulaz', ?, 'primka', ?)"
       );
 
+      // Collect price diffs BEFORE inserting stock (so stock reflects pre-delivery state)
+      // Deduplicate by productId — same product may appear on multiple stavke lines
+      const priceDiffMap = new Map<number, {
+        productId: number; kolicina: number; staraCijena: number; novaCijena: number; pdvStopa: string;
+      }>();
+
+      for (const stavka of data.stavke) {
+        if (priceDiffMap.has(stavka.productId)) continue; // already recorded
+        const product = db.prepare('SELECT cijena FROM products WHERE id = ?').get(stavka.productId) as { cijena: number } | undefined;
+        if (product && Math.abs(product.cijena - stavka.cijena) > 0.001) {
+          const existingStock = getProductStock(stavka.productId);
+          if (existingStock > 0) {
+            priceDiffMap.set(stavka.productId, {
+              productId: stavka.productId,
+              kolicina: existingStock,
+              staraCijena: product.cijena,
+              novaCijena: stavka.cijena,
+              pdvStopa: stavka.pdvStopa,
+            });
+          }
+        }
+      }
+
+      // Now insert stavke and stock movements
       for (const stavka of data.stavke) {
         insertStavka.run(primkaId, stavka.productId, stavka.kolicina, stavka.cijena, stavka.nabavnaCijena, stavka.rabat, stavka.pdvStopa);
         insertStock.run(stavka.productId, stavka.kolicina, primkaId);
       }
 
-      return { id: primkaId };
+      const priceDiffs = Array.from(priceDiffMap.values());
+
+      createNivelacijaInTransaction(primkaId, priceDiffs);
+
+      return { id: primkaId, nivelacijaCreated: priceDiffs.length > 0 };
     });
 
     return createPrimka();
@@ -333,11 +361,27 @@ export function registerIpcHandlers(): void {
       db.prepare('UPDATE primke SET brojPrimke = ?, datum = ?, dobavljacNaziv = ?, dobavljacId = ?, dobavljacAdresa = ?, napomena = ?, brojFakture = ? WHERE id = ?')
         .run(data.brojPrimke, datum, data.dobavljacNaziv ?? null, data.dobavljacId ?? null, data.dobavljacAdresa ?? null, data.napomena ?? null, data.brojFakture ?? null, data.id);
 
+      // Clean up old nivelacija and revert product prices it changed
+      const oldNivStavke = db.prepare(`
+        SELECT ns.productId, ns.staraCijena
+        FROM nivelacija_stavke ns
+        JOIN nivelacije n ON n.id = ns.nivelacijaId
+        WHERE n.primkaId = ?
+      `).all(data.id) as Array<{ productId: number; staraCijena: number }>;
+
+      for (const ons of oldNivStavke) {
+        db.prepare("UPDATE products SET cijena = ?, updatedAt = datetime('now','localtime') WHERE id = ?")
+          .run(ons.staraCijena, ons.productId);
+      }
+
+      db.prepare('DELETE FROM nivelacija_stavke WHERE nivelacijaId IN (SELECT id FROM nivelacije WHERE primkaId = ?)').run(data.id);
+      db.prepare('DELETE FROM nivelacije WHERE primkaId = ?').run(data.id);
+
       // Delete old stavke and stock movements
       db.prepare('DELETE FROM primka_stavke WHERE primkaId = ?').run(data.id);
       db.prepare("DELETE FROM stock_movements WHERE referenceType = 'primka' AND referenceId = ?").run(data.id);
 
-      // Insert new stavke and stock movements
+      // Collect price diffs BEFORE inserting stock, deduplicate by productId
       const insertStavka = db.prepare(
         'INSERT INTO primka_stavke (primkaId, productId, kolicina, cijena, nabavnaCijena, rabat, pdvStopa) VALUES (?, ?, ?, ?, ?, ?, ?)'
       );
@@ -345,12 +389,37 @@ export function registerIpcHandlers(): void {
         "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'ulaz', ?, 'primka', ?)"
       );
 
+      const priceDiffMap = new Map<number, {
+        productId: number; kolicina: number; staraCijena: number; novaCijena: number; pdvStopa: string;
+      }>();
+
+      for (const stavka of data.stavke) {
+        if (!priceDiffMap.has(stavka.productId)) {
+          const product = db.prepare('SELECT cijena FROM products WHERE id = ?').get(stavka.productId) as { cijena: number } | undefined;
+          if (product && Math.abs(product.cijena - stavka.cijena) > 0.001) {
+            const existingStock = getProductStock(stavka.productId);
+            if (existingStock > 0) {
+              priceDiffMap.set(stavka.productId, {
+                productId: stavka.productId,
+                kolicina: existingStock,
+                staraCijena: product.cijena,
+                novaCijena: stavka.cijena,
+                pdvStopa: stavka.pdvStopa,
+              });
+            }
+          }
+        }
+      }
+
+      // Now insert stavke and stock movements
       for (const stavka of data.stavke) {
         insertStavka.run(data.id, stavka.productId, stavka.kolicina, stavka.cijena, stavka.nabavnaCijena, stavka.rabat, stavka.pdvStopa);
         insertStock.run(stavka.productId, stavka.kolicina, data.id);
       }
 
-      return { id: data.id };
+      createNivelacijaInTransaction(data.id, Array.from(priceDiffMap.values()));
+
+      return { id: data.id, nivelacijaCreated: priceDiffMap.size > 0 };
     });
 
     return updatePrimka();
@@ -358,12 +427,61 @@ export function registerIpcHandlers(): void {
 
   handle('primka:delete', (id: number) => {
     const deletePrimka = db.transaction(() => {
+      // Clean up associated nivelacije
+      db.prepare('DELETE FROM nivelacija_stavke WHERE nivelacijaId IN (SELECT id FROM nivelacije WHERE primkaId = ?)').run(id);
+      db.prepare('DELETE FROM nivelacije WHERE primkaId = ?').run(id);
+
       db.prepare('DELETE FROM primka_stavke WHERE primkaId = ?').run(id);
       db.prepare("DELETE FROM stock_movements WHERE referenceType = 'primka' AND referenceId = ?").run(id);
       db.prepare('DELETE FROM primke WHERE id = ?').run(id);
     });
 
     return deletePrimka();
+  });
+
+  // ─── Nivelacije ──────────────────────────────────────────
+
+  handle('nivelacija:getAll', (from?: string, to?: string) => {
+    if (from && to) {
+      return db.prepare(`
+        SELECT n.*,
+          p.brojPrimke AS primkaBroj,
+          (SELECT COUNT(*) FROM nivelacija_stavke ns WHERE ns.nivelacijaId = n.id) AS stavkiCount,
+          (SELECT COALESCE(SUM(ns.ukupnaRazlika), 0) FROM nivelacija_stavke ns WHERE ns.nivelacijaId = n.id) AS ukupnaRazlika
+        FROM nivelacije n
+        LEFT JOIN primke p ON p.id = n.primkaId
+        WHERE date(n.datum) BETWEEN date(?) AND date(?)
+        ORDER BY n.datum DESC
+      `).all(from, to);
+    }
+    return db.prepare(`
+      SELECT n.*,
+        p.brojPrimke AS primkaBroj,
+        (SELECT COUNT(*) FROM nivelacija_stavke ns WHERE ns.nivelacijaId = n.id) AS stavkiCount,
+        (SELECT COALESCE(SUM(ns.ukupnaRazlika), 0) FROM nivelacija_stavke ns WHERE ns.nivelacijaId = n.id) AS ukupnaRazlika
+      FROM nivelacije n
+      LEFT JOIN primke p ON p.id = n.primkaId
+      ORDER BY n.datum DESC
+    `).all();
+  });
+
+  handle('nivelacija:get', (id: number) => {
+    const niv = db.prepare(`
+      SELECT n.*, p.brojPrimke AS primkaBroj
+      FROM nivelacije n
+      LEFT JOIN primke p ON p.id = n.primkaId
+      WHERE n.id = ?
+    `).get(id) as any;
+    if (!niv) throw new Error('Nivelacija ne postoji');
+
+    niv.stavke = db.prepare(`
+      SELECT ns.*, p.naziv AS productNaziv, p.sifra AS productSifra, p.jm AS productJm
+      FROM nivelacija_stavke ns
+      LEFT JOIN products p ON p.id = ns.productId
+      WHERE ns.nivelacijaId = ?
+    `).all(id);
+
+    return niv;
   });
 
   // ─── Orders ──────────────────────────────────────────────
@@ -535,6 +653,17 @@ export function registerIpcHandlers(): void {
     };
   });
 
+  handle('settings:get', (key: string) => {
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
+    return row?.value ?? null;
+  });
+
+  handle('settings:set', (key: string, value: string) => {
+    db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+      .run(key, value);
+    return { success: true };
+  });
+
   handle('settings:saveFirma', (data: {
     naziv: string; adresa: string; grad: string;
     idBroj: string; pdvBroj: string; skladiste: string; logo: string;
@@ -592,6 +721,65 @@ export function registerIpcHandlers(): void {
     throw new Error(`Nepoznat tip izvještaja: ${type}`);
   });
 
+  // ─── Nivelacija Helpers ─────────────────────────────────
+
+  function getNextBrojNivelacije(): string {
+    const year = new Date().getFullYear();
+    const prefix = `NIV-${year}-`;
+    const row = db.prepare(
+      "SELECT MAX(CAST(SUBSTR(brojNivelacije, ?) AS INTEGER)) AS maxNum FROM nivelacije WHERE brojNivelacije LIKE ?"
+    ).get(prefix.length + 1, `${prefix}%`) as { maxNum: number | null } | undefined;
+    const next = (row?.maxNum ?? 0) + 1;
+    return `${prefix}${String(next).padStart(3, '0')}`;
+  }
+
+  function getProductStock(productId: number): number {
+    const row = db.prepare(`
+      SELECT COALESCE(
+        SUM(CASE WHEN tip = 'ulaz' THEN kolicina ELSE -kolicina END), 0
+      ) AS stanje
+      FROM stock_movements WHERE productId = ?
+    `).get(productId) as { stanje: number };
+    return row.stanje;
+  }
+
+  function createNivelacijaInTransaction(
+    primkaId: number | bigint,
+    priceDiffs: Array<{
+      productId: number;
+      kolicina: number;
+      staraCijena: number;
+      novaCijena: number;
+      pdvStopa: string;
+    }>
+  ): void {
+    if (priceDiffs.length === 0) return;
+
+    const brojNivelacije = getNextBrojNivelacije();
+    const datum = new Date().toISOString().split('T')[0];
+
+    const nivResult = db.prepare(
+      'INSERT INTO nivelacije (brojNivelacije, datum, primkaId) VALUES (?, ?, ?)'
+    ).run(brojNivelacije, datum, primkaId);
+
+    const nivelacijaId = nivResult.lastInsertRowid;
+
+    const insertStavka = db.prepare(
+      'INSERT INTO nivelacija_stavke (nivelacijaId, productId, kolicina, staraCijena, novaCijena, razlika, ukupnaRazlika, pdvStopa) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    );
+
+    const updatePrice = db.prepare(
+      "UPDATE products SET cijena = ?, updatedAt = datetime('now','localtime') WHERE id = ?"
+    );
+
+    for (const d of priceDiffs) {
+      const razlika = d.novaCijena - d.staraCijena;
+      const ukupnaRazlika = razlika * d.kolicina;
+      insertStavka.run(nivelacijaId, d.productId, d.kolicina, d.staraCijena, d.novaCijena, razlika, ukupnaRazlika, d.pdvStopa);
+      updatePrice.run(d.novaCijena, d.productId);
+    }
+  }
+
   // ─── Tring ──────────────────────────────────────────────
 
   // Load Tring settings from DB and configure the Tring client
@@ -610,6 +798,10 @@ export function registerIpcHandlers(): void {
       port: parseInt(map.port ?? '8085', 10),
     });
 
+    // Load dev logging setting
+    const devLogging = db.prepare("SELECT value FROM settings WHERE key = 'dev.logging'").get() as { value: string } | undefined;
+    Tring.setLoggingEnabled(devLogging?.value === 'true');
+
     return {
       operatorId: parseInt(map.operatorId ?? '0', 10),
       operatorPassword: map.operatorPassword ?? '0',
@@ -619,7 +811,7 @@ export function registerIpcHandlers(): void {
   handle('tring:init', async () => {
     const { operatorId, operatorPassword } = loadTringConfig();
     const result = await Tring.inicijalizacija(operatorId, operatorPassword);
-    console.log('[Tring] init:', JSON.stringify(result));
+    if (Tring.isLoggingEnabled()) console.log('[Tring] init:', JSON.stringify(result));
     return result;
   });
 
@@ -661,9 +853,9 @@ export function registerIpcHandlers(): void {
       napomena: data.napomena,
       brojRacuna: data.brojRacuna,
     };
-    console.log('[Tring] printReceipt request:', JSON.stringify(racun));
+    if (Tring.isLoggingEnabled()) console.log('[Tring] printReceipt request:', JSON.stringify(racun));
     const result = await Tring.stampatiFiskalniRacun(racun);
-    console.log('[Tring] printReceipt response:', JSON.stringify(result));
+    if (Tring.isLoggingEnabled()) console.log('[Tring] printReceipt response:', JSON.stringify(result));
     return result;
   });
 
@@ -693,37 +885,37 @@ export function registerIpcHandlers(): void {
       } : undefined,
       brojRacuna: Number(data.brojRacuna),
     };
-    console.log('[Tring] printRefund request:', JSON.stringify(racun));
+    if (Tring.isLoggingEnabled()) console.log('[Tring] printRefund request:', JSON.stringify(racun));
     const result = await Tring.stampatiReklamiraniRacun(racun);
-    console.log('[Tring] printRefund response:', JSON.stringify(result));
+    if (Tring.isLoggingEnabled()) console.log('[Tring] printRefund response:', JSON.stringify(result));
     return result;
   });
 
   handle('tring:xReport', async () => {
     loadTringConfig();
     const result = await Tring.stampatiPresjekStanja();
-    console.log('[Tring] xReport:', JSON.stringify(result));
+    if (Tring.isLoggingEnabled()) console.log('[Tring] xReport:', JSON.stringify(result));
     return result;
   });
 
   handle('tring:zReport', async () => {
     loadTringConfig();
     const result = await Tring.stampatiDnevniIzvjestaj();
-    console.log('[Tring] zReport:', JSON.stringify(result));
+    if (Tring.isLoggingEnabled()) console.log('[Tring] zReport:', JSON.stringify(result));
     return result;
   });
 
   handle('tring:periodicReport', async (from: string, to: string) => {
     loadTringConfig();
     const result = await Tring.stampatiPeriodicniIzvjestaj(from, to);
-    console.log('[Tring] periodicReport:', JSON.stringify(result));
+    if (Tring.isLoggingEnabled()) console.log('[Tring] periodicReport:', JSON.stringify(result));
     return result;
   });
 
   handle('tring:writeArticle', async (data: any) => {
     loadTringConfig();
     const result = await Tring.upisiArtikal(data);
-    console.log('[Tring] writeArticle:', JSON.stringify(result));
+    if (Tring.isLoggingEnabled()) console.log('[Tring] writeArticle:', JSON.stringify(result));
     return result;
   });
 

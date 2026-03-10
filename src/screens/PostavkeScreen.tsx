@@ -11,6 +11,7 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import { User, TringSettings } from '@/types';
 import {
@@ -49,6 +50,10 @@ export default function PostavkeScreen() {
   const [firmaStatus, setFirmaStatus] = useState('');
   const [backupStatus, setBackupStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
+  // ── Kasa settings ──
+  const [showDailyTotal, setShowDailyTotal] = useState(false);
+  const [devLogging, setDevLogging] = useState(false);
+
   // ── Debug state ──
   const [debugOpen, setDebugOpen] = useState(false);
   const [debugLogs, setDebugLogs] = useState<any[]>([]);
@@ -80,6 +85,12 @@ export default function PostavkeScreen() {
 
   useEffect(() => {
     loadUsers();
+  }, []);
+
+  // ── Load Kasa settings ──
+  useEffect(() => {
+    window.api.getSetting('kasa.showDailyTotal').then((v) => setShowDailyTotal(v === 'true'));
+    window.api.getSetting('dev.logging').then((v) => setDevLogging(v === 'true'));
   }, []);
 
   // ── Load Firma settings ──
@@ -806,6 +817,50 @@ export default function PostavkeScreen() {
                       {firmaStatus}
                     </div>
                   )}
+                </div>
+
+                {/* Kasa settings card */}
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm shadow-slate-200/50 overflow-hidden">
+                  <div className="px-6 py-4 border-b border-slate-100">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center">
+                        <Shield size={20} className="text-blue-500" />
+                      </div>
+                      <div>
+                        <h3 className="text-[15px] font-semibold text-slate-800">Postavke kase</h3>
+                        <p className="text-[12px] text-slate-400 mt-0.5">Podešavanja za kasa ekran</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="px-6 py-5 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-[13px] font-medium text-slate-700">Prikaži dnevni promet</p>
+                        <p className="text-[12px] text-slate-400 mt-0.5">Prikazuje ukupan promet za danas na kasa ekranu</p>
+                      </div>
+                      <Switch
+                        checked={showDailyTotal}
+                        onCheckedChange={async (checked) => {
+                          setShowDailyTotal(checked);
+                          await window.api.setSetting('kasa.showDailyTotal', String(checked));
+                        }}
+                      />
+                    </div>
+                    <Separator />
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-[13px] font-medium text-slate-700">Dev logiranje</p>
+                        <p className="text-[12px] text-slate-400 mt-0.5">Bilježi Tring XML zahtjeve i odgovore u memoriju</p>
+                      </div>
+                      <Switch
+                        checked={devLogging}
+                        onCheckedChange={async (checked) => {
+                          setDevLogging(checked);
+                          await window.api.setSetting('dev.logging', String(checked));
+                        }}
+                      />
+                    </div>
+                  </div>
                 </div>
 
                 {/* Database backup card */}

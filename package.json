@@ -1,8 +1,8 @@
 {
-  "name": "Kasa",
-  "productName": "Kasa",
+  "name": "Pazar",
+  "productName": "Pazar",
   "version": "1.0.0",
-  "description": "Kasa POS application for Bosnian market",
+  "description": "Pazar POS application for Bosnian market",
   "main": ".vite/build/main.js",
   "private": true,
   "scripts": {
@@ -54,6 +54,7 @@
     "@radix-ui/react-select": "^2.2.6",
     "@radix-ui/react-separator": "^1.1.8",
     "@radix-ui/react-slot": "^1.2.4",
+    "@radix-ui/react-switch": "^1.2.6",
     "@radix-ui/react-tabs": "^1.1.13",
     "@radix-ui/react-toast": "^1.2.15",
     "@radix-ui/react-tooltip": "^1.2.8",

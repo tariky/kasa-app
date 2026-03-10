@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, nativeImage } from 'electron';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
 import { registerIpcHandlers } from './ipc/handlers';
@@ -9,15 +9,27 @@ if (started) {
   app.quit();
 }
 
+// Resolve icon path – works in both dev and packaged builds
+const iconPath = app.isPackaged
+  ? path.join(process.resourcesPath, 'icon.png')
+  : path.join(__dirname, '../../src/assets/icon.png');
+
 const createWindow = () => {
   const mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
     minWidth: 1024,
     minHeight: 700,
+    show: false,
+    backgroundColor: '#0f172a',
+    icon: iconPath,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
     },
+  });
+
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.show();
   });
 
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
@@ -30,6 +42,23 @@ const createWindow = () => {
 };
 
 app.on('ready', () => {
+  // Set About panel info and dock icon before creating window
+  const appIcon = nativeImage.createFromPath(iconPath);
+
+  if (process.platform === 'darwin' && app.dock) {
+    app.dock.setIcon(appIcon);
+  }
+
+  app.setAboutPanelOptions({
+    applicationName: 'Pazar',
+    applicationVersion: '1.0.0',
+    version: '1.0.0',
+    copyright: '© 2026 Tarik Caplja / Lunatik',
+    credits: 'Razvio: Tarik Caplja\ntarik@lunatik.ba',
+    iconPath,        // Linux
+    icon: appIcon,   // macOS (NativeImage)
+  });
+
   registerIpcHandlers();
   createWindow();
 });

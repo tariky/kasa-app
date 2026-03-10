@@ -22,7 +22,7 @@ import {
   Plus, Trash2, FileText, Package, Search, Pencil, X,
   ClipboardList, PackagePlus, Hash, Barcode,
   DollarSign, Layers, Ruler, ChevronRight, Printer, Building2, Phone, Download, Wrench, Users,
-  ArrowUpRight, ArrowDownRight,
+  ArrowUpRight, ArrowDownRight, AlertTriangle,
 } from 'lucide-react';
 
 type SkladisteTab = 'artikli' | 'usluge' | 'primke' | 'dobavljaci' | 'kupci';
@@ -340,6 +340,16 @@ function NovaPrimkaDialog({
     { productId: null, kolicina: '', nabavnaCijena: '', rabat: '', cijena: '' },
   ]);
   const [saving, setSaving] = useState(false);
+  const [nivelacijaItems, setNivelacijaItems] = useState<Array<{
+    productId: number;
+    productNaziv: string;
+    kolicina: number;
+    staraCijena: number;
+    novaCijena: number;
+    razlika: number;
+    ukupnaRazlika: number;
+  }>>([]);
+  const [showNivelacija, setShowNivelacija] = useState(false);
 
   useEffect(() => {
     if (open) {
@@ -413,6 +423,40 @@ function NovaPrimkaDialog({
     );
     if (validStavke.length === 0) return;
 
+    // Check for price differences
+    const diffs: typeof nivelacijaItems = [];
+    for (const s of validStavke) {
+      const product = products.find(p => p.id === s.productId);
+      if (product && Math.abs(product.cijena - parseFloat(s.cijena)) > 0.001) {
+        const existingStock = product.stanje ?? 0;
+        if (existingStock > 0) {
+          const razlika = parseFloat(s.cijena) - product.cijena;
+          diffs.push({
+            productId: product.id,
+            productNaziv: product.naziv,
+            kolicina: existingStock,
+            staraCijena: product.cijena,
+            novaCijena: parseFloat(s.cijena),
+            razlika,
+            ukupnaRazlika: razlika * existingStock,
+          });
+        }
+      }
+    }
+
+    if (diffs.length > 0) {
+      setNivelacijaItems(diffs);
+      setShowNivelacija(true);
+      return;
+    }
+
+    await doSave();
+  };
+
+  const doSave = async () => {
+    const validStavke = stavke.filter(
+      (s) => s.productId != null && s.kolicina && s.nabavnaCijena && s.cijena,
+    );
     setSaving(true);
     try {
       const payload = {
@@ -449,6 +493,7 @@ function NovaPrimkaDialog({
   };
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-3xl p-0 gap-0 overflow-hidden">
         {/* Header */}
@@ -724,6 +769,76 @@ function NovaPrimkaDialog({
         </div>
       </DialogContent>
     </Dialog>
+
+    <Dialog open={showNivelacija} onOpenChange={setShowNivelacija}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <AlertTriangle className="h-5 w-5 text-amber-500" />
+            Nivelacija cijena
+          </DialogTitle>
+          <DialogDescription>
+            Sljedeći artikli imaju različitu prodajnu cijenu od trenutne. Sačuvanje primke će automatski kreirati nivelaciju i ažurirati cijene.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="max-h-[300px] overflow-y-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-xs text-muted-foreground border-b">
+                <th className="text-left py-2">Artikal</th>
+                <th className="text-right py-2">Kol.</th>
+                <th className="text-right py-2">Stara</th>
+                <th className="text-right py-2">Nova</th>
+                <th className="text-right py-2">Razlika</th>
+              </tr>
+            </thead>
+            <tbody>
+              {nivelacijaItems.map((item) => (
+                <tr key={item.productId} className="border-b border-slate-50">
+                  <td className="py-2 text-sm">{item.productNaziv}</td>
+                  <td className="py-2 text-right font-mono text-sm">{item.kolicina}</td>
+                  <td className="py-2 text-right font-mono text-sm">{formatKM(item.staraCijena)}</td>
+                  <td className="py-2 text-right font-mono text-sm">{formatKM(item.novaCijena)}</td>
+                  <td className={cn(
+                    "py-2 text-right font-mono text-sm font-medium",
+                    item.ukupnaRazlika > 0 ? "text-emerald-600" : "text-red-500"
+                  )}>
+                    {item.ukupnaRazlika > 0 ? '+' : ''}{formatKM(item.ukupnaRazlika)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="border-t-2">
+                <td colSpan={4} className="py-2 text-sm font-semibold">Ukupna razlika</td>
+                <td className={cn(
+                  "py-2 text-right font-mono text-sm font-bold",
+                  nivelacijaItems.reduce((s, i) => s + i.ukupnaRazlika, 0) > 0 ? "text-emerald-600" : "text-red-500"
+                )}>
+                  {formatKM(nivelacijaItems.reduce((s, i) => s + i.ukupnaRazlika, 0))}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setShowNivelacija(false)}>
+            Otkaži
+          </Button>
+          <Button
+            onClick={() => {
+              setShowNivelacija(false);
+              doSave();
+            }}
+          >
+            Sačuvaj sa nivelacijom
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    </>
   );
 }
 

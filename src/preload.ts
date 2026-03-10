@@ -38,6 +38,10 @@ contextBridge.exposeInMainWorld('api', {
   updatePrimka: (data: any) => ipcRenderer.invoke('primka:update', data),
   deletePrimka: (id: number) => ipcRenderer.invoke('primka:delete', id),
 
+  // Nivelacije
+  getNivelacije: (from?: string, to?: string) => ipcRenderer.invoke('nivelacija:getAll', from, to),
+  getNivelacija: (id: number) => ipcRenderer.invoke('nivelacija:get', id),
+
   // Orders
   getOrders: () => ipcRenderer.invoke('order:getAll'),
   getOrder: (id: number) => ipcRenderer.invoke('order:get', id),
@@ -57,6 +61,8 @@ contextBridge.exposeInMainWorld('api', {
   tringClearLogs: () => ipcRenderer.invoke('tring:clearLogs'),
 
   // Settings
+  getSetting: (key: string) => ipcRenderer.invoke('settings:get', key),
+  setSetting: (key: string, value: string) => ipcRenderer.invoke('settings:set', key, value),
   getTringSettings: () => ipcRenderer.invoke('settings:getTring'),
   saveTringSettings: (data: any) => ipcRenderer.invoke('settings:saveTring', data),
   getFirmaSettings: () => ipcRenderer.invoke('settings:getFirma'),

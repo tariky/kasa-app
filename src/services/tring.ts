@@ -21,6 +21,15 @@ export interface TringLogEntry {
 
 let logIdCounter = 0;
 const logEntries: TringLogEntry[] = [];
+let loggingEnabled = false;
+
+export function setLoggingEnabled(enabled: boolean): void {
+  loggingEnabled = enabled;
+}
+
+export function isLoggingEnabled(): boolean {
+  return loggingEnabled;
+}
 
 export function getLogs(): TringLogEntry[] {
   return logEntries;
@@ -31,6 +40,7 @@ export function clearLogs(): void {
 }
 
 function addLog(entry: Omit<TringLogEntry, 'id' | 'timestamp'>): void {
+  if (!loggingEnabled) return;
   logEntries.push({
     id: ++logIdCounter,
     timestamp: new Date().toISOString(),

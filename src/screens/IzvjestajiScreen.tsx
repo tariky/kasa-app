@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -7,10 +7,12 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import {
   Printer, FileText, AlertTriangle, TrendingUp, Package,
   ArrowUpRight, ArrowDownRight, RotateCcw, Calendar, Loader2,
-  ChevronRight, Zap, Clock, BarChart3,
+  ChevronRight, Zap, Clock, BarChart3, Download,
 } from 'lucide-react';
 import { cn, formatKM, formatDateTime, formatDate } from '@/lib/utils';
 import { Order, Primka } from '@/types';
+import { pdf } from '@react-pdf/renderer';
+import { NivelacijaPdf } from '@/components/NivelacijaPdf';
 
 function toDateStr(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -20,7 +22,7 @@ function fmtDisplay(d: Date): string {
   return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
 }
 
-type Tab = 'promet' | 'primke' | 'fiskalni';
+type Tab = 'promet' | 'primke' | 'nivelacije' | 'fiskalni';
 
 export default function IzvjestajiScreen() {
   const [dateFrom, setDateFrom] = useState(new Date());
@@ -35,8 +37,26 @@ export default function IzvjestajiScreen() {
   const [primkeData, setPrimkeData] = useState<Primka[]>([]);
   const [primkeLoading, setPrimkeLoading] = useState(false);
 
+  const [nivelacijeData, setNivelacijeData] = useState<any[]>([]);
+  const [nivelacijeLoading, setNivelacijeLoading] = useState(false);
+  const [expandedNivId, setExpandedNivId] = useState<number | null>(null);
+  const [expandedNivStavke, setExpandedNivStavke] = useState<any[]>([]);
+
+  const [firma, setFirma] = useState<any>(null);
+
   const [fiskalniStatus, setFiskalniStatus] = useState('');
   const [fiskalniError, setFiskalniError] = useState(false);
+
+  useEffect(() => {
+    window.api.getFirmaSettings().then(setFirma);
+  }, []);
+
+  // Auto-load data when tab or date range changes
+  useEffect(() => {
+    if (activeTab === 'promet') loadPromet();
+    else if (activeTab === 'primke') loadPrimke();
+    else if (activeTab === 'nivelacije') loadNivelacije();
+  }, [activeTab, dateFrom, dateTo]);
 
   const loadPromet = async () => {
     setPrometLoading(true);
@@ -59,6 +79,50 @@ export default function IzvjestajiScreen() {
       console.error('Primke load error:', err);
     } finally {
       setPrimkeLoading(false);
+    }
+  };
+
+  const loadNivelacije = async () => {
+    setNivelacijeLoading(true);
+    try {
+      const data = await window.api.getNivelacije(toDateStr(dateFrom), toDateStr(dateTo));
+      setNivelacijeData(data);
+    } catch (err) {
+      console.error('Nivelacije load error:', err);
+    } finally {
+      setNivelacijeLoading(false);
+    }
+  };
+
+  const loadNivelacijaDetail = async (id: number) => {
+    if (expandedNivId === id) {
+      setExpandedNivId(null);
+      return;
+    }
+    try {
+      const niv = await window.api.getNivelacija(id);
+      setExpandedNivStavke(niv.stavke || []);
+      setExpandedNivId(id);
+    } catch (err) {
+      console.error('Nivelacija detail error:', err);
+    }
+  };
+
+  const exportNivelacijaPdf = async (nivId: number) => {
+    if (!firma) return;
+    try {
+      const niv = await window.api.getNivelacija(nivId);
+      const blob = await pdf(<NivelacijaPdf nivelacija={niv} firma={firma} />).toBlob();
+      const arrayBuffer = await blob.arrayBuffer();
+      const savePath = await window.api.showSaveDialog({
+        defaultName: `${niv.brojNivelacije}.pdf`,
+        filters: [{ name: 'PDF', extensions: ['pdf'] }],
+      });
+      if (savePath) {
+        await window.api.writeFile(savePath, Array.from(new Uint8Array(arrayBuffer)) as any);
+      }
+    } catch (err) {
+      console.error('PDF export error:', err);
     }
   };
 
@@ -134,6 +198,7 @@ export default function IzvjestajiScreen() {
   const tabs: { id: Tab; label: string; icon: typeof TrendingUp }[] = [
     { id: 'promet', label: 'Promet', icon: TrendingUp },
     { id: 'primke', label: 'Ulaz robe', icon: Package },
+    { id: 'nivelacije', label: 'Nivelacije', icon: FileText },
     { id: 'fiskalni', label: 'Fiskalni', icon: Printer },
   ];
 
@@ -221,14 +286,14 @@ export default function IzvjestajiScreen() {
                 </PopoverContent>
               </Popover>
             </div>
-            {activeTab !== 'fiskalni' && (
+            {(activeTab === 'promet' || activeTab === 'primke' || activeTab === 'nivelacije') && (
               <Button
                 size="sm"
                 className="h-9 gap-2"
-                onClick={activeTab === 'promet' ? loadPromet : loadPrimke}
-                disabled={activeTab === 'promet' ? prometLoading : primkeLoading}
+                onClick={activeTab === 'promet' ? loadPromet : activeTab === 'primke' ? loadPrimke : loadNivelacije}
+                disabled={activeTab === 'promet' ? prometLoading : activeTab === 'primke' ? primkeLoading : nivelacijeLoading}
               >
-                {(activeTab === 'promet' ? prometLoading : primkeLoading) ? (
+                {(activeTab === 'promet' ? prometLoading : activeTab === 'primke' ? primkeLoading : nivelacijeLoading) ? (
                   <Loader2 size={14} className="animate-spin" />
                 ) : (
                   <BarChart3 size={14} />
@@ -521,6 +586,174 @@ export default function IzvjestajiScreen() {
                             </tr>
                           );
                         })}
+                      </tbody>
+                    </table>
+                  </ScrollArea>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ═══ NIVELACIJE TAB ═══ */}
+        {activeTab === 'nivelacije' && (
+          <div className="flex flex-col h-full">
+            {/* Summary cards */}
+            <div className="flex-shrink-0 px-6 pt-5 pb-4">
+              <div className="grid grid-cols-3 gap-4">
+                <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm shadow-slate-200/50">
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Broj nivelacija</span>
+                    <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center">
+                      <FileText size={16} className="text-blue-500" />
+                    </div>
+                  </div>
+                  <p className="text-[22px] font-bold font-mono tracking-tight text-slate-900 leading-none">
+                    {nivelacijeData.length}
+                  </p>
+                </div>
+                <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm shadow-slate-200/50">
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Pozitivna razlika</span>
+                    <div className="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center">
+                      <ArrowUpRight size={16} className="text-emerald-500" />
+                    </div>
+                  </div>
+                  <p className="text-[22px] font-bold font-mono tracking-tight text-emerald-600 leading-none">
+                    {formatKM(nivelacijeData.filter(n => (n.ukupnaRazlika ?? 0) > 0).reduce((s, n) => s + (n.ukupnaRazlika ?? 0), 0))}
+                  </p>
+                </div>
+                <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm shadow-slate-200/50">
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Negativna razlika</span>
+                    <div className="w-8 h-8 rounded-lg bg-red-50 flex items-center justify-center">
+                      <ArrowDownRight size={16} className="text-red-500" />
+                    </div>
+                  </div>
+                  <p className="text-[22px] font-bold font-mono tracking-tight text-red-500 leading-none">
+                    {formatKM(nivelacijeData.filter(n => (n.ukupnaRazlika ?? 0) < 0).reduce((s, n) => s + (n.ukupnaRazlika ?? 0), 0))}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Table */}
+            <div className="flex-1 min-h-0 px-6 pb-5">
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm shadow-slate-200/50 h-full flex flex-col overflow-hidden">
+                <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[13px] font-semibold text-slate-700">Nivelacije</span>
+                    {nivelacijeData.length > 0 && (
+                      <Badge variant="secondary" className="text-[10px] font-mono px-1.5 py-0 h-5">
+                        {nivelacijeData.length}
+                      </Badge>
+                    )}
+                  </div>
+                </div>
+
+                {nivelacijeData.length === 0 ? (
+                  <div className="flex-1 flex flex-col items-center justify-center text-slate-400 select-none">
+                    <div className="w-14 h-14 rounded-2xl bg-slate-50 flex items-center justify-center mb-3">
+                      <FileText size={24} className="text-slate-300" />
+                    </div>
+                    <p className="text-[13px] font-medium text-slate-500">Nema podataka</p>
+                    <p className="text-[12px] text-slate-400 mt-0.5">Odaberite period i kliknite Generiši</p>
+                  </div>
+                ) : (
+                  <ScrollArea className="flex-1">
+                    <table className="w-full">
+                      <thead className="sticky top-0 bg-slate-50/80 backdrop-blur-sm">
+                        <tr className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
+                          <th className="text-left pl-5 pr-2 py-2.5">Broj</th>
+                          <th className="text-left px-2 py-2.5">Datum</th>
+                          <th className="text-left px-2 py-2.5">Primka</th>
+                          <th className="text-right px-2 py-2.5">Stavki</th>
+                          <th className="text-right pr-5 pl-2 py-2.5">Ukupna razlika</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {nivelacijeData.map((niv) => (
+                          <>
+                            <tr
+                              key={niv.id}
+                              className="border-t border-slate-50 transition-colors hover:bg-slate-50/50 cursor-pointer"
+                              onClick={() => loadNivelacijaDetail(niv.id)}
+                            >
+                              <td className="pl-5 pr-2 py-2.5 text-[12px] font-mono font-semibold text-slate-700">
+                                {niv.brojNivelacije}
+                              </td>
+                              <td className="px-2 py-2.5 text-[12px] tabular-nums text-slate-600">
+                                {formatDate(niv.datum)}
+                              </td>
+                              <td className="px-2 py-2.5 text-[12px] font-mono text-slate-500">
+                                {niv.primkaBroj || '—'}
+                              </td>
+                              <td className="px-2 py-2.5 text-[12px] font-mono text-right tabular-nums text-slate-500">
+                                {niv.stavkiCount ?? 0}
+                              </td>
+                              <td className={cn(
+                                "pr-5 pl-2 py-2.5 text-[13px] font-mono font-semibold text-right tabular-nums",
+                                (niv.ukupnaRazlika ?? 0) >= 0 ? 'text-emerald-600' : 'text-red-500'
+                              )}>
+                                {(niv.ukupnaRazlika ?? 0) >= 0 ? '+' : ''}{formatKM(niv.ukupnaRazlika ?? 0)}
+                              </td>
+                            </tr>
+                            {expandedNivId === niv.id && (
+                              <tr key={`${niv.id}-detail`}>
+                                <td colSpan={5} className="px-5 py-3 bg-slate-50/50">
+                                  <table className="w-full text-[12px]">
+                                    <thead>
+                                      <tr className="text-[10px] text-slate-400 uppercase">
+                                        <th className="text-left py-1">Artikal</th>
+                                        <th className="text-right py-1">Količina</th>
+                                        <th className="text-right py-1">Stara cijena</th>
+                                        <th className="text-right py-1">Nova cijena</th>
+                                        <th className="text-right py-1">Razlika/jed</th>
+                                        <th className="text-right py-1">Ukupna razlika</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {expandedNivStavke.map((s: any) => (
+                                        <tr key={s.id} className="border-t border-slate-100">
+                                          <td className="py-1.5 text-slate-700">{s.productNaziv}</td>
+                                          <td className="py-1.5 text-right font-mono text-slate-500">{s.kolicina}</td>
+                                          <td className="py-1.5 text-right font-mono text-slate-500">{formatKM(s.staraCijena)}</td>
+                                          <td className="py-1.5 text-right font-mono text-slate-700">{formatKM(s.novaCijena)}</td>
+                                          <td className={cn(
+                                            "py-1.5 text-right font-mono",
+                                            s.razlika >= 0 ? 'text-emerald-600' : 'text-red-500'
+                                          )}>
+                                            {s.razlika >= 0 ? '+' : ''}{formatKM(s.razlika)}
+                                          </td>
+                                          <td className={cn(
+                                            "py-1.5 text-right font-mono font-medium",
+                                            s.ukupnaRazlika >= 0 ? 'text-emerald-600' : 'text-red-500'
+                                          )}>
+                                            {s.ukupnaRazlika >= 0 ? '+' : ''}{formatKM(s.ukupnaRazlika)}
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                  <div className="flex justify-end mt-2">
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      className="h-7 gap-1.5 text-[12px]"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        exportNivelacijaPdf(niv.id);
+                                      }}
+                                    >
+                                      <Download size={13} />
+                                      Exportuj PDF
+                                    </Button>
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </>
+                        ))}
                       </tbody>
                     </table>
                   </ScrollArea>
