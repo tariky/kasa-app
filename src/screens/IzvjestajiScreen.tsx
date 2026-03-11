@@ -13,6 +13,8 @@ import { cn, formatKM, formatDateTime, formatDate } from '@/lib/utils';
 import { Order, Primka } from '@/types';
 import { pdf } from '@react-pdf/renderer';
 import { NivelacijaPdf } from '@/components/NivelacijaPdf';
+import { PrometPdf } from '@/components/PrometPdf';
+import { PrimkePdf } from '@/components/PrimkePdf';
 
 function toDateStr(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -43,6 +45,7 @@ export default function IzvjestajiScreen() {
   const [expandedNivStavke, setExpandedNivStavke] = useState<any[]>([]);
 
   const [firma, setFirma] = useState<any>(null);
+  const [reportError, setReportError] = useState('');
 
   const [fiskalniStatus, setFiskalniStatus] = useState('');
   const [fiskalniError, setFiskalniError] = useState(false);
@@ -63,8 +66,9 @@ export default function IzvjestajiScreen() {
     try {
       const data = await window.api.getReportData('dnevni', toDateStr(dateFrom), toDateStr(dateTo));
       setPrometData(data);
-    } catch (err) {
-      console.error('Promet load error:', err);
+      setReportError('');
+    } catch (err: any) {
+      setReportError(err?.message || 'Greška pri učitavanju prometa');
     } finally {
       setPrometLoading(false);
     }
@@ -75,8 +79,9 @@ export default function IzvjestajiScreen() {
     try {
       const data = await window.api.getReportData('primke', toDateStr(dateFrom), toDateStr(dateTo));
       setPrimkeData(data);
-    } catch (err) {
-      console.error('Primke load error:', err);
+      setReportError('');
+    } catch (err: any) {
+      setReportError(err?.message || 'Greška pri učitavanju primki');
     } finally {
       setPrimkeLoading(false);
     }
@@ -87,8 +92,9 @@ export default function IzvjestajiScreen() {
     try {
       const data = await window.api.getNivelacije(toDateStr(dateFrom), toDateStr(dateTo));
       setNivelacijeData(data);
-    } catch (err) {
-      console.error('Nivelacije load error:', err);
+      setReportError('');
+    } catch (err: any) {
+      setReportError(err?.message || 'Greška pri učitavanju nivelacija');
     } finally {
       setNivelacijeLoading(false);
     }
@@ -103,8 +109,8 @@ export default function IzvjestajiScreen() {
       const niv = await window.api.getNivelacija(id);
       setExpandedNivStavke(niv.stavke || []);
       setExpandedNivId(id);
-    } catch (err) {
-      console.error('Nivelacija detail error:', err);
+    } catch (err: any) {
+      setReportError(err?.message || 'Greška pri učitavanju detalja nivelacije');
     }
   };
 
@@ -113,16 +119,42 @@ export default function IzvjestajiScreen() {
     try {
       const niv = await window.api.getNivelacija(nivId);
       const blob = await pdf(<NivelacijaPdf nivelacija={niv} firma={firma} />).toBlob();
-      const arrayBuffer = await blob.arrayBuffer();
-      const savePath = await window.api.showSaveDialog({
-        defaultName: `${niv.brojNivelacije}.pdf`,
-        filters: [{ name: 'PDF', extensions: ['pdf'] }],
-      });
-      if (savePath) {
-        await window.api.writeFile(savePath, Array.from(new Uint8Array(arrayBuffer)) as any);
-      }
-    } catch (err) {
-      console.error('PDF export error:', err);
+      openPdfInWindow(blob, `Nivelacija ${niv.brojNivelacije}`);
+    } catch {
+      setReportError('Greška pri generisanju PDF-a za nivelaciju');
+    }
+  };
+
+  const openPdfInWindow = (blob: Blob, title: string) => {
+    const url = URL.createObjectURL(blob);
+    const win = window.open(url, '_blank');
+    if (win) {
+      win.document.title = title;
+      win.onload = () => URL.revokeObjectURL(url);
+    }
+  };
+
+  const exportPrometPdf = async () => {
+    if (!firma || prometData.length === 0) return;
+    try {
+      const blob = await pdf(
+        <PrometPdf orders={prometData} dateFrom={fmtDisplay(dateFrom)} dateTo={fmtDisplay(dateTo)} firma={firma} />
+      ).toBlob();
+      openPdfInWindow(blob, `Promet ${fmtDisplay(dateFrom)} - ${fmtDisplay(dateTo)}`);
+    } catch {
+      setReportError('Greška pri generisanju PDF-a za promet');
+    }
+  };
+
+  const exportPrimkePdf = async () => {
+    if (!firma || primkeData.length === 0) return;
+    try {
+      const blob = await pdf(
+        <PrimkePdf primke={primkeData} dateFrom={fmtDisplay(dateFrom)} dateTo={fmtDisplay(dateTo)} firma={firma} />
+      ).toBlob();
+      openPdfInWindow(blob, `Primke ${fmtDisplay(dateFrom)} - ${fmtDisplay(dateTo)}`);
+    } catch {
+      setReportError('Greška pri generisanju PDF-a za primke');
     }
   };
 
@@ -308,6 +340,13 @@ export default function IzvjestajiScreen() {
       {/* ── Content area ── */}
       <div className="flex-1 min-h-0 overflow-hidden">
 
+        {reportError && (
+          <div className="mx-6 mt-4 flex items-center gap-2 rounded-xl px-4 py-3 text-[12px] font-medium bg-red-50/60 border border-red-100 text-red-600">
+            <AlertTriangle size={14} className="flex-shrink-0" />
+            {reportError}
+          </div>
+        )}
+
         {/* ═══ PROMET TAB ═══ */}
         {activeTab === 'promet' && (
           <div className="flex flex-col h-full">
@@ -388,9 +427,9 @@ export default function IzvjestajiScreen() {
                       </Badge>
                     )}
                   </div>
-                  <Button variant="ghost" size="sm" className="h-7 gap-1.5 text-[12px] text-slate-500" onClick={() => window.print()}>
-                    <Printer size={13} />
-                    Štampaj
+                  <Button variant="ghost" size="sm" className="h-7 gap-1.5 text-[12px] text-slate-500" onClick={exportPrometPdf} disabled={prometData.length === 0}>
+                    <Download size={13} />
+                    PDF
                   </Button>
                 </div>
 
@@ -524,9 +563,9 @@ export default function IzvjestajiScreen() {
                       </Badge>
                     )}
                   </div>
-                  <Button variant="ghost" size="sm" className="h-7 gap-1.5 text-[12px] text-slate-500" onClick={() => window.print()}>
-                    <Printer size={13} />
-                    Štampaj
+                  <Button variant="ghost" size="sm" className="h-7 gap-1.5 text-[12px] text-slate-500" onClick={exportPrimkePdf} disabled={primkeData.length === 0}>
+                    <Download size={13} />
+                    PDF
                   </Button>
                 </div>
 
@@ -647,6 +686,19 @@ export default function IzvjestajiScreen() {
                       <Badge variant="secondary" className="text-[10px] font-mono px-1.5 py-0 h-5">
                         {nivelacijeData.length}
                       </Badge>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1">
+                    {nivelacijeData.length > 0 && expandedNivId && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 gap-1.5 text-[12px] text-slate-500"
+                        onClick={() => exportNivelacijaPdf(expandedNivId)}
+                      >
+                        <Download size={13} />
+                        PDF
+                      </Button>
                     )}
                   </div>
                 </div>

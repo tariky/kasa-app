@@ -209,6 +209,7 @@ function ArtikalDialog({
                 id="cijena"
                 type="number"
                 step="0.01"
+                min="0"
                 className="font-mono text-base h-11"
                 value={form.cijena}
                 onChange={(e) => setForm({ ...form, cijena: e.target.value })}
@@ -259,6 +260,7 @@ function ArtikalDialog({
                 id="stanje"
                 type="number"
                 step="1"
+                min="0"
                 className="font-mono"
                 placeholder="0"
                 value={form.stanje}
@@ -340,6 +342,7 @@ function NovaPrimkaDialog({
     { productId: null, kolicina: '', nabavnaCijena: '', rabat: '', cijena: '' },
   ]);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
   const [nivelacijaItems, setNivelacijaItems] = useState<Array<{
     productId: number;
     productNaziv: string;
@@ -370,6 +373,7 @@ function NovaPrimkaDialog({
             cijena: String(s.cijena),
           }))
         );
+      setSaveError('');
       } else {
         setNapomena('');
         setBrojFakture('');
@@ -486,7 +490,7 @@ function NovaPrimkaDialog({
       onOpenChange(false);
       onSave();
     } catch (err: any) {
-      console.error(err);
+      setSaveError(err?.message || 'Greška pri spremanju primke');
     } finally {
       setSaving(false);
     }
@@ -677,6 +681,7 @@ function NovaPrimkaDialog({
                     <Input
                       type="number"
                       step="0.01"
+                      min="0.01"
                       className="h-8 font-mono text-sm text-right border-0 shadow-none bg-transparent hover:bg-slate-100 rounded"
                       placeholder="0"
                       value={s.kolicina}
@@ -685,6 +690,7 @@ function NovaPrimkaDialog({
                     <Input
                       type="number"
                       step="0.01"
+                      min="0"
                       className="h-8 font-mono text-sm text-right border-0 shadow-none bg-transparent hover:bg-slate-100 rounded"
                       placeholder="0.00"
                       value={s.nabavnaCijena}
@@ -693,6 +699,8 @@ function NovaPrimkaDialog({
                     <Input
                       type="number"
                       step="0.01"
+                      min="0"
+                      max="100"
                       className="h-8 font-mono text-sm text-right border-0 shadow-none bg-transparent hover:bg-slate-100 rounded"
                       placeholder="0"
                       value={s.rabat}
@@ -701,6 +709,7 @@ function NovaPrimkaDialog({
                     <Input
                       type="number"
                       step="0.01"
+                      min="0"
                       className="h-8 font-mono text-sm text-right border-0 shadow-none bg-transparent hover:bg-slate-100 rounded"
                       placeholder="0.00"
                       value={s.cijena}
@@ -759,6 +768,11 @@ function NovaPrimkaDialog({
         </div>
 
         {/* Footer */}
+        {saveError && (
+          <div className="mx-6 flex items-center gap-2 rounded-xl px-4 py-3 text-[12px] font-medium bg-red-50/60 border border-red-100 text-red-600">
+            {saveError}
+          </div>
+        )}
         <div className="border-t bg-slate-50/50 px-6 py-4 flex items-center justify-end gap-3">
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Otkaži
@@ -1914,9 +1928,10 @@ function KupacDialog({
                 id="kup-idbroj"
                 className="font-mono"
                 value={idBroj}
-                onChange={(e) => setIdBroj(e.target.value)}
+                onChange={(e) => setIdBroj(e.target.value.replace(/\D/g, ''))}
                 placeholder="4200000000000"
                 maxLength={13}
+                inputMode="numeric"
               />
             </div>
             <div className="space-y-1.5">
@@ -1927,9 +1942,10 @@ function KupacDialog({
                 id="kup-pdvbroj"
                 className="font-mono"
                 value={pdvBroj}
-                onChange={(e) => setPdvBroj(e.target.value)}
+                onChange={(e) => setPdvBroj(e.target.value.replace(/\D/g, ''))}
                 placeholder="200000000000"
                 maxLength={12}
+                inputMode="numeric"
               />
             </div>
           </div>
@@ -1956,9 +1972,10 @@ function KupacDialog({
                 id="kup-postbroj"
                 className="font-mono"
                 value={postanskiBroj}
-                onChange={(e) => setPostanskiBroj(e.target.value)}
+                onChange={(e) => setPostanskiBroj(e.target.value.replace(/\D/g, ''))}
                 placeholder="75000"
                 maxLength={5}
+                inputMode="numeric"
               />
             </div>
             <div className="space-y-1.5">
@@ -2217,7 +2234,7 @@ function UslugaDialog({
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Cijena</Label>
-              <Input type="number" step="0.01" value={cijena} onChange={e => setCijena(e.target.value)} placeholder="0.00" className="font-mono" />
+              <Input type="number" step="0.01" min="0" value={cijena} onChange={e => setCijena(e.target.value)} placeholder="0.00" className="font-mono" />
             </div>
             <div className="space-y-2">
               <Label>PDV stopa</Label>

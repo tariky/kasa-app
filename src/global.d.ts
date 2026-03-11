@@ -10,6 +10,7 @@ interface Window {
   api: {
     login: (pin: string) => Promise<any>;
     getUsers: () => Promise<any[]>;
+    verifyAdminPin: (pin: string) => Promise<{ success: boolean; ime: string }>;
     createUser: (data: any) => Promise<any>;
     updateUser: (id: number, data: any) => Promise<any>;
     deleteUser: (id: number) => Promise<any>;

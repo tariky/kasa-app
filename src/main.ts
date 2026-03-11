@@ -32,6 +32,23 @@ const createWindow = () => {
     mainWindow.show();
   });
 
+  // Allow opening blob: URLs in new windows (PDF preview)
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('blob:')) {
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: {
+          width: 900,
+          height: 700,
+          title: 'PDF',
+          icon: iconPath,
+          autoHideMenuBar: true,
+        },
+      };
+    }
+    return { action: 'deny' };
+  });
+
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
   } else {
@@ -57,7 +74,7 @@ app.on('ready', () => {
     credits: 'Razvio: Tarik Caplja\ntarik@lunatik.ba',
     iconPath,        // Linux
     icon: appIcon,   // macOS (NativeImage)
-  });
+  } as Electron.AboutPanelOptionsOptions);
 
   registerIpcHandlers();
   createWindow();

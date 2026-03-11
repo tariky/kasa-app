@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('api', {
   // Users
   login: (pin: string) => ipcRenderer.invoke('user:login', pin),
   getUsers: () => ipcRenderer.invoke('user:getAll'),
+  verifyAdminPin: (pin: string) => ipcRenderer.invoke('user:verifyAdminPin', pin),
   createUser: (data: any) => ipcRenderer.invoke('user:create', data),
   updateUser: (id: number, data: any) => ipcRenderer.invoke('user:update', id, data),
   deleteUser: (id: number) => ipcRenderer.invoke('user:delete', id),

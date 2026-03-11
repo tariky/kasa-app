@@ -45,6 +45,8 @@ export default function KasaScreen({ user }: KasaScreenProps) {
   const kupacDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [focusedIndex, setFocusedIndex] = useState(-1);
   const [dailyTotal, setDailyTotal] = useState<number | null>(null);
+  const [allowZeroStock, setAllowZeroStock] = useState(false);
+  const [racunNapomena, setRacunNapomena] = useState('');
   const qtyInputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -117,6 +119,11 @@ export default function KasaScreen({ user }: KasaScreenProps) {
 
   useEffect(() => { loadDailyTotal(); }, [loadDailyTotal]);
 
+  useEffect(() => {
+    window.api.getSetting('kasa.allowZeroStock').then((v) => setAllowZeroStock(v === 'true'));
+    window.api.getSetting('racun.napomena').then((v) => setRacunNapomena(v || ''));
+  }, []);
+
   // Cart calculations
   const subtotal = cart.reduce((sum, item) =>
     sum + item.product.cijena * item.kolicina * (1 - item.rabat / 100), 0);
@@ -144,7 +151,7 @@ export default function KasaScreen({ user }: KasaScreenProps) {
     setCart(prev => {
       const existing = prev.find(item => item.product.id === qtyProduct.id);
       const currentQty = existing ? existing.kolicina : 0;
-      const addQty = isService ? qty : Math.min(qty, stock - currentQty);
+      const addQty = (isService || allowZeroStock) ? qty : Math.min(qty, stock - currentQty);
       if (addQty <= 0) return prev;
       if (existing) {
         return prev.map(item =>
@@ -158,7 +165,7 @@ export default function KasaScreen({ user }: KasaScreenProps) {
     setMessage(null);
     setQtyProduct(null);
     setTimeout(() => searchInputRef.current?.focus(), 50);
-  }, [qtyProduct, qtyValue]);
+  }, [qtyProduct, qtyValue, allowZeroStock]);
 
   const updateQuantity = useCallback((productId: number, delta: number) => {
     setCart(prev =>
@@ -166,12 +173,12 @@ export default function KasaScreen({ user }: KasaScreenProps) {
         .map(item => {
           if (item.product.id !== productId) return item;
           const newQty = item.kolicina + delta;
-          if (delta > 0 && item.product.tip !== 'usluga' && newQty > (item.product.stanje ?? 0)) return item;
+          if (delta > 0 && !allowZeroStock && item.product.tip !== 'usluga' && newQty > (item.product.stanje ?? 0)) return item;
           return { ...item, kolicina: Math.max(0, newQty) };
         })
         .filter(item => item.kolicina > 0)
     );
-  }, []);
+  }, [allowZeroStock]);
 
   const handleSearchKeyDown = useCallback(async (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'ArrowDown') {
@@ -206,7 +213,7 @@ export default function KasaScreen({ user }: KasaScreenProps) {
     // If an item is focused via arrows, select it
     if (focusedIndex >= 0 && focusedIndex < products.length) {
       const product = products[focusedIndex];
-      const outOfStock = product.tip !== 'usluga' && product.stanje != null && product.stanje <= 0;
+      const outOfStock = !allowZeroStock && product.tip !== 'usluga' && product.stanje != null && product.stanje <= 0;
       if (!outOfStock) {
         promptAddToCart(product);
         setQuery('');
@@ -261,6 +268,7 @@ export default function KasaScreen({ user }: KasaScreenProps) {
           rabat: item.rabat, pdvStopa: item.product.pdvStopa, sifra: item.product.sifra, jm: item.product.jm,
         })),
         ukupno: total, nacinPlacanja: paymentType, kupac,
+        napomena: racunNapomena || undefined,
       };
 
       const tringResult = await window.api.tringPrintReceipt(tringData);
@@ -340,7 +348,7 @@ export default function KasaScreen({ user }: KasaScreenProps) {
           ) : (
             <div className="flex flex-col gap-1" ref={productListRef}>
               {products.map((product, idx) => {
-                const outOfStock = product.tip !== 'usluga' && product.stanje != null && product.stanje <= 0;
+                const outOfStock = !allowZeroStock && product.tip !== 'usluga' && product.stanje != null && product.stanje <= 0;
                 const isFocused = idx === focusedIndex;
                 return (
                   <button
@@ -725,7 +733,7 @@ export default function KasaScreen({ user }: KasaScreenProps) {
                 ref={qtyInputRef}
                 type="number"
                 min={1}
-                max={qtyProduct?.tip === 'usluga' ? 999 : (qtyProduct?.stanje ?? 999)}
+                max={(qtyProduct?.tip === 'usluga' || allowZeroStock) ? 999 : (qtyProduct?.stanje ?? 999)}
                 value={qtyValue}
                 onChange={e => setQtyValue(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') confirmAddToCart(); }}
@@ -734,7 +742,7 @@ export default function KasaScreen({ user }: KasaScreenProps) {
               />
               <button
                 className="w-12 h-12 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center text-xl font-bold transition-colors"
-                onClick={() => setQtyValue(String(Math.min(qtyProduct?.tip === 'usluga' ? 999 : (qtyProduct?.stanje ?? 999), (parseInt(qtyValue) || 0) + 1)))}
+                onClick={() => setQtyValue(String(Math.min((qtyProduct?.tip === 'usluga' || allowZeroStock) ? 999 : (qtyProduct?.stanje ?? 999), (parseInt(qtyValue) || 0) + 1)))}
               >
                 +
               </button>

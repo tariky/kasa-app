@@ -18,10 +18,10 @@ import {
   UserPlus, Wifi, WifiOff, Save, Trash2, Pencil,
   Users, Printer, Building2, Shield, Hash, KeyRound,
   MapPin, FileText, Image, CheckCircle2, AlertTriangle,
-  HardDrive, Download, Bug, RefreshCw, X, ChevronDown, ChevronUp,
+  HardDrive, Download, Bug, RefreshCw, X, ChevronDown, ChevronUp, Settings,
 } from 'lucide-react';
 
-type SettingsTab = 'korisnici' | 'fiskalni' | 'firma';
+type SettingsTab = 'korisnici' | 'fiskalni' | 'firma' | 'sistem';
 
 export default function PostavkeScreen() {
   // ── Korisnici state ──
@@ -53,6 +53,9 @@ export default function PostavkeScreen() {
   // ── Kasa settings ──
   const [showDailyTotal, setShowDailyTotal] = useState(false);
   const [devLogging, setDevLogging] = useState(false);
+  const [allowZeroStock, setAllowZeroStock] = useState(false);
+  const [requirePinRefund, setRequirePinRefund] = useState(false);
+  const [racunNapomena, setRacunNapomena] = useState('');
 
   // ── Debug state ──
   const [debugOpen, setDebugOpen] = useState(false);
@@ -91,6 +94,9 @@ export default function PostavkeScreen() {
   useEffect(() => {
     window.api.getSetting('kasa.showDailyTotal').then((v) => setShowDailyTotal(v === 'true'));
     window.api.getSetting('dev.logging').then((v) => setDevLogging(v === 'true'));
+    window.api.getSetting('kasa.allowZeroStock').then((v) => setAllowZeroStock(v === 'true'));
+    window.api.getSetting('kasa.requirePinRefund').then((v) => setRequirePinRefund(v === 'true'));
+    window.api.getSetting('racun.napomena').then((v) => setRacunNapomena(v || ''));
   }, []);
 
   // ── Load Firma settings ──
@@ -240,6 +246,7 @@ export default function PostavkeScreen() {
     { id: 'korisnici', label: 'Korisnici', icon: Users },
     { id: 'fiskalni', label: 'Fiskalni printer', icon: Printer },
     { id: 'firma', label: 'Firma', icon: Building2 },
+    { id: 'sistem', label: 'Sistem', icon: Settings },
   ];
 
   return (
@@ -453,6 +460,8 @@ export default function PostavkeScreen() {
                         <Input
                           id="tring-port"
                           type="number"
+                          min={1}
+                          max={65535}
                           value={tringPort}
                           onChange={e => setTringPort(Number(e.target.value))}
                           className="font-mono text-[13px] h-9 bg-slate-50 border-slate-200"
@@ -465,6 +474,7 @@ export default function PostavkeScreen() {
                         <Input
                           id="tring-operator"
                           type="number"
+                          min={0}
                           value={tringOperatorId}
                           onChange={e => setTringOperatorId(Number(e.target.value))}
                           className="font-mono text-[13px] h-9 bg-slate-50 border-slate-200"
@@ -520,7 +530,7 @@ export default function PostavkeScreen() {
             </div>
 
             {/* ── Debug Log Panel ── */}
-            <div className="px-6 pb-5">
+            {devLogging && <div className="px-6 pb-5">
               <div className="max-w-4xl">
                 <div className="bg-white rounded-2xl border border-slate-100 shadow-sm shadow-slate-200/50 overflow-hidden">
                   <div className="px-6 py-4 border-b border-slate-100">
@@ -655,7 +665,7 @@ export default function PostavkeScreen() {
                   )}
                 </div>
               </div>
-            </div>
+            </div>}
           </div>
           </ScrollArea>
         )}
@@ -783,9 +793,10 @@ export default function PostavkeScreen() {
                         </Label>
                         <Input
                           value={firmaIdBroj}
-                          onChange={e => setFirmaIdBroj(e.target.value)}
+                          onChange={e => setFirmaIdBroj(e.target.value.replace(/\D/g, ''))}
                           placeholder="4200000000000"
                           maxLength={13}
+                          inputMode="numeric"
                           className="font-mono text-[13px] h-9 bg-slate-50 border-slate-200"
                         />
                       </div>
@@ -795,9 +806,10 @@ export default function PostavkeScreen() {
                         </Label>
                         <Input
                           value={firmaPdvBroj}
-                          onChange={e => setFirmaPdvBroj(e.target.value)}
+                          onChange={e => setFirmaPdvBroj(e.target.value.replace(/\D/g, ''))}
                           placeholder="200000000000"
                           maxLength={12}
+                          inputMode="numeric"
                           className="font-mono text-[13px] h-9 bg-slate-50 border-slate-200"
                         />
                       </div>
@@ -819,12 +831,23 @@ export default function PostavkeScreen() {
                   )}
                 </div>
 
+              </div>
+            </div>
+          </ScrollArea>
+        )}
+
+        {/* ═══ SISTEM TAB ═══ */}
+        {activeTab === 'sistem' && (
+          <ScrollArea className="h-full">
+            <div className="px-6 pt-5 pb-6">
+              <div className="max-w-xl space-y-4">
+
                 {/* Kasa settings card */}
                 <div className="bg-white rounded-2xl border border-slate-100 shadow-sm shadow-slate-200/50 overflow-hidden">
                   <div className="px-6 py-4 border-b border-slate-100">
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center">
-                        <Shield size={20} className="text-blue-500" />
+                        <Settings size={20} className="text-blue-500" />
                       </div>
                       <div>
                         <h3 className="text-[15px] font-semibold text-slate-800">Postavke kase</h3>
@@ -849,6 +872,34 @@ export default function PostavkeScreen() {
                     <Separator />
                     <div className="flex items-center justify-between">
                       <div>
+                        <p className="text-[13px] font-medium text-slate-700">Dozvoli prodaju bez zalihe</p>
+                        <p className="text-[12px] text-slate-400 mt-0.5">Omogućuje prodaju artikala koji imaju 0 na stanju</p>
+                      </div>
+                      <Switch
+                        checked={allowZeroStock}
+                        onCheckedChange={async (checked) => {
+                          setAllowZeroStock(checked);
+                          await window.api.setSetting('kasa.allowZeroStock', String(checked));
+                        }}
+                      />
+                    </div>
+                    <Separator />
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-[13px] font-medium text-slate-700">Zahtijevaj PIN za storniranje</p>
+                        <p className="text-[12px] text-slate-400 mt-0.5">Traži unos admin PIN-a prije reklamacije računa</p>
+                      </div>
+                      <Switch
+                        checked={requirePinRefund}
+                        onCheckedChange={async (checked) => {
+                          setRequirePinRefund(checked);
+                          await window.api.setSetting('kasa.requirePinRefund', String(checked));
+                        }}
+                      />
+                    </div>
+                    <Separator />
+                    <div className="flex items-center justify-between">
+                      <div>
                         <p className="text-[13px] font-medium text-slate-700">Dev logiranje</p>
                         <p className="text-[12px] text-slate-400 mt-0.5">Bilježi Tring XML zahtjeve i odgovore u memoriju</p>
                       </div>
@@ -860,6 +911,40 @@ export default function PostavkeScreen() {
                         }}
                       />
                     </div>
+                  </div>
+                </div>
+
+                {/* Receipt note card */}
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm shadow-slate-200/50 overflow-hidden">
+                  <div className="px-6 py-4 border-b border-slate-100">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-violet-50 flex items-center justify-center">
+                        <FileText size={20} className="text-violet-500" />
+                      </div>
+                      <div>
+                        <h3 className="text-[15px] font-semibold text-slate-800">Napomena na računu</h3>
+                        <p className="text-[12px] text-slate-400 mt-0.5">Tekst koji se štampa na dnu fiskalnog računa</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="px-6 py-5 space-y-3">
+                    <Input
+                      value={racunNapomena}
+                      onChange={e => setRacunNapomena(e.target.value)}
+                      placeholder="npr. Hvala na posjeti!"
+                      maxLength={100}
+                      className="text-[13px] h-9 bg-slate-50 border-slate-200"
+                    />
+                    <Button
+                      size="sm"
+                      className="h-8 gap-1.5 text-[12px]"
+                      onClick={async () => {
+                        await window.api.setSetting('racun.napomena', racunNapomena);
+                      }}
+                    >
+                      <Save size={13} />
+                      Sačuvaj napomenu
+                    </Button>
                   </div>
                 </div>
 
@@ -946,10 +1031,12 @@ export default function PostavkeScreen() {
               <Input
                 id="user-pin"
                 value={formPin}
-                onChange={e => setFormPin(e.target.value)}
+                onChange={e => setFormPin(e.target.value.replace(/\D/g, ''))}
                 maxLength={6}
+                inputMode="numeric"
+                pattern="[0-9]*"
                 className="font-mono h-10 text-[14px] bg-slate-50 border-slate-200"
-                placeholder="Unesite PIN"
+                placeholder="Min. 4 cifre"
               />
             </div>
             <div className="space-y-1.5">
@@ -990,7 +1077,7 @@ export default function PostavkeScreen() {
             <Button variant="ghost" onClick={() => setDialogOpen(false)}>
               Otkaži
             </Button>
-            <Button onClick={handleSaveUser} disabled={!formIme.trim() || !formPin.trim()} className="min-w-[100px]">
+            <Button onClick={handleSaveUser} disabled={!formIme.trim() || formPin.length < 4} className="min-w-[100px]">
               Sačuvaj
             </Button>
           </div>

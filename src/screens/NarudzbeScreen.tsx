@@ -10,7 +10,7 @@ import {
 import { Separator } from '@/components/ui/separator';
 import {
   RotateCcw, Receipt, AlertTriangle, Printer, Download,
-  User, Hash, CreditCard, Banknote, Building2, ChevronRight,
+  User, Hash, CreditCard, Banknote, Building2, ChevronRight, KeyRound,
 } from 'lucide-react';
 import { pdf } from '@react-pdf/renderer';
 import { RacunPdf, InvoiceLang } from '@/components/RacunPdf';
@@ -24,9 +24,14 @@ export default function NarudzbeScreen() {
   const [reklamacijaBroj, setReklamacijaBroj] = useState('');
   const [reklamacijaLoading, setReklamacijaLoading] = useState(false);
   const [reklamacijaMsg, setReklamacijaMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [requirePinRefund, setRequirePinRefund] = useState(false);
+  const [pinDialogOpen, setPinDialogOpen] = useState(false);
+  const [pinValue, setPinValue] = useState('');
+  const [pinError, setPinError] = useState('');
 
   useEffect(() => {
     loadOrders();
+    window.api.getSetting('kasa.requirePinRefund').then((v) => setRequirePinRefund(v === 'true'));
   }, []);
 
   const loadOrders = async () => {
@@ -461,7 +466,16 @@ export default function NarudzbeScreen() {
                   {/* Reklamacija */}
                   {selectedOrder.status === 'completed' && selectedOrder.brojFiskalnogRacuna && (
                     <button
-                      onClick={() => { setReklamacijaMsg(null); setReklamacijaOpen(true); }}
+                      onClick={() => {
+                        setReklamacijaMsg(null);
+                        if (requirePinRefund) {
+                          setPinValue('');
+                          setPinError('');
+                          setPinDialogOpen(true);
+                        } else {
+                          setReklamacijaOpen(true);
+                        }
+                      }}
                       className="w-full h-9 flex items-center justify-center gap-2 rounded-lg border border-red-200 text-[12px] font-medium text-red-500 hover:bg-red-50 hover:border-red-300 transition-all"
                     >
                       <RotateCcw size={13} />
@@ -552,6 +566,73 @@ export default function NarudzbeScreen() {
               className="min-w-[140px]"
             >
               {reklamacijaLoading ? 'Obrađujem...' : 'Potvrdi reklamaciju'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── PIN Verification Dialog ── */}
+      <Dialog open={pinDialogOpen} onOpenChange={setPinDialogOpen}>
+        <DialogContent className="sm:max-w-[360px] p-0 gap-0 overflow-hidden">
+          <div className="px-6 pt-6 pb-4">
+            <DialogHeader>
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center">
+                  <KeyRound className="h-5 w-5 text-amber-500" />
+                </div>
+                <div>
+                  <DialogTitle className="text-lg">Admin autorizacija</DialogTitle>
+                  <DialogDescription className="text-xs mt-0.5">
+                    Unesite admin PIN za nastavak
+                  </DialogDescription>
+                </div>
+              </div>
+            </DialogHeader>
+          </div>
+          <Separator />
+          <div className="px-6 py-5 space-y-3">
+            <Input
+              type="password"
+              value={pinValue}
+              onChange={e => { setPinValue(e.target.value.replace(/\D/g, '')); setPinError(''); }}
+              onKeyDown={async e => {
+                if (e.key === 'Enter' && pinValue.length >= 4) {
+                  try {
+                    await window.api.verifyAdminPin(pinValue);
+                    setPinDialogOpen(false);
+                    setReklamacijaOpen(true);
+                  } catch {
+                    setPinError('Neispravan admin PIN');
+                  }
+                }
+              }}
+              placeholder="PIN"
+              maxLength={8}
+              inputMode="numeric"
+              className="font-mono text-center text-xl h-12 tracking-[0.3em] bg-slate-50 border-slate-200"
+              autoFocus
+            />
+            {pinError && (
+              <p className="text-[12px] text-red-500 font-medium text-center">{pinError}</p>
+            )}
+          </div>
+          <div className="border-t bg-slate-50/50 px-6 py-4 flex items-center justify-end gap-3">
+            <Button variant="ghost" onClick={() => setPinDialogOpen(false)}>
+              Otkaži
+            </Button>
+            <Button
+              onClick={async () => {
+                try {
+                  await window.api.verifyAdminPin(pinValue);
+                  setPinDialogOpen(false);
+                  setReklamacijaOpen(true);
+                } catch {
+                  setPinError('Neispravan admin PIN');
+                }
+              }}
+              disabled={pinValue.length < 4}
+            >
+              Potvrdi
             </Button>
           </div>
         </DialogContent>

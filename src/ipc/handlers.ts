@@ -10,7 +10,7 @@ function handle<T>(channel: string, handler: (...args: any[]) => T): void {
       return handler(...args);
     } catch (error: any) {
       console.error(`[IPC ${channel}]`, error);
-      throw new Error(error.message || 'Unknown error');
+      throw new Error(error.message || 'Nepoznata greška');
     }
   });
 }
@@ -24,14 +24,25 @@ export function registerIpcHandlers(): void {
     return db.prepare('SELECT id, ime, pin, uloga FROM users WHERE pin = ?').get(pin) ?? null;
   });
 
+  handle('user:verifyAdminPin', (pin: string) => {
+    const user = db.prepare("SELECT id, ime FROM users WHERE pin = ? AND uloga = 'admin'").get(pin) as any;
+    if (!user) throw new Error('Neispravan admin PIN');
+    return { success: true, ime: user.ime };
+  });
+
   handle('user:getAll', () => {
     return db.prepare('SELECT * FROM users ORDER BY ime').all();
   });
 
   handle('user:create', (data: { ime: string; pin: string; uloga: string }) => {
+    if (!data.ime?.trim()) throw new Error('Ime korisnika je obavezno');
+    if (!data.pin?.trim()) throw new Error('PIN je obavezan');
+    if (data.pin.length < 4) throw new Error('PIN mora imati najmanje 4 cifre');
+    const existingPin = db.prepare('SELECT id FROM users WHERE pin = ?').get(data.pin);
+    if (existingPin) throw new Error(`Korisnik sa PIN-om "${data.pin}" već postoji`);
     const result = db
       .prepare('INSERT INTO users (ime, pin, uloga) VALUES (?, ?, ?)')
-      .run(data.ime, data.pin, data.uloga);
+      .run(data.ime.trim(), data.pin, data.uloga);
     return { id: result.lastInsertRowid };
   });
 
@@ -39,8 +50,16 @@ export function registerIpcHandlers(): void {
     const fields: string[] = [];
     const values: any[] = [];
 
-    if (data.ime !== undefined) { fields.push('ime = ?'); values.push(data.ime); }
-    if (data.pin !== undefined) { fields.push('pin = ?'); values.push(data.pin); }
+    if (data.ime !== undefined) {
+      if (!data.ime.trim()) throw new Error('Ime korisnika je obavezno');
+      fields.push('ime = ?'); values.push(data.ime.trim());
+    }
+    if (data.pin !== undefined) {
+      if (data.pin.length < 4) throw new Error('PIN mora imati najmanje 4 cifre');
+      const existingPin = db.prepare('SELECT id FROM users WHERE pin = ? AND id != ?').get(data.pin, id);
+      if (existingPin) throw new Error(`Korisnik sa PIN-om "${data.pin}" već postoji`);
+      fields.push('pin = ?'); values.push(data.pin);
+    }
     if (data.uloga !== undefined) { fields.push('uloga = ?'); values.push(data.uloga); }
 
     if (fields.length === 0) return { changes: 0 };
@@ -53,6 +72,8 @@ export function registerIpcHandlers(): void {
   });
 
   handle('user:delete', (id: number) => {
+    const hasOrders = db.prepare('SELECT id FROM orders WHERE korisnikId = ? LIMIT 1').get(id);
+    if (hasOrders) throw new Error('Korisnik ima račune i ne može biti obrisan');
     const result = db.prepare('DELETE FROM users WHERE id = ?').run(id);
     return { changes: result.changes };
   });
@@ -84,6 +105,15 @@ export function registerIpcHandlers(): void {
     sifra: string; naziv: string; jm?: string; cijena: number;
     pdvStopa: string; plu?: number; barkod?: string; tip?: string;
   }) => {
+    if (!data.sifra?.trim()) throw new Error('Šifra artikla je obavezna');
+    if (!data.naziv?.trim()) throw new Error('Naziv artikla je obavezan');
+    if (data.cijena == null || data.cijena < 0) throw new Error('Cijena mora biti pozitivan broj');
+    const existing = db.prepare('SELECT id FROM products WHERE sifra = ?').get(data.sifra.trim());
+    if (existing) throw new Error(`Artikal sa šifrom "${data.sifra}" već postoji`);
+    if (data.barkod?.trim()) {
+      const existingBarkod = db.prepare('SELECT id FROM products WHERE barkod = ?').get(data.barkod.trim());
+      if (existingBarkod) throw new Error(`Artikal sa barkodom "${data.barkod}" već postoji`);
+    }
     const tip = data.tip === 'usluga' ? 'usluga' : 'artikal';
     const result = db
       .prepare(`
@@ -101,13 +131,23 @@ export function registerIpcHandlers(): void {
     const fields: string[] = [];
     const values: any[] = [];
 
-    if (data.sifra !== undefined) { fields.push('sifra = ?'); values.push(data.sifra); }
+    if (data.sifra !== undefined) {
+      const existing = db.prepare('SELECT id FROM products WHERE sifra = ? AND id != ?').get(data.sifra, id);
+      if (existing) throw new Error(`Artikal sa šifrom "${data.sifra}" već postoji`);
+      fields.push('sifra = ?'); values.push(data.sifra);
+    }
     if (data.naziv !== undefined) { fields.push('naziv = ?'); values.push(data.naziv); }
     if (data.jm !== undefined) { fields.push('jm = ?'); values.push(data.jm); }
     if (data.cijena !== undefined) { fields.push('cijena = ?'); values.push(data.cijena); }
     if (data.pdvStopa !== undefined) { fields.push('pdvStopa = ?'); values.push(data.pdvStopa); }
     if (data.plu !== undefined) { fields.push('plu = ?'); values.push(data.plu); }
-    if ('barkod' in data) { fields.push('barkod = ?'); values.push(data.barkod); }
+    if ('barkod' in data) {
+      if (data.barkod?.trim()) {
+        const existingBarkod = db.prepare('SELECT id FROM products WHERE barkod = ? AND id != ?').get(data.barkod.trim(), id);
+        if (existingBarkod) throw new Error(`Artikal sa barkodom "${data.barkod}" već postoji`);
+      }
+      fields.push('barkod = ?'); values.push(data.barkod);
+    }
     if (data.tip !== undefined) { fields.push('tip = ?'); values.push(data.tip === 'usluga' ? 'usluga' : 'artikal'); }
 
     if (fields.length === 0) return { changes: 0 };
@@ -122,6 +162,10 @@ export function registerIpcHandlers(): void {
   });
 
   handle('product:delete', (id: number) => {
+    const inOrders = db.prepare('SELECT id FROM order_items WHERE productId = ? LIMIT 1').get(id);
+    if (inOrders) throw new Error('Artikal se koristi u računima i ne može biti obrisan');
+    const inPrimke = db.prepare('SELECT id FROM primka_stavke WHERE productId = ? LIMIT 1').get(id);
+    if (inPrimke) throw new Error('Artikal se koristi u primkama i ne može biti obrisan');
     const result = db.prepare('DELETE FROM products WHERE id = ?').run(id);
     return { changes: result.changes };
   });
@@ -174,9 +218,10 @@ export function registerIpcHandlers(): void {
   handle('dobavljac:create', (data: {
     naziv: string; idBroj?: string; pdvBroj?: string; adresa?: string; kontakt?: string;
   }) => {
+    if (!data.naziv?.trim()) throw new Error('Naziv dobavljača je obavezan');
     const result = db
       .prepare('INSERT INTO dobavljaci (naziv, idBroj, pdvBroj, adresa, kontakt) VALUES (?, ?, ?, ?, ?)')
-      .run(data.naziv, data.idBroj ?? null, data.pdvBroj ?? null, data.adresa ?? null, data.kontakt ?? null);
+      .run(data.naziv.trim(), data.idBroj ?? null, data.pdvBroj ?? null, data.adresa ?? null, data.kontakt ?? null);
     return { id: result.lastInsertRowid };
   });
 
@@ -202,6 +247,8 @@ export function registerIpcHandlers(): void {
   });
 
   handle('dobavljac:delete', (id: number) => {
+    const inPrimke = db.prepare("SELECT id FROM primke WHERE dobavljacId = ? LIMIT 1").get(String(id));
+    if (inPrimke) throw new Error('Dobavljač se koristi u primkama i ne može biti obrisan');
     const result = db.prepare('DELETE FROM dobavljaci WHERE id = ?').run(id);
     return { changes: result.changes };
   });
@@ -223,9 +270,13 @@ export function registerIpcHandlers(): void {
     naziv: string; idBroj: string; pdvBroj?: string; adresa?: string;
     postanskiBroj?: string; grad?: string; kontakt?: string;
   }) => {
+    if (!data.naziv?.trim()) throw new Error('Naziv kupca je obavezan');
+    if (!data.idBroj?.trim()) throw new Error('ID broj (JIB) kupca je obavezan');
+    const existingJib = db.prepare('SELECT id FROM kupci WHERE idBroj = ?').get(data.idBroj.trim());
+    if (existingJib) throw new Error(`Kupac sa JIB-om "${data.idBroj}" već postoji`);
     const result = db
       .prepare('INSERT INTO kupci (naziv, idBroj, pdvBroj, adresa, postanskiBroj, grad, kontakt) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(data.naziv, data.idBroj, data.pdvBroj ?? null, data.adresa ?? null, data.postanskiBroj ?? null, data.grad ?? null, data.kontakt ?? null);
+      .run(data.naziv.trim(), data.idBroj.trim(), data.pdvBroj ?? null, data.adresa ?? null, data.postanskiBroj ?? null, data.grad ?? null, data.kontakt ?? null);
     return { id: result.lastInsertRowid };
   });
 
@@ -237,7 +288,11 @@ export function registerIpcHandlers(): void {
     const values: any[] = [];
 
     if (data.naziv !== undefined) { fields.push('naziv = ?'); values.push(data.naziv); }
-    if (data.idBroj !== undefined) { fields.push('idBroj = ?'); values.push(data.idBroj); }
+    if (data.idBroj !== undefined) {
+      const existingJib = db.prepare('SELECT id FROM kupci WHERE idBroj = ? AND id != ?').get(data.idBroj, id);
+      if (existingJib) throw new Error(`Kupac sa JIB-om "${data.idBroj}" već postoji`);
+      fields.push('idBroj = ?'); values.push(data.idBroj);
+    }
     if (data.pdvBroj !== undefined) { fields.push('pdvBroj = ?'); values.push(data.pdvBroj); }
     if (data.adresa !== undefined) { fields.push('adresa = ?'); values.push(data.adresa); }
     if (data.postanskiBroj !== undefined) { fields.push('postanskiBroj = ?'); values.push(data.postanskiBroj); }
@@ -254,6 +309,11 @@ export function registerIpcHandlers(): void {
   });
 
   handle('kupac:delete', (id: number) => {
+    const kupac = db.prepare('SELECT idBroj FROM kupci WHERE id = ?').get(id) as { idBroj: string } | undefined;
+    if (kupac) {
+      const inOrders = db.prepare('SELECT id FROM orders WHERE kupacIdBroj = ? LIMIT 1').get(kupac.idBroj);
+      if (inOrders) throw new Error('Kupac se koristi u računima i ne može biti obrisan');
+    }
     const result = db.prepare('DELETE FROM kupci WHERE id = ?').run(id);
     return { changes: result.changes };
   });
@@ -295,6 +355,10 @@ export function registerIpcHandlers(): void {
     dobavljacNaziv?: string; dobavljacId?: string; dobavljacAdresa?: string;
     stavke: Array<{ productId: number; kolicina: number; cijena: number; nabavnaCijena: number; rabat: number; pdvStopa: string }>;
   }) => {
+    if (!data.brojPrimke?.trim()) throw new Error('Broj primke je obavezan');
+    if (!data.stavke || data.stavke.length === 0) throw new Error('Primka mora imati najmanje jednu stavku');
+    const existingPrimka = db.prepare('SELECT id FROM primke WHERE brojPrimke = ?').get(data.brojPrimke.trim());
+    if (existingPrimka) throw new Error(`Primka sa brojem "${data.brojPrimke}" već postoji`);
     const createPrimka = db.transaction(() => {
       const datum = data.datum || new Date().toISOString().split('T')[0];
       const result = db
@@ -527,6 +591,8 @@ export function registerIpcHandlers(): void {
     kupac?: { naziv?: string; idBroj?: string; adresa?: string; grad?: string; postanskiBroj?: string };
     stavke: Array<{ productId: number; kolicina: number; cijena: number; rabat: number; pdvStopa: string }>;
   }) => {
+    if (!data.stavke || data.stavke.length === 0) throw new Error('Račun mora imati najmanje jednu stavku');
+    if (!data.korisnikId) throw new Error('Korisnik nije prijavljen');
     const createOrder = db.transaction(() => {
       const result = db
         .prepare(`

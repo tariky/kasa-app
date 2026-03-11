@@ -22,12 +22,18 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
 
   const handleSubmit = useCallback(async () => {
     if (pin.length < 4) return;
-    const user = await window.api.login(pin);
-    if (user) {
-      setError('');
-      onLogin(user);
-    } else {
-      setError('Pogrešan PIN');
+    try {
+      const user = await window.api.login(pin);
+      if (user) {
+        setError('');
+        onLogin(user);
+      } else {
+        setError('Pogrešan PIN');
+        setShaking(true);
+        setTimeout(() => { setShaking(false); setPin(''); }, 500);
+      }
+    } catch {
+      setError('Greška pri prijavi');
       setShaking(true);
       setTimeout(() => { setShaking(false); setPin(''); }, 500);
     }
