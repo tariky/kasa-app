@@ -57,8 +57,8 @@ interface Window {
     setSetting: (key: string, value: string) => Promise<any>;
     getTringSettings: () => Promise<any>;
     saveTringSettings: (data: any) => Promise<any>;
-    getFirmaSettings: () => Promise<{ naziv: string; adresa: string; grad: string; idBroj: string; pdvBroj: string; skladiste: string; logo: string }>;
-    saveFirmaSettings: (data: any) => Promise<any>;
+    getFirmaSettings: () => Promise<import('./types').FirmaSettings>;
+    saveFirmaSettings: (data: import('./types').FirmaSettings) => Promise<{ success: boolean }>;
     showSaveDialog: (data: { defaultName: string; filters: Array<{ name: string; extensions: string[] }> }) => Promise<string | null>;
     writeFile: (path: string, buffer: Buffer) => Promise<any>;
     getReportData: (type: string, from: string, to: string) => Promise<any[]>;

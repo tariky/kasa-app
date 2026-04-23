@@ -184,6 +184,7 @@ export default function PostavkeScreen() {
       naziv: firmaNaziv, adresa: firmaAdresa, grad: firmaGrad,
       idBroj: firmaIdBroj, pdvBroj: firmaPdvBroj,
       skladiste: firmaSkladiste, logo: firmaLogo,
+      bankAccounts: [],
     });
     setFirmaStatus('Postavke firme spremljene!');
     setTimeout(() => setFirmaStatus(''), 3000);

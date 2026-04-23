@@ -142,3 +142,19 @@ export interface Nivelacija {
   stavkiCount?: number;
   ukupnaRazlika?: number;
 }
+
+export interface BankAccount {
+  bankName: string;
+  accountNumber: string;
+}
+
+export interface FirmaSettings {
+  naziv: string;
+  adresa: string;
+  grad: string;
+  idBroj: string;
+  pdvBroj: string;
+  skladiste: string;
+  logo: string;
+  bankAccounts: BankAccount[];
+}
