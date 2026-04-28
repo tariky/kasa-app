@@ -13,12 +13,12 @@ import {
 } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
-import { User, TringSettings } from '@/types';
+import { User, TringSettings, BankAccount } from '@/types';
 import {
   UserPlus, Wifi, WifiOff, Save, Trash2, Pencil,
   Users, Printer, Building2, Shield, Hash, KeyRound,
   MapPin, FileText, Image, CheckCircle2, AlertTriangle,
-  HardDrive, Download, Bug, RefreshCw, X, ChevronDown, ChevronUp, Settings,
+  HardDrive, Download, Bug, RefreshCw, X, ChevronDown, ChevronUp, Settings, Landmark,
 } from 'lucide-react';
 
 type SettingsTab = 'korisnici' | 'fiskalni' | 'firma' | 'sistem';
@@ -47,6 +47,11 @@ export default function PostavkeScreen() {
   const [firmaPdvBroj, setFirmaPdvBroj] = useState('');
   const [firmaSkladiste, setFirmaSkladiste] = useState('');
   const [firmaLogo, setFirmaLogo] = useState('');
+  const [firmaBankAccounts, setFirmaBankAccounts] = useState<BankAccount[]>([
+    { bankName: '', accountNumber: '' },
+    { bankName: '', accountNumber: '' },
+    { bankName: '', accountNumber: '' },
+  ]);
   const [firmaStatus, setFirmaStatus] = useState('');
   const [backupStatus, setBackupStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
@@ -109,6 +114,11 @@ export default function PostavkeScreen() {
       setFirmaPdvBroj(s.pdvBroj);
       setFirmaSkladiste(s.skladiste);
       setFirmaLogo(s.logo);
+
+      const padded: BankAccount[] = [0, 1, 2].map(i =>
+        s.bankAccounts[i] ?? { bankName: '', accountNumber: '' }
+      );
+      setFirmaBankAccounts(padded);
     });
   }, []);
 
@@ -180,11 +190,14 @@ export default function PostavkeScreen() {
 
   // ── Firma handlers ──
   const handleSaveFirma = async () => {
+    const cleanedAccounts = firmaBankAccounts
+      .map(a => ({ bankName: a.bankName.trim(), accountNumber: a.accountNumber.trim() }))
+      .filter(a => a.bankName !== '' || a.accountNumber !== '');
     await window.api.saveFirmaSettings({
       naziv: firmaNaziv, adresa: firmaAdresa, grad: firmaGrad,
       idBroj: firmaIdBroj, pdvBroj: firmaPdvBroj,
       skladiste: firmaSkladiste, logo: firmaLogo,
-      bankAccounts: [],
+      bankAccounts: cleanedAccounts,
     });
     setFirmaStatus('Postavke firme spremljene!');
     setTimeout(() => setFirmaStatus(''), 3000);
@@ -815,6 +828,52 @@ export default function PostavkeScreen() {
                         />
                       </div>
                     </div>
+                  </div>
+                </div>
+
+                {/* Bank accounts card */}
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm shadow-slate-200/50 overflow-hidden">
+                  <div className="px-6 py-4 border-b border-slate-100">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center">
+                        <Landmark size={20} className="text-amber-500" />
+                      </div>
+                      <div>
+                        <h3 className="text-[15px] font-semibold text-slate-800">Bankovni računi</h3>
+                        <p className="text-[12px] text-slate-400 mt-0.5">Prikazuju se na računima (do 3 računa)</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="px-6 py-5 space-y-4">
+                    {firmaBankAccounts.map((acc, i) => (
+                      <div key={i} className="space-y-1.5">
+                        <Label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                          Račun {i + 1}
+                        </Label>
+                        <div className="grid grid-cols-2 gap-4">
+                          <Input
+                            value={acc.bankName}
+                            onChange={e => setFirmaBankAccounts(prev => {
+                              const next = [...prev];
+                              next[i] = { ...next[i], bankName: e.target.value };
+                              return next;
+                            })}
+                            placeholder="Naziv banke"
+                            className="text-[13px] h-9 bg-slate-50 border-slate-200"
+                          />
+                          <Input
+                            value={acc.accountNumber}
+                            onChange={e => setFirmaBankAccounts(prev => {
+                              const next = [...prev];
+                              next[i] = { ...next[i], accountNumber: e.target.value };
+                              return next;
+                            })}
+                            placeholder="Broj računa"
+                            className="font-mono text-[13px] h-9 bg-slate-50 border-slate-200"
+                          />
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
 

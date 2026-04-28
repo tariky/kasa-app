@@ -130,7 +130,7 @@ export default function NarudzbeScreen() {
     try {
       return await window.api.getFirmaSettings();
     } catch {
-      return { naziv: '', adresa: '', grad: '', idBroj: '', pdvBroj: '', skladiste: '', logo: '' };
+      return { naziv: '', adresa: '', grad: '', idBroj: '', pdvBroj: '', skladiste: '', logo: '', bankAccounts: [] };
     }
   };
 

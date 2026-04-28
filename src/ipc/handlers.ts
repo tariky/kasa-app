@@ -708,6 +708,13 @@ export function registerIpcHandlers(): void {
       settings[row.key.replace('firma.', '')] = row.value;
     }
 
+    const bankAccounts = [1, 2, 3]
+      .map(i => ({
+        bankName: settings[`bank${i}.name`] ?? '',
+        accountNumber: settings[`bank${i}.number`] ?? '',
+      }))
+      .filter(b => b.bankName.trim() !== '' || b.accountNumber.trim() !== '');
+
     return {
       naziv: settings.naziv ?? '',
       adresa: settings.adresa ?? '',
@@ -716,6 +723,7 @@ export function registerIpcHandlers(): void {
       pdvBroj: settings.pdvBroj ?? '',
       skladiste: settings.skladiste ?? '',
       logo: settings.logo ?? '',
+      bankAccounts,
     };
   });
 
@@ -733,6 +741,7 @@ export function registerIpcHandlers(): void {
   handle('settings:saveFirma', (data: {
     naziv: string; adresa: string; grad: string;
     idBroj: string; pdvBroj: string; skladiste: string; logo: string;
+    bankAccounts?: Array<{ bankName: string; accountNumber: string }>;
   }) => {
     const save = db.transaction(() => {
       const upsert = db.prepare(
@@ -745,6 +754,13 @@ export function registerIpcHandlers(): void {
       upsert.run('firma.pdvBroj', data.pdvBroj);
       upsert.run('firma.skladiste', data.skladiste);
       upsert.run('firma.logo', data.logo);
+
+      const accounts = data.bankAccounts ?? [];
+      for (let i = 0; i < 3; i++) {
+        const a = accounts[i] ?? { bankName: '', accountNumber: '' };
+        upsert.run(`firma.bank${i + 1}.name`, a.bankName ?? '');
+        upsert.run(`firma.bank${i + 1}.number`, a.accountNumber ?? '');
+      }
     });
     save();
     return { success: true };

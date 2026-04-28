@@ -1,6 +1,6 @@
 import React from 'react';
 import { Document, Page, View, Text, Image, StyleSheet } from '@react-pdf/renderer';
-import { Order, OrderItem } from '@/types';
+import { Order, OrderItem, BankAccount } from '@/types';
 import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
 
 export type InvoiceLang = 'bs' | 'en';
@@ -15,6 +15,7 @@ export interface RacunPdfProps {
     pdvBroj: string;
     skladiste: string;
     logo: string;
+    bankAccounts: BankAccount[];
   };
   lang?: InvoiceLang;
 }
@@ -47,6 +48,7 @@ const translations = {
     paymentCash: 'Gotovina',
     paymentCard: 'Kartica',
     paymentBoth: 'Gotovina + Kartica',
+    bankAccounts: 'Žiro računi',
   },
   en: {
     invoiceTitle: 'INVOICE',
@@ -75,6 +77,7 @@ const translations = {
     paymentCash: 'Cash',
     paymentCard: 'Card',
     paymentBoth: 'Cash + Card',
+    bankAccounts: 'Bank accounts',
   },
 } as const;
 
@@ -290,6 +293,35 @@ const s = StyleSheet.create({
     marginBottom: 3,
   },
 
+  /* ── Bank accounts ── */
+  bankAccountsWrap: {
+    marginTop: 18,
+  },
+  bankAccountsLabel: {
+    fontSize: 7,
+    fontFamily: FB,
+    fontWeight: 700,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    color: '#888',
+    marginBottom: 4,
+  },
+  bankAccountRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 2,
+  },
+  bankName: {
+    fontSize: 8.5,
+    color: '#333',
+  },
+  bankNumber: {
+    fontSize: 8.5,
+    fontFamily: FB,
+    fontWeight: 700,
+    color: '#000',
+  },
+
   /* ── Footer ── */
   footer: {
     position: 'absolute',
@@ -452,6 +484,19 @@ export function RacunPdf({ order, firma, lang = 'bs' }: RacunPdfProps) {
             </View>
           </View>
         </View>
+
+        {/* ── Bank accounts ── */}
+        {firma.bankAccounts.length > 0 && (
+          <View style={s.bankAccountsWrap}>
+            <Text style={s.bankAccountsLabel}>{t.bankAccounts}</Text>
+            {firma.bankAccounts.map((b, i) => (
+              <View key={i} style={s.bankAccountRow}>
+                <Text style={s.bankName}>{b.bankName}</Text>
+                <Text style={s.bankNumber}>{b.accountNumber}</Text>
+              </View>
+            ))}
+          </View>
+        )}
 
         {/* ── Reklamacija ── */}
         {order.brojReklamacije && (
