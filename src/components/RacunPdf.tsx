@@ -49,6 +49,8 @@ const translations = {
     paymentCard: 'Kartica',
     paymentBoth: 'Gotovina + Kartica',
     bankAccounts: 'Žiro računi',
+    signatureIssuer: 'Potpis izdavaoca',
+    signatureRecipient: 'Potpis primaoca',
   },
   en: {
     invoiceTitle: 'INVOICE',
@@ -78,6 +80,8 @@ const translations = {
     paymentCard: 'Card',
     paymentBoth: 'Cash + Card',
     bankAccounts: 'Bank accounts',
+    signatureIssuer: 'Issuer signature',
+    signatureRecipient: 'Recipient signature',
   },
 } as const;
 
@@ -220,14 +224,17 @@ const s = StyleSheet.create({
     flexDirection: 'row',
     paddingVertical: 5,
     borderBottom: '0.5pt solid #ddd',
+    alignItems: 'flex-start',
   },
   tCell: {
     fontSize: 8.5,
+    lineHeight: 1.3,
   },
   tCellBold: {
     fontSize: 8.5,
     fontFamily: FB,
     fontWeight: 700,
+    lineHeight: 1.3,
   },
   colRb: { width: '5%' },
   colArtikal: { width: '37%' },
@@ -296,6 +303,9 @@ const s = StyleSheet.create({
   /* ── Bank accounts ── */
   bankAccountsWrap: {
     marginTop: 18,
+    backgroundColor: '#f5f5f5',
+    borderLeft: '2pt solid #000',
+    padding: 10,
   },
   bankAccountsLabel: {
     fontSize: 7,
@@ -303,13 +313,20 @@ const s = StyleSheet.create({
     fontWeight: 700,
     textTransform: 'uppercase',
     letterSpacing: 1,
-    color: '#888',
-    marginBottom: 4,
+    color: '#666',
+    marginBottom: 6,
   },
   bankAccountRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingVertical: 2,
+    paddingVertical: 3,
+  },
+  bankAccountRowPrimary: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 4,
+    borderBottom: '0.5pt solid #ccc',
+    marginBottom: 2,
   },
   bankName: {
     fontSize: 8.5,
@@ -320,6 +337,44 @@ const s = StyleSheet.create({
     fontFamily: FB,
     fontWeight: 700,
     color: '#000',
+  },
+  bankNamePrimary: {
+    fontSize: 9.5,
+    fontFamily: FB,
+    fontWeight: 700,
+    color: '#000',
+  },
+  bankNumberPrimary: {
+    fontSize: 9.5,
+    fontFamily: FB,
+    fontWeight: 700,
+    color: '#000',
+    letterSpacing: 0.3,
+  },
+
+  /* ── Signatures ── */
+  signaturesWrap: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 'auto',
+    paddingTop: 40,
+    paddingBottom: 20,
+  },
+  signatureBlock: {
+    width: '42%',
+  },
+  signatureLine: {
+    borderTop: '0.5pt solid #000',
+    marginBottom: 4,
+  },
+  signatureLabel: {
+    fontSize: 7,
+    fontFamily: FB,
+    fontWeight: 700,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    color: '#555',
+    textAlign: 'center',
   },
 
   /* ── Footer ── */
@@ -489,12 +544,22 @@ export function RacunPdf({ order, firma, lang = 'bs' }: RacunPdfProps) {
         {firma.bankAccounts.length > 0 && (
           <View style={s.bankAccountsWrap}>
             <Text style={s.bankAccountsLabel}>{t.bankAccounts}</Text>
-            {firma.bankAccounts.map((b, i) => (
-              <View key={i} style={s.bankAccountRow}>
-                <Text style={s.bankName}>{b.bankName}</Text>
-                <Text style={s.bankNumber}>{b.accountNumber}</Text>
-              </View>
-            ))}
+            {firma.bankAccounts.map((b, i) => {
+              const isPrimary = i === 0;
+              return (
+                <View
+                  key={i}
+                  style={isPrimary ? s.bankAccountRowPrimary : s.bankAccountRow}
+                >
+                  <Text style={isPrimary ? s.bankNamePrimary : s.bankName}>
+                    {b.bankName}
+                  </Text>
+                  <Text style={isPrimary ? s.bankNumberPrimary : s.bankNumber}>
+                    {b.accountNumber}
+                  </Text>
+                </View>
+              );
+            })}
           </View>
         )}
 
@@ -505,6 +570,18 @@ export function RacunPdf({ order, firma, lang = 'bs' }: RacunPdfProps) {
             <Text style={{ fontSize: 8.5 }}>{t.refundNumber}: {order.brojReklamacije}</Text>
           </View>
         )}
+
+        {/* ── Signatures ── */}
+        <View style={s.signaturesWrap} wrap={false}>
+          <View style={s.signatureBlock}>
+            <View style={s.signatureLine} />
+            <Text style={s.signatureLabel}>{t.signatureIssuer}</Text>
+          </View>
+          <View style={s.signatureBlock}>
+            <View style={s.signatureLine} />
+            <Text style={s.signatureLabel}>{t.signatureRecipient}</Text>
+          </View>
+        </View>
 
         {/* ── Footer ── */}
         <View style={s.footer} fixed>

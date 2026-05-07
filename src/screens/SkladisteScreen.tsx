@@ -882,6 +882,11 @@ function ArtikliTab({
     setDialogOpen(true);
   };
 
+  const handleDialogOpenChange = (v: boolean) => {
+    setDialogOpen(v);
+    if (!v) setEditProduct(null);
+  };
+
   const handleDelete = async (p: Product) => {
     if (!confirm(`Obrisati artikal "${p.naziv}"?`)) return;
     await window.api.deleteProduct(p.id);
@@ -1102,8 +1107,9 @@ function ArtikliTab({
       </div>
 
       <ArtikalDialog
+        key={editProduct?.id ?? 'new'}
         open={dialogOpen}
-        onOpenChange={setDialogOpen}
+        onOpenChange={handleDialogOpenChange}
         product={editProduct}
         onSave={onReload}
       />
@@ -2293,6 +2299,11 @@ function UslugeTab({ usluge, onReload }: { usluge: Product[]; onReload: () => vo
     onReload();
   };
 
+  const handleDialogOpenChange = (v: boolean) => {
+    setDialogOpen(v);
+    if (!v) setEditProduct(null);
+  };
+
   const handleSave = async (data: any) => {
     if (editProduct) {
       await window.api.updateProduct(editProduct.id, { ...data, tip: 'usluga' });
@@ -2300,6 +2311,7 @@ function UslugeTab({ usluge, onReload }: { usluge: Product[]; onReload: () => vo
       await window.api.createProduct({ ...data, tip: 'usluga' });
     }
     setDialogOpen(false);
+    setEditProduct(null);
     onReload();
   };
 
@@ -2421,8 +2433,9 @@ function UslugeTab({ usluge, onReload }: { usluge: Product[]; onReload: () => vo
       </div>
 
       <UslugaDialog
+        key={editProduct?.id ?? 'new'}
         open={dialogOpen}
-        onOpenChange={setDialogOpen}
+        onOpenChange={handleDialogOpenChange}
         product={editProduct}
         onSave={handleSave}
       />
