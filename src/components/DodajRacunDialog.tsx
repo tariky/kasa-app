@@ -15,6 +15,7 @@ interface StavkaUnos {
   product: Product;
   kolicina: number;
   rabat: number;
+  cijena: number;
 }
 
 type PaymentType = 'Gotovina' | 'Kartica' | 'Virman' | 'Ček';
@@ -49,7 +50,7 @@ export default function DodajRacunDialog({ open, onOpenChange, korisnikId, onSav
 
   const { ukupno, pdvIznos } = useMemo(
     () => izracunajTotale(stavke.map(s => ({
-      cijena: s.product.cijena, kolicina: s.kolicina, rabat: s.rabat, pdvStopa: s.product.pdvStopa,
+      cijena: s.cijena, kolicina: s.kolicina, rabat: s.rabat, pdvStopa: s.product.pdvStopa,
     }))),
     [stavke]
   );
@@ -65,7 +66,7 @@ export default function DodajRacunDialog({ open, onOpenChange, korisnikId, onSav
     setStavke(prev => {
       const existing = prev.find(s => s.product.id === p.id);
       if (existing) return prev.map(s => s.product.id === p.id ? { ...s, kolicina: s.kolicina + 1 } : s);
-      return [...prev, { product: p, kolicina: 1, rabat: 0 }];
+      return [...prev, { product: p, kolicina: 1, rabat: 0, cijena: p.cijena }];
     });
     setQuery(''); setResults([]);
   };
@@ -99,7 +100,7 @@ export default function DodajRacunDialog({ open, onOpenChange, korisnikId, onSav
         korisnikId, ukupno, pdvIznos, nacinPlacanja,
         brojFiskalnogRacuna: brojFiskalnog.trim(), createdAt, kupac,
         stavke: stavke.map(s => ({
-          productId: s.product.id, kolicina: s.kolicina, cijena: s.product.cijena, rabat: s.rabat, pdvStopa: s.product.pdvStopa,
+          productId: s.product.id, kolicina: s.kolicina, cijena: s.cijena, rabat: s.rabat, pdvStopa: s.product.pdvStopa,
         })),
       });
       reset();
@@ -173,12 +174,17 @@ export default function DodajRacunDialog({ open, onOpenChange, korisnikId, onSav
                         onChange={e => updateStavka(s.product.id, { kolicina: parseFloat(e.target.value) || 0 })} />
                     </div>
                     <div className="flex items-center gap-1">
+                      <Label className="text-xs text-slate-400">Cijena</Label>
+                      <Input type="number" min={0} step="any" value={s.cijena} className="w-20 h-8"
+                        onChange={e => updateStavka(s.product.id, { cijena: parseFloat(e.target.value) || 0 })} />
+                    </div>
+                    <div className="flex items-center gap-1">
                       <Label className="text-xs text-slate-400">Rabat %</Label>
                       <Input type="number" min={0} max={100} step="any" value={s.rabat} className="w-16 h-8"
                         onChange={e => updateStavka(s.product.id, { rabat: parseFloat(e.target.value) || 0 })} />
                     </div>
                     <div className="w-24 text-right font-mono">
-                      {formatKM(s.product.cijena * s.kolicina * (1 - s.rabat / 100))}
+                      {formatKM(s.cijena * s.kolicina * (1 - s.rabat / 100))}
                     </div>
                     <Button type="button" variant="ghost" size="icon" onClick={() => removeStavka(s.product.id)}>
                       <Trash2 className="h-4 w-4 text-red-500" />
