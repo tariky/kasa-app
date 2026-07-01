@@ -10,14 +10,15 @@ import {
 import { Separator } from '@/components/ui/separator';
 import {
   RotateCcw, Receipt, AlertTriangle, Printer, Download,
-  User, Hash, CreditCard, Banknote, Building2, ChevronRight, KeyRound,
+  User, Hash, CreditCard, Banknote, Building2, ChevronRight, KeyRound, Plus,
 } from 'lucide-react';
 import { pdf } from '@react-pdf/renderer';
 import { RacunPdf, InvoiceLang } from '@/components/RacunPdf';
 import { Order, OrderItem } from '@/types';
 import { cn, formatKM, formatDateTime } from '@/lib/utils';
+import DodajRacunDialog from '@/components/DodajRacunDialog';
 
-export default function NarudzbeScreen() {
+export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
   const [orders, setOrders] = useState<Order[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [reklamacijaOpen, setReklamacijaOpen] = useState(false);
@@ -28,6 +29,7 @@ export default function NarudzbeScreen() {
   const [pinDialogOpen, setPinDialogOpen] = useState(false);
   const [pinValue, setPinValue] = useState('');
   const [pinError, setPinError] = useState('');
+  const [dodajOpen, setDodajOpen] = useState(false);
 
   useEffect(() => {
     loadOrders();
@@ -189,6 +191,12 @@ export default function NarudzbeScreen() {
         {/* ── Left: Orders table ── */}
         <div className="flex-1 min-w-0">
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm shadow-slate-200/50 h-full flex flex-col overflow-hidden">
+            <div className="flex-shrink-0 flex justify-end px-4 pt-3 pb-1">
+              <Button size="sm" onClick={() => setDodajOpen(true)} className="h-8 gap-1.5 text-[12px]">
+                <Plus className="h-3.5 w-3.5" />
+                Dodaj račun ručno
+              </Button>
+            </div>
             {orders.length === 0 ? (
               <div className="flex-1 flex flex-col items-center justify-center text-slate-400 select-none">
                 <div className="w-14 h-14 rounded-2xl bg-slate-50 flex items-center justify-center mb-3">
@@ -229,7 +237,10 @@ export default function NarudzbeScreen() {
                           <td className={cn('px-2 py-2.5 text-[13px] font-mono font-semibold text-right tabular-nums', selected ? 'text-white' : 'text-slate-800')}>
                             {formatKM(order.ukupno)}
                           </td>
-                          <td className={cn('px-2 py-2.5 text-[12px] font-mono', selected ? 'text-white/60' : 'text-slate-400')}>{order.brojFiskalnogRacuna || '—'}</td>
+                          <td className={cn('px-2 py-2.5 text-[12px] font-mono', selected ? 'text-white/60' : 'text-slate-400')}>
+                            {order.brojFiskalnogRacuna || '—'}
+                            {order.isManual ? <Badge variant="outline" className="ml-1 text-amber-600 border-amber-400">R</Badge> : null}
+                          </td>
                           <td className="pr-5 pl-2 py-2.5 text-center">
                             {refunded ? (
                               <span className={cn(
@@ -284,16 +295,21 @@ export default function NarudzbeScreen() {
                       </div>
                     </div>
                   </div>
-                  {isRefunded(selectedOrder.status) ? (
-                    <span className="inline-flex items-center gap-1 text-[10px] font-semibold bg-red-50 text-red-500 border border-red-100 rounded-full px-2.5 py-1">
-                      <RotateCcw size={10} />
-                      Storno
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center text-[10px] font-semibold bg-emerald-50 text-emerald-600 border border-emerald-100 rounded-full px-2.5 py-1">
-                      Završeno
-                    </span>
-                  )}
+                  <div className="flex items-center gap-1.5">
+                    {selectedOrder?.isManual ? (
+                      <Badge variant="outline" className="border-amber-400 text-amber-600">Ručno unesen</Badge>
+                    ) : null}
+                    {isRefunded(selectedOrder.status) ? (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold bg-red-50 text-red-500 border border-red-100 rounded-full px-2.5 py-1">
+                        <RotateCcw size={10} />
+                        Storno
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center text-[10px] font-semibold bg-emerald-50 text-emerald-600 border border-emerald-100 rounded-full px-2.5 py-1">
+                        Završeno
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -637,6 +653,14 @@ export default function NarudzbeScreen() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* ── Dodaj račun ručno Dialog ── */}
+      <DodajRacunDialog
+        open={dodajOpen}
+        onOpenChange={setDodajOpen}
+        korisnikId={korisnikId}
+        onSaved={loadOrders}
+      />
     </div>
   );
 }

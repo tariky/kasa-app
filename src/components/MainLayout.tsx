@@ -88,7 +88,7 @@ export default function MainLayout({ user, onLogout }: Props) {
       <main className="flex-1 overflow-hidden">
         {screen === 'kasa' && <KasaScreen user={user} />}
         {screen === 'skladiste' && <SkladisteScreen />}
-        {screen === 'narudzbe' && <NarudzbeScreen />}
+        {screen === 'narudzbe' && <NarudzbeScreen korisnikId={user.id} />}
         {screen === 'izvjestaji' && <IzvjestajiScreen />}
         {screen === 'postavke' && <PostavkeScreen />}
       </main>

@@ -83,6 +83,7 @@ export const schema = `
     kupacAdresa TEXT,
     kupacGrad TEXT,
     kupacPostanskiBroj TEXT,
+    isManual INTEGER NOT NULL DEFAULT 0,
     createdAt TEXT DEFAULT (datetime('now','localtime')),
     FOREIGN KEY (korisnikId) REFERENCES users(id)
   );

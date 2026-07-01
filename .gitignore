@@ -90,3 +90,6 @@ typings/
 
 # Electron-Forge
 out/
+
+# SDD progress scratch
+.superpowers/

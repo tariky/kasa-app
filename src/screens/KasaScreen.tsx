@@ -8,6 +8,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
 } from '@/components/ui/dialog';
 import { cn, formatKM } from '@/lib/utils';
+import { izracunajTotale } from '@/lib/racun';
 import type { User, Product, CartItem, Kupac } from '@/types';
 
 type PaymentType = 'Gotovina' | 'Kartica' | 'Virman' | 'Ček';
@@ -125,13 +126,14 @@ export default function KasaScreen({ user }: KasaScreenProps) {
   }, []);
 
   // Cart calculations
-  const subtotal = cart.reduce((sum, item) =>
-    sum + item.product.cijena * item.kolicina * (1 - item.rabat / 100), 0);
-  const pdvAmount = cart.reduce((sum, item) => {
-    if (item.product.pdvStopa !== 'E') return sum;
-    const itemTotal = item.product.cijena * item.kolicina * (1 - item.rabat / 100);
-    return sum + (itemTotal - itemTotal / 1.17);
-  }, 0);
+  const { ukupno: subtotal, pdvIznos: pdvAmount } = izracunajTotale(
+    cart.map(item => ({
+      cijena: item.product.cijena,
+      kolicina: item.kolicina,
+      rabat: item.rabat,
+      pdvStopa: item.product.pdvStopa,
+    }))
+  );
   const total = subtotal;
   const itemCount = cart.reduce((sum, item) => sum + item.kolicina, 0);
 

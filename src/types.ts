@@ -68,6 +68,7 @@ export interface Order {
   brojFiskalnogRacuna?: string;
   brojReklamacije?: string;
   status: 'completed' | 'refunded';
+  isManual?: boolean;
   createdAt: string;
   stavke?: OrderItem[];
   korisnikIme?: string;

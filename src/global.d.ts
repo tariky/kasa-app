@@ -42,6 +42,7 @@ interface Window {
     getOrders: () => Promise<any[]>;
     getOrder: (id: number) => Promise<any>;
     createOrder: (data: any) => Promise<any>;
+    createManualOrder: (data: any) => Promise<{ id: number }>;
     updateOrderReklamacija: (id: number, broj: string) => Promise<any>;
     refundOrder: (id: number) => Promise<any>;
     tringInit: () => Promise<any>;

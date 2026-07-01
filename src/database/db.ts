@@ -94,6 +94,10 @@ function runMigrations(database: Database.Database): void {
     database.exec("ALTER TABLE orders ADD COLUMN kupacGrad TEXT");
     database.exec("ALTER TABLE orders ADD COLUMN kupacPostanskiBroj TEXT");
   }
+
+  if (!orderCols.find(c => c.name === 'isManual')) {
+    database.exec("ALTER TABLE orders ADD COLUMN isManual INTEGER NOT NULL DEFAULT 0");
+  }
 }
 
 function seedDefaults(database: Database.Database): void {
