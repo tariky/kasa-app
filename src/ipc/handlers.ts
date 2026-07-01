@@ -630,6 +630,59 @@ export function registerIpcHandlers(): void {
     return createOrder();
   });
 
+  handle('order:createManual', (data: {
+    korisnikId: number; ukupno: number; pdvIznos: number;
+    nacinPlacanja: string; brojFiskalnogRacuna: string; createdAt: string;
+    kupac?: { naziv?: string; idBroj?: string; adresa?: string; grad?: string; postanskiBroj?: string };
+    stavke: Array<{ productId: number; kolicina: number; cijena: number; rabat: number; pdvStopa: string }>;
+  }) => {
+    if (!data.stavke || data.stavke.length === 0) throw new Error('Račun mora imati najmanje jednu stavku');
+    if (!data.korisnikId) throw new Error('Korisnik nije prijavljen');
+    if (!data.brojFiskalnogRacuna?.trim()) throw new Error('Fiskalni broj je obavezan');
+    if (!data.createdAt?.trim()) throw new Error('Datum računa je obavezan');
+
+    const existing = db
+      .prepare('SELECT id FROM orders WHERE brojFiskalnogRacuna = ?')
+      .get(data.brojFiskalnogRacuna.trim());
+    if (existing) throw new Error('Fiskalni račun sa tim brojem već postoji');
+
+    const createManual = db.transaction(() => {
+      const result = db
+        .prepare(`
+          INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, status,
+            kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj, isManual, createdAt)
+          VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, 1, ?)
+        `)
+        .run(
+          data.korisnikId, data.ukupno, data.pdvIznos, data.nacinPlacanja, data.brojFiskalnogRacuna.trim(),
+          data.kupac?.naziv || null, data.kupac?.idBroj || null, data.kupac?.adresa || null,
+          data.kupac?.grad || null, data.kupac?.postanskiBroj || null, data.createdAt
+        );
+
+      const orderId = result.lastInsertRowid;
+
+      const insertItem = db.prepare(
+        'INSERT INTO order_items (orderId, productId, kolicina, cijena, rabat, pdvStopa) VALUES (?, ?, ?, ?, ?, ?)'
+      );
+      const insertStock = db.prepare(
+        "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId, createdAt) VALUES (?, 'izlaz', ?, 'order', ?, ?)"
+      );
+
+      for (const item of data.stavke) {
+        insertItem.run(orderId, item.productId, item.kolicina, item.cijena, item.rabat, item.pdvStopa);
+        // Only create stock movements for artikli, not services
+        const product = db.prepare('SELECT tip FROM products WHERE id = ?').get(item.productId) as { tip: string } | undefined;
+        if (!product || product.tip !== 'usluga') {
+          insertStock.run(item.productId, item.kolicina, orderId, data.createdAt);
+        }
+      }
+
+      return { id: orderId };
+    });
+
+    return createManual();
+  });
+
   handle('order:updateReklamacija', (id: number, brojReklamacije: string) => {
     const result = db
       .prepare('UPDATE orders SET brojReklamacije = ? WHERE id = ?')
