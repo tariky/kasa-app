@@ -2,6 +2,7 @@ import { ipcMain, dialog, app } from 'electron';
 import { writeFileSync, copyFileSync } from 'fs';
 import path from 'node:path';
 import { getDb } from '../database/db';
+import { parseFiskalniBroj, izracunajPraznine } from '../lib/fiskalni';
 import * as Tring from '../services/tring';
 import type Database from 'better-sqlite3';
 
@@ -843,6 +844,67 @@ export function registerIpcHandlers(): void {
     });
 
     return refundOrder();
+  });
+
+  handle('pending:list', () => {
+    const rows = db
+      .prepare('SELECT id, korisnikId, snapshot, createdAt FROM pending_receipts ORDER BY id')
+      .all() as Array<{ id: number; korisnikId: number; snapshot: string; createdAt: string }>;
+    return rows.map(r => ({
+      id: r.id, korisnikId: r.korisnikId, createdAt: r.createdAt, snapshot: JSON.parse(r.snapshot),
+    }));
+  });
+
+  handle('pending:resolve', (data: { id: number; brojFiskalnogRacuna: string; createdAt: string }) => {
+    if (!data.brojFiskalnogRacuna?.trim()) throw new Error('Fiskalni broj je obavezan');
+    if (!data.createdAt?.trim()) throw new Error('Datum računa je obavezan');
+
+    const row = db.prepare('SELECT snapshot FROM pending_receipts WHERE id = ?').get(data.id) as { snapshot: string } | undefined;
+    if (!row) throw new Error('Zapis više ne postoji');
+    const snap = JSON.parse(row.snapshot);
+
+    const existing = db.prepare('SELECT id FROM orders WHERE brojFiskalnogRacuna = ?').get(data.brojFiskalnogRacuna.trim());
+    if (existing) throw new Error('Fiskalni račun sa tim brojem već postoji');
+
+    const resolveTx = db.transaction(() => {
+      const orderId = insertCompletedOrder(db, {
+        ...snap,
+        brojFiskalnogRacuna: data.brojFiskalnogRacuna.trim(),
+        isManual: 1,
+        createdAt: data.createdAt,
+      });
+      db.prepare('DELETE FROM pending_receipts WHERE id = ?').run(data.id);
+      return orderId;
+    });
+    return { id: resolveTx() };
+  });
+
+  handle('pending:discard', (id: number) => {
+    db.prepare('DELETE FROM pending_receipts WHERE id = ?').run(id);
+    return { success: true };
+  });
+
+  handle('order:getFiscalGaps', () => {
+    const rows = db
+      .prepare('SELECT brojFiskalnogRacuna FROM orders WHERE brojFiskalnogRacuna IS NOT NULL')
+      .all() as Array<{ brojFiskalnogRacuna: string }>;
+    const brojevi = rows
+      .map(r => parseFiskalniBroj(r.brojFiskalnogRacuna))
+      .filter((n): n is number => n !== null);
+    const sve = izracunajPraznine(brojevi);
+
+    const dismissedRow = db.prepare("SELECT value FROM settings WHERE key = 'fiscal.dismissedGaps'").get() as { value: string } | undefined;
+    const dismissed: number[] = dismissedRow ? JSON.parse(dismissedRow.value) : [];
+    return sve.filter(n => !dismissed.includes(n));
+  });
+
+  handle('order:dismissFiscalGap', (broj: number) => {
+    const row = db.prepare("SELECT value FROM settings WHERE key = 'fiscal.dismissedGaps'").get() as { value: string } | undefined;
+    const dismissed: number[] = row ? JSON.parse(row.value) : [];
+    if (!dismissed.includes(broj)) dismissed.push(broj);
+    db.prepare("INSERT INTO settings (key, value) VALUES ('fiscal.dismissedGaps', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .run(JSON.stringify(dismissed));
+    return { success: true };
   });
 
   // ─── Settings ────────────────────────────────────────────
