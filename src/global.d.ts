@@ -45,6 +45,12 @@ interface Window {
     createManualOrder: (data: any) => Promise<{ id: number }>;
     updateOrderReklamacija: (id: number, broj: string) => Promise<any>;
     refundOrder: (id: number) => Promise<any>;
+    finalizeOrder: (data: any) => Promise<{ success: boolean; id?: number; brojFiskalnogRacuna?: string | null; error?: string; odgovori?: Record<string, string> }>;
+    listPending: () => Promise<Array<{ id: number; korisnikId: number; createdAt: string; snapshot: any }>>;
+    resolvePending: (data: { id: number; brojFiskalnogRacuna: string; createdAt: string }) => Promise<{ id: number }>;
+    discardPending: (id: number) => Promise<{ success: boolean }>;
+    getFiscalGaps: () => Promise<number[]>;
+    dismissFiscalGap: (broj: number) => Promise<{ success: boolean }>;
     tringInit: () => Promise<any>;
     tringPrintReceipt: (data: any) => Promise<any>;
     tringPrintRefund: (data: any) => Promise<any>;

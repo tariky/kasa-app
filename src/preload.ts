@@ -50,6 +50,12 @@ contextBridge.exposeInMainWorld('api', {
   createManualOrder: (data: any) => ipcRenderer.invoke('order:createManual', data),
   updateOrderReklamacija: (id: number, broj: string) => ipcRenderer.invoke('order:updateReklamacija', id, broj),
   refundOrder: (id: number) => ipcRenderer.invoke('order:refund', id),
+  finalizeOrder: (data: any) => ipcRenderer.invoke('order:finalize', data),
+  listPending: () => ipcRenderer.invoke('pending:list'),
+  resolvePending: (data: { id: number; brojFiskalnogRacuna: string; createdAt: string }) => ipcRenderer.invoke('pending:resolve', data),
+  discardPending: (id: number) => ipcRenderer.invoke('pending:discard', id),
+  getFiscalGaps: () => ipcRenderer.invoke('order:getFiscalGaps'),
+  dismissFiscalGap: (broj: number) => ipcRenderer.invoke('order:dismissFiscalGap', broj),
 
   // Tring
   tringInit: () => ipcRenderer.invoke('tring:init'),

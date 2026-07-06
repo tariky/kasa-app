@@ -264,32 +264,33 @@ export default function KasaScreen({ user }: KasaScreenProps) {
         ? { idBroj: kupacIdBroj.trim(), naziv: kupacNaziv.trim(), adresa: kupacAdresa.trim(), grad: kupacGrad.trim(), postanskiBroj: kupacPostanskiBroj.trim() }
         : undefined;
 
-      const tringData = {
-        items: cart.map(item => ({
-          naziv: item.product.naziv, cijena: item.product.cijena, kolicina: item.kolicina,
-          rabat: item.rabat, pdvStopa: item.product.pdvStopa, sifra: item.product.sifra, jm: item.product.jm,
-        })),
-        ukupno: total, nacinPlacanja: paymentType, kupac,
-        napomena: racunNapomena || undefined,
-      };
+      const stavke = cart.map(item => ({
+        productId: item.product.id,
+        sifra: item.product.sifra,
+        naziv: item.product.naziv,
+        jm: item.product.jm,
+        plu: item.product.plu,
+        cijena: item.product.cijena,
+        kolicina: item.kolicina,
+        rabat: item.rabat,
+        pdvStopa: item.product.pdvStopa,
+      }));
 
-      const tringResult = await window.api.tringPrintReceipt(tringData);
-      console.log('Tring printReceipt result:', tringResult);
-      if (!tringResult || !tringResult.success) {
-        const details = tringResult?.odgovori ? Object.entries(tringResult.odgovori).map(([k, v]) => `${k}: ${v}`).join(', ') : '';
-        setMessage({ type: 'error', text: `Greška pri štampanju: ${tringResult?.error || tringResult?.vrstaOdgovora || 'Nepoznata greška'}${details ? ` (${details})` : ''}` });
+      const res = await window.api.finalizeOrder({
+        korisnikId: user.id, ukupno: total, pdvIznos: pdvAmount, nacinPlacanja: paymentType,
+        kupac, napomena: racunNapomena || undefined, stavke,
+      });
+
+      if (!res || !res.success) {
+        const details = res?.odgovori ? Object.entries(res.odgovori).map(([k, v]) => `${k}: ${v}`).join(', ') : '';
+        setMessage({ type: 'error', text: `Greška pri štampanju: ${res?.error || 'Nepoznata greška'}${details ? ` (${details})` : ''}` });
         setLoading(false);
         return;
       }
 
-      const brojFiskalnogRacuna = tringResult.odgovori?.BrojFiskalnogRacuna || null;
-      const datumRacuna = tringResult.odgovori?.DatumFiskalnogRacuna || '';
-      const vrijemeRacuna = tringResult.odgovori?.VrijemeFiskalnogRacuna || '';
-      await window.api.createOrder({
-        korisnikId: user.id, ukupno: total, pdvIznos: pdvAmount, nacinPlacanja: paymentType,
-        brojFiskalnogRacuna, kupac,
-        stavke: cart.map(item => ({ productId: item.product.id, kolicina: item.kolicina, cijena: item.product.cijena, rabat: item.rabat, pdvStopa: item.product.pdvStopa })),
-      });
+      const brojFiskalnogRacuna = res.brojFiskalnogRacuna || null;
+      const datumRacuna = res.odgovori?.DatumFiskalnogRacuna || '';
+      const vrijemeRacuna = res.odgovori?.VrijemeFiskalnogRacuna || '';
 
       setCart([]); setPaymentAmount(''); setKupacOpen(false); clearKupac();
       setQuery(''); setProducts([]);

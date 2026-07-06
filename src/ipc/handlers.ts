@@ -2,7 +2,9 @@ import { ipcMain, dialog, app } from 'electron';
 import { writeFileSync, copyFileSync } from 'fs';
 import path from 'node:path';
 import { getDb } from '../database/db';
+import { parseFiskalniBroj, izracunajPraznine } from '../lib/fiskalni';
 import * as Tring from '../services/tring';
+import type Database from 'better-sqlite3';
 
 function handle<T>(channel: string, handler: (...args: any[]) => T): void {
   ipcMain.handle(channel, async (_event, ...args) => {
@@ -13,6 +15,89 @@ function handle<T>(channel: string, handler: (...args: any[]) => T): void {
       throw new Error(error.message || 'Nepoznata greška');
     }
   });
+}
+
+// Insert a completed order + items + stock movements from a snapshot-shaped payload.
+// Returns the new orderId. Caller is responsible for wrapping in a transaction.
+function insertCompletedOrder(
+  db: Database.Database,
+  data: {
+    korisnikId: number; ukupno: number; pdvIznos: number; nacinPlacanja: string;
+    brojFiskalnogRacuna: string | null;
+    kupac?: { naziv?: string; idBroj?: string; adresa?: string; grad?: string; postanskiBroj?: string };
+    stavke: Array<{ productId: number; kolicina: number; cijena: number; rabat: number; pdvStopa: string }>;
+    isManual?: 0 | 1; createdAt?: string;
+  }
+): number {
+  const isManual = data.isManual ?? 0;
+  const hasCreatedAt = typeof data.createdAt === 'string' && data.createdAt.length > 0;
+
+  const result = db
+    .prepare(`
+      INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, status,
+        kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj, isManual${hasCreatedAt ? ', createdAt' : ''})
+      VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?${hasCreatedAt ? ', ?' : ''})
+    `)
+    .run(
+      data.korisnikId, data.ukupno, data.pdvIznos, data.nacinPlacanja, data.brojFiskalnogRacuna,
+      data.kupac?.naziv || null, data.kupac?.idBroj || null, data.kupac?.adresa || null,
+      data.kupac?.grad || null, data.kupac?.postanskiBroj || null, isManual,
+      ...(hasCreatedAt ? [data.createdAt] : [])
+    );
+
+  const orderId = result.lastInsertRowid as number;
+
+  const insertItem = db.prepare(
+    'INSERT INTO order_items (orderId, productId, kolicina, cijena, rabat, pdvStopa) VALUES (?, ?, ?, ?, ?, ?)'
+  );
+  const insertStock = hasCreatedAt
+    ? db.prepare("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId, createdAt) VALUES (?, 'izlaz', ?, 'order', ?, ?)")
+    : db.prepare("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'izlaz', ?, 'order', ?)");
+
+  for (const item of data.stavke) {
+    insertItem.run(orderId, item.productId, item.kolicina, item.cijena, item.rabat, item.pdvStopa);
+    const product = db.prepare('SELECT tip FROM products WHERE id = ?').get(item.productId) as { tip: string } | undefined;
+    if (!product || product.tip !== 'usluga') {
+      if (hasCreatedAt) insertStock.run(item.productId, item.kolicina, orderId, data.createdAt);
+      else insertStock.run(item.productId, item.kolicina, orderId);
+    }
+  }
+
+  return orderId;
+}
+
+function buildTringRacun(data: any): Tring.Racun {
+  const ukupno = data.ukupno || 0;
+  let vrstePlacanja: Tring.VrstaPlacanja[];
+  if (data.vrstePlacanja && data.vrstePlacanja.length > 0) {
+    vrstePlacanja = data.vrstePlacanja;
+  } else {
+    vrstePlacanja = [{ oznaka: data.nacinPlacanja || 'Gotovina', iznos: ukupno }];
+  }
+  return {
+    stavke: (data.items || data.stavke || []).map((item: any) => ({
+      artikal: {
+        sifra: item.sifra || String(item.productId || ''),
+        naziv: item.naziv || '',
+        jm: item.jm || 'kom',
+        cijena: item.cijena,
+        stopa: item.pdvStopa || item.stopa || 'E',
+        plu: item.plu || 0,
+      },
+      kolicina: item.kolicina,
+      rabat: item.rabat || 0,
+    })),
+    vrstePlacanja,
+    kupac: data.kupac ? {
+      idBroj: data.kupac.idBroj || '',
+      naziv: data.kupac.naziv || '',
+      adresa: data.kupac.adresa || '',
+      postanskiBroj: data.kupac.postanskiBroj || '',
+      grad: data.kupac.grad || '',
+    } : undefined,
+    napomena: data.napomena,
+    brojRacuna: data.brojRacuna,
+  };
 }
 
 export function registerIpcHandlers(): void {
@@ -683,6 +768,51 @@ export function registerIpcHandlers(): void {
     return createManual();
   });
 
+  handle('order:finalize', async (data: {
+    korisnikId: number; ukupno: number; pdvIznos: number; nacinPlacanja: string;
+    kupac?: { naziv?: string; idBroj?: string; adresa?: string; grad?: string; postanskiBroj?: string };
+    napomena?: string;
+    stavke: Array<{ productId: number; sifra: string; naziv: string; jm: string; plu?: number;
+      cijena: number; kolicina: number; rabat: number; pdvStopa: string }>;
+  }) => {
+    if (!data.stavke || data.stavke.length === 0) throw new Error('Račun mora imati najmanje jednu stavku');
+    if (!data.korisnikId) throw new Error('Korisnik nije prijavljen');
+
+    // 1. Write-ahead: persist the snapshot BEFORE printing (committed immediately).
+    const pending = db
+      .prepare('INSERT INTO pending_receipts (korisnikId, snapshot) VALUES (?, ?)')
+      .run(data.korisnikId, JSON.stringify(data));
+    const pendingId = pending.lastInsertRowid as number;
+
+    // 2. Print.
+    loadTringConfig();
+    const racun = buildTringRacun({ ...data, items: data.stavke });
+    if (Tring.isLoggingEnabled()) console.log('[Tring] finalize request:', JSON.stringify(racun));
+    const result = await Tring.stampatiFiskalniRacun(racun);
+    if (Tring.isLoggingEnabled()) console.log('[Tring] finalize response:', JSON.stringify(result));
+
+    // 3b. Print failed → nothing was printed, drop the pending row.
+    if (!result || !result.success) {
+      db.prepare('DELETE FROM pending_receipts WHERE id = ?').run(pendingId);
+      return {
+        success: false,
+        error: result?.error || result?.vrstaOdgovora || 'Nepoznata greška',
+        odgovori: result?.odgovori ?? {},
+      };
+    }
+
+    // 3a. Print succeeded → create order + delete pending row atomically.
+    const brojFiskalnogRacuna = result.odgovori?.BrojFiskalnogRacuna || null;
+    const finalizeTx = db.transaction(() => {
+      const orderId = insertCompletedOrder(db, { ...data, brojFiskalnogRacuna, isManual: 0 });
+      db.prepare('DELETE FROM pending_receipts WHERE id = ?').run(pendingId);
+      return orderId;
+    });
+    const orderId = finalizeTx();
+
+    return { success: true, id: orderId, brojFiskalnogRacuna, odgovori: result.odgovori };
+  });
+
   handle('order:updateReklamacija', (id: number, brojReklamacije: string) => {
     const result = db
       .prepare('UPDATE orders SET brojReklamacije = ? WHERE id = ?')
@@ -714,6 +844,67 @@ export function registerIpcHandlers(): void {
     });
 
     return refundOrder();
+  });
+
+  handle('pending:list', () => {
+    const rows = db
+      .prepare('SELECT id, korisnikId, snapshot, createdAt FROM pending_receipts ORDER BY id')
+      .all() as Array<{ id: number; korisnikId: number; snapshot: string; createdAt: string }>;
+    return rows.map(r => ({
+      id: r.id, korisnikId: r.korisnikId, createdAt: r.createdAt, snapshot: JSON.parse(r.snapshot),
+    }));
+  });
+
+  handle('pending:resolve', (data: { id: number; brojFiskalnogRacuna: string; createdAt: string }) => {
+    if (!data.brojFiskalnogRacuna?.trim()) throw new Error('Fiskalni broj je obavezan');
+    if (!data.createdAt?.trim()) throw new Error('Datum računa je obavezan');
+
+    const row = db.prepare('SELECT snapshot FROM pending_receipts WHERE id = ?').get(data.id) as { snapshot: string } | undefined;
+    if (!row) throw new Error('Zapis više ne postoji');
+    const snap = JSON.parse(row.snapshot);
+
+    const existing = db.prepare('SELECT id FROM orders WHERE brojFiskalnogRacuna = ?').get(data.brojFiskalnogRacuna.trim());
+    if (existing) throw new Error('Fiskalni račun sa tim brojem već postoji');
+
+    const resolveTx = db.transaction(() => {
+      const orderId = insertCompletedOrder(db, {
+        ...snap,
+        brojFiskalnogRacuna: data.brojFiskalnogRacuna.trim(),
+        isManual: 1,
+        createdAt: data.createdAt,
+      });
+      db.prepare('DELETE FROM pending_receipts WHERE id = ?').run(data.id);
+      return orderId;
+    });
+    return { id: resolveTx() };
+  });
+
+  handle('pending:discard', (id: number) => {
+    db.prepare('DELETE FROM pending_receipts WHERE id = ?').run(id);
+    return { success: true };
+  });
+
+  handle('order:getFiscalGaps', () => {
+    const rows = db
+      .prepare('SELECT brojFiskalnogRacuna FROM orders WHERE brojFiskalnogRacuna IS NOT NULL')
+      .all() as Array<{ brojFiskalnogRacuna: string }>;
+    const brojevi = rows
+      .map(r => parseFiskalniBroj(r.brojFiskalnogRacuna))
+      .filter((n): n is number => n !== null);
+    const sve = izracunajPraznine(brojevi);
+
+    const dismissedRow = db.prepare("SELECT value FROM settings WHERE key = 'fiscal.dismissedGaps'").get() as { value: string } | undefined;
+    const dismissed: number[] = dismissedRow ? JSON.parse(dismissedRow.value) : [];
+    return sve.filter(n => !dismissed.includes(n));
+  });
+
+  handle('order:dismissFiscalGap', (broj: number) => {
+    const row = db.prepare("SELECT value FROM settings WHERE key = 'fiscal.dismissedGaps'").get() as { value: string } | undefined;
+    const dismissed: number[] = row ? JSON.parse(row.value) : [];
+    if (!dismissed.includes(broj)) dismissed.push(broj);
+    db.prepare("INSERT INTO settings (key, value) VALUES ('fiscal.dismissedGaps', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .run(JSON.stringify(dismissed));
+    return { success: true };
   });
 
   // ─── Settings ────────────────────────────────────────────
@@ -952,42 +1143,7 @@ export function registerIpcHandlers(): void {
 
   handle('tring:printReceipt', async (data: any) => {
     loadTringConfig();
-    // Transform screen data to Tring Racun format
-    const ukupno = data.ukupno || 0;
-
-    // Build VrstaPlacanja - Tring expects payment type with full amount
-    let vrstePlacanja: Tring.VrstaPlacanja[];
-    if (data.vrstePlacanja && data.vrstePlacanja.length > 0) {
-      vrstePlacanja = data.vrstePlacanja;
-    } else {
-      const oznaka = data.nacinPlacanja || 'Gotovina';
-      vrstePlacanja = [{ oznaka, iznos: ukupno }];
-    }
-
-    const racun: Tring.Racun = {
-      stavke: (data.items || data.stavke || []).map((item: any) => ({
-        artikal: {
-          sifra: item.sifra || String(item.productId || ''),
-          naziv: item.naziv || '',
-          jm: item.jm || 'kom',
-          cijena: item.cijena,
-          stopa: item.pdvStopa || item.stopa || 'E',
-          plu: item.plu || 0,
-        },
-        kolicina: item.kolicina,
-        rabat: item.rabat || 0,
-      })),
-      vrstePlacanja,
-      kupac: data.kupac ? {
-        idBroj: data.kupac.idBroj || '',
-        naziv: data.kupac.naziv || '',
-        adresa: data.kupac.adresa || '',
-        postanskiBroj: data.kupac.postanskiBroj || '',
-        grad: data.kupac.grad || '',
-      } : undefined,
-      napomena: data.napomena,
-      brojRacuna: data.brojRacuna,
-    };
+    const racun = buildTringRacun(data);
     if (Tring.isLoggingEnabled()) console.log('[Tring] printReceipt request:', JSON.stringify(racun));
     const result = await Tring.stampatiFiskalniRacun(racun);
     if (Tring.isLoggingEnabled()) console.log('[Tring] printReceipt response:', JSON.stringify(result));

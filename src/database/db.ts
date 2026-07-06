@@ -98,6 +98,17 @@ function runMigrations(database: Database.Database): void {
   if (!orderCols.find(c => c.name === 'isManual')) {
     database.exec("ALTER TABLE orders ADD COLUMN isManual INTEGER NOT NULL DEFAULT 0");
   }
+
+  // Create pending_receipts table if missing (write-ahead intent log)
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS pending_receipts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      korisnikId INTEGER NOT NULL,
+      snapshot TEXT NOT NULL,
+      createdAt TEXT DEFAULT (datetime('now','localtime')),
+      FOREIGN KEY (korisnikId) REFERENCES users(id)
+    )
+  `);
 }
 
 function seedDefaults(database: Database.Database): void {

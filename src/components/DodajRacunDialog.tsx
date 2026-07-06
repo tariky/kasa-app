@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
@@ -25,6 +25,7 @@ interface Props {
   onOpenChange: (v: boolean) => void;
   korisnikId: number;
   onSaved: () => void;
+  prefillBroj?: string;
 }
 
 function nowLocalInput(): string {
@@ -33,7 +34,7 @@ function nowLocalInput(): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-export default function DodajRacunDialog({ open, onOpenChange, korisnikId, onSaved }: Props) {
+export default function DodajRacunDialog({ open, onOpenChange, korisnikId, onSaved, prefillBroj }: Props) {
   const [brojFiskalnog, setBrojFiskalnog] = useState('');
   const [datum, setDatum] = useState(nowLocalInput());
   const [nacinPlacanja, setNacinPlacanja] = useState<PaymentType>('Gotovina');
@@ -47,6 +48,10 @@ export default function DodajRacunDialog({ open, onOpenChange, korisnikId, onSav
   const [kupacPostanskiBroj, setKupacPostanskiBroj] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (open && prefillBroj) setBrojFiskalnog(prefillBroj);
+  }, [open, prefillBroj]);
 
   const { ukupno, pdvIznos } = useMemo(
     () => izracunajTotale(stavke.map(s => ({
