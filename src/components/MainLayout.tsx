@@ -9,6 +9,7 @@ import SkladisteScreen from '@/screens/SkladisteScreen';
 import NarudzbeScreen from '@/screens/NarudzbeScreen';
 import IzvjestajiScreen from '@/screens/IzvjestajiScreen';
 import PostavkeScreen from '@/screens/PostavkeScreen';
+import PendingRacuniDialog from '@/components/PendingRacuniDialog';
 
 type Screen = 'kasa' | 'skladiste' | 'narudzbe' | 'izvjestaji' | 'postavke';
 
@@ -92,6 +93,8 @@ export default function MainLayout({ user, onLogout }: Props) {
         {screen === 'izvjestaji' && <IzvjestajiScreen />}
         {screen === 'postavke' && <PostavkeScreen />}
       </main>
+
+      <PendingRacuniDialog korisnikId={user.id} />
     </div>
   );
 }
