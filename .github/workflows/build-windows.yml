@@ -19,6 +19,14 @@ jobs:
         with:
           node-version: 20
 
+      - name: Setup Python (for node-gyp)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup MSVC build environment
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: Install dependencies
         run: npm install
 
