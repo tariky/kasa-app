@@ -30,15 +30,22 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
   const [pinValue, setPinValue] = useState('');
   const [pinError, setPinError] = useState('');
   const [dodajOpen, setDodajOpen] = useState(false);
+  const [gaps, setGaps] = useState<number[]>([]);
+  const [prefillBroj, setPrefillBroj] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     loadOrders();
+    loadGaps();
     window.api.getSetting('kasa.requirePinRefund').then((v) => setRequirePinRefund(v === 'true'));
   }, []);
 
   const loadOrders = async () => {
     const data = await window.api.getOrders();
     setOrders(data);
+  };
+
+  const loadGaps = async () => {
+    setGaps(await window.api.getFiscalGaps());
   };
 
   const handleSelectOrder = async (order: Order) => {
@@ -184,6 +191,33 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
           </Button>
         </div>
       </div>
+
+      {gaps.length > 0 && (
+        <div className="mx-4 mb-2 rounded border border-amber-300 bg-amber-50 p-3">
+          <p className="text-sm font-medium text-amber-800">
+            Nedostaju fiskalni brojevi u nizu — mogući neupisani računi:
+          </p>
+          <div className="flex flex-wrap gap-2 mt-2">
+            {gaps.map(n => (
+              <div key={n} className="flex items-center gap-1">
+                <Button
+                  variant="outline" size="sm"
+                  className="h-7 text-amber-700 border-amber-400"
+                  onClick={() => { setPrefillBroj(String(n)); setDodajOpen(true); }}
+                >
+                  Unesi #{n}
+                </Button>
+                <Button
+                  variant="ghost" size="sm" className="h-7 text-slate-400"
+                  onClick={async () => { await window.api.dismissFiscalGap(n); loadGaps(); }}
+                >
+                  ×
+                </Button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Content */}
       <div className="flex-1 min-h-0 flex gap-4 p-5 overflow-hidden">
@@ -657,9 +691,10 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
       {/* ── Dodaj račun ručno Dialog ── */}
       <DodajRacunDialog
         open={dodajOpen}
-        onOpenChange={setDodajOpen}
+        onOpenChange={(v) => { setDodajOpen(v); if (!v) setPrefillBroj(undefined); }}
         korisnikId={korisnikId}
-        onSaved={loadOrders}
+        prefillBroj={prefillBroj}
+        onSaved={() => { loadOrders(); loadGaps(); setPrefillBroj(undefined); }}
       />
     </div>
   );
