@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { User } from '@/types';
 import {
-  ShoppingCart, Package, ClipboardList, BarChart3, Settings, LogOut
+  ShoppingCart, Package, ClipboardList, BarChart3, Settings, LogOut, Sparkles
 } from 'lucide-react';
 import appIcon from '@/assets/icon.png';
 import KasaScreen from '@/screens/KasaScreen';
@@ -9,15 +9,17 @@ import SkladisteScreen from '@/screens/SkladisteScreen';
 import NarudzbeScreen from '@/screens/NarudzbeScreen';
 import IzvjestajiScreen from '@/screens/IzvjestajiScreen';
 import PostavkeScreen from '@/screens/PostavkeScreen';
+import GeneratorScreen from '@/screens/GeneratorScreen';
 import PendingRacuniDialog from '@/components/PendingRacuniDialog';
 
-type Screen = 'kasa' | 'skladiste' | 'narudzbe' | 'izvjestaji' | 'postavke';
+type Screen = 'kasa' | 'skladiste' | 'narudzbe' | 'izvjestaji' | 'generator' | 'postavke';
 
 const NAV_ITEMS: { id: Screen; label: string; icon: typeof ShoppingCart; adminOnly?: boolean }[] = [
   { id: 'kasa', label: 'Kasa', icon: ShoppingCart },
   { id: 'skladiste', label: 'Skladište', icon: Package },
   { id: 'narudzbe', label: 'Računi', icon: ClipboardList },
   { id: 'izvjestaji', label: 'Izvještaji', icon: BarChart3 },
+  { id: 'generator', label: 'Generator', icon: Sparkles, adminOnly: true },
   { id: 'postavke', label: 'Postavke', icon: Settings, adminOnly: true },
 ];
 
@@ -91,6 +93,7 @@ export default function MainLayout({ user, onLogout }: Props) {
         {screen === 'skladiste' && <SkladisteScreen />}
         {screen === 'narudzbe' && <NarudzbeScreen korisnikId={user.id} />}
         {screen === 'izvjestaji' && <IzvjestajiScreen />}
+        {screen === 'generator' && <GeneratorScreen korisnikId={user.id} />}
         {screen === 'postavke' && <PostavkeScreen />}
       </main>
 
