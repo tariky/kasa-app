@@ -100,6 +100,14 @@ export const schema = `
     FOREIGN KEY (productId) REFERENCES products(id)
   );
 
+  CREATE TABLE IF NOT EXISTS pending_receipts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    korisnikId INTEGER NOT NULL,
+    snapshot TEXT NOT NULL,
+    createdAt TEXT DEFAULT (datetime('now','localtime')),
+    FOREIGN KEY (korisnikId) REFERENCES users(id)
+  );
+
   CREATE TABLE IF NOT EXISTS stock_movements (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     productId INTEGER NOT NULL,
