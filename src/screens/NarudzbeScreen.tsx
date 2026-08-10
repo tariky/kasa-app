@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { pdf } from '@react-pdf/renderer';
 import { RacunPdf, InvoiceLang } from '@/components/RacunPdf';
+import { OtpremnicaPdf } from '@/components/OtpremnicaPdf';
 import { Order, OrderItem } from '@/types';
 import { cn, formatKM, formatDateTime } from '@/lib/utils';
 import DodajRacunDialog from '@/components/DodajRacunDialog';
@@ -56,44 +57,30 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
   const handleReklamacija = async () => {
     if (!selectedOrder || !selectedOrder.brojFiskalnogRacuna) return;
 
+    if (reklamacijaLoading) return;
     setReklamacijaLoading(true);
     setReklamacijaMsg(null);
     try {
-      const data = {
-        brojRacuna: selectedOrder.brojFiskalnogRacuna,
-        stavke: selectedOrder.stavke || [],
-        kupac: selectedOrder.kupacIdBroj ? {
-          idBroj: selectedOrder.kupacIdBroj,
-          naziv: selectedOrder.kupacNaziv || '',
-          adresa: selectedOrder.kupacAdresa || '',
-          postanskiBroj: selectedOrder.kupacPostanskiBroj || '',
-          grad: selectedOrder.kupacGrad || '',
-        } : undefined,
-      };
-
-      const result = await window.api.tringPrintRefund(data);
-      console.log('Tring printRefund result:', result);
+      // Štampa i upis storna idu kroz jedan poziv da ne ostane odštampana
+      // reklamacija bez zapisa u bazi ako nešto pukne između.
+      const result = await window.api.refundAndPrintOrder({
+        id: selectedOrder.id,
+        brojReklamacije: reklamacijaBroj.trim() || undefined,
+      });
 
       if (!result || !result.success) {
         const details = result?.odgovori ? Object.entries(result.odgovori).map(([k, v]) => `${k}: ${v}`).join(', ') : '';
-        setReklamacijaMsg({ type: 'error', text: `Greška: ${result?.error || result?.vrstaOdgovora || 'Nepoznata greška'}${details ? ` (${details})` : ''}` });
+        setReklamacijaMsg({ type: 'error', text: `Greška: ${result?.error || 'Nepoznata greška'}${details ? ` (${details})` : ''}` });
         return;
-      }
-
-      const brojRekl = result.odgovori?.BrojFiskalnogRacuna || '';
-      await window.api.refundOrder(selectedOrder.id);
-
-      if (reklamacijaBroj || brojRekl) {
-        await window.api.updateOrderReklamacija(selectedOrder.id, reklamacijaBroj || brojRekl);
       }
 
       setReklamacijaOpen(false);
       setReklamacijaBroj('');
-      setReklamacijaMsg({ type: 'success', text: `Reklamacija #${brojRekl} uspješno kreirana` });
+      setReklamacijaMsg({ type: 'success', text: `Reklamacija #${result.brojReklamacije ?? ''} uspješno kreirana` });
       await loadOrders();
 
-      const updated = await window.api.getOrders();
-      const refreshed = updated.find((o: Order) => o.id === selectedOrder.id);
+      // getOrders vraća samo zaglavlja — detalj mora ponovo učitati stavke.
+      const refreshed = await window.api.getOrder(selectedOrder.id);
       if (refreshed) setSelectedOrder(refreshed);
     } catch (err: any) {
       console.error('Reklamacija error:', err);
@@ -158,6 +145,29 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
     const blob = await pdf(<RacunPdf order={fullOrder} firma={firma} lang={lang} />).toBlob();
     const prefix = lang === 'en' ? 'Invoice' : 'Racun';
     const fileName = `${prefix}-${order.brojFiskalnogRacuna || order.id}.pdf`;
+    const savePath = await window.api.showSaveDialog({
+      defaultName: fileName,
+      filters: [{ name: 'PDF', extensions: ['pdf'] }],
+    });
+    if (!savePath) return;
+    const arrayBuffer = await blob.arrayBuffer();
+    await window.api.writeFile(savePath, Array.from(new Uint8Array(arrayBuffer)) as any);
+  };
+
+  const handlePrintOtpremnica = async (order: Order) => {
+    const fullOrder = order.stavke ? order : await window.api.getOrder(order.id);
+    const firma = await loadFirma();
+    const blob = await pdf(<OtpremnicaPdf order={fullOrder} firma={firma} />).toBlob();
+    const url = URL.createObjectURL(blob);
+    const win = window.open(url, '_blank');
+    if (win) win.onafterprint = () => URL.revokeObjectURL(url);
+  };
+
+  const handleExportOtpremnica = async (order: Order) => {
+    const fullOrder = order.stavke ? order : await window.api.getOrder(order.id);
+    const firma = await loadFirma();
+    const blob = await pdf(<OtpremnicaPdf order={fullOrder} firma={firma} />).toBlob();
+    const fileName = `Otpremnica-${order.brojFiskalnogRacuna || order.id}.pdf`;
     const savePath = await window.api.showSaveDialog({
       defaultName: fileName,
       filters: [{ name: 'PDF', extensions: ['pdf'] }],
@@ -498,6 +508,27 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
                         <span>EN</span>
                       </button>
                     </div>
+                  </div>
+
+                  {/* Otpremnica */}
+                  <div className="flex items-center flex-1 bg-slate-50 rounded-lg border border-slate-100 overflow-hidden">
+                    <button
+                      onClick={() => handlePrintOtpremnica(selectedOrder)}
+                      className="flex-1 flex items-center justify-center gap-1.5 h-8 text-[11px] font-medium text-slate-600 hover:bg-slate-100 transition-colors"
+                      title="Štampaj otpremnicu"
+                    >
+                      <Printer size={13} />
+                      <span>Otpremnica</span>
+                    </button>
+                    <div className="w-px h-4 bg-slate-200" />
+                    <button
+                      onClick={() => handleExportOtpremnica(selectedOrder)}
+                      className="flex-1 flex items-center justify-center gap-1.5 h-8 text-[11px] font-medium text-slate-600 hover:bg-slate-100 transition-colors"
+                      title="Eksportuj otpremnicu (PDF)"
+                    >
+                      <Download size={13} />
+                      <span>Otpremnica</span>
+                    </button>
                   </div>
 
                   {/* Reklamacija result */}

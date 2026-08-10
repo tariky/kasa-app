@@ -49,13 +49,24 @@ contextBridge.exposeInMainWorld('api', {
   createOrder: (data: any) => ipcRenderer.invoke('order:create', data),
   createManualOrder: (data: any) => ipcRenderer.invoke('order:createManual', data),
   updateOrderReklamacija: (id: number, broj: string) => ipcRenderer.invoke('order:updateReklamacija', id, broj),
-  refundOrder: (id: number) => ipcRenderer.invoke('order:refund', id),
+  refundOrder: (id: number, brojReklamacije?: string) => ipcRenderer.invoke('order:refund', id, brojReklamacije),
+  refundAndPrintOrder: (data: { id: number; brojReklamacije?: string }) => ipcRenderer.invoke('order:refundAndPrint', data),
   finalizeOrder: (data: any) => ipcRenderer.invoke('order:finalize', data),
   listPending: () => ipcRenderer.invoke('pending:list'),
   resolvePending: (data: { id: number; brojFiskalnogRacuna: string; createdAt: string }) => ipcRenderer.invoke('pending:resolve', data),
   discardPending: (id: number) => ipcRenderer.invoke('pending:discard', id),
   getFiscalGaps: () => ipcRenderer.invoke('order:getFiscalGaps'),
   dismissFiscalGap: (broj: number) => ipcRenderer.invoke('order:dismissFiscalGap', broj),
+
+  // Ponude
+  getPonude: () => ipcRenderer.invoke('ponuda:getAll'),
+  getPonuda: (id: number) => ipcRenderer.invoke('ponuda:get', id),
+  getNextBrojPonude: () => ipcRenderer.invoke('ponuda:nextBroj'),
+  createPonuda: (data: any) => ipcRenderer.invoke('ponuda:create', data),
+  updatePonuda: (id: number, data: any) => ipcRenderer.invoke('ponuda:update', id, data),
+  setPonudaStatus: (id: number, status: string) => ipcRenderer.invoke('ponuda:setStatus', id, status),
+  deletePonuda: (id: number) => ipcRenderer.invoke('ponuda:delete', id),
+  konvertujPonudu: (data: { id: number; korisnikId: number; nacinPlacanja: string }) => ipcRenderer.invoke('ponuda:konvertuj', data),
 
   // Tring
   tringInit: () => ipcRenderer.invoke('tring:init'),
@@ -67,6 +78,12 @@ contextBridge.exposeInMainWorld('api', {
   tringWriteArticle: (data: any) => ipcRenderer.invoke('tring:writeArticle', data),
   tringGetLogs: () => ipcRenderer.invoke('tring:getLogs'),
   tringClearLogs: () => ipcRenderer.invoke('tring:clearLogs'),
+
+  // Spremljene košarice
+  listSavedCarts: () => ipcRenderer.invoke('savedCarts:list'),
+  saveCart: (naziv: string, items: Array<{ productId: number; kolicina: number; rabat: number }>, ukupno: number) =>
+    ipcRenderer.invoke('savedCarts:save', naziv, items, ukupno),
+  deleteSavedCart: (id: number) => ipcRenderer.invoke('savedCarts:delete', id),
 
   // Settings
   getSetting: (key: string) => ipcRenderer.invoke('settings:get', key),

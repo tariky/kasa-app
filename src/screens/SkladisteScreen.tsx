@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Product, Primka, PrimkaStavka, Dobavljac, Kupac } from '@/types';
-import { cn, formatKM, formatDate } from '@/lib/utils';
+import { Product, Primka, PrimkaStavka, Dobavljac } from '@/types';
+import { cn, formatKM, formatDate, parseDecimal } from '@/lib/utils';
 import { pdf } from '@react-pdf/renderer';
 import { UlazPdf } from '@/components/UlazPdf';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { DecimalInput } from '@/components/ui/decimal-input';
 import { Label } from '@/components/ui/label';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -21,11 +22,11 @@ import { Separator } from '@/components/ui/separator';
 import {
   Plus, Trash2, FileText, Package, Search, Pencil, X,
   ClipboardList, PackagePlus, Hash, Barcode,
-  DollarSign, Layers, Ruler, ChevronRight, Printer, Building2, Phone, Download, Wrench, Users,
+  DollarSign, Layers, Ruler, ChevronRight, Printer, Building2, Download,
   ArrowUpRight, ArrowDownRight, AlertTriangle,
 } from 'lucide-react';
 
-type SkladisteTab = 'artikli' | 'usluge' | 'primke' | 'dobavljaci' | 'kupci';
+type SkladisteTab = 'artikli' | 'primke';
 
 // ---------------------------------------------------------------------------
 // Artikal Dialog — refined two-section layout
@@ -86,7 +87,7 @@ function ArtikalDialog({
   }, [open, product]);
 
   const handleSave = async () => {
-    if (!form.sifra || !form.naziv || !form.cijena) return;
+    if (!form.sifra || !form.naziv || !form.cijena || isNaN(parseDecimal(form.cijena))) return;
     setSaving(true);
     setError('');
     try {
@@ -95,18 +96,18 @@ function ArtikalDialog({
         barkod: form.barkod || null,
         naziv: form.naziv,
         jm: form.jm,
-        cijena: parseFloat(form.cijena),
+        cijena: parseDecimal(form.cijena),
         pdvStopa: form.pdvStopa,
       };
       if (product) {
         await window.api.updateProduct(product.id, payload);
-        const newStanje = parseFloat(form.stanje);
+        const newStanje = parseDecimal(form.stanje);
         if (!isNaN(newStanje) && newStanje !== (product.stanje ?? 0)) {
           await window.api.adjustStock(product.id, newStanje);
         }
       } else {
         const result = await window.api.createProduct(payload);
-        const initialStock = parseFloat(form.stanje);
+        const initialStock = parseDecimal(form.stanje);
         if (!isNaN(initialStock) && initialStock > 0 && result?.id) {
           await window.api.adjustStock(Number(result.id), initialStock);
         }
@@ -205,15 +206,12 @@ function ArtikalDialog({
                 <DollarSign className="h-3 w-3" />
                 Cijena (KM)
               </Label>
-              <Input
+              <DecimalInput
                 id="cijena"
-                type="number"
-                step="0.01"
-                min="0"
                 className="font-mono text-base h-11"
                 value={form.cijena}
-                onChange={(e) => setForm({ ...form, cijena: e.target.value })}
-                placeholder="0.00"
+                onValueChange={(text) => setForm({ ...form, cijena: text })}
+                placeholder="0,00"
               />
             </div>
             <div className="space-y-1.5">
@@ -256,15 +254,13 @@ function ArtikalDialog({
                 <Layers className="h-3 w-3" />
                 Stanje na skladištu
               </Label>
-              <Input
+              <DecimalInput
                 id="stanje"
-                type="number"
-                step="1"
-                min="0"
+                maxDecimals={3}
                 className="font-mono"
                 placeholder="0"
                 value={form.stanje}
-                onChange={(e) => setForm({ ...form, stanje: e.target.value })}
+                onValueChange={(text) => setForm({ ...form, stanje: text })}
               />
             </div>
             <div className="space-y-1.5">
@@ -410,37 +406,41 @@ function NovaPrimkaDialog({
 
   const stavkeNabavnaTotal = stavke.reduce((sum, s) => {
     if (!s.kolicina || !s.nabavnaCijena) return sum;
-    return sum + parseFloat(s.kolicina) * parseFloat(s.nabavnaCijena);
+    return sum + (parseDecimal(s.kolicina) * parseDecimal(s.nabavnaCijena) || 0);
   }, 0);
 
   const stavkeProdajnaTotal = stavke.reduce((sum, s) => {
     if (!s.kolicina || !s.cijena) return sum;
-    return sum + parseFloat(s.kolicina) * parseFloat(s.cijena);
+    return sum + (parseDecimal(s.kolicina) * parseDecimal(s.cijena) || 0);
   }, 0);
 
-  const validCount = stavke.filter(s => s.productId != null && s.kolicina && s.nabavnaCijena && s.cijena).length;
+  const isValidStavka = (s: StavkaRow) =>
+    s.productId != null &&
+    parseDecimal(s.kolicina) > 0 &&
+    !isNaN(parseDecimal(s.nabavnaCijena)) &&
+    !isNaN(parseDecimal(s.cijena));
+
+  const validCount = stavke.filter(isValidStavka).length;
 
   const handleSave = async () => {
     if (!brojPrimke) return;
-    const validStavke = stavke.filter(
-      (s) => s.productId != null && s.kolicina && s.nabavnaCijena && s.cijena,
-    );
+    const validStavke = stavke.filter(isValidStavka);
     if (validStavke.length === 0) return;
 
     // Check for price differences
     const diffs: typeof nivelacijaItems = [];
     for (const s of validStavke) {
       const product = products.find(p => p.id === s.productId);
-      if (product && Math.abs(product.cijena - parseFloat(s.cijena)) > 0.001) {
+      if (product && Math.abs(product.cijena - parseDecimal(s.cijena)) > 0.001) {
         const existingStock = product.stanje ?? 0;
         if (existingStock > 0) {
-          const razlika = parseFloat(s.cijena) - product.cijena;
+          const razlika = parseDecimal(s.cijena) - product.cijena;
           diffs.push({
             productId: product.id,
             productNaziv: product.naziv,
             kolicina: existingStock,
             staraCijena: product.cijena,
-            novaCijena: parseFloat(s.cijena),
+            novaCijena: parseDecimal(s.cijena),
             razlika,
             ukupnaRazlika: razlika * existingStock,
           });
@@ -458,9 +458,7 @@ function NovaPrimkaDialog({
   };
 
   const doSave = async () => {
-    const validStavke = stavke.filter(
-      (s) => s.productId != null && s.kolicina && s.nabavnaCijena && s.cijena,
-    );
+    const validStavke = stavke.filter(isValidStavka);
     setSaving(true);
     try {
       const payload = {
@@ -474,10 +472,10 @@ function NovaPrimkaDialog({
         napomena: napomena || undefined,
         stavke: validStavke.map((s) => ({
           productId: s.productId,
-          kolicina: parseFloat(s.kolicina),
-          nabavnaCijena: parseFloat(s.nabavnaCijena),
-          rabat: parseFloat(s.rabat) || 0,
-          cijena: parseFloat(s.cijena),
+          kolicina: parseDecimal(s.kolicina),
+          nabavnaCijena: parseDecimal(s.nabavnaCijena),
+          rabat: parseDecimal(s.rabat) || 0,
+          cijena: parseDecimal(s.cijena),
           pdvStopa: products.find(p => p.id === s.productId)?.pdvStopa ?? 'E',
         })),
       };
@@ -678,42 +676,30 @@ function NovaPrimkaDialog({
                         </SelectContent>
                       </Select>
                     </div>
-                    <Input
-                      type="number"
-                      step="0.01"
-                      min="0.01"
+                    <DecimalInput
+                      maxDecimals={3}
                       className="h-8 font-mono text-sm text-right border-0 shadow-none bg-transparent hover:bg-slate-100 rounded"
                       placeholder="0"
                       value={s.kolicina}
-                      onChange={(e) => updateStavka(idx, { kolicina: e.target.value })}
+                      onValueChange={(text) => updateStavka(idx, { kolicina: text })}
                     />
-                    <Input
-                      type="number"
-                      step="0.01"
-                      min="0"
+                    <DecimalInput
                       className="h-8 font-mono text-sm text-right border-0 shadow-none bg-transparent hover:bg-slate-100 rounded"
-                      placeholder="0.00"
+                      placeholder="0,00"
                       value={s.nabavnaCijena}
-                      onChange={(e) => updateStavka(idx, { nabavnaCijena: e.target.value })}
+                      onValueChange={(text) => updateStavka(idx, { nabavnaCijena: text })}
                     />
-                    <Input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      max="100"
+                    <DecimalInput
                       className="h-8 font-mono text-sm text-right border-0 shadow-none bg-transparent hover:bg-slate-100 rounded"
                       placeholder="0"
                       value={s.rabat}
-                      onChange={(e) => updateStavka(idx, { rabat: e.target.value })}
+                      onValueChange={(text) => updateStavka(idx, { rabat: text })}
                     />
-                    <Input
-                      type="number"
-                      step="0.01"
-                      min="0"
+                    <DecimalInput
                       className="h-8 font-mono text-sm text-right border-0 shadow-none bg-transparent hover:bg-slate-100 rounded"
-                      placeholder="0.00"
+                      placeholder="0,00"
                       value={s.cijena}
-                      onChange={(e) => updateStavka(idx, { cijena: e.target.value })}
+                      onValueChange={(text) => updateStavka(idx, { cijena: text })}
                     />
                     <button
                       onClick={() => removeStavka(idx)}
@@ -1484,974 +1470,12 @@ function PrimkeTab({ products, dobavljaci, onReloadProducts }: { products: Produ
 }
 
 // ---------------------------------------------------------------------------
-// Dobavljači Tab
-// ---------------------------------------------------------------------------
-
-interface DobavljacFormData {
-  naziv: string;
-  idBroj: string;
-  pdvBroj: string;
-  adresa: string;
-  kontakt: string;
-}
-
-const emptyDobavljacForm: DobavljacFormData = {
-  naziv: '',
-  idBroj: '',
-  pdvBroj: '',
-  adresa: '',
-  kontakt: '',
-};
-
-function DobavljacDialog({
-  open,
-  onOpenChange,
-  dobavljac,
-  onSave,
-}: {
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-  dobavljac: Dobavljac | null;
-  onSave: () => void;
-}) {
-  const [form, setForm] = useState<DobavljacFormData>(emptyDobavljacForm);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    if (open) {
-      setError('');
-      if (dobavljac) {
-        setForm({
-          naziv: dobavljac.naziv,
-          idBroj: dobavljac.idBroj ?? '',
-          pdvBroj: dobavljac.pdvBroj ?? '',
-          adresa: dobavljac.adresa ?? '',
-          kontakt: dobavljac.kontakt ?? '',
-        });
-      } else {
-        setForm(emptyDobavljacForm);
-      }
-    }
-  }, [open, dobavljac]);
-
-  const handleSave = async () => {
-    if (!form.naziv) return;
-    setSaving(true);
-    setError('');
-    try {
-      const payload = {
-        naziv: form.naziv,
-        idBroj: form.idBroj || null,
-        pdvBroj: form.pdvBroj || null,
-        adresa: form.adresa || null,
-        kontakt: form.kontakt || null,
-      };
-      if (dobavljac) {
-        await window.api.updateDobavljac(dobavljac.id, payload);
-      } else {
-        await window.api.createDobavljac(payload);
-      }
-      onSave();
-      onOpenChange(false);
-    } catch (err: any) {
-      setError(err?.message || 'Greška pri spremanju');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const isEdit = !!dobavljac;
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[520px] p-0 gap-0 overflow-hidden">
-        <div className="px-6 pt-6 pb-4">
-          <DialogHeader>
-            <div className="flex items-center gap-3">
-              <div className={cn(
-                'w-10 h-10 rounded-xl flex items-center justify-center',
-                isEdit ? 'bg-blue-50 text-blue-600' : 'bg-emerald-50 text-emerald-600'
-              )}>
-                <Building2 className="h-5 w-5" />
-              </div>
-              <div>
-                <DialogTitle className="text-lg">{isEdit ? 'Uredi dobavljača' : 'Novi dobavljač'}</DialogTitle>
-                <DialogDescription className="text-xs mt-0.5">
-                  {isEdit ? `ID: ${dobavljac.idBroj || dobavljac.id}` : 'Unesite podatke o dobavljaču'}
-                </DialogDescription>
-              </div>
-            </div>
-          </DialogHeader>
-        </div>
-
-        <Separator />
-
-        <div className="px-6 py-5 space-y-5">
-          <div className="space-y-1.5">
-            <Label htmlFor="dob-naziv" className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-              Naziv firme
-            </Label>
-            <Input
-              id="dob-naziv"
-              value={form.naziv}
-              onChange={(e) => setForm({ ...form, naziv: e.target.value })}
-              placeholder="Npr. Distributer d.o.o."
-              className="h-11 text-base"
-              autoFocus
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="dob-idbroj" className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                ID broj
-              </Label>
-              <Input
-                id="dob-idbroj"
-                className="font-mono"
-                value={form.idBroj}
-                onChange={(e) => setForm({ ...form, idBroj: e.target.value })}
-                placeholder="4200000000000"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="dob-pdvbroj" className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                PDV broj
-              </Label>
-              <Input
-                id="dob-pdvbroj"
-                className="font-mono"
-                value={form.pdvBroj}
-                onChange={(e) => setForm({ ...form, pdvBroj: e.target.value })}
-                placeholder="200000000000"
-              />
-            </div>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="dob-adresa" className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-              Adresa
-            </Label>
-            <Input
-              id="dob-adresa"
-              value={form.adresa}
-              onChange={(e) => setForm({ ...form, adresa: e.target.value })}
-              placeholder="Ulica i broj, Grad"
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="dob-kontakt" className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
-              <Phone className="h-3 w-3" />
-              Kontakt
-            </Label>
-            <Input
-              id="dob-kontakt"
-              value={form.kontakt}
-              onChange={(e) => setForm({ ...form, kontakt: e.target.value })}
-              placeholder="Telefon, email..."
-            />
-          </div>
-        </div>
-
-        <div className="border-t bg-slate-50/50">
-          {error && (
-            <div className="mx-6 mt-4 text-sm px-3 py-2.5 rounded-lg bg-red-50 text-red-600 border border-red-100 flex items-center gap-2">
-              <X className="h-4 w-4 flex-shrink-0" />
-              {error}
-            </div>
-          )}
-          <div className="px-6 py-4 flex items-center justify-end gap-3">
-            <Button variant="ghost" onClick={() => onOpenChange(false)}>
-              Otkaži
-            </Button>
-            <Button onClick={handleSave} disabled={saving || !form.naziv} className="min-w-[120px]">
-              {saving ? 'Spremam...' : isEdit ? 'Spremi izmjene' : 'Dodaj dobavljača'}
-            </Button>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function DobavljaciTab({
-  dobavljaci,
-  onReload,
-}: {
-  dobavljaci: Dobavljac[];
-  onReload: () => void;
-}) {
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [editDobavljac, setEditDobavljac] = useState<Dobavljac | null>(null);
-  const [search, setSearch] = useState('');
-
-  const handleNew = () => {
-    setEditDobavljac(null);
-    setDialogOpen(true);
-  };
-
-  const handleEdit = (d: Dobavljac) => {
-    setEditDobavljac(d);
-    setDialogOpen(true);
-  };
-
-  const handleDelete = async (d: Dobavljac) => {
-    if (!confirm(`Obrisati dobavljača "${d.naziv}"?`)) return;
-    await window.api.deleteDobavljac(d.id);
-    onReload();
-  };
-
-  const filtered = dobavljaci.filter(d => {
-    if (!search.trim()) return true;
-    const q = search.toLowerCase();
-    return (
-      d.naziv.toLowerCase().includes(q) ||
-      (d.idBroj?.toLowerCase().includes(q) ?? false) ||
-      (d.pdvBroj?.toLowerCase().includes(q) ?? false) ||
-      (d.adresa?.toLowerCase().includes(q) ?? false)
-    );
-  });
-
-  return (
-    <div className="flex flex-col h-full">
-      <div className="flex-1 min-h-0 px-6 py-5">
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm shadow-slate-200/50 h-full flex flex-col overflow-hidden">
-          {/* Header bar */}
-          <div className="flex items-center gap-3 px-5 py-3 border-b border-slate-100">
-            <div className="relative flex-1 max-w-sm">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-              <Input
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                placeholder="Pretraži dobavljače..."
-                className="pl-9 h-8 text-[13px] bg-slate-50 border-slate-200"
-              />
-              {search && (
-                <button
-                  onClick={() => setSearch('')}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-[13px] font-semibold text-slate-700">Dobavljači</span>
-              {dobavljaci.length > 0 && (
-                <Badge variant="secondary" className="text-[10px] font-mono px-1.5 py-0 h-5">
-                  {dobavljaci.length}
-                </Badge>
-              )}
-            </div>
-            <Button size="sm" onClick={handleNew} className="ml-auto h-8 gap-1.5 text-[12px]">
-              <Plus className="h-3.5 w-3.5" />
-              Novi dobavljač
-            </Button>
-          </div>
-
-          {filtered.length === 0 ? (
-            <div className="flex-1 flex flex-col items-center justify-center text-slate-400 select-none">
-              <div className="w-14 h-14 rounded-2xl bg-slate-50 flex items-center justify-center mb-3">
-                <Building2 size={24} className="text-slate-300" />
-              </div>
-              <p className="text-[13px] font-medium text-slate-500">{search ? 'Nema rezultata pretrage' : 'Nema dobavljača'}</p>
-              {!search && <p className="text-[12px] text-slate-400 mt-0.5">Dodajte prvog dobavljača klikom na dugme iznad</p>}
-            </div>
-          ) : (
-            <ScrollArea className="flex-1">
-              <table className="w-full">
-                <thead className="sticky top-0 bg-slate-50/80 backdrop-blur-sm">
-                  <tr className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
-                    <th className="text-left pl-5 pr-2 py-2.5">Naziv</th>
-                    <th className="text-left px-2 py-2.5 w-[140px]">ID broj</th>
-                    <th className="text-left px-2 py-2.5 w-[140px]">PDV broj</th>
-                    <th className="text-left px-2 py-2.5">Adresa</th>
-                    <th className="text-left px-2 py-2.5 w-[120px]">Kontakt</th>
-                    <th className="text-right pr-5 pl-2 py-2.5 w-[100px]" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map((d) => (
-                    <tr
-                      key={d.id}
-                      className="group border-t border-slate-50 transition-colors hover:bg-slate-50/50 cursor-pointer"
-                      onClick={() => handleEdit(d)}
-                    >
-                      <td className="pl-5 pr-2 py-2.5 text-[12px] font-medium text-slate-700">{d.naziv}</td>
-                      <td className="px-2 py-2.5 text-[12px] font-mono text-slate-400">{d.idBroj || '—'}</td>
-                      <td className="px-2 py-2.5 text-[12px] font-mono text-slate-400">{d.pdvBroj || '—'}</td>
-                      <td className="px-2 py-2.5 text-[12px] text-slate-500 truncate max-w-[200px]">{d.adresa || '—'}</td>
-                      <td className="px-2 py-2.5 text-[12px] text-slate-500">{d.kontakt || '—'}</td>
-                      <td className="pr-5 pl-2 py-2.5 text-right">
-                        <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <Button variant="ghost" size="sm" className="h-7 text-xs px-2" onClick={(e) => { e.stopPropagation(); handleEdit(d); }}>
-                            <Pencil className="h-3 w-3 mr-1" /> Uredi
-                          </Button>
-                          <Button variant="ghost" size="sm" className="h-7 text-xs px-2 text-red-500 hover:text-red-600 hover:bg-red-50" onClick={(e) => { e.stopPropagation(); handleDelete(d); }}>
-                            <Trash2 className="h-3 w-3" />
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </ScrollArea>
-          )}
-        </div>
-      </div>
-
-      <DobavljacDialog
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-        dobavljac={editDobavljac}
-        onSave={onReload}
-      />
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Kupac Dialog
-// ---------------------------------------------------------------------------
-
-function KupacDialog({
-  open,
-  onOpenChange,
-  kupac,
-  onSave,
-}: {
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-  kupac: Kupac | null;
-  onSave: () => void;
-}) {
-  const [naziv, setNaziv] = useState('');
-  const [idBroj, setIdBroj] = useState('');
-  const [pdvBroj, setPdvBroj] = useState('');
-  const [adresa, setAdresa] = useState('');
-  const [postanskiBroj, setPostanskiBroj] = useState('');
-  const [grad, setGrad] = useState('');
-  const [kontakt, setKontakt] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    if (open) {
-      setError('');
-      if (kupac) {
-        setNaziv(kupac.naziv);
-        setIdBroj(kupac.idBroj);
-        setPdvBroj(kupac.pdvBroj ?? '');
-        setAdresa(kupac.adresa ?? '');
-        setPostanskiBroj(kupac.postanskiBroj ?? '');
-        setGrad(kupac.grad ?? '');
-        setKontakt(kupac.kontakt ?? '');
-      } else {
-        setNaziv(''); setIdBroj(''); setPdvBroj(''); setAdresa('');
-        setPostanskiBroj(''); setGrad(''); setKontakt('');
-      }
-    }
-  }, [open, kupac]);
-
-  const handleSave = async () => {
-    if (!naziv || !idBroj) return;
-    setSaving(true);
-    setError('');
-    try {
-      const payload = {
-        naziv, idBroj,
-        pdvBroj: pdvBroj || null,
-        adresa: adresa || null,
-        postanskiBroj: postanskiBroj || null,
-        grad: grad || null,
-        kontakt: kontakt || null,
-      };
-      if (kupac) {
-        await window.api.updateKupac(kupac.id, payload);
-      } else {
-        await window.api.createKupac(payload);
-      }
-      onSave();
-      onOpenChange(false);
-    } catch (err: any) {
-      setError(err?.message || 'Greška pri spremanju');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const isEdit = !!kupac;
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[520px] p-0 gap-0 overflow-hidden">
-        <div className="px-6 pt-6 pb-4">
-          <DialogHeader>
-            <div className="flex items-center gap-3">
-              <div className={cn(
-                'w-10 h-10 rounded-xl flex items-center justify-center',
-                isEdit ? 'bg-blue-50 text-blue-600' : 'bg-emerald-50 text-emerald-600'
-              )}>
-                <Users className="h-5 w-5" />
-              </div>
-              <div>
-                <DialogTitle className="text-lg">{isEdit ? 'Uredi kupca' : 'Novi kupac'}</DialogTitle>
-                <DialogDescription className="text-xs mt-0.5">
-                  {isEdit ? `JIB: ${kupac.idBroj}` : 'Unesite podatke o kupcu'}
-                </DialogDescription>
-              </div>
-            </div>
-          </DialogHeader>
-        </div>
-
-        <Separator />
-
-        <div className="px-6 py-5 space-y-5">
-          <div className="space-y-1.5">
-            <Label htmlFor="kup-naziv" className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-              Naziv
-            </Label>
-            <Input
-              id="kup-naziv"
-              value={naziv}
-              onChange={(e) => setNaziv(e.target.value)}
-              placeholder="Npr. Firma d.o.o."
-              className="h-11 text-base"
-              maxLength={32}
-              autoFocus
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="kup-idbroj" className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                ID broj (JIB)
-              </Label>
-              <Input
-                id="kup-idbroj"
-                className="font-mono"
-                value={idBroj}
-                onChange={(e) => setIdBroj(e.target.value.replace(/\D/g, ''))}
-                placeholder="4200000000000"
-                maxLength={13}
-                inputMode="numeric"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="kup-pdvbroj" className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                PDV broj
-              </Label>
-              <Input
-                id="kup-pdvbroj"
-                className="font-mono"
-                value={pdvBroj}
-                onChange={(e) => setPdvBroj(e.target.value.replace(/\D/g, ''))}
-                placeholder="200000000000"
-                maxLength={12}
-                inputMode="numeric"
-              />
-            </div>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="kup-adresa" className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-              Adresa
-            </Label>
-            <Input
-              id="kup-adresa"
-              value={adresa}
-              onChange={(e) => setAdresa(e.target.value)}
-              placeholder="Ulica i broj"
-              maxLength={32}
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="kup-postbroj" className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                Poštanski broj
-              </Label>
-              <Input
-                id="kup-postbroj"
-                className="font-mono"
-                value={postanskiBroj}
-                onChange={(e) => setPostanskiBroj(e.target.value.replace(/\D/g, ''))}
-                placeholder="75000"
-                maxLength={5}
-                inputMode="numeric"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="kup-grad" className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                Grad
-              </Label>
-              <Input
-                id="kup-grad"
-                value={grad}
-                onChange={(e) => setGrad(e.target.value)}
-                placeholder="Tuzla"
-                maxLength={26}
-              />
-            </div>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="kup-kontakt" className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
-              <Phone className="h-3 w-3" />
-              Kontakt
-            </Label>
-            <Input
-              id="kup-kontakt"
-              value={kontakt}
-              onChange={(e) => setKontakt(e.target.value)}
-              placeholder="Telefon, email..."
-            />
-          </div>
-        </div>
-
-        <div className="border-t bg-slate-50/50">
-          {error && (
-            <div className="mx-6 mt-4 text-sm px-3 py-2.5 rounded-lg bg-red-50 text-red-600 border border-red-100 flex items-center gap-2">
-              <X className="h-4 w-4 flex-shrink-0" />
-              {error}
-            </div>
-          )}
-          <div className="px-6 py-4 flex items-center justify-end gap-3">
-            <Button variant="ghost" onClick={() => onOpenChange(false)}>
-              Otkaži
-            </Button>
-            <Button onClick={handleSave} disabled={saving || !naziv || !idBroj} className="min-w-[120px]">
-              {saving ? 'Spremam...' : isEdit ? 'Spremi izmjene' : 'Dodaj kupca'}
-            </Button>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Kupci Tab
-// ---------------------------------------------------------------------------
-
-function KupciTab({
-  kupci,
-  onReload,
-}: {
-  kupci: Kupac[];
-  onReload: () => void;
-}) {
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [editKupac, setEditKupac] = useState<Kupac | null>(null);
-  const [search, setSearch] = useState('');
-
-  const handleNew = () => {
-    setEditKupac(null);
-    setDialogOpen(true);
-  };
-
-  const handleEdit = (k: Kupac) => {
-    setEditKupac(k);
-    setDialogOpen(true);
-  };
-
-  const handleDelete = async (k: Kupac) => {
-    if (!confirm(`Obrisati kupca "${k.naziv}"?`)) return;
-    await window.api.deleteKupac(k.id);
-    onReload();
-  };
-
-  const filtered = kupci.filter(k => {
-    if (!search.trim()) return true;
-    const q = search.toLowerCase();
-    return (
-      k.naziv.toLowerCase().includes(q) ||
-      k.idBroj.toLowerCase().includes(q) ||
-      (k.pdvBroj?.toLowerCase().includes(q) ?? false) ||
-      (k.adresa?.toLowerCase().includes(q) ?? false) ||
-      (k.grad?.toLowerCase().includes(q) ?? false)
-    );
-  });
-
-  return (
-    <div className="flex flex-col h-full">
-      <div className="flex-1 min-h-0 px-6 py-5">
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm shadow-slate-200/50 h-full flex flex-col overflow-hidden">
-          {/* Header bar */}
-          <div className="flex items-center gap-3 px-5 py-3 border-b border-slate-100">
-            <div className="relative flex-1 max-w-sm">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-              <Input
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                placeholder="Pretraži kupce..."
-                className="pl-9 h-8 text-[13px] bg-slate-50 border-slate-200"
-              />
-              {search && (
-                <button
-                  onClick={() => setSearch('')}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-[13px] font-semibold text-slate-700">Kupci</span>
-              {kupci.length > 0 && (
-                <Badge variant="secondary" className="text-[10px] font-mono px-1.5 py-0 h-5">
-                  {kupci.length}
-                </Badge>
-              )}
-            </div>
-            <Button size="sm" onClick={handleNew} className="ml-auto h-8 gap-1.5 text-[12px]">
-              <Plus className="h-3.5 w-3.5" />
-              Novi kupac
-            </Button>
-          </div>
-
-          {filtered.length === 0 ? (
-            <div className="flex-1 flex flex-col items-center justify-center text-slate-400 select-none">
-              <div className="w-14 h-14 rounded-2xl bg-slate-50 flex items-center justify-center mb-3">
-                <Users size={24} className="text-slate-300" />
-              </div>
-              <p className="text-[13px] font-medium text-slate-500">{search ? 'Nema rezultata pretrage' : 'Nema kupaca'}</p>
-              {!search && <p className="text-[12px] text-slate-400 mt-0.5">Dodajte prvog kupca klikom na dugme iznad</p>}
-            </div>
-          ) : (
-            <ScrollArea className="flex-1">
-              <table className="w-full">
-                <thead className="sticky top-0 bg-slate-50/80 backdrop-blur-sm">
-                  <tr className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
-                    <th className="text-left pl-5 pr-2 py-2.5">Naziv</th>
-                    <th className="text-left px-2 py-2.5 w-[140px]">ID broj</th>
-                    <th className="text-left px-2 py-2.5 w-[140px]">PDV broj</th>
-                    <th className="text-left px-2 py-2.5">Adresa</th>
-                    <th className="text-left px-2 py-2.5 w-[100px]">Grad</th>
-                    <th className="text-left px-2 py-2.5 w-[100px]">Kontakt</th>
-                    <th className="text-right pr-5 pl-2 py-2.5 w-[100px]" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map((k) => (
-                    <tr
-                      key={k.id}
-                      className="group border-t border-slate-50 transition-colors hover:bg-slate-50/50 cursor-pointer"
-                      onClick={() => handleEdit(k)}
-                    >
-                      <td className="pl-5 pr-2 py-2.5 text-[12px] font-medium text-slate-700">{k.naziv}</td>
-                      <td className="px-2 py-2.5 text-[12px] font-mono text-slate-400">{k.idBroj}</td>
-                      <td className="px-2 py-2.5 text-[12px] font-mono text-slate-400">{k.pdvBroj || '—'}</td>
-                      <td className="px-2 py-2.5 text-[12px] text-slate-500 truncate max-w-[200px]">{k.adresa || '—'}</td>
-                      <td className="px-2 py-2.5 text-[12px] text-slate-500">{k.grad || '—'}</td>
-                      <td className="px-2 py-2.5 text-[12px] text-slate-500">{k.kontakt || '—'}</td>
-                      <td className="pr-5 pl-2 py-2.5 text-right">
-                        <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <Button variant="ghost" size="sm" className="h-7 text-xs px-2" onClick={(e) => { e.stopPropagation(); handleEdit(k); }}>
-                            <Pencil className="h-3 w-3 mr-1" /> Uredi
-                          </Button>
-                          <Button variant="ghost" size="sm" className="h-7 text-xs px-2 text-red-500 hover:text-red-600 hover:bg-red-50" onClick={(e) => { e.stopPropagation(); handleDelete(k); }}>
-                            <Trash2 className="h-3 w-3" />
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </ScrollArea>
-          )}
-        </div>
-      </div>
-
-      <KupacDialog
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-        kupac={editKupac}
-        onSave={onReload}
-      />
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Main Screen
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Usluga Dialog — simplified for services
-// ---------------------------------------------------------------------------
-
-function UslugaDialog({
-  open,
-  onOpenChange,
-  product,
-  onSave,
-}: {
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-  product: Product | null;
-  onSave: (data: any) => void;
-}) {
-  const [sifra, setSifra] = useState('');
-  const [naziv, setNaziv] = useState('');
-  const [cijena, setCijena] = useState('');
-  const [pdvStopa, setPdvStopa] = useState<'E' | 'K'>('E');
-
-  useEffect(() => {
-    if (open) {
-      if (product) {
-        setSifra(product.sifra);
-        setNaziv(product.naziv);
-        setCijena(String(product.cijena));
-        setPdvStopa(product.pdvStopa);
-      } else {
-        setSifra('');
-        setNaziv('');
-        setCijena('');
-        setPdvStopa('E');
-      }
-    }
-  }, [open, product]);
-
-  const isEdit = !!product;
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[420px]">
-        <DialogHeader>
-          <DialogTitle>{isEdit ? 'Uredi uslugu' : 'Nova usluga'}</DialogTitle>
-          <DialogDescription>
-            {isEdit ? 'Izmjenite podatke o usluzi' : 'Dodajte novu uslugu'}
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-4 py-2">
-          <div className="space-y-2">
-            <Label>Šifra</Label>
-            <Input value={sifra} onChange={e => setSifra(e.target.value)} placeholder="USL-001" className="font-mono" />
-          </div>
-          <div className="space-y-2">
-            <Label>Naziv</Label>
-            <Input value={naziv} onChange={e => setNaziv(e.target.value)} placeholder="Naziv usluge" autoFocus />
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label>Cijena</Label>
-              <Input type="number" step="0.01" min="0" value={cijena} onChange={e => setCijena(e.target.value)} placeholder="0.00" className="font-mono" />
-            </div>
-            <div className="space-y-2">
-              <Label>PDV stopa</Label>
-              <Select value={pdvStopa} onValueChange={(v: 'E' | 'K') => setPdvStopa(v)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="E">E — 17%</SelectItem>
-                  <SelectItem value="K">K — 0%</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>Otkaži</Button>
-          <Button
-            onClick={() => onSave({ sifra, naziv, cijena: parseFloat(cijena), pdvStopa })}
-            disabled={!sifra || !naziv || !cijena}
-          >
-            {isEdit ? 'Spremi' : 'Dodaj'}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Usluge Tab
-// ---------------------------------------------------------------------------
-
-function UslugeTab({ usluge, onReload }: { usluge: Product[]; onReload: () => void }) {
-  const [search, setSearch] = useState('');
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [editProduct, setEditProduct] = useState<Product | null>(null);
-  const [sortBy, setSortBy] = useState<'naziv' | 'cijena'>('naziv');
-
-  const filtered = usluge
-    .filter(p => {
-      if (!search) return true;
-      const q = search.toLowerCase();
-      return p.naziv.toLowerCase().includes(q) || p.sifra.toLowerCase().includes(q);
-    })
-    .sort((a, b) => {
-      if (sortBy === 'cijena') return b.cijena - a.cijena;
-      return a.naziv.localeCompare(b.naziv);
-    });
-
-  const handleNew = () => { setEditProduct(null); setDialogOpen(true); };
-  const handleEdit = (p: Product) => { setEditProduct(p); setDialogOpen(true); };
-  const handleDelete = async (p: Product) => {
-    if (!confirm(`Obrisati uslugu "${p.naziv}"?`)) return;
-    await window.api.deleteProduct(p.id);
-    onReload();
-  };
-
-  const handleDialogOpenChange = (v: boolean) => {
-    setDialogOpen(v);
-    if (!v) setEditProduct(null);
-  };
-
-  const handleSave = async (data: any) => {
-    if (editProduct) {
-      await window.api.updateProduct(editProduct.id, { ...data, tip: 'usluga' });
-    } else {
-      await window.api.createProduct({ ...data, tip: 'usluga' });
-    }
-    setDialogOpen(false);
-    setEditProduct(null);
-    onReload();
-  };
-
-  return (
-    <div className="flex flex-col h-full">
-      <div className="flex-1 min-h-0 px-6 py-5">
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm shadow-slate-200/50 h-full flex flex-col overflow-hidden">
-          {/* Header bar */}
-          <div className="flex items-center gap-3 px-5 py-3 border-b border-slate-100">
-            <div className="relative flex-1 max-w-sm">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-              <Input
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                placeholder="Pretraži usluge..."
-                className="pl-9 h-8 text-[13px] bg-slate-50 border-slate-200"
-              />
-              {search && (
-                <button
-                  onClick={() => setSearch('')}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              )}
-            </div>
-
-            <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-0.5">
-              {(['naziv', 'cijena'] as const).map(key => (
-                <button
-                  key={key}
-                  onClick={() => setSortBy(key)}
-                  className={cn(
-                    'px-2.5 py-1 rounded-md text-[11px] font-medium transition-all duration-150',
-                    sortBy === key
-                      ? 'bg-white text-slate-900 shadow-sm'
-                      : 'text-slate-500 hover:text-slate-700'
-                  )}
-                >
-                  {key === 'naziv' ? 'A-Z' : 'Cijena'}
-                </button>
-              ))}
-            </div>
-
-            <div className="flex items-center gap-2">
-              <span className="text-[13px] font-semibold text-slate-700">Usluge</span>
-              {usluge.length > 0 && (
-                <Badge variant="secondary" className="text-[10px] font-mono px-1.5 py-0 h-5">
-                  {usluge.length}
-                </Badge>
-              )}
-            </div>
-
-            <Button size="sm" onClick={handleNew} className="ml-auto h-8 gap-1.5 text-[12px]">
-              <Plus className="h-3.5 w-3.5" />
-              Nova usluga
-            </Button>
-          </div>
-
-          {filtered.length === 0 ? (
-            <div className="flex-1 flex flex-col items-center justify-center text-slate-400 select-none">
-              <div className="w-14 h-14 rounded-2xl bg-slate-50 flex items-center justify-center mb-3">
-                <Wrench size={24} className="text-slate-300" />
-              </div>
-              <p className="text-[13px] font-medium text-slate-500">{search ? 'Nema rezultata pretrage' : 'Nema usluga'}</p>
-              {!search && <p className="text-[12px] text-slate-400 mt-0.5">Dodajte prvu uslugu klikom na dugme iznad</p>}
-            </div>
-          ) : (
-            <ScrollArea className="flex-1">
-              <table className="w-full">
-                <thead className="sticky top-0 bg-slate-50/80 backdrop-blur-sm">
-                  <tr className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
-                    <th className="text-left pl-5 pr-2 py-2.5 w-[80px]">Šifra</th>
-                    <th className="text-left px-2 py-2.5">Naziv</th>
-                    <th className="text-right px-2 py-2.5 w-[100px]">Cijena</th>
-                    <th className="text-center px-2 py-2.5 w-[60px]">PDV</th>
-                    <th className="text-right pr-5 pl-2 py-2.5 w-[100px]" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map((p) => (
-                    <tr
-                      key={p.id}
-                      className="group border-t border-slate-50 transition-colors hover:bg-slate-50/50 cursor-pointer"
-                      onClick={() => handleEdit(p)}
-                    >
-                      <td className="pl-5 pr-2 py-2.5 text-[12px] font-mono text-slate-400">{p.sifra}</td>
-                      <td className="px-2 py-2.5 text-[12px] font-medium text-slate-700">{p.naziv}</td>
-                      <td className="px-2 py-2.5 text-[13px] font-mono font-semibold text-right tabular-nums text-slate-800">
-                        {formatKM(p.cijena)}
-                      </td>
-                      <td className="px-2 py-2.5 text-center">
-                        <span className={cn(
-                          'inline-flex items-center justify-center w-10 h-5 rounded text-[10px] font-semibold',
-                          p.pdvStopa === 'E'
-                            ? 'bg-amber-50 text-amber-700'
-                            : 'bg-slate-100 text-slate-500'
-                        )}>
-                          {p.pdvStopa === 'E' ? '17%' : '0%'}
-                        </span>
-                      </td>
-                      <td className="pr-5 pl-2 py-2.5 text-right">
-                        <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <Button variant="ghost" size="sm" className="h-7 text-xs px-2" onClick={(e) => { e.stopPropagation(); handleEdit(p); }}>
-                            <Pencil className="h-3 w-3 mr-1" /> Uredi
-                          </Button>
-                          <Button variant="ghost" size="sm" className="h-7 text-xs px-2 text-red-500 hover:text-red-600 hover:bg-red-50" onClick={(e) => { e.stopPropagation(); handleDelete(p); }}>
-                            <Trash2 className="h-3 w-3" />
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </ScrollArea>
-          )}
-        </div>
-      </div>
-
-      <UslugaDialog
-        key={editProduct?.id ?? 'new'}
-        open={dialogOpen}
-        onOpenChange={handleDialogOpenChange}
-        product={editProduct}
-        onSave={handleSave}
-      />
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Main Screen
 // ---------------------------------------------------------------------------
 
 export default function SkladisteScreen() {
   const [products, setProducts] = useState<Product[]>([]);
   const [dobavljaci, setDobavljaci] = useState<Dobavljac[]>([]);
-  const [kupci, setKupci] = useState<Kupac[]>([]);
-  const [usluge, setUsluge] = useState<Product[]>([]);
   const [activeTab, setActiveTab] = useState<SkladisteTab>('artikli');
 
   const loadProducts = useCallback(async () => {
@@ -2464,29 +1488,14 @@ export default function SkladisteScreen() {
     setDobavljaci(data);
   }, []);
 
-  const loadKupci = useCallback(async () => {
-    const data = await window.api.getKupci();
-    setKupci(data);
-  }, []);
-
-  const loadUsluge = useCallback(async () => {
-    const data = await window.api.getProducts('usluga');
-    setUsluge(data);
-  }, []);
-
   useEffect(() => {
     loadProducts();
     loadDobavljaci();
-    loadKupci();
-    loadUsluge();
-  }, [loadProducts, loadDobavljaci, loadKupci, loadUsluge]);
+  }, [loadProducts, loadDobavljaci]);
 
   const tabs: { id: SkladisteTab; label: string; icon: typeof Package }[] = [
     { id: 'artikli', label: 'Artikli', icon: Package },
-    { id: 'usluge', label: 'Usluge', icon: Wrench },
     { id: 'primke', label: 'Ulaz robe', icon: FileText },
-    { id: 'dobavljaci', label: 'Dobavljači', icon: Building2 },
-    { id: 'kupci', label: 'Kupci', icon: Users },
   ];
 
   return (
@@ -2519,10 +1528,7 @@ export default function SkladisteScreen() {
       {/* Content */}
       <div className="flex-1 min-h-0 overflow-hidden">
         {activeTab === 'artikli' && <ArtikliTab products={products} onReload={loadProducts} />}
-        {activeTab === 'usluge' && <UslugeTab usluge={usluge} onReload={loadUsluge} />}
         {activeTab === 'primke' && <PrimkeTab products={products} dobavljaci={dobavljaci} onReloadProducts={loadProducts} />}
-        {activeTab === 'dobavljaci' && <DobavljaciTab dobavljaci={dobavljaci} onReload={loadDobavljaci} />}
-        {activeTab === 'kupci' && <KupciTab kupci={kupci} onReload={loadKupci} />}
       </div>
     </div>
   );

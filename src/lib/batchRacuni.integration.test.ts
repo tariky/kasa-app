@@ -4,6 +4,8 @@
 import { test, expect, beforeAll, afterAll } from 'bun:test';
 import type { Server } from 'node:http';
 import { generirajRacune } from './batchRacuni';
+import { buildTringRacun } from './tringRacun';
+import { izracunajTotale } from './racun';
 import * as Tring from '@/services/tring';
 import { startMockTringServer } from '@/services/tring-mock-server';
 import type { Product } from '@/types';
@@ -28,19 +30,9 @@ function proizvod(over: Partial<Product>): Product {
   };
 }
 
-// Mirror of handlers.ts buildTringRacun for the fields the generator produces.
+// Ista funkcija koju koristi IPC handler — ne kopija, da test hvata i izmjene u njoj.
 function buildRacun(r: { stavke: any[]; ukupno: number }): Tring.Racun {
-  return {
-    stavke: r.stavke.map(item => ({
-      artikal: {
-        sifra: item.sifra, naziv: item.naziv, jm: item.jm,
-        cijena: item.cijena, stopa: item.pdvStopa, plu: item.plu || 0,
-      },
-      kolicina: item.kolicina,
-      rabat: item.rabat || 0,
-    })),
-    vrstePlacanja: [{ oznaka: 'Gotovina', iznos: r.ukupno }],
-  };
+  return buildTringRacun({ ...r, nacinPlacanja: 'Gotovina' });
 }
 
 const katalog: Product[] = [
@@ -74,3 +66,37 @@ test('svi generisani računi se uspješno štampaju kroz mock fiskalni server', 
   // Printed total matches the generated total.
   expect(odstampanoUkupno).toBeCloseTo(res.ukupnoGenerisano, 2);
 }, 60000);
+
+test('iznos koji ide uređaju je zaokružen na fene', async () => {
+  // 3×1,15 + 3×0,70 u plutajućem zarezu daje 5.549999999999999; takav broj je
+  // ranije doslovno išao u <Iznos> i u orders.ukupno.
+  const stavke = [
+    { sifra: '001', naziv: 'Hljeb', jm: 'kom', cijena: 1.15, kolicina: 3, rabat: 0, pdvStopa: 'E' },
+    { sifra: '002', naziv: 'Mlijeko', jm: 'kom', cijena: 0.70, kolicina: 3, rabat: 0, pdvStopa: 'E' },
+  ];
+  const { ukupno } = izracunajTotale(stavke);
+  expect(ukupno).toBe(5.55);
+
+  const racun = buildTringRacun({ stavke, ukupno, nacinPlacanja: 'Gotovina' });
+  expect(racun.vrstePlacanja[0].iznos).toBe(5.55);
+  // Ono što zaista završi u XML tijelu zahtjeva.
+  expect(String(racun.vrstePlacanja[0].iznos)).toBe('5.55');
+
+  const odgovor = await Tring.stampatiFiskalniRacun(racun);
+  expect(odgovor.success).toBe(true);
+}, 15000);
+
+test('decimalna količina prolazi kroz cijeli lanac do uređaja', async () => {
+  // parseInt je ranije sjekao 2,5 kg na 2 kg.
+  const stavke = [
+    { sifra: '010', naziv: 'Sir', jm: 'kg', cijena: 18, kolicina: 2.5, rabat: 0, pdvStopa: 'E' },
+  ];
+  const { ukupno } = izracunajTotale(stavke);
+  expect(ukupno).toBe(45);
+
+  const racun = buildTringRacun({ stavke, ukupno, nacinPlacanja: 'Gotovina' });
+  expect(racun.stavke[0].kolicina).toBe(2.5);
+
+  const odgovor = await Tring.stampatiFiskalniRacun(racun);
+  expect(odgovor.success).toBe(true);
+}, 15000);

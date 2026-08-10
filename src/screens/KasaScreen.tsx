@@ -1,14 +1,20 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Search, Plus, Minus, X, ShoppingCart, ChevronDown, User as UserIcon, Banknote, CreditCard, Building, FileCheck, Loader2, Printer } from 'lucide-react';
+import { Search, Plus, Minus, X, ShoppingCart, User as UserIcon, Banknote, CreditCard, Building, FileCheck, Loader2, Printer, ScanBarcode, Save, FolderOpen, Percent, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Switch } from '@/components/ui/switch';
+import { DecimalInput } from '@/components/ui/decimal-input';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
 } from '@/components/ui/dialog';
-import { cn, formatKM } from '@/lib/utils';
-import { izracunajTotale } from '@/lib/racun';
+import { cn, formatKM, parseDecimal } from '@/lib/utils';
+import { localDateStr, prijedloziApoena, round2 } from '@/lib/novac';
+import { izracunajTotale, iznosStavke } from '@/lib/racun';
+import { dodajUKosaricu, restoreCart, postaviRabat, postaviRabatNaSve, type SavedCartItem } from '@/lib/kosarica';
+import { pdf } from '@react-pdf/renderer';
+import { OtpremnicaPdf } from '@/components/OtpremnicaPdf';
 import type { User, Product, CartItem, Kupac } from '@/types';
 
 type PaymentType = 'Gotovina' | 'Kartica' | 'Virman' | 'Ček';
@@ -24,14 +30,40 @@ interface KasaScreenProps {
   user: User;
 }
 
+interface SavedCartRow {
+  id: number;
+  naziv: string;
+  items: string; // JSON: SavedCartItem[]
+  ukupno: number;
+  createdAt: string;
+}
+
+/** Broj → tekst za polje količine (zarez kao separator, bez suvišnih nula). */
+function formatQty(n: number): string {
+  return String(Math.round(n * 1000) / 1000).replace('.', ',');
+}
+
+/** Bosanski plural za "artikal": 1 artikal, 2–4 artikla, 5+ artikala. */
+function formatArtikliCount(n: number): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return `${n} artikal`;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return `${n} artikla`;
+  return `${n} artikala`;
+}
+
 export default function KasaScreen({ user }: KasaScreenProps) {
   const [query, setQuery] = useState('');
   const [products, setProducts] = useState<Product[]>([]);
+  const [allProducts, setAllProducts] = useState<Product[]>([]);
+  const [tipFilter, setTipFilter] = useState<'svi' | 'proizvodi' | 'usluge'>('svi');
   const [cart, setCart] = useState<CartItem[]>([]);
   const [paymentType, setPaymentType] = useState<PaymentType>('Gotovina');
-  const [paymentAmount, setPaymentAmount] = useState('');
+  const [kusurTotal, setKusurTotal] = useState<number | null>(null);
+  const [kusurValue, setKusurValue] = useState('');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [lastOrderId, setLastOrderId] = useState<number | null>(null);
   const [qtyProduct, setQtyProduct] = useState<Product | null>(null);
   const [qtyValue, setQtyValue] = useState('1');
   const [kupacOpen, setKupacOpen] = useState(false);
@@ -41,38 +73,37 @@ export default function KasaScreen({ user }: KasaScreenProps) {
   const [kupacGrad, setKupacGrad] = useState('');
   const [kupacPostanskiBroj, setKupacPostanskiBroj] = useState('');
   const [kupacSearch, setKupacSearch] = useState('');
-  const [kupacResults, setKupacResults] = useState<Kupac[]>([]);
-  const [kupacSearching, setKupacSearching] = useState(false);
-  const kupacDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [allKupci, setAllKupci] = useState<Kupac[]>([]);
   const [focusedIndex, setFocusedIndex] = useState(-1);
   const [dailyTotal, setDailyTotal] = useState<number | null>(null);
   const [allowZeroStock, setAllowZeroStock] = useState(false);
+  const [kusurEnabled, setKusurEnabled] = useState(true);
   const [racunNapomena, setRacunNapomena] = useState('');
+  const [scanMode, setScanMode] = useState(false);
+  const [savedCarts, setSavedCarts] = useState<SavedCartRow[]>([]);
+  const [savedOpen, setSavedOpen] = useState(false);
+  // productId za rabat po stavci, 'sve' za rabat na cijelu košaricu, null = zatvoren.
+  const [rabatTarget, setRabatTarget] = useState<number | 'sve' | null>(null);
+  const [rabatValue, setRabatValue] = useState('');
   const qtyInputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const productListRef = useRef<HTMLDivElement>(null);
 
-  // Kupac search
+  // Učitaj sve kupce kad se dialog otvori — filtriranje je lokalno.
   useEffect(() => {
-    if (kupacDebounceRef.current) clearTimeout(kupacDebounceRef.current);
-    if (!kupacSearch.trim()) {
-      setKupacResults([]);
-      setKupacSearching(false);
-      return;
-    }
-    setKupacSearching(true);
-    kupacDebounceRef.current = setTimeout(async () => {
-      try {
-        const results = await window.api.searchKupci(kupacSearch.trim());
-        setKupacResults(results);
-      } catch {
-        setKupacResults([]);
-      }
-      setKupacSearching(false);
-    }, 200);
-    return () => { if (kupacDebounceRef.current) clearTimeout(kupacDebounceRef.current); };
-  }, [kupacSearch]);
+    if (!kupacOpen) return;
+    window.api.getKupci().then(setAllKupci).catch(() => setAllKupci([]));
+  }, [kupacOpen]);
+
+  const filteredKupci = kupacSearch.trim()
+    ? allKupci.filter(k => {
+        const q = kupacSearch.trim().toLowerCase();
+        return k.naziv.toLowerCase().includes(q)
+          || k.idBroj.includes(q)
+          || (k.grad ?? '').toLowerCase().includes(q);
+      })
+    : allKupci;
 
   const selectKupac = useCallback((k: Kupac) => {
     setKupacNaziv(k.naziv);
@@ -81,7 +112,7 @@ export default function KasaScreen({ user }: KasaScreenProps) {
     setKupacGrad(k.grad ?? '');
     setKupacPostanskiBroj(k.postanskiBroj ?? '');
     setKupacSearch('');
-    setKupacResults([]);
+    setKupacOpen(false);
   }, []);
 
   const clearKupac = useCallback(() => {
@@ -91,8 +122,18 @@ export default function KasaScreen({ user }: KasaScreenProps) {
     setKupacGrad('');
     setKupacPostanskiBroj('');
     setKupacSearch('');
-    setKupacResults([]);
   }, []);
+
+  // Svi artikli — prikazuju se kad je pretraga prazna.
+  const loadAllProducts = useCallback(async () => {
+    try {
+      setAllProducts(await window.api.getProducts());
+    } catch {
+      setAllProducts([]);
+    }
+  }, []);
+
+  useEffect(() => { loadAllProducts(); }, [loadAllProducts]);
 
   // Debounced product search
   useEffect(() => {
@@ -112,7 +153,7 @@ export default function KasaScreen({ user }: KasaScreenProps) {
   const loadDailyTotal = useCallback(async () => {
     const enabled = await window.api.getSetting('kasa.showDailyTotal');
     if (enabled !== 'true') { setDailyTotal(null); return; }
-    const today = new Date().toISOString().split('T')[0];
+    const today = localDateStr();
     const orders = await window.api.getReportData('dnevni', today, today);
     const completed = orders.filter((o: any) => o.status === 'completed');
     setDailyTotal(completed.reduce((s: number, o: any) => s + o.ukupno, 0));
@@ -122,7 +163,37 @@ export default function KasaScreen({ user }: KasaScreenProps) {
 
   useEffect(() => {
     window.api.getSetting('kasa.allowZeroStock').then((v) => setAllowZeroStock(v === 'true'));
+    window.api.getSetting('kasa.kusurKalkulacija').then((v) => setKusurEnabled(v !== 'false'));
     window.api.getSetting('racun.napomena').then((v) => setRacunNapomena(v || ''));
+    window.api.getSetting('kasa.scanMode').then((v) => setScanMode(v === 'true'));
+  }, []);
+
+  const toggleScanMode = useCallback((on: boolean) => {
+    setScanMode(on);
+    window.api.setSetting('kasa.scanMode', on ? 'true' : 'false');
+    setTimeout(() => searchInputRef.current?.focus(), 50);
+  }, []);
+
+  const loadSavedCarts = useCallback(async () => {
+    try {
+      setSavedCarts(await window.api.listSavedCarts());
+    } catch {
+      setSavedCarts([]);
+    }
+  }, []);
+
+  useEffect(() => { loadSavedCarts(); }, [loadSavedCarts]);
+
+  // Lista koja se prikazuje: rezultati pretrage ili svi artikli, uz tip filter.
+  const baseList = query.trim() ? products : allProducts;
+  const displayedProducts = tipFilter === 'svi'
+    ? baseList
+    : baseList.filter(p => (tipFilter === 'usluge' ? p.tip === 'usluga' : p.tip !== 'usluga'));
+
+  const closeKusur = useCallback(() => {
+    setKusurTotal(null);
+    setKusurValue('');
+    setTimeout(() => searchInputRef.current?.focus(), 50);
   }, []);
 
   // Cart calculations
@@ -135,39 +206,38 @@ export default function KasaScreen({ user }: KasaScreenProps) {
     }))
   );
   const total = subtotal;
-  const itemCount = cart.reduce((sum, item) => sum + item.kolicina, 0);
+  const itemCount = cart.length;
 
   // Cart actions
+  const addToCart = useCallback((product: Product, qty: number) => {
+    setCart(prev => dodajUKosaricu(prev, product, qty, allowZeroStock));
+    setMessage(null);
+    setQtyProduct(null);
+    // Očisti pretragu i rezultate pa vrati fokus za sljedeći artikal/sken.
+    setQuery('');
+    setProducts([]);
+    setFocusedIndex(-1);
+    setTimeout(() => searchInputRef.current?.focus(), 50);
+  }, [allowZeroStock]);
+
+  // Scan mode: bez pitanja za količinu — odmah 1 komad (ponovni sken = +1).
   const promptAddToCart = useCallback((product: Product) => {
+    if (scanMode) {
+      addToCart(product, 1);
+      return;
+    }
     setQtyProduct(product);
     setQtyValue('1');
     setTimeout(() => qtyInputRef.current?.select(), 50);
-  }, []);
+  }, [scanMode, addToCart]);
 
   const confirmAddToCart = useCallback(() => {
     if (!qtyProduct) return;
-    const qty = parseInt(qtyValue) || 0;
+    // Količina može biti decimalna (npr. 2,5 kg) — kolone u bazi su REAL.
+    const qty = parseDecimal(qtyValue) || 0;
     if (qty <= 0) { setQtyProduct(null); return; }
-    const isService = qtyProduct.tip === 'usluga';
-    const stock = qtyProduct.stanje ?? 0;
-    setCart(prev => {
-      const existing = prev.find(item => item.product.id === qtyProduct.id);
-      const currentQty = existing ? existing.kolicina : 0;
-      const addQty = (isService || allowZeroStock) ? qty : Math.min(qty, stock - currentQty);
-      if (addQty <= 0) return prev;
-      if (existing) {
-        return prev.map(item =>
-          item.product.id === qtyProduct.id
-            ? { ...item, kolicina: item.kolicina + addQty }
-            : item
-        );
-      }
-      return [...prev, { product: qtyProduct, kolicina: addQty, rabat: 0 }];
-    });
-    setMessage(null);
-    setQtyProduct(null);
-    setTimeout(() => searchInputRef.current?.focus(), 50);
-  }, [qtyProduct, qtyValue, allowZeroStock]);
+    addToCart(qtyProduct, qty);
+  }, [qtyProduct, qtyValue, addToCart]);
 
   const updateQuantity = useCallback((productId: number, delta: number) => {
     setCart(prev =>
@@ -185,8 +255,8 @@ export default function KasaScreen({ user }: KasaScreenProps) {
   const handleSearchKeyDown = useCallback(async (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      if (products.length > 0) {
-        const nextIdx = focusedIndex < products.length - 1 ? focusedIndex + 1 : 0;
+      if (displayedProducts.length > 0) {
+        const nextIdx = focusedIndex < displayedProducts.length - 1 ? focusedIndex + 1 : 0;
         setFocusedIndex(nextIdx);
         // Scroll into view
         const el = productListRef.current?.children[nextIdx] as HTMLElement;
@@ -196,8 +266,8 @@ export default function KasaScreen({ user }: KasaScreenProps) {
     }
     if (e.key === 'ArrowUp') {
       e.preventDefault();
-      if (products.length > 0) {
-        const nextIdx = focusedIndex > 0 ? focusedIndex - 1 : products.length - 1;
+      if (displayedProducts.length > 0) {
+        const nextIdx = focusedIndex > 0 ? focusedIndex - 1 : displayedProducts.length - 1;
         setFocusedIndex(nextIdx);
         const el = productListRef.current?.children[nextIdx] as HTMLElement;
         el?.scrollIntoView({ block: 'nearest' });
@@ -213,8 +283,8 @@ export default function KasaScreen({ user }: KasaScreenProps) {
     if (e.key !== 'Enter') return;
 
     // If an item is focused via arrows, select it
-    if (focusedIndex >= 0 && focusedIndex < products.length) {
-      const product = products[focusedIndex];
+    if (focusedIndex >= 0 && focusedIndex < displayedProducts.length) {
+      const product = displayedProducts[focusedIndex];
       const outOfStock = !allowZeroStock && product.tip !== 'usluga' && product.stanje != null && product.stanje <= 0;
       if (!outOfStock) {
         promptAddToCart(product);
@@ -240,11 +310,78 @@ export default function KasaScreen({ user }: KasaScreenProps) {
       setProducts([]);
     }
     setFocusedIndex(-1);
-  }, [query, products, focusedIndex, promptAddToCart]);
+  }, [query, displayedProducts, focusedIndex, promptAddToCart, allowZeroStock]);
 
   const removeFromCart = useCallback((productId: number) => {
     setCart(prev => prev.filter(item => item.product.id !== productId));
   }, []);
+
+  // ─── Spremljene košarice ───
+  const handleSaveCart = useCallback(async () => {
+    if (cart.length === 0) return;
+    const now = new Date();
+    const hhmm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const naziv = `${hhmm} — ${formatArtikliCount(cart.length)}`;
+    const items: SavedCartItem[] = cart.map(i => ({ productId: i.product.id, kolicina: i.kolicina, rabat: i.rabat }));
+    try {
+      await window.api.saveCart(naziv, items, total);
+      setCart([]);
+      setMessage({ type: 'success', text: `Košarica spremljena (${naziv}).` });
+      loadSavedCarts();
+      setTimeout(() => searchInputRef.current?.focus(), 50);
+    } catch (err: any) {
+      setMessage({ type: 'error', text: `Greška pri spremanju košarice: ${err?.message || 'Nepoznata greška'}` });
+    }
+  }, [cart, total, loadSavedCarts]);
+
+  const handleRestoreCart = useCallback(async (saved: SavedCartRow) => {
+    if (cart.length > 0 && !window.confirm('Trenutna košarica nije prazna i bit će zamijenjena. Nastaviti?')) return;
+    try {
+      // Svježi podaci iz šifarnika — cijene i stanje se provjeravaju sada.
+      const fresh: Product[] = await window.api.getProducts();
+      const items: SavedCartItem[] = JSON.parse(saved.items);
+      const { cart: restored, upozorenja } = restoreCart(
+        items, (id) => fresh.find(p => p.id === id), allowZeroStock
+      );
+      setCart(restored);
+      await window.api.deleteSavedCart(saved.id);
+      loadSavedCarts();
+      setAllProducts(fresh);
+      setSavedOpen(false);
+      if (upozorenja.length > 0) {
+        setMessage({ type: 'error', text: `Košarica vraćena uz upozorenja: ${upozorenja.join(' ')}` });
+      } else {
+        setMessage({ type: 'success', text: `Košarica "${saved.naziv}" vraćena.` });
+      }
+      setTimeout(() => searchInputRef.current?.focus(), 50);
+    } catch (err: any) {
+      setMessage({ type: 'error', text: `Greška pri vraćanju košarice: ${err?.message || 'Nepoznata greška'}` });
+    }
+  }, [cart.length, allowZeroStock, loadSavedCarts]);
+
+  const handleDeleteSavedCart = useCallback(async (id: number) => {
+    try {
+      await window.api.deleteSavedCart(id);
+      loadSavedCarts();
+    } catch {
+      // lista se svakako osvježava
+    }
+  }, [loadSavedCarts]);
+
+  // ─── Rabat ───
+  const openRabatDialog = useCallback((target: number | 'sve') => {
+    const current = target === 'sve' ? 0 : (cart.find(i => i.product.id === target)?.rabat ?? 0);
+    setRabatValue(current > 0 ? formatQty(current) : '');
+    setRabatTarget(target);
+  }, [cart]);
+
+  const confirmRabat = useCallback(() => {
+    if (rabatTarget === null) return;
+    const rabat = parseDecimal(rabatValue) || 0;
+    setCart(prev => rabatTarget === 'sve' ? postaviRabatNaSve(prev, rabat) : postaviRabat(prev, rabatTarget, rabat));
+    setRabatTarget(null);
+    setTimeout(() => searchInputRef.current?.focus(), 50);
+  }, [rabatTarget, rabatValue]);
 
   // F5 to checkout
   useEffect(() => {
@@ -257,8 +394,15 @@ export default function KasaScreen({ user }: KasaScreenProps) {
 
   const handleFinalize = async () => {
     if (cart.length === 0 || loading) return;
+    // Virman ide na žiro račun — bez kupca na računu nema ko da uplati.
+    if (paymentType === 'Virman' && !kupacIdBroj.trim()) {
+      setKupacOpen(true);
+      setMessage({ type: 'error', text: 'Za virman je obavezan kupac — odaberite ili unesite kupca.' });
+      return;
+    }
     setLoading(true);
     setMessage(null);
+    setLastOrderId(null);
     try {
       const kupac = kupacIdBroj.trim()
         ? { idBroj: kupacIdBroj.trim(), naziv: kupacNaziv.trim(), adresa: kupacAdresa.trim(), grad: kupacGrad.trim(), postanskiBroj: kupacPostanskiBroj.trim() }
@@ -292,11 +436,19 @@ export default function KasaScreen({ user }: KasaScreenProps) {
       const datumRacuna = res.odgovori?.DatumFiskalnogRacuna || '';
       const vrijemeRacuna = res.odgovori?.VrijemeFiskalnogRacuna || '';
 
-      setCart([]); setPaymentAmount(''); setKupacOpen(false); clearKupac();
+      setCart([]); setKupacOpen(false); clearKupac();
       setQuery(''); setProducts([]);
       setMessage({ type: 'success', text: `Račun #${brojFiskalnogRacuna} uspješno kreiran${datumRacuna ? ` — ${datumRacuna} ${vrijemeRacuna}` : ''}` });
+      setLastOrderId(res.id ?? null);
       loadDailyTotal();
-      setTimeout(() => searchInputRef.current?.focus(), 50);
+      loadAllProducts(); // stanje se promijenilo nakon prodaje
+      if (kusurEnabled && paymentType === 'Gotovina') {
+        // Kusur mod — mušterija tek sad predaje novac, modal preuzima fokus.
+        setKusurValue('');
+        setKusurTotal(total);
+      } else {
+        setTimeout(() => searchInputRef.current?.focus(), 50);
+      }
     } catch (err: any) {
       setMessage({ type: 'error', text: `Greška: ${err?.message || 'Nepoznata greška'}` });
     } finally {
@@ -304,7 +456,21 @@ export default function KasaScreen({ user }: KasaScreenProps) {
     }
   };
 
-  const change = paymentAmount ? parseFloat(paymentAmount) - total : 0;
+  const handlePrintOtpremnica = async (orderId: number) => {
+    try {
+      const fullOrder = await window.api.getOrder(orderId);
+      if (!fullOrder) return;
+      const firma = await window.api.getFirmaSettings();
+      const blob = await pdf(<OtpremnicaPdf order={fullOrder} firma={firma} />).toBlob();
+      const url = URL.createObjectURL(blob);
+      const win = window.open(url, '_blank');
+      if (win) win.onafterprint = () => URL.revokeObjectURL(url);
+    } catch (err: any) {
+      setMessage({ type: 'error', text: `Greška pri štampanju otpremnice: ${err?.message || 'Nepoznata greška'}` });
+    }
+  };
+
+  const qtyMax = (qtyProduct?.tip === 'usluga' || allowZeroStock) ? 999 : (qtyProduct?.stanje ?? 999);
 
   return (
     <div className="flex h-full">
@@ -332,25 +498,53 @@ export default function KasaScreen({ user }: KasaScreenProps) {
               </button>
             )}
           </div>
+
+          {/* Tip filter */}
+          <div className="flex items-center gap-1.5 mt-3">
+            {([['svi', 'Svi'], ['proizvodi', 'Proizvodi'], ['usluge', 'Usluge']] as const).map(([value, label]) => (
+              <button
+                key={value}
+                onClick={() => { setTipFilter(value); setFocusedIndex(-1); }}
+                className={cn(
+                  'px-3.5 py-1.5 rounded-full text-[12px] font-medium transition-all duration-150',
+                  tipFilter === value
+                    ? 'bg-slate-900 text-white shadow-sm'
+                    : 'bg-white text-slate-500 border border-slate-200 hover:border-slate-300 hover:text-slate-700'
+                )}
+              >
+                {label}
+              </button>
+            ))}
+            <label className="ml-auto flex items-center gap-2 cursor-pointer select-none" title="Sken odmah dodaje 1 komad, bez pitanja za količinu">
+              <ScanBarcode className={cn('h-4 w-4', scanMode ? 'text-blue-600' : 'text-slate-400')} />
+              <span className={cn('text-[12px] font-medium', scanMode ? 'text-blue-600' : 'text-slate-500')}>Scan mode</span>
+              <Switch checked={scanMode} onCheckedChange={toggleScanMode} />
+            </label>
+            <span className="text-[11px] font-mono tabular-nums text-slate-400">
+              {formatArtikliCount(displayedProducts.length)}
+            </span>
+          </div>
         </div>
 
         {/* Product grid */}
         <ScrollArea className="flex-1 p-5">
-          {!query.trim() && products.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full text-slate-400 select-none">
-              <div className="w-20 h-20 rounded-3xl bg-slate-100 flex items-center justify-center mb-4">
-                <Search className="h-8 w-8 text-slate-300" />
+          {displayedProducts.length === 0 ? (
+            query.trim() ? (
+              <div className="flex flex-col items-center justify-center h-full text-slate-400">
+                <p className="text-sm">Nema rezultata za &ldquo;{query}&rdquo;</p>
               </div>
-              <p className="text-sm font-medium text-slate-500">Pretraži artikle</p>
-              <p className="text-xs text-slate-400 mt-1">Koristite pretragu ili skenirajte barkod</p>
-            </div>
-          ) : query.trim() && products.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full text-slate-400">
-              <p className="text-sm">Nema rezultata za &ldquo;{query}&rdquo;</p>
-            </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center h-full text-slate-400 select-none">
+                <div className="w-20 h-20 rounded-3xl bg-slate-100 flex items-center justify-center mb-4">
+                  <Search className="h-8 w-8 text-slate-300" />
+                </div>
+                <p className="text-sm font-medium text-slate-500">Nema artikala</p>
+                <p className="text-xs text-slate-400 mt-1">Pretražite, skenirajte barkod ili promijenite filter</p>
+              </div>
+            )
           ) : (
-            <div className="flex flex-col gap-1" ref={productListRef}>
-              {products.map((product, idx) => {
+            <div className="grid grid-cols-2 xl:grid-cols-3 gap-2" ref={productListRef}>
+              {displayedProducts.map((product, idx) => {
                 const outOfStock = !allowZeroStock && product.tip !== 'usluga' && product.stanje != null && product.stanje <= 0;
                 const isFocused = idx === focusedIndex;
                 return (
@@ -360,36 +554,37 @@ export default function KasaScreen({ user }: KasaScreenProps) {
                     onMouseEnter={() => setFocusedIndex(idx)}
                     disabled={outOfStock}
                     className={cn(
-                      'group flex items-center gap-4 text-left rounded-xl bg-white px-4 py-3 transition-all duration-150',
-                      'hover:bg-blue-50/50 active:bg-blue-50',
-                      isFocused && !outOfStock && 'bg-blue-50 ring-2 ring-blue-500/30',
-                      outOfStock && 'opacity-50 cursor-not-allowed hover:bg-white',
+                      'group flex flex-col text-left rounded-xl bg-white p-3.5 min-h-[86px] transition-all duration-150',
+                      'border border-transparent hover:border-blue-200 hover:bg-blue-50/40 active:bg-blue-50',
+                      isFocused && !outOfStock && 'border-blue-300 bg-blue-50/60 ring-2 ring-blue-500/20',
+                      outOfStock && 'opacity-45 cursor-not-allowed hover:border-transparent hover:bg-white',
                     )}
                   >
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-slate-800 truncate">{product.naziv}</p>
-                      <div className="flex items-center gap-1.5 mt-0.5 text-[11px]">
-                        <span className="font-mono text-slate-400">{product.sifra}</span>
-                        <span className="text-slate-300">·</span>
-                        {product.tip === 'usluga' ? (
-                          <span className="font-medium text-violet-500">Usluga</span>
-                        ) : product.stanje != null ? (
-                          <span className={cn(
-                            'font-mono',
-                            product.stanje <= 0 ? 'text-red-400' : product.stanje <= 5 ? 'text-amber-500' : 'text-slate-400'
-                          )}>
-                            {product.stanje} {product.jm}
-                          </span>
-                        ) : null}
-                        <span className="text-slate-300">·</span>
-                        <span className={product.pdvStopa === 'E' ? 'text-slate-400' : 'text-emerald-500'}>
-                          {product.pdvStopa === 'E' ? '17%' : '0%'}
-                        </span>
-                      </div>
+                    <div className="flex items-start justify-between gap-2 w-full">
+                      <p className="text-[13px] font-medium text-slate-800 leading-snug truncate">{product.naziv}</p>
+                      {product.tip === 'usluga' && (
+                        <span className="text-[9px] font-semibold text-violet-500 bg-violet-50 px-1.5 py-0.5 rounded-full flex-shrink-0 uppercase tracking-wide">Usl</span>
+                      )}
                     </div>
-                    <span className="text-sm font-bold font-mono tabular-nums text-blue-600 flex-shrink-0">
-                      {formatKM(product.cijena)}
-                    </span>
+                    <div className="mt-auto pt-2.5 flex items-end justify-between w-full gap-2">
+                      <div className="flex items-center gap-1.5 text-[11px] min-w-0">
+                        <span className="font-mono text-slate-400 truncate">{product.sifra}</span>
+                        {product.tip !== 'usluga' && product.stanje != null && (
+                          <>
+                            <span className="text-slate-300 flex-shrink-0">·</span>
+                            <span className={cn(
+                              'font-mono flex-shrink-0',
+                              product.stanje <= 0 ? 'text-red-400' : product.stanje <= 5 ? 'text-amber-500' : 'text-slate-400'
+                            )}>
+                              {product.stanje} {product.jm}
+                            </span>
+                          </>
+                        )}
+                      </div>
+                      <span className="text-[13px] font-bold font-mono tabular-nums text-blue-600 flex-shrink-0">
+                        {formatKM(product.cijena)}
+                      </span>
+                    </div>
                   </button>
                 );
               })}
@@ -401,39 +596,65 @@ export default function KasaScreen({ user }: KasaScreenProps) {
       {/* ─── Right: Cart Panel ─── */}
       <div className="w-[420px] flex-shrink-0 bg-white flex flex-col border-l border-slate-200/80">
         {/* Cart header */}
-        <div className="px-5 py-4 flex items-center justify-between">
+        <div className="px-5 py-4 flex items-center justify-between border-b border-slate-100">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center">
               <ShoppingCart className="h-4.5 w-4.5 text-blue-600" />
             </div>
             <div>
               <h2 className="font-semibold text-slate-900 text-[15px] leading-tight">Račun</h2>
-              {cart.length > 0 && (
-                <p className="text-[11px] text-slate-400 font-mono tabular-nums leading-tight mt-0.5">
-                  {itemCount} {itemCount === 1 ? 'stavka' : itemCount < 5 ? 'stavke' : 'stavki'}
-                </p>
-              )}
+              <p className="text-[11px] text-slate-400 font-mono tabular-nums leading-tight mt-0.5">
+                {cart.length > 0
+                  ? `${itemCount} ${itemCount === 1 ? 'stavka' : itemCount < 5 ? 'stavke' : 'stavki'}`
+                  : 'prazan'}
+              </p>
             </div>
           </div>
-          {cart.length > 0 && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-xs text-slate-400 hover:text-red-500 h-7 px-2"
-              onClick={() => setCart([])}
-            >
-              Isprazni
-            </Button>
-          )}
+          <div className="flex items-center gap-3">
+            {dailyTotal !== null && (
+              <div className="text-right">
+                <p className="text-[9px] font-semibold text-slate-400 uppercase tracking-wider leading-none">Danas</p>
+                <p className="text-[12px] font-bold font-mono tabular-nums text-slate-600 leading-tight mt-0.5">{formatKM(dailyTotal)}</p>
+              </div>
+            )}
+            {savedCarts.length > 0 && (
+              <button
+                onClick={() => setSavedOpen(true)}
+                className="flex items-center gap-1 h-7 px-2 rounded-lg text-[11px] font-medium text-amber-600 bg-amber-50 hover:bg-amber-100 transition-colors"
+                title="Spremljene košarice"
+              >
+                <FolderOpen className="h-3.5 w-3.5" />
+                {savedCarts.length}
+              </button>
+            )}
+            {cart.length > 0 && (
+              <>
+                <button
+                  onClick={() => openRabatDialog('sve')}
+                  className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+                  title="Rabat na cijelu košaricu"
+                >
+                  <Percent className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  onClick={handleSaveCart}
+                  className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+                  title="Spremi košaricu za kasnije"
+                >
+                  <Save className="h-3.5 w-3.5" />
+                </button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs text-slate-400 hover:text-red-500 h-7 px-2"
+                  onClick={() => setCart([])}
+                >
+                  Isprazni
+                </Button>
+              </>
+            )}
+          </div>
         </div>
-        {dailyTotal !== null && (
-          <div className="px-5 pb-3 -mt-1">
-            <div className="flex items-center justify-between bg-slate-50 rounded-lg px-3 py-2">
-              <span className="text-[11px] font-medium text-slate-400 uppercase tracking-wider">Danas</span>
-              <span className="text-[13px] font-bold font-mono tabular-nums text-slate-700">{formatKM(dailyTotal)}</span>
-            </div>
-          </div>
-        )}
 
         {/* Cart items */}
         <ScrollArea className="flex-1 min-h-0">
@@ -448,21 +669,19 @@ export default function KasaScreen({ user }: KasaScreenProps) {
           ) : (
             <div className="px-3">
               {cart.map((item, idx) => {
-                const lineTotal = item.product.cijena * item.kolicina * (1 - item.rabat / 100);
+                const lineTotal = iznosStavke({
+                  cijena: item.product.cijena, kolicina: item.kolicina,
+                  rabat: item.rabat, pdvStopa: item.product.pdvStopa,
+                });
                 return (
                   <div
                     key={item.product.id}
                     className={cn(
-                      'group flex items-center gap-3 py-3 px-2 rounded-xl hover:bg-slate-50/80 transition-colors kasa-item-enter',
+                      'group flex items-center gap-3 py-2.5 px-2 rounded-xl hover:bg-slate-50/80 transition-colors kasa-item-enter',
                       idx < cart.length - 1 && 'border-b border-slate-100'
                     )}
                     style={{ animationDelay: `${idx * 30}ms` }}
                   >
-                    {/* Index circle */}
-                    <div className="w-7 h-7 rounded-lg bg-slate-100 flex items-center justify-center flex-shrink-0">
-                      <span className="text-[11px] font-semibold text-slate-500">{idx + 1}</span>
-                    </div>
-
                     {/* Product info */}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1.5">
@@ -472,12 +691,15 @@ export default function KasaScreen({ user }: KasaScreenProps) {
                         )}
                       </div>
                       <p className="text-[11px] text-slate-400 font-mono tabular-nums mt-0.5">
-                        {item.product.sifra} · {formatKM(item.product.cijena)} × {item.kolicina}
+                        {item.product.sifra} · {formatKM(item.product.cijena)} × {formatQty(item.kolicina)}
+                        {item.rabat > 0 && (
+                          <span className="text-emerald-600 font-semibold"> · −{formatQty(item.rabat)}%</span>
+                        )}
                       </p>
                     </div>
 
                     {/* Qty controls */}
-                    <div className="flex items-center gap-0.5 opacity-60 group-hover:opacity-100 transition-opacity">
+                    <div className="flex items-center gap-0.5">
                       <button
                         onClick={() => updateQuantity(item.product.id, -1)}
                         className="w-6 h-6 rounded-md flex items-center justify-center text-slate-500 hover:bg-slate-200 hover:text-slate-700 transition-colors"
@@ -485,7 +707,7 @@ export default function KasaScreen({ user }: KasaScreenProps) {
                         <Minus className="h-3 w-3" />
                       </button>
                       <span className="w-6 text-center text-xs font-semibold font-mono tabular-nums text-slate-700">
-                        {item.kolicina}
+                        {formatQty(item.kolicina)}
                       </span>
                       <button
                         onClick={() => updateQuantity(item.product.id, 1)}
@@ -495,6 +717,20 @@ export default function KasaScreen({ user }: KasaScreenProps) {
                       </button>
                     </div>
 
+                    {/* Rabat */}
+                    <button
+                      onClick={() => openRabatDialog(item.product.id)}
+                      className={cn(
+                        'w-6 h-6 rounded-md flex items-center justify-center transition-colors',
+                        item.rabat > 0
+                          ? 'text-emerald-600 bg-emerald-50 hover:bg-emerald-100'
+                          : 'text-slate-300 hover:text-blue-500 hover:bg-blue-50'
+                      )}
+                      title="Rabat na stavku"
+                    >
+                      <Percent className="h-3 w-3" />
+                    </button>
+
                     {/* Line total */}
                     <span className="text-sm font-semibold font-mono tabular-nums text-slate-800 w-20 text-right">
                       {formatKM(lineTotal)}
@@ -503,7 +739,7 @@ export default function KasaScreen({ user }: KasaScreenProps) {
                     {/* Remove */}
                     <button
                       onClick={() => removeFromCart(item.product.id)}
-                      className="w-6 h-6 rounded-md flex items-center justify-center text-slate-300 hover:text-red-400 hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100"
+                      className="w-6 h-6 rounded-md flex items-center justify-center text-slate-300 hover:text-red-400 hover:bg-red-50 transition-colors"
                     >
                       <X className="h-3.5 w-3.5" />
                     </button>
@@ -517,32 +753,40 @@ export default function KasaScreen({ user }: KasaScreenProps) {
         {/* ─── Checkout footer ─── */}
         <div className="border-t border-slate-100 bg-slate-50/50">
           {/* Totals */}
-          <div className="px-5 pt-4 pb-3 space-y-1.5">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-slate-500">PDV (17%)</span>
-              <span className="font-mono tabular-nums text-slate-500">{formatKM(pdvAmount)}</span>
+          <div className="px-5 pt-3.5 pb-3">
+            <div className="flex items-center justify-between text-[12px] mb-1">
+              <span className="text-slate-400">Osnovica</span>
+              <span className="font-mono tabular-nums text-slate-400">{formatKM(total - pdvAmount)}</span>
             </div>
-            <div className="flex items-center justify-between">
-              <span className="text-xl font-bold text-slate-900">Ukupno</span>
-              <span className="text-xl font-bold font-mono tabular-nums text-slate-900">
+            <div className="flex items-center justify-between text-[12px] mb-2">
+              <span className="text-slate-400">PDV (17%)</span>
+              <span className="font-mono tabular-nums text-slate-400">{formatKM(pdvAmount)}</span>
+            </div>
+            <div className="flex items-baseline justify-between border-t border-slate-200 pt-2.5">
+              <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Ukupno</span>
+              <span className="text-[26px] font-bold font-mono tabular-nums tracking-tight text-slate-900 leading-none">
                 {formatKM(total)}
               </span>
             </div>
           </div>
 
-          <div className="px-5 pb-4 space-y-3">
+          <div className="px-5 pb-4 space-y-2.5">
             {/* Payment type chips */}
             <div className="grid grid-cols-4 gap-1.5">
               {(['Gotovina', 'Kartica', 'Virman', 'Ček'] as PaymentType[]).map(type => (
                 <button
                   key={type}
                   className={cn(
-                    'flex flex-col items-center gap-1 py-2.5 rounded-xl text-[11px] font-medium transition-all duration-150',
+                    'flex flex-col items-center gap-0.5 py-2 rounded-xl text-[10.5px] font-medium transition-all duration-150',
                     paymentType === type
                       ? 'bg-blue-600 text-white shadow-md shadow-blue-500/25'
                       : 'bg-white text-slate-500 border border-slate-200 hover:border-blue-200 hover:text-blue-600'
                   )}
-                  onClick={() => setPaymentType(type)}
+                  onClick={() => {
+                    setPaymentType(type);
+                    // Virman zahtijeva kupca — odmah otvori dialog za odabir
+                    if (type === 'Virman' && !kupacIdBroj.trim()) setKupacOpen(true);
+                  }}
                 >
                   {paymentIcons[type]}
                   {type}
@@ -550,106 +794,53 @@ export default function KasaScreen({ user }: KasaScreenProps) {
               ))}
             </div>
 
-            {/* Payment amount + change */}
-            <div className="flex gap-2">
-              <div className="flex-1 relative">
-                <Input
-                  type="number"
-                  placeholder="Iznos plaćanja"
-                  value={paymentAmount}
-                  onChange={e => setPaymentAmount(e.target.value)}
-                  className="font-mono tabular-nums h-10 rounded-xl border-slate-200 bg-white"
-                />
-              </div>
-              {paymentAmount && change > 0 && (
-                <div className="flex items-center px-3 rounded-xl bg-emerald-50 border border-emerald-100">
-                  <span className="text-xs font-mono tabular-nums text-emerald-600 font-semibold whitespace-nowrap">
-                    Kusur: {formatKM(change)}
-                  </span>
-                </div>
-              )}
-            </div>
 
-            {/* Kupac section */}
-            <div className={cn(
-              'rounded-xl border transition-colors',
-              kupacOpen ? 'border-slate-200 bg-white' : 'border-slate-200/60'
-            )}>
+            {/* Kupac */}
+            <div className="rounded-xl border border-slate-200/60 flex items-center">
               <button
                 type="button"
-                className="flex items-center justify-between w-full px-3.5 py-2.5 text-sm text-slate-500 hover:text-slate-700 transition-colors"
-                onClick={() => setKupacOpen(!kupacOpen)}
+                className="flex items-center gap-2 flex-1 min-w-0 px-3.5 py-2.5 text-sm text-slate-500 hover:text-slate-700 transition-colors"
+                onClick={() => setKupacOpen(true)}
               >
-                <div className="flex items-center gap-2">
-                  <UserIcon className="h-3.5 w-3.5" />
-                  <span className="text-[13px]">
-                    {kupacIdBroj.trim() ? kupacNaziv.trim() || 'Kupac odabran' : 'Dodaj kupca'}
-                  </span>
-                  {kupacIdBroj.trim() && (
-                    <span className="text-[10px] font-mono text-slate-400">{kupacIdBroj}</span>
-                  )}
-                </div>
-                <ChevronDown className={cn('h-3.5 w-3.5 transition-transform duration-200', kupacOpen && 'rotate-180')} />
+                <UserIcon className="h-3.5 w-3.5 flex-shrink-0" />
+                <span className="text-[13px] truncate">
+                  {kupacIdBroj.trim() ? kupacNaziv.trim() || 'Kupac odabran' : 'Dodaj kupca'}
+                </span>
+                {kupacIdBroj.trim() && (
+                  <span className="text-[10px] font-mono text-slate-400 flex-shrink-0">{kupacIdBroj}</span>
+                )}
               </button>
-              {kupacOpen && (
-                <div className="px-3.5 pb-3.5 space-y-2 border-t border-slate-100">
-                  {/* Search */}
-                  <div className="relative pt-2.5">
-                    <Input
-                      placeholder="Pretraži sačuvane kupce..."
-                      value={kupacSearch}
-                      onChange={e => setKupacSearch(e.target.value)}
-                      className="h-9 text-sm pl-8 rounded-lg"
-                    />
-                    <Search className="absolute left-2.5 top-1/2 mt-1.5 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
-                    {kupacResults.length > 0 && (
-                      <div className="absolute z-50 left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl shadow-slate-200/50 max-h-40 overflow-auto">
-                        {kupacResults.map(k => (
-                          <button
-                            key={k.id}
-                            type="button"
-                            className="w-full text-left px-3.5 py-2.5 text-sm hover:bg-blue-50 transition-colors border-b border-slate-100 last:border-b-0"
-                            onClick={() => selectKupac(k)}
-                          >
-                            <span className="font-medium text-slate-800">{k.naziv}</span>
-                            <span className="text-[11px] text-slate-400 ml-2 font-mono">{k.idBroj}</span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  {kupacIdBroj.trim() && (
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] text-slate-400">Odabrani kupac</span>
-                      <button type="button" onClick={clearKupac} className="text-[11px] text-red-400 hover:text-red-500 transition-colors">
-                        Ukloni
-                      </button>
-                    </div>
-                  )}
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <Input placeholder="JIB (13 cifara)" value={kupacIdBroj} onChange={e => setKupacIdBroj(e.target.value)} className="h-8 text-sm rounded-lg font-mono" maxLength={13} />
-                    <Input placeholder="Naziv" value={kupacNaziv} onChange={e => setKupacNaziv(e.target.value)} className="h-8 text-sm rounded-lg" maxLength={32} />
-                  </div>
-                  <Input placeholder="Adresa" value={kupacAdresa} onChange={e => setKupacAdresa(e.target.value)} className="h-8 text-sm rounded-lg" maxLength={32} />
-                  <div className="flex gap-2">
-                    <Input placeholder="Poš. br." value={kupacPostanskiBroj} onChange={e => setKupacPostanskiBroj(e.target.value)} className="h-8 text-sm w-24 rounded-lg font-mono" maxLength={5} />
-                    <Input placeholder="Grad" value={kupacGrad} onChange={e => setKupacGrad(e.target.value)} className="h-8 text-sm flex-1 rounded-lg" maxLength={26} />
-                  </div>
-                </div>
+              {kupacIdBroj.trim() && (
+                <button
+                  type="button"
+                  onClick={clearKupac}
+                  className="px-3 py-2.5 text-slate-300 hover:text-red-400 transition-colors flex-shrink-0"
+                  title="Ukloni kupca"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
               )}
             </div>
 
             {/* Message */}
             {message && (
               <div className={cn(
-                'text-sm px-4 py-3 rounded-xl flex items-center gap-2',
+                'text-sm px-4 py-3 rounded-xl flex items-center gap-2 flex-wrap',
                 message.type === 'success'
                   ? 'bg-emerald-50 text-emerald-700 border border-emerald-100'
                   : 'bg-red-50 text-red-600 border border-red-100'
               )}>
-                {message.text}
+                <span className="flex-1 min-w-0">{message.text}</span>
+                {message.type === 'success' && lastOrderId !== null && (
+                  <button
+                    onClick={() => handlePrintOtpremnica(lastOrderId)}
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white border border-emerald-200 text-emerald-700 text-[11px] font-medium hover:bg-emerald-100 transition-colors flex-shrink-0"
+                    title="Štampaj otpremnicu"
+                  >
+                    <Printer size={12} />
+                    Otpremnica
+                  </button>
+                )}
               </div>
             )}
 
@@ -716,7 +907,7 @@ export default function KasaScreen({ user }: KasaScreenProps) {
       )}
 
       {/* Quantity dialog */}
-      <Dialog open={!!qtyProduct} onOpenChange={(open) => { if (!open) setQtyProduct(null); }}>
+      <Dialog open={!!qtyProduct} onOpenChange={(open) => { if (!open) { setQtyProduct(null); setTimeout(() => searchInputRef.current?.focus(), 50); } }}>
         <DialogContent className="sm:max-w-[340px] p-0 gap-0 overflow-hidden rounded-2xl">
           <div className="px-6 pt-6 pb-5">
             <DialogHeader>
@@ -728,24 +919,22 @@ export default function KasaScreen({ user }: KasaScreenProps) {
             <div className="mt-5 flex items-center gap-3">
               <button
                 className="w-12 h-12 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center text-xl font-bold transition-colors"
-                onClick={() => setQtyValue(String(Math.max(1, (parseInt(qtyValue) || 1) - 1)))}
+                onClick={() => setQtyValue(formatQty(Math.max(1, (parseDecimal(qtyValue) || 1) - 1)))}
               >
                 −
               </button>
-              <Input
+              <DecimalInput
                 ref={qtyInputRef}
-                type="number"
-                min={1}
-                max={(qtyProduct?.tip === 'usluga' || allowZeroStock) ? 999 : (qtyProduct?.stanje ?? 999)}
+                maxDecimals={3}
                 value={qtyValue}
-                onChange={e => setQtyValue(e.target.value)}
+                onValueChange={text => setQtyValue(text)}
                 onKeyDown={e => { if (e.key === 'Enter') confirmAddToCart(); }}
                 className="h-12 text-center font-mono text-2xl font-bold flex-1 rounded-xl border-slate-200"
                 autoFocus
               />
               <button
                 className="w-12 h-12 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center text-xl font-bold transition-colors"
-                onClick={() => setQtyValue(String(Math.min((qtyProduct?.tip === 'usluga' || allowZeroStock) ? 999 : (qtyProduct?.stanje ?? 999), (parseInt(qtyValue) || 0) + 1)))}
+                onClick={() => setQtyValue(formatQty(Math.min(qtyMax, (parseDecimal(qtyValue) || 0) + 1)))}
               >
                 +
               </button>
@@ -763,6 +952,294 @@ export default function KasaScreen({ user }: KasaScreenProps) {
             <Button size="sm" className="rounded-lg px-5" onClick={confirmAddToCart}>
               Dodaj
             </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Spremljene košarice */}
+      <Dialog open={savedOpen} onOpenChange={setSavedOpen}>
+        <DialogContent className="sm:max-w-[440px] p-0 gap-0 overflow-hidden rounded-2xl">
+          <div className="px-6 pt-6 pb-2">
+            <DialogHeader>
+              <DialogTitle className="text-[15px]">Spremljene košarice</DialogTitle>
+              <DialogDescription className="text-sm text-slate-500 mt-0.5">
+                Nastavi vraća košaricu u kasu uz provjeru stanja.
+              </DialogDescription>
+            </DialogHeader>
+          </div>
+          <div className="px-3 pb-4 max-h-[320px] overflow-y-auto">
+            {savedCarts.length === 0 ? (
+              <p className="text-sm text-slate-400 text-center py-8">Nema spremljenih košarica</p>
+            ) : savedCarts.map(saved => (
+              <div key={saved.id} className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-slate-50 transition-colors">
+                <div className="flex-1 min-w-0">
+                  <p className="text-[13px] font-medium text-slate-800 truncate">{saved.naziv}</p>
+                  <p className="text-[11px] text-slate-400 font-mono tabular-nums mt-0.5">
+                    {saved.createdAt} · {formatKM(saved.ukupno)}
+                  </p>
+                </div>
+                <Button size="sm" className="rounded-lg h-8" onClick={() => handleRestoreCart(saved)}>
+                  Nastavi
+                </Button>
+                <button
+                  onClick={() => handleDeleteSavedCart(saved.id)}
+                  className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-300 hover:text-red-400 hover:bg-red-50 transition-colors"
+                  title="Obriši"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Rabat dialog */}
+      <Dialog open={rabatTarget !== null} onOpenChange={(open) => { if (!open) { setRabatTarget(null); setTimeout(() => searchInputRef.current?.focus(), 50); } }}>
+        <DialogContent className="sm:max-w-[340px] p-0 gap-0 overflow-hidden rounded-2xl">
+          <div className="px-6 pt-6 pb-5">
+            <DialogHeader>
+              <DialogTitle className="text-[15px]">
+                {rabatTarget === 'sve' ? 'Rabat na cijelu košaricu' : 'Rabat na stavku'}
+              </DialogTitle>
+              <DialogDescription className="text-sm text-slate-500 truncate mt-0.5">
+                {rabatTarget === 'sve'
+                  ? 'Postotak se primjenjuje na sve stavke.'
+                  : cart.find(i => i.product.id === rabatTarget)?.product.naziv}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="mt-5 relative">
+              <DecimalInput
+                maxDecimals={2}
+                value={rabatValue}
+                onValueChange={setRabatValue}
+                onKeyDown={e => { if (e.key === 'Enter') confirmRabat(); }}
+                placeholder="0"
+                className="h-12 text-center font-mono text-2xl font-bold rounded-xl border-slate-200 pr-10"
+                autoFocus
+              />
+              <span className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 font-mono text-lg">%</span>
+            </div>
+            <p className="text-[11px] text-slate-400 mt-3 text-center">0–100% · 0 uklanja rabat</p>
+          </div>
+          <div className="border-t border-slate-100 px-6 py-4 bg-slate-50/50 flex justify-end gap-2">
+            <Button variant="ghost" size="sm" className="rounded-lg" onClick={() => setRabatTarget(null)}>
+              Otkaži
+            </Button>
+            <Button size="sm" className="rounded-lg px-5" onClick={confirmRabat}>
+              Primijeni
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Kusur modal — otvara se poslije štampe gotovinskog računa */}
+      <Dialog open={kusurTotal !== null} onOpenChange={(open) => { if (!open) closeKusur(); }}>
+        <DialogContent className="sm:max-w-[400px] p-0 gap-0 overflow-hidden rounded-2xl">
+          {kusurTotal !== null && (() => {
+            const apoeni = prijedloziApoena(kusurTotal);
+            const dato = kusurValue ? parseDecimal(kusurValue) : null;
+            const kusur = dato !== null ? round2(dato - kusurTotal) : null;
+            const cycleApoen = (dir: 1 | -1) => {
+              if (apoeni.length === 0) return;
+              const current = apoeni.indexOf(dato ?? NaN);
+              const next = current === -1
+                ? (dir === 1 ? 0 : apoeni.length - 1)
+                : (current + dir + apoeni.length) % apoeni.length;
+              setKusurValue(formatQty(apoeni[next]));
+            };
+            return (
+              <>
+                <div className="px-6 pt-6 pb-5">
+                  <DialogHeader>
+                    <DialogTitle className="text-[15px]">Kalkulacija kusura</DialogTitle>
+                    <DialogDescription className="text-[12px] text-slate-500 mt-0.5">
+                      Upišite koliko je mušterija dala — kusur se računa automatski
+                    </DialogDescription>
+                  </DialogHeader>
+
+                  {/* Ukupno */}
+                  <div className="mt-4 flex items-baseline justify-between">
+                    <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Ukupno</span>
+                    <span className="text-[24px] font-bold font-mono tabular-nums text-slate-900 leading-none">
+                      {formatKM(kusurTotal)}
+                    </span>
+                  </div>
+
+                  {/* Mušterija dala */}
+                  <DecimalInput
+                    placeholder="Mušterija dala..."
+                    value={kusurValue}
+                    onValueChange={text => setKusurValue(text)}
+                    onKeyDown={e => {
+                      // Enter u prazno polje zatvara — s upisanim iznosom kusur
+                      // ostaje na ekranu dok kasir ne pritisne Esc.
+                      if (e.key === 'Enter') { e.preventDefault(); if (!kusurValue.trim()) closeKusur(); }
+                      else if (e.key === 'ArrowDown') { e.preventDefault(); cycleApoen(1); }
+                      else if (e.key === 'ArrowUp') { e.preventDefault(); cycleApoen(-1); }
+                    }}
+                    className="mt-4 h-12 text-center font-mono text-xl font-bold rounded-xl border-slate-200"
+                    autoFocus
+                  />
+
+                  {/* Apoeni — klik ili ↑/↓ */}
+                  <div className="flex gap-1.5 mt-2.5">
+                    {apoeni.map(iznos => (
+                      <button
+                        key={iznos}
+                        type="button"
+                        onClick={() => setKusurValue(formatQty(iznos))}
+                        className={cn(
+                          'flex-1 h-9 rounded-lg text-[12px] font-semibold font-mono tabular-nums transition-all duration-150',
+                          dato === iznos
+                            ? 'bg-slate-900 text-white'
+                            : 'bg-white text-slate-600 border border-slate-200 hover:border-slate-400',
+                        )}
+                      >
+                        {iznos === round2(kusurTotal) ? formatKM(iznos) : iznos}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Kusur — ogromno, vidi ga i mušterija */}
+                  {kusur !== null && kusur >= 0 && (
+                    <div className="mt-4 rounded-xl bg-emerald-50 border border-emerald-100 px-5 py-4 text-center">
+                      <p className="text-[11px] font-semibold text-emerald-600 uppercase tracking-wider">Kusur</p>
+                      <p className="text-[40px] font-bold font-mono tabular-nums text-emerald-600 leading-tight">
+                        {formatKM(kusur)}
+                      </p>
+                    </div>
+                  )}
+                  {kusur !== null && kusur < 0 && (
+                    <div className="mt-4 rounded-xl bg-amber-50 border border-amber-100 px-5 py-3 text-center">
+                      <p className="text-[11px] font-semibold text-amber-600 uppercase tracking-wider">Nedostaje</p>
+                      <p className="text-[26px] font-bold font-mono tabular-nums text-amber-600 leading-tight">
+                        {formatKM(-kusur)}
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="border-t border-slate-100 px-6 py-3 bg-slate-50/50 flex items-center justify-between">
+                  <span className="text-[11px] text-slate-400">
+                    Esc za zatvaranje
+                  </span>
+                  <Button size="sm" className="rounded-lg px-5" onClick={closeKusur}>
+                    Gotovo
+                  </Button>
+                </div>
+              </>
+            );
+          })()}
+        </DialogContent>
+      </Dialog>
+
+      {/* Kupac dialog */}
+      <Dialog open={kupacOpen} onOpenChange={(open) => { if (!open) { setKupacOpen(false); setKupacSearch(''); } }}>
+        <DialogContent className="sm:max-w-[520px] p-0 gap-0 overflow-hidden rounded-2xl">
+          <div className="px-6 pt-6 pb-4">
+            <DialogHeader>
+              <DialogTitle className="text-[15px]">Kupac</DialogTitle>
+              <DialogDescription className="text-sm text-slate-500 mt-0.5">
+                Odaberite sačuvanog kupca ili unesite novog
+              </DialogDescription>
+            </DialogHeader>
+          </div>
+
+          {/* Search */}
+          <div className="px-6 pb-3">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+              <Input
+                placeholder="Pretraži kupce po nazivu, JIB-u ili gradu..."
+                value={kupacSearch}
+                onChange={e => setKupacSearch(e.target.value)}
+                className="h-10 text-sm pl-9 rounded-xl"
+                autoFocus
+              />
+            </div>
+          </div>
+
+          {/* Kupci list */}
+          <div className="px-6 pb-4">
+            <div className="border border-slate-100 rounded-xl overflow-hidden">
+              <ScrollArea className="h-52">
+                {filteredKupci.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center h-52 text-slate-400 select-none">
+                    <UserIcon className="h-6 w-6 text-slate-200 mb-2" />
+                    <p className="text-[13px]">
+                      {allKupci.length === 0 ? 'Nema sačuvanih kupaca' : 'Nema rezultata'}
+                    </p>
+                  </div>
+                ) : (
+                  filteredKupci.map(k => {
+                    const isSelected = k.idBroj === kupacIdBroj.trim();
+                    return (
+                      <button
+                        key={k.id}
+                        type="button"
+                        className={cn(
+                          'w-full text-left px-4 py-2.5 transition-colors border-b border-slate-50 last:border-b-0',
+                          isSelected ? 'bg-blue-50' : 'hover:bg-slate-50',
+                        )}
+                        onClick={() => selectKupac(k)}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[13px] font-medium text-slate-800 truncate">{k.naziv}</span>
+                          <span className="text-[11px] font-mono text-slate-400 flex-shrink-0">{k.idBroj}</span>
+                        </div>
+                        {(k.adresa || k.grad) && (
+                          <p className="text-[11px] text-slate-400 truncate mt-0.5">
+                            {[k.adresa, k.grad].filter(Boolean).join(', ')}
+                          </p>
+                        )}
+                      </button>
+                    );
+                  })
+                )}
+              </ScrollArea>
+            </div>
+          </div>
+
+          {/* Novi / uređivanje kupca */}
+          <div className="px-6 pb-5 space-y-2">
+            <p className="text-[11px] font-medium text-slate-400 uppercase tracking-wider">Podaci kupca</p>
+            <div className="grid grid-cols-2 gap-2">
+              <Input placeholder="JIB (13 cifara)" value={kupacIdBroj} onChange={e => setKupacIdBroj(e.target.value)} className="h-9 text-sm rounded-lg font-mono" maxLength={13} />
+              <Input placeholder="Naziv" value={kupacNaziv} onChange={e => setKupacNaziv(e.target.value)} className="h-9 text-sm rounded-lg" maxLength={32} />
+            </div>
+            <Input placeholder="Adresa" value={kupacAdresa} onChange={e => setKupacAdresa(e.target.value)} className="h-9 text-sm rounded-lg" maxLength={32} />
+            <div className="flex gap-2">
+              <Input placeholder="Poš. br." value={kupacPostanskiBroj} onChange={e => setKupacPostanskiBroj(e.target.value)} className="h-9 text-sm w-24 rounded-lg font-mono" maxLength={5} />
+              <Input placeholder="Grad" value={kupacGrad} onChange={e => setKupacGrad(e.target.value)} className="h-9 text-sm flex-1 rounded-lg" maxLength={26} />
+            </div>
+          </div>
+
+          <div className="border-t border-slate-100 px-6 py-4 bg-slate-50/50 flex items-center justify-between">
+            <div>
+              {kupacIdBroj.trim() && (
+                <button
+                  type="button"
+                  onClick={clearKupac}
+                  className="text-[12px] text-red-400 hover:text-red-500 transition-colors"
+                >
+                  Ukloni kupca
+                </button>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <Button variant="ghost" size="sm" className="rounded-lg" onClick={() => { setKupacOpen(false); setKupacSearch(''); }}>
+                Otkaži
+              </Button>
+              <Button
+                size="sm"
+                className="rounded-lg px-5"
+                disabled={!kupacIdBroj.trim() || !kupacNaziv.trim()}
+                onClick={() => { setKupacOpen(false); setKupacSearch(''); }}
+              >
+                Potvrdi
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>

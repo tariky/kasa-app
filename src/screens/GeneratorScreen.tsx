@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { DecimalInput } from '@/components/ui/decimal-input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -8,7 +8,7 @@ import {
   Sparkles, Play, RotateCcw, X, CheckCircle2, AlertTriangle, Loader2, Package, Clock,
 } from 'lucide-react';
 import { Product } from '@/types';
-import { formatKM } from '@/lib/utils';
+import { formatKM, parseDecimal } from '@/lib/utils';
 import { generirajRacune, GeneratedRacun, GenerateResult } from '@/lib/batchRacuni';
 
 const DELAY_SECONDS = 5;
@@ -46,7 +46,7 @@ export default function GeneratorScreen({ korisnikId }: Props) {
   );
 
   const generate = () => {
-    const target = parseFloat(targetInput.replace(',', '.'));
+    const target = parseDecimal(targetInput);
     if (!target || target <= 0) {
       setMessage({ type: 'error', text: 'Unesite ispravan ciljni iznos.' });
       return;
@@ -182,11 +182,9 @@ export default function GeneratorScreen({ korisnikId }: Props) {
         <div className="flex flex-wrap items-end gap-4">
           <div className="w-56">
             <Label className="text-[12px] text-slate-500">Ciljni ukupni iznos (KM)</Label>
-            <Input
-              type="text"
-              inputMode="decimal"
+            <DecimalInput
               value={targetInput}
-              onChange={e => setTargetInput(e.target.value)}
+              onValueChange={text => setTargetInput(text)}
               placeholder="npr. 2000"
               disabled={running}
               className="mt-1 h-10 bg-white"

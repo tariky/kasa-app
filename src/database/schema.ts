@@ -108,6 +108,14 @@ export const schema = `
     FOREIGN KEY (korisnikId) REFERENCES users(id)
   );
 
+  CREATE TABLE IF NOT EXISTS saved_carts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    naziv TEXT NOT NULL,
+    items TEXT NOT NULL,
+    ukupno REAL NOT NULL,
+    createdAt TEXT DEFAULT (datetime('now','localtime'))
+  );
+
   CREATE TABLE IF NOT EXISTS stock_movements (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     productId INTEGER NOT NULL,
@@ -148,7 +156,41 @@ export const schema = `
     FOREIGN KEY (productId) REFERENCES products(id)
   );
 
+  CREATE TABLE IF NOT EXISTS ponude (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    broj INTEGER NOT NULL,
+    godina INTEGER NOT NULL,
+    kupacId INTEGER NOT NULL,
+    korisnikId INTEGER NOT NULL,
+    datum TEXT NOT NULL,
+    vaziDo TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft'
+      CHECK(status IN ('draft', 'poslana', 'prihvacena', 'odbijena', 'konvertovana')),
+    napomena TEXT,
+    ukupno REAL NOT NULL,
+    pdvIznos REAL NOT NULL,
+    racunId INTEGER,
+    createdAt TEXT DEFAULT (datetime('now','localtime')),
+    UNIQUE(broj, godina),
+    FOREIGN KEY (kupacId) REFERENCES kupci(id),
+    FOREIGN KEY (korisnikId) REFERENCES users(id),
+    FOREIGN KEY (racunId) REFERENCES orders(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS ponuda_stavke (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ponudaId INTEGER NOT NULL,
+    productId INTEGER NOT NULL,
+    kolicina REAL NOT NULL,
+    cijena REAL NOT NULL,
+    rabat REAL NOT NULL DEFAULT 0,
+    pdvStopa TEXT NOT NULL,
+    FOREIGN KEY (ponudaId) REFERENCES ponude(id),
+    FOREIGN KEY (productId) REFERENCES products(id)
+  );
+
   CREATE INDEX IF NOT EXISTS idx_products_sifra ON products(sifra);
+  CREATE INDEX IF NOT EXISTS idx_ponuda_stavke_ponudaId ON ponuda_stavke(ponudaId);
   CREATE INDEX IF NOT EXISTS idx_products_barkod ON products(barkod);
   CREATE INDEX IF NOT EXISTS idx_stock_movements_productId ON stock_movements(productId);
   CREATE INDEX IF NOT EXISTS idx_order_items_orderId ON order_items(orderId);

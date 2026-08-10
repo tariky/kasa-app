@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Fragment } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -239,7 +239,7 @@ export default function IzvjestajiScreen() {
 
       {/* ── Top bar: date range + tabs ── */}
       <div className="flex-shrink-0 bg-white border-b px-6 py-4">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
           {/* Tabs */}
           <div className="flex items-center gap-1 bg-slate-100 rounded-xl p-1">
             {tabs.map(tab => {
@@ -250,7 +250,7 @@ export default function IzvjestajiScreen() {
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id)}
                   className={cn(
-                    'flex items-center gap-2 px-4 py-2 rounded-lg text-[13px] font-medium transition-all duration-150',
+                    'flex items-center gap-2 px-4 py-2 rounded-lg text-[13px] font-medium whitespace-nowrap transition-all duration-150',
                     isActive
                       ? 'bg-white text-slate-900 shadow-sm'
                       : 'text-slate-500 hover:text-slate-700',
@@ -725,9 +725,8 @@ export default function IzvjestajiScreen() {
                       </thead>
                       <tbody>
                         {nivelacijeData.map((niv) => (
-                          <>
+                          <Fragment key={niv.id}>
                             <tr
-                              key={niv.id}
                               className="border-t border-slate-50 transition-colors hover:bg-slate-50/50 cursor-pointer"
                               onClick={() => loadNivelacijaDetail(niv.id)}
                             >
@@ -751,7 +750,7 @@ export default function IzvjestajiScreen() {
                               </td>
                             </tr>
                             {expandedNivId === niv.id && (
-                              <tr key={`${niv.id}-detail`}>
+                              <tr>
                                 <td colSpan={5} className="px-5 py-3 bg-slate-50/50">
                                   <table className="w-full text-[12px]">
                                     <thead>
@@ -804,7 +803,7 @@ export default function IzvjestajiScreen() {
                                 </td>
                               </tr>
                             )}
-                          </>
+                          </Fragment>
                         ))}
                       </tbody>
                     </table>

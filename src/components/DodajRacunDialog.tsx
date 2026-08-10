@@ -4,11 +4,12 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { DecimalInput } from '@/components/ui/decimal-input';
 import { Label } from '@/components/ui/label';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Trash2, Plus, Search } from 'lucide-react';
 import { Product } from '@/types';
-import { izracunajTotale } from '@/lib/racun';
+import { izracunajTotale, iznosStavke } from '@/lib/racun';
 import { formatKM } from '@/lib/utils';
 
 interface StavkaUnos {
@@ -175,21 +176,21 @@ export default function DodajRacunDialog({ open, onOpenChange, korisnikId, onSav
                     <div className="flex-1 min-w-0 truncate">{s.product.naziv}</div>
                     <div className="flex items-center gap-1">
                       <Label className="text-xs text-slate-400">Kol</Label>
-                      <Input type="number" min={0} step="any" value={s.kolicina} className="w-16 h-8"
-                        onChange={e => updateStavka(s.product.id, { kolicina: parseFloat(e.target.value) || 0 })} />
+                      <DecimalInput value={s.kolicina} maxDecimals={3} className="w-16 h-8"
+                        onValueChange={(_, n) => updateStavka(s.product.id, { kolicina: n || 0 })} />
                     </div>
                     <div className="flex items-center gap-1">
                       <Label className="text-xs text-slate-400">Cijena</Label>
-                      <Input type="number" min={0} step="any" value={s.cijena} className="w-20 h-8"
-                        onChange={e => updateStavka(s.product.id, { cijena: parseFloat(e.target.value) || 0 })} />
+                      <DecimalInput value={s.cijena} className="w-20 h-8"
+                        onValueChange={(_, n) => updateStavka(s.product.id, { cijena: n || 0 })} />
                     </div>
                     <div className="flex items-center gap-1">
                       <Label className="text-xs text-slate-400">Rabat %</Label>
-                      <Input type="number" min={0} max={100} step="any" value={s.rabat} className="w-16 h-8"
-                        onChange={e => updateStavka(s.product.id, { rabat: parseFloat(e.target.value) || 0 })} />
+                      <DecimalInput value={s.rabat} className="w-16 h-8"
+                        onValueChange={(_, n) => updateStavka(s.product.id, { rabat: Math.min(100, n || 0) })} />
                     </div>
                     <div className="w-24 text-right font-mono">
-                      {formatKM(s.cijena * s.kolicina * (1 - s.rabat / 100))}
+                      {formatKM(iznosStavke({ cijena: s.cijena, kolicina: s.kolicina, rabat: s.rabat, pdvStopa: s.product.pdvStopa }))}
                     </div>
                     <Button type="button" variant="ghost" size="icon" onClick={() => removeStavka(s.product.id)}>
                       <Trash2 className="h-4 w-4 text-red-500" />

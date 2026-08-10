@@ -34,8 +34,9 @@ export default function PostavkeScreen() {
 
   // ── Tring state ──
   const [tringHost, setTringHost] = useState('localhost');
-  const [tringPort, setTringPort] = useState(8085);
-  const [tringOperatorId, setTringOperatorId] = useState(0);
+  // Port i operator ID se drže kao tekst da prazno polje ne postane 0.
+  const [tringPort, setTringPort] = useState('8085');
+  const [tringOperatorId, setTringOperatorId] = useState('0');
   const [tringPassword, setTringPassword] = useState('0');
   const [tringStatus, setTringStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
@@ -59,7 +60,9 @@ export default function PostavkeScreen() {
   const [showDailyTotal, setShowDailyTotal] = useState(false);
   const [devLogging, setDevLogging] = useState(false);
   const [allowZeroStock, setAllowZeroStock] = useState(false);
+  const [kusurKalkulacija, setKusurKalkulacija] = useState(true);
   const [requirePinRefund, setRequirePinRefund] = useState(false);
+  const [generatorEnabled, setGeneratorEnabled] = useState(false);
   const [racunNapomena, setRacunNapomena] = useState('');
 
   // ── Debug state ──
@@ -100,7 +103,10 @@ export default function PostavkeScreen() {
     window.api.getSetting('kasa.showDailyTotal').then((v) => setShowDailyTotal(v === 'true'));
     window.api.getSetting('dev.logging').then((v) => setDevLogging(v === 'true'));
     window.api.getSetting('kasa.allowZeroStock').then((v) => setAllowZeroStock(v === 'true'));
+    // Kalkulacija kusura je podrazumijevano uključena — isključena samo na eksplicitno 'false'.
+    window.api.getSetting('kasa.kusurKalkulacija').then((v) => setKusurKalkulacija(v !== 'false'));
     window.api.getSetting('kasa.requirePinRefund').then((v) => setRequirePinRefund(v === 'true'));
+    window.api.getSetting('ui.showGenerator').then((v) => setGeneratorEnabled(v === 'true'));
     window.api.getSetting('racun.napomena').then((v) => setRacunNapomena(v || ''));
   }, []);
 
@@ -129,8 +135,8 @@ export default function PostavkeScreen() {
         const settings: TringSettings = await window.api.getTringSettings();
         if (settings) {
           setTringHost(settings.host || 'localhost');
-          setTringPort(settings.port ?? 8085);
-          setTringOperatorId(settings.operatorId ?? 0);
+          setTringPort(String(settings.port ?? 8085));
+          setTringOperatorId(String(settings.operatorId ?? 0));
           setTringPassword(settings.operatorPassword || '0');
         }
       } catch {
@@ -213,16 +219,32 @@ export default function PostavkeScreen() {
 
   // ── Tring handlers ──
   const handleSaveTring = async () => {
+    const port = parseInt(tringPort, 10);
+    const operatorId = parseInt(tringOperatorId, 10);
+
+    if (!tringHost.trim()) {
+      setTringStatus({ type: 'error', message: 'Host je obavezan.' });
+      return;
+    }
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      setTringStatus({ type: 'error', message: 'Port mora biti broj između 1 i 65535.' });
+      return;
+    }
+    if (!Number.isInteger(operatorId) || operatorId < 0) {
+      setTringStatus({ type: 'error', message: 'Operator ID mora biti nenegativan broj.' });
+      return;
+    }
+
     try {
       await window.api.saveTringSettings({
-        host: tringHost,
-        port: tringPort,
-        operatorId: tringOperatorId,
+        host: tringHost.trim(),
+        port,
+        operatorId,
         operatorPassword: tringPassword,
       });
       setTringStatus({ type: 'success', message: 'Postavke uspješno sačuvane.' });
-    } catch {
-      setTringStatus({ type: 'error', message: 'Greška pri čuvanju postavki.' });
+    } catch (err: any) {
+      setTringStatus({ type: 'error', message: err?.message || 'Greška pri čuvanju postavki.' });
     }
   };
 
@@ -477,7 +499,7 @@ export default function PostavkeScreen() {
                           min={1}
                           max={65535}
                           value={tringPort}
-                          onChange={e => setTringPort(Number(e.target.value))}
+                          onChange={e => setTringPort(e.target.value.replace(/\D/g, ''))}
                           className="font-mono text-[13px] h-9 bg-slate-50 border-slate-200"
                         />
                       </div>
@@ -490,7 +512,7 @@ export default function PostavkeScreen() {
                           type="number"
                           min={0}
                           value={tringOperatorId}
-                          onChange={e => setTringOperatorId(Number(e.target.value))}
+                          onChange={e => setTringOperatorId(e.target.value.replace(/\D/g, ''))}
                           className="font-mono text-[13px] h-9 bg-slate-50 border-slate-200"
                         />
                       </div>
@@ -946,6 +968,20 @@ export default function PostavkeScreen() {
                     <Separator />
                     <div className="flex items-center justify-between">
                       <div>
+                        <p className="text-[13px] font-medium text-slate-700">Kalkulacija kusura</p>
+                        <p className="text-[12px] text-slate-400 mt-0.5">Nakon štampe gotovinskog računa otvara prozor za izračun kusura</p>
+                      </div>
+                      <Switch
+                        checked={kusurKalkulacija}
+                        onCheckedChange={async (checked) => {
+                          setKusurKalkulacija(checked);
+                          await window.api.setSetting('kasa.kusurKalkulacija', String(checked));
+                        }}
+                      />
+                    </div>
+                    <Separator />
+                    <div className="flex items-center justify-between">
+                      <div>
                         <p className="text-[13px] font-medium text-slate-700">Zahtijevaj PIN za storniranje</p>
                         <p className="text-[12px] text-slate-400 mt-0.5">Traži unos admin PIN-a prije reklamacije računa</p>
                       </div>
@@ -968,6 +1004,22 @@ export default function PostavkeScreen() {
                         onCheckedChange={async (checked) => {
                           setDevLogging(checked);
                           await window.api.setSetting('dev.logging', String(checked));
+                        }}
+                      />
+                    </div>
+                    <Separator />
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-[13px] font-medium text-slate-700">Generator opcija</p>
+                        <p className="text-[12px] text-slate-400 mt-0.5">Prikazuje Generator ekran u navigaciji (samo admin)</p>
+                      </div>
+                      <Switch
+                        checked={generatorEnabled}
+                        onCheckedChange={async (checked) => {
+                          setGeneratorEnabled(checked);
+                          await window.api.setSetting('ui.showGenerator', String(checked));
+                          // MainLayout drži navigaciju — obavijesti ga bez remounta
+                          window.dispatchEvent(new CustomEvent('ui:showGenerator', { detail: checked }));
                         }}
                       />
                     </div>

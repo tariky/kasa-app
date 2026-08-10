@@ -44,13 +44,26 @@ interface Window {
     createOrder: (data: any) => Promise<any>;
     createManualOrder: (data: any) => Promise<{ id: number }>;
     updateOrderReklamacija: (id: number, broj: string) => Promise<any>;
-    refundOrder: (id: number) => Promise<any>;
+    refundOrder: (id: number, brojReklamacije?: string) => Promise<any>;
+    refundAndPrintOrder: (data: { id: number; brojReklamacije?: string }) => Promise<{
+      success: boolean; brojReklamacije?: string | null; error?: string; odgovori?: Record<string, string>;
+    }>;
     finalizeOrder: (data: any) => Promise<{ success: boolean; id?: number; brojFiskalnogRacuna?: string | null; error?: string; odgovori?: Record<string, string> }>;
     listPending: () => Promise<Array<{ id: number; korisnikId: number; createdAt: string; snapshot: any }>>;
     resolvePending: (data: { id: number; brojFiskalnogRacuna: string; createdAt: string }) => Promise<{ id: number }>;
     discardPending: (id: number) => Promise<{ success: boolean }>;
     getFiscalGaps: () => Promise<number[]>;
     dismissFiscalGap: (broj: number) => Promise<{ success: boolean }>;
+    getPonude: () => Promise<any[]>;
+    getPonuda: (id: number) => Promise<any>;
+    getNextBrojPonude: () => Promise<{ broj: number; godina: number }>;
+    createPonuda: (data: any) => Promise<{ id: number; broj: number; godina: number }>;
+    updatePonuda: (id: number, data: any) => Promise<{ success: boolean }>;
+    setPonudaStatus: (id: number, status: string) => Promise<{ success: boolean }>;
+    deletePonuda: (id: number) => Promise<{ changes: number }>;
+    konvertujPonudu: (data: { id: number; korisnikId: number; nacinPlacanja: string }) => Promise<{
+      success: boolean; racunId?: number; brojFiskalnogRacuna?: string | null; error?: string; odgovori?: Record<string, string>;
+    }>;
     tringInit: () => Promise<any>;
     tringPrintReceipt: (data: any) => Promise<any>;
     tringPrintRefund: (data: any) => Promise<any>;
@@ -60,6 +73,9 @@ interface Window {
     tringWriteArticle: (data: any) => Promise<any>;
     tringGetLogs: () => Promise<any[]>;
     tringClearLogs: () => Promise<any>;
+    listSavedCarts: () => Promise<Array<{ id: number; naziv: string; items: string; ukupno: number; createdAt: string }>>;
+    saveCart: (naziv: string, items: Array<{ productId: number; kolicina: number; rabat: number }>, ukupno: number) => Promise<number>;
+    deleteSavedCart: (id: number) => Promise<any>;
     getSetting: (key: string) => Promise<string | null>;
     setSetting: (key: string, value: string) => Promise<any>;
     getTringSettings: () => Promise<any>;

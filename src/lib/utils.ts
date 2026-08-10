@@ -9,6 +9,15 @@ export function formatKM(amount: number): string {
   return amount.toFixed(2).replace('.', ',') + ' KM';
 }
 
+/**
+ * Parsira decimalni unos koji može koristiti i zarez i tačku kao separator
+ * ("12,50" i "12.50" → 12.5). Vraća NaN za neispravan unos, kao parseFloat.
+ */
+export function parseDecimal(value: string | number): number {
+  if (typeof value === 'number') return value;
+  return parseFloat(value.trim().replace(',', '.'));
+}
+
 function pad(n: number): string {
   return String(n).padStart(2, '0');
 }
