@@ -67,6 +67,18 @@ Pri **Nastavi**, za svaku stavku se proizvod učita iz baze (`getProduct`):
 
 Ako ima problematičnih stavki, prikazuje se upozorenje (postojeći `message` mehanizam ili dijalog) sa listom: naziv artikla i razlog ("obrisan", "stanje: traženo X, dostupno Y").
 
+## 3. Rabat u kasi (dopuna tokom implementacije)
+
+Stavka košarice već ima polje `rabat` (postotak 0–100) koje ulazi u obračun
+(`iznosStavke`/`izracunajTotale`) — nedostajao je samo UI:
+
+- **Po stavci**: dugme `%` u redu stavke otvara dijalog za unos postotka;
+  aktivan rabat se prikazuje u redu stavke (`−X%`) i boji dugme.
+- **Na cijelu košaricu**: dugme `%` u headeru košarice postavlja isti rabat na
+  sve stavke.
+- Unos se steže na 0–100; `0` uklanja rabat. Logika u `postaviRabat` /
+  `postaviRabatNaSve` (`src/lib/kosarica.ts`) s testovima.
+
 ## Rubni slučajevi
 
 - Spremanje košarice ne dira zalihe — zalihe se skidaju tek pri naplati (postojeće ponašanje).
