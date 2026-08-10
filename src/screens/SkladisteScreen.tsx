@@ -6,6 +6,7 @@ import { UlazPdf } from '@/components/UlazPdf';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { DecimalInput } from '@/components/ui/decimal-input';
+import { DatePicker } from '@/components/ui/date-picker';
 import { Label } from '@/components/ui/label';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -536,11 +537,10 @@ function NovaPrimkaDialog({
               <Label htmlFor="datum" className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
                 Datum prijema
               </Label>
-              <Input
+              <DatePicker
                 id="datum"
-                type="date"
                 value={datum}
-                onChange={(e) => setDatum(e.target.value)}
+                onChange={setDatum}
               />
             </div>
           </div>

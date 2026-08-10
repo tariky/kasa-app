@@ -107,8 +107,11 @@ function Calendar({
         ),
         range_middle: cn("rounded-none", defaultClassNames.range_middle),
         range_end: cn("bg-accent rounded-r-md", defaultClassNames.range_end),
+        // Danas je natuknica, ne izbor: obris umjesto pune podloge. Stock
+        // shadcn ovdje koristi bg-accent, ali --accent je u ovoj temi ista
+        // plava kao --primary, pa bi današnji dan izgledao kao odabrani.
         today: cn(
-          "bg-accent text-accent-foreground rounded-md data-[selected=true]:rounded-none",
+          "ring-primary/40 rounded-md font-semibold ring-1 ring-inset data-[selected=true]:ring-0",
           defaultClassNames.today
         ),
         outside: cn(
