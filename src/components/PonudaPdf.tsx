@@ -3,6 +3,7 @@ import { Document, Page, View, Text, Image, StyleSheet } from '@react-pdf/render
 import { BankAccount } from '@/types';
 import { formatBrojPonude } from '@/lib/ponuda';
 import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
+import { POTPIS_AUTORA } from '@/lib/brend';
 
 export interface PonudaPdfProps {
   ponuda: {
@@ -518,8 +519,8 @@ export function PonudaPdf({ ponuda, firma }: PonudaPdfProps) {
 
         {/* ── Footer ── */}
         <View style={s.footer} fixed>
-          <Text>{firma.naziv} | {firma.adresa}, {firma.grad}</Text>
-          <Text>Generisano: {today}</Text>
+          <Text>{POTPIS_AUTORA}</Text>
+          <Text>{firma.naziv} · Generisano: {today}</Text>
           <Text
             render={({ pageNumber, totalPages }) =>
               `${pageNumber} / ${totalPages}`

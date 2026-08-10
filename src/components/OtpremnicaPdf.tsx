@@ -2,6 +2,7 @@ import React from 'react';
 import { Document, Page, View, Text, Image, StyleSheet } from '@react-pdf/renderer';
 import { Order, BankAccount } from '@/types';
 import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
+import { POTPIS_AUTORA } from '@/lib/brend';
 
 export interface OtpremnicaPdfProps {
   order: Order;
@@ -317,8 +318,8 @@ export function OtpremnicaPdf({ order, firma }: OtpremnicaPdfProps) {
 
         {/* ── Footer ── */}
         <View style={s.footer} fixed>
-          <Text>{firma.naziv} | {firma.adresa}, {firma.grad}</Text>
-          <Text>Generisano: {today}</Text>
+          <Text>{POTPIS_AUTORA}</Text>
+          <Text>{firma.naziv} · Generisano: {today}</Text>
           <Text
             render={({ pageNumber, totalPages }) =>
               `${pageNumber} / ${totalPages}`

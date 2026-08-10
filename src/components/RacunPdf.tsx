@@ -2,6 +2,7 @@ import React from 'react';
 import { Document, Page, View, Text, Image, StyleSheet } from '@react-pdf/renderer';
 import { Order, OrderItem, BankAccount } from '@/types';
 import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
+import { POTPIS_AUTORA, POTPIS_AUTORA_EN } from '@/lib/brend';
 
 export type InvoiceLang = 'bs' | 'en';
 
@@ -585,8 +586,8 @@ export function RacunPdf({ order, firma, lang = 'bs' }: RacunPdfProps) {
 
         {/* ── Footer ── */}
         <View style={s.footer} fixed>
-          <Text>{firma.naziv} | {firma.adresa}, {firma.grad}</Text>
-          <Text>{t.generated}: {today}</Text>
+          <Text>{lang === 'en' ? POTPIS_AUTORA_EN : POTPIS_AUTORA}</Text>
+          <Text>{firma.naziv} · {t.generated}: {today}</Text>
           <Text
             render={({ pageNumber, totalPages }) =>
               `${pageNumber} / ${totalPages}`
