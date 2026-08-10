@@ -24,10 +24,22 @@ export interface PonudaInput {
 /** Default rok važenja ponude (uobičajena "opcija 8 dana"). */
 export const DEFAULT_ROK_DANA = 8;
 
-function plusDana(datum: string, dana: number): string {
+/** Datum ("YYYY-MM-DD") pomjeren za `dana` dana naprijed. */
+export function plusDana(datum: string, dana: number): string {
   const d = new Date(`${datum}T00:00:00`);
   d.setDate(d.getDate() + dana);
   return localDateStr(d);
+}
+
+/**
+ * Broj punih dana od `od` do `do_`. Računa se preko UTC ponoći da ljetno
+ * računanje vremena ne pojede/doda sat i obori rezultat za jedan dan.
+ */
+export function danaIzmedju(od: string, do_: string): number {
+  const a = Date.parse(`${od}T00:00:00Z`);
+  const b = Date.parse(`${do_}T00:00:00Z`);
+  if (isNaN(a) || isNaN(b)) return 0;
+  return Math.round((b - a) / 86400000);
 }
 
 /** Sljedeći redni broj ponude u godini — brojanje kreće od 1 svake godine. */

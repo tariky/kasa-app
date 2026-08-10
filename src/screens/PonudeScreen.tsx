@@ -12,6 +12,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import { DecimalInput } from '@/components/ui/decimal-input';
+import { DatePicker } from '@/components/ui/date-picker';
 import {
   RotateCcw, FileText, AlertTriangle, Printer, Download, Plus, Trash2, Pencil,
   User as UserIcon, Building2, ChevronRight, Receipt, Search, X, Banknote, CreditCard,
@@ -19,9 +20,16 @@ import {
 } from 'lucide-react';
 import { pdf } from '@react-pdf/renderer';
 import { PonudaPdf } from '@/components/PonudaPdf';
-import { formatBrojPonude, efektivniStatus } from '@/lib/ponuda';
+import { formatBrojPonude, efektivniStatus, plusDana, danaIzmedju, DEFAULT_ROK_DANA } from '@/lib/ponuda';
 import { izracunajTotale } from '@/lib/racun';
 import { cn, formatKM, formatDate } from '@/lib/utils';
+
+/** "8 dana od datuma ponude" — bosanska množina: 1/21/31 dan, ostalo dana. */
+function opisRoka(dana: number): string {
+  if (dana <= 0) return 'Važi samo na dan ponude';
+  const jednina = dana % 10 === 1 && dana % 100 !== 11;
+  return `${dana} ${jednina ? 'dan' : 'dana'} od datuma ponude`;
+}
 
 interface PonudaRow {
   id: number;
@@ -120,13 +128,26 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
 
   // ── Forma ──────────────────────────────────────────────────
 
+  /** Rok važenja u danima — izveden iz para datuma, ne drži se posebno. */
+  const rokDana = datum && vaziDo ? danaIzmedju(datum, vaziDo) : DEFAULT_ROK_DANA;
+
+  /**
+   * Pomjeranje datuma ponude nosi i rok sa sobom: dogovoreno je "8 dana",
+   * a ne "do 18.08." — pa ostaje 8 dana i kad se ponuda datira unaprijed.
+   */
+  const promijeniDatum = (novi: string) => {
+    setDatum(novi);
+    setVaziDo(plusDana(novi, rokDana));
+  };
+
   const openNova = async () => {
     setEditId(null);
     setKupacId('');
     const today = new Date();
     const pad = (n: number) => String(n).padStart(2, '0');
-    setDatum(`${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`);
-    setVaziDo('');
+    const danas = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+    setDatum(danas);
+    setVaziDo(plusDana(danas, DEFAULT_ROK_DANA));
     setNapomena('');
     setStavke([]);
     setProductQuery('');
@@ -193,7 +214,7 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
         kupacId: Number(kupacId),
         korisnikId,
         datum,
-        vaziDo: vaziDo || undefined,
+        vaziDo,
         napomena: napomena.trim() || undefined,
         stavke: stavke.map(s => ({
           productId: s.productId, kolicina: s.kolicina, cijena: s.cijena,
@@ -686,15 +707,15 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
               </div>
               <div className="space-y-1.5">
                 <Label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Datum</Label>
-                <Input type="date" value={datum} onChange={e => setDatum(e.target.value)} className="h-9 text-[13px]" />
+                <DatePicker value={datum} onChange={promijeniDatum} className="h-9 text-[13px]" />
               </div>
               <div className="space-y-1.5">
                 <Label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Važi do</Label>
-                <Input
-                  type="date" value={vaziDo} onChange={e => setVaziDo(e.target.value)}
-                  className="h-9 text-[13px]" placeholder="8 dana"
+                <DatePicker
+                  value={vaziDo} onChange={setVaziDo} minDate={datum}
+                  className="h-9 text-[13px]"
                 />
-                <p className="text-[10px] text-slate-400">Prazno = 8 dana od datuma ponude</p>
+                <p className="text-[10px] text-slate-400">{opisRoka(rokDana)}</p>
               </div>
             </div>
 

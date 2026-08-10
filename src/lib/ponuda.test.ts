@@ -6,7 +6,7 @@ import { Database } from 'bun:sqlite';
 import { schema } from '@/database/schema';
 import {
   nextBrojPonude, formatBrojPonude, createPonuda, updatePonuda,
-  efektivniStatus, setStatusPonude, konvertujPonudu,
+  efektivniStatus, setStatusPonude, konvertujPonudu, plusDana, danaIzmedju, DEFAULT_ROK_DANA,
 } from './ponuda';
 import type { SqlDb } from './sqldb';
 
@@ -321,4 +321,25 @@ test('createPonuda odbija ponudu bez stavki', () => {
   const korisnikId = dodajKorisnika();
   expect(() => createPonuda(db, { kupacId, korisnikId, datum: '2026-03-01', stavke: [] }))
     .toThrow('Ponuda mora imati najmanje jednu stavku');
+});
+
+// ── Računanje roka važenja ──────────────────────────────────
+
+test('danaIzmedju broji pune dane i preskače prelazak na ljetno vrijeme', () => {
+  expect(danaIzmedju('2026-03-01', '2026-03-09')).toBe(8);
+  // 29.03.2026. je prelazak na ljetno vrijeme — dan traje 23h.
+  expect(danaIzmedju('2026-03-28', '2026-03-30')).toBe(2);
+  // 25.10.2026. je povratak na zimsko — dan traje 25h.
+  expect(danaIzmedju('2026-10-24', '2026-10-26')).toBe(2);
+});
+
+test('danaIzmedju vraća 0 za isti dan i negativan broj za obrnut redoslijed', () => {
+  expect(danaIzmedju('2026-03-01', '2026-03-01')).toBe(0);
+  expect(danaIzmedju('2026-03-09', '2026-03-01')).toBe(-8);
+});
+
+test('plusDana i danaIzmedju su inverzni, i preko prelaska na ljetno vrijeme', () => {
+  expect(plusDana('2026-03-01', DEFAULT_ROK_DANA)).toBe('2026-03-09');
+  expect(plusDana('2026-03-28', 2)).toBe('2026-03-30');
+  expect(danaIzmedju('2026-03-28', plusDana('2026-03-28', 15))).toBe(15);
 });
