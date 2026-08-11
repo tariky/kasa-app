@@ -7,8 +7,9 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import {
   Printer, FileText, AlertTriangle, TrendingUp, Package,
   ArrowUpRight, ArrowDownRight, RotateCcw, Calendar, Loader2,
-  ChevronRight, Zap, Clock, BarChart3, Download,
+  ChevronRight, Zap, Clock, BarChart3, Download, Banknote,
 } from 'lucide-react';
+import CashMovementDialog from '@/components/CashMovementDialog';
 import { cn, formatKM, formatDateTime, formatDate } from '@/lib/utils';
 import { Order, Primka } from '@/types';
 import { pdf } from '@react-pdf/renderer';
@@ -26,7 +27,7 @@ function fmtDisplay(d: Date): string {
 
 type Tab = 'promet' | 'primke' | 'nivelacije' | 'fiskalni';
 
-export default function IzvjestajiScreen() {
+export default function IzvjestajiScreen({ korisnikId }: { korisnikId: number }) {
   const [dateFrom, setDateFrom] = useState(new Date());
   const [dateTo, setDateTo] = useState(new Date());
   const [fromOpen, setFromOpen] = useState(false);
@@ -50,6 +51,28 @@ export default function IzvjestajiScreen() {
   const [fiskalniStatus, setFiskalniStatus] = useState('');
   const [fiskalniError, setFiskalniError] = useState(false);
 
+  const [ladica, setLadica] = useState<Awaited<ReturnType<typeof window.api.getDrawerState>> | null>(null);
+  const [kretanja, setKretanja] = useState<Awaited<ReturnType<typeof window.api.getTodayCashMovements>>>([]);
+  const [cashDialogTip, setCashDialogTip] = useState<'polog' | 'povrat' | null>(null);
+  const [retryingId, setRetryingId] = useState<number | null>(null);
+
+  const loadLadica = async () => {
+    try {
+      setLadica(await window.api.getDrawerState());
+      setKretanja(await window.api.getTodayCashMovements());
+    } catch { /* prikaz ladice je informativan — greška ne ruši tab */ }
+  };
+
+  const retryCash = async (id: number) => {
+    setRetryingId(id);
+    try {
+      await window.api.retryCashMovement(id);
+    } finally {
+      setRetryingId(null);
+      loadLadica();
+    }
+  };
+
   useEffect(() => {
     window.api.getFirmaSettings().then(setFirma);
   }, []);
@@ -59,6 +82,7 @@ export default function IzvjestajiScreen() {
     if (activeTab === 'promet') loadPromet();
     else if (activeTab === 'primke') loadPrimke();
     else if (activeTab === 'nivelacije') loadNivelacije();
+    else if (activeTab === 'fiskalni') loadLadica();
   }, [activeTab, dateFrom, dateTo]);
 
   const loadPromet = async () => {
@@ -893,7 +917,84 @@ export default function IzvjestajiScreen() {
                   {fiskalniStatus}
                 </div>
               )}
+
+              {/* Stanje ladice — lokalna evidencija pologa/povrata za danas */}
+              <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-sm shadow-slate-200/50">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center">
+                      <Banknote size={20} className="text-emerald-500" />
+                    </div>
+                    <div>
+                      <h3 className="text-[15px] font-semibold text-slate-800">Stanje ladice (danas)</h3>
+                      <p className="text-[12px] text-slate-400">Očekivana gotovina — uporedi s presjekom stanja (X)</p>
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button variant="outline" size="sm" className="h-8 gap-1.5 text-[12px]" onClick={() => setCashDialogTip('polog')}>
+                      Polog
+                    </Button>
+                    <Button variant="outline" size="sm" className="h-8 gap-1.5 text-[12px]" onClick={() => setCashDialogTip('povrat')}>
+                      Povrat novca
+                    </Button>
+                  </div>
+                </div>
+
+                {ladica && (
+                  <div className="grid grid-cols-5 gap-3 mb-4">
+                    {[
+                      { label: 'Polozi', value: ladica.polozi },
+                      { label: 'Gotovinski promet', value: ladica.gotovinskiPromet },
+                      { label: 'Povrati', value: -ladica.povrati },
+                      { label: 'Reklamacije', value: -ladica.gotovinskeReklamacije },
+                      { label: 'Očekivano u ladici', value: ladica.ocekivanoStanje, naglasi: true },
+                    ].map(({ label, value, naglasi }) => (
+                      <div key={label} className={cn('rounded-xl px-3 py-2.5', naglasi ? 'bg-emerald-50 border border-emerald-100' : 'bg-slate-50')}>
+                        <p className="text-[11px] text-slate-400">{label}</p>
+                        <p className={cn('text-[15px] font-semibold font-mono tabular-nums', naglasi ? 'text-emerald-700' : 'text-slate-700')}>
+                          {formatKM(value)}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {kretanja.length > 0 && (
+                  <div className="space-y-1.5">
+                    {kretanja.map(k => (
+                      <div key={k.id} className="flex items-center justify-between text-[12px] rounded-lg bg-slate-50 px-3 py-2">
+                        <span className="text-slate-600">
+                          {k.createdAt.slice(11, 16)} · {k.tip === 'polog' ? 'Polog' : 'Povrat'} · {k.korisnikIme}
+                          {k.napomena ? ` · ${k.napomena}` : ''}
+                        </span>
+                        <span className="flex items-center gap-2">
+                          <span className={cn('font-mono tabular-nums font-semibold', k.tip === 'polog' ? 'text-emerald-600' : 'text-red-500')}>
+                            {k.tip === 'polog' ? '+' : '−'}{formatKM(k.iznos)}
+                          </span>
+                          {k.tringStatus === 'error' && (
+                            <Button
+                              variant="outline" size="sm" className="h-6 px-2 text-[11px] text-red-600 border-red-200"
+                              disabled={retryingId === k.id}
+                              onClick={() => retryCash(k.id)}
+                            >
+                              {retryingId === k.id ? 'Slanje…' : 'Nije poslano — ponovi'}
+                            </Button>
+                          )}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
+
+            <CashMovementDialog
+              open={cashDialogTip !== null}
+              tip={cashDialogTip ?? 'polog'}
+              korisnikId={korisnikId}
+              onClose={() => setCashDialogTip(null)}
+              onSaved={loadLadica}
+            />
           </div>
         )}
       </div>

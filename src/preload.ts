@@ -79,6 +79,14 @@ contextBridge.exposeInMainWorld('api', {
   tringGetLogs: () => ipcRenderer.invoke('tring:getLogs'),
   tringClearLogs: () => ipcRenderer.invoke('tring:clearLogs'),
 
+  // Polog / povrat gotovine
+  addCashMovement: (data: { tip: 'polog' | 'povrat'; iznos: number; korisnikId: number; napomena?: string }) =>
+    ipcRenderer.invoke('cash:add', data),
+  retryCashMovement: (id: number) => ipcRenderer.invoke('cash:retry', id),
+  getTodayCashMovements: () => ipcRenderer.invoke('cash:getToday'),
+  getLastPolog: () => ipcRenderer.invoke('cash:lastPolog'),
+  getDrawerState: () => ipcRenderer.invoke('cash:drawerState'),
+
   // Spremljene košarice
   listSavedCarts: () => ipcRenderer.invoke('savedCarts:list'),
   saveCart: (naziv: string, items: Array<{ productId: number; kolicina: number; rabat: number }>, ukupno: number) =>

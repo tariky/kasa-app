@@ -81,6 +81,16 @@ test('usluge se ne vraćaju na zalihu', () => {
   expect(getProductStock(db, 2)).toBe(uslugaPrije);
 });
 
+test('storno upisuje refundedAt — bez njega se dnevni obračun ladice ne može izvesti', () => {
+  dodajArtikal(1);
+  const orderId = dodajRacun([{ productId: 1, kolicina: 1 }]);
+
+  refundOrderInTransaction(db, orderId, 'R-5');
+
+  const order = db.prepare('SELECT refundedAt FROM orders WHERE id = ?').get(orderId) as any;
+  expect(order.refundedAt).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+});
+
 test('storno nepostojećeg računa baca grešku', () => {
   expect(() => refundOrderInTransaction(db, 999, null)).toThrow('ne postoji');
 });

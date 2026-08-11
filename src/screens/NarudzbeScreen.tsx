@@ -18,6 +18,9 @@ import { OtpremnicaPdf } from '@/components/OtpremnicaPdf';
 import { Order, OrderItem } from '@/types';
 import { cn, formatKM, formatDateTime } from '@/lib/utils';
 import DodajRacunDialog from '@/components/DodajRacunDialog';
+import CashMovementDialog from '@/components/CashMovementDialog';
+import { gotovinskiIznos } from '@/lib/drawer';
+import { round2 } from '@/lib/novac';
 
 export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
   const [orders, setOrders] = useState<Order[]>([]);
@@ -31,6 +34,8 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
   const [pinValue, setPinValue] = useState('');
   const [pinError, setPinError] = useState('');
   const [dodajOpen, setDodajOpen] = useState(false);
+  const [drawerWarning, setDrawerWarning] = useState<{ stanje: number; potrebno: number } | null>(null);
+  const [pologOpen, setPologOpen] = useState(false);
   const [gaps, setGaps] = useState<number[]>([]);
   const [prefillBroj, setPrefillBroj] = useState<string | undefined>(undefined);
 
@@ -53,6 +58,18 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
     const fullOrder = await window.api.getOrder(order.id);
     setSelectedOrder(fullOrder);
   };
+
+  // Tring zahtijeva evidentiranu gotovinu prije gotovinske reklamacije —
+  // upozorenje (ne blokada) kad očekivano stanje ladice ne pokriva povrat.
+  useEffect(() => {
+    setDrawerWarning(null);
+    if (!reklamacijaOpen || !selectedOrder) return;
+    const potrebno = gotovinskiIznos(selectedOrder.nacinPlacanja, selectedOrder.ukupno);
+    if (potrebno <= 0) return;
+    window.api.getDrawerState()
+      .then(s => { if (s.ocekivanoStanje < potrebno) setDrawerWarning({ stanje: s.ocekivanoStanje, potrebno }); })
+      .catch(() => { /* informativno */ });
+  }, [reklamacijaOpen, selectedOrder, pologOpen]);
 
   const handleReklamacija = async () => {
     if (!selectedOrder || !selectedOrder.brojFiskalnogRacuna) return;
@@ -610,6 +627,27 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
               </div>
             </div>
 
+            {drawerWarning && (
+              <div className="flex items-start gap-3 bg-amber-50/60 border border-amber-100 rounded-xl px-4 py-3">
+                <AlertTriangle size={16} className="text-amber-500 mt-0.5 flex-shrink-0" />
+                <div className="flex-1">
+                  <p className="text-[12px] font-semibold text-amber-700">
+                    U kasi nema dovoljno evidentirane gotovine za povrat
+                  </p>
+                  <p className="text-[11px] text-amber-600/70 mt-0.5">
+                    Očekivano stanje je {formatKM(drawerWarning.stanje)}, a povrat traži {formatKM(drawerWarning.potrebno)}.
+                    Tring zahtijeva unos novca prije gotovinske reklamacije — printer može odbiti štampu.
+                  </p>
+                  <Button
+                    variant="outline" size="sm" className="h-7 mt-2 text-[11px] border-amber-200 text-amber-700"
+                    onClick={() => setPologOpen(true)}
+                  >
+                    Unesi polog
+                  </Button>
+                </div>
+              </div>
+            )}
+
             <div className="space-y-1.5">
               <Label htmlFor="reklamacija-broj" className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
                 Broj fiskalnog za reklamaciju (opcionalno)
@@ -726,6 +764,15 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
         korisnikId={korisnikId}
         prefillBroj={prefillBroj}
         onSaved={() => { loadOrders(); loadGaps(); setPrefillBroj(undefined); }}
+      />
+
+      {/* Polog prije gotovinske reklamacije kad u ladici nema dovoljno */}
+      <CashMovementDialog
+        open={pologOpen}
+        tip="polog"
+        korisnikId={korisnikId}
+        suggested={drawerWarning ? round2(drawerWarning.potrebno - drawerWarning.stanje) : undefined}
+        onClose={() => setPologOpen(false)}
       />
     </div>
   );

@@ -18,8 +18,10 @@ export function refundOrderInTransaction(
   const order = db.prepare("SELECT id FROM orders WHERE id = ? AND status = 'completed'").get(id);
   if (!order) throw new Error('Račun ne postoji ili je već storniran');
 
-  db.prepare("UPDATE orders SET status = 'refunded', brojReklamacije = COALESCE(?, brojReklamacije) WHERE id = ?")
-    .run(brojReklamacije, id);
+  db.prepare(
+    "UPDATE orders SET status = 'refunded', refundedAt = datetime('now','localtime'), " +
+    'brojReklamacije = COALESCE(?, brojReklamacije) WHERE id = ?'
+  ).run(brojReklamacije, id);
 
   const items = db.prepare('SELECT productId, kolicina FROM order_items WHERE orderId = ?')
     .all(id) as Array<{ productId: number; kolicina: number }>;

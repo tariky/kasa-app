@@ -99,6 +99,10 @@ function runMigrations(database: Database.Database): void {
     database.exec("ALTER TABLE orders ADD COLUMN isManual INTEGER NOT NULL DEFAULT 0");
   }
 
+  if (!orderCols.find(c => c.name === 'refundedAt')) {
+    database.exec("ALTER TABLE orders ADD COLUMN refundedAt TEXT");
+  }
+
   // Create pending_receipts table if missing (write-ahead intent log)
   database.exec(`
     CREATE TABLE IF NOT EXISTS pending_receipts (

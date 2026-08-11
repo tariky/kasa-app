@@ -197,6 +197,14 @@ function handleRequest(
       return { status: 200, xml: okResponse() };
     }
 
+    case "/un":
+    case "/pn": {
+      const smjer = path === "/un" ? "Unos novca (polog)" : "Povrat novca";
+      const iznos = body.match(/<Naziv>iznos<\/Naziv><Vrijednost>(.*?)<\/Vrijednost>/)?.[1] ?? "?";
+      console.log(`[mock-tring] ${smjer}: ${iznos} KM (Gotovina)`);
+      return { status: 200, xml: okResponse() };
+    }
+
     case "/spi": {
       console.log("[mock-tring] Periodicni izvjestaj");
       console.log("[mock-tring] Body:", body);

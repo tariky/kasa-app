@@ -13,6 +13,7 @@ import IzvjestajiScreen from '@/screens/IzvjestajiScreen';
 import PostavkeScreen from '@/screens/PostavkeScreen';
 import GeneratorScreen from '@/screens/GeneratorScreen';
 import PendingRacuniDialog from '@/components/PendingRacuniDialog';
+import PologPrompt from '@/components/PologPrompt';
 
 type Screen = 'kasa' | 'skladiste' | 'sifarnik' | 'narudzbe' | 'ponude' | 'izvjestaji' | 'generator' | 'postavke';
 
@@ -112,12 +113,13 @@ export default function MainLayout({ user, onLogout }: Props) {
         {screen === 'sifarnik' && <SifarnikScreen />}
         {screen === 'narudzbe' && <NarudzbeScreen korisnikId={user.id} />}
         {screen === 'ponude' && <PonudeScreen korisnikId={user.id} />}
-        {screen === 'izvjestaji' && <IzvjestajiScreen />}
+        {screen === 'izvjestaji' && <IzvjestajiScreen korisnikId={user.id} />}
         {screen === 'generator' && <GeneratorScreen korisnikId={user.id} />}
         {screen === 'postavke' && <PostavkeScreen />}
       </main>
 
       <PendingRacuniDialog korisnikId={user.id} />
+      <PologPrompt korisnikId={user.id} />
     </div>
   );
 }

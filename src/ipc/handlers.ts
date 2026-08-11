@@ -16,6 +16,7 @@ import {
   type PonudaStatus,
 } from '../lib/ponuda';
 import { buildTringRacun, buildTringReklamacija } from '../lib/tringRacun';
+import { addCashMovement, retryCashMovement, getTodayMovements, getDrawerState, getLastPologIznos } from '../lib/cash';
 import * as Tring from '../services/tring';
 import type Database from 'better-sqlite3';
 
@@ -1213,6 +1214,31 @@ export function registerIpcHandlers(): void {
     if (Tring.isLoggingEnabled()) console.log('[Tring] periodicReport:', JSON.stringify(result));
     return result;
   });
+
+  // Službeni unos/iznos gotovine (polog). Deps obrazac kao refundAndPrint —
+  // logika i upis žive u lib/cash.ts da budu testabilni bez Electrona.
+  const cashDeps = () => {
+    loadTringConfig();
+    return {
+      db,
+      send: async (tip: 'polog' | 'povrat', iznos: number) => {
+        const result = tip === 'polog' ? await Tring.unosNovca(iznos) : await Tring.povratNovca(iznos);
+        if (Tring.isLoggingEnabled()) console.log(`[Tring] ${tip}:`, JSON.stringify(result));
+        return result;
+      },
+    };
+  };
+
+  handle('cash:add', (data: { tip: 'polog' | 'povrat'; iznos: number; korisnikId: number; napomena?: string }) =>
+    addCashMovement(cashDeps(), data));
+
+  handle('cash:retry', (id: number) => retryCashMovement(cashDeps(), id));
+
+  handle('cash:getToday', () => getTodayMovements(db));
+
+  handle('cash:lastPolog', () => getLastPologIznos(db));
+
+  handle('cash:drawerState', () => getDrawerState(db));
 
   handle('tring:writeArticle', async (data: any) => {
     loadTringConfig();

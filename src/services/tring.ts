@@ -397,6 +397,48 @@ export function stampatiDnevniIzvjestaj(): Promise<TringResponse> {
   return postXml("/sdi", body);
 }
 
+// NEPOTVRĐENO: adrese /un i /pn te VrstaZahtjeva=7 su izvedeni iz Tring
+// uputstva (sekcija 7.5 — datoteke un.xml/pn.xml, primjer "0 7 Gotovina 125.35")
+// po analogiji s postojećim kratkim adresama. Provjeriti uz XSD primjere u
+// /xml/primjeri Tring.Fiscal instalacije prije produkcijske upotrebe.
+const UNOS_NOVCA_PATH = "/un";
+const POVRAT_NOVCA_PATH = "/pn";
+const UNOS_POVRAT_VRSTA_ZAHTJEVA = 7;
+
+function novacXml(brojZahtjeva: number, iznos: number): string {
+  const iznosZaokruzen = Math.round((iznos + Number.EPSILON) * 100) / 100;
+  return (
+    `${XML_DECL}` +
+    `<Zahtjev ${XMLNS}>` +
+    `<BrojZahtjeva>${brojZahtjeva}</BrojZahtjeva>` +
+    `<VrstaZahtjeva>${UNOS_POVRAT_VRSTA_ZAHTJEVA}</VrstaZahtjeva>` +
+    `<Parametri>` +
+    `<Parametar><Naziv>vrstaPlacanja</Naziv><Vrijednost>Gotovina</Vrijednost></Parametar>` +
+    `<Parametar><Naziv>iznos</Naziv><Vrijednost>${iznosZaokruzen}</Vrijednost></Parametar>` +
+    `</Parametri>` +
+    `</Zahtjev>`
+  );
+}
+
+export function buildUnosNovcaXml(brojZahtjeva: number, iznos: number): string {
+  return novacXml(brojZahtjeva, iznos);
+}
+
+export function buildPovratNovcaXml(brojZahtjeva: number, iznos: number): string {
+  return novacXml(brojZahtjeva, iznos);
+}
+
+// Službeni unos gotovine u kasu (polog). Uvijek Gotovina — polog drugim
+// sredstvima ne mijenja ladicu pa ga aplikacija ne nudi.
+export function unosNovca(iznos: number): Promise<TringResponse> {
+  return postXml(UNOS_NOVCA_PATH, buildUnosNovcaXml(nextRequestNumber(), iznos));
+}
+
+// Službeni iznos gotovine iz kase (npr. pražnjenje ladice na kraju dana).
+export function povratNovca(iznos: number): Promise<TringResponse> {
+  return postXml(POVRAT_NOVCA_PATH, buildPovratNovcaXml(nextRequestNumber(), iznos));
+}
+
 // POST /spi - VrstaZahtjeva=5
 export function stampatiPeriodicniIzvjestaj(
   odDatuma: string,

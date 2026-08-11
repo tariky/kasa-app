@@ -84,6 +84,7 @@ export const schema = `
     kupacGrad TEXT,
     kupacPostanskiBroj TEXT,
     isManual INTEGER NOT NULL DEFAULT 0,
+    refundedAt TEXT,
     createdAt TEXT DEFAULT (datetime('now','localtime')),
     FOREIGN KEY (korisnikId) REFERENCES users(id)
   );
@@ -189,6 +190,18 @@ export const schema = `
     FOREIGN KEY (productId) REFERENCES products(id)
   );
 
+  CREATE TABLE IF NOT EXISTS cash_movements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tip TEXT NOT NULL CHECK(tip IN ('polog', 'povrat')),
+    iznos REAL NOT NULL,
+    korisnikId INTEGER NOT NULL,
+    tringStatus TEXT NOT NULL CHECK(tringStatus IN ('ok', 'error', 'skipped')),
+    napomena TEXT,
+    createdAt TEXT DEFAULT (datetime('now','localtime')),
+    FOREIGN KEY (korisnikId) REFERENCES users(id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_cash_movements_createdAt ON cash_movements(createdAt);
   CREATE INDEX IF NOT EXISTS idx_products_sifra ON products(sifra);
   CREATE INDEX IF NOT EXISTS idx_ponuda_stavke_ponudaId ON ponuda_stavke(ponudaId);
   CREATE INDEX IF NOT EXISTS idx_products_barkod ON products(barkod);

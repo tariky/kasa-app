@@ -73,6 +73,18 @@ interface Window {
     tringWriteArticle: (data: any) => Promise<any>;
     tringGetLogs: () => Promise<any[]>;
     tringClearLogs: () => Promise<any>;
+    addCashMovement: (data: { tip: 'polog' | 'povrat'; iznos: number; korisnikId: number; napomena?: string }) =>
+      Promise<{ id: number; tringStatus: 'ok' | 'error' | 'skipped'; error?: string }>;
+    retryCashMovement: (id: number) => Promise<{ id: number; tringStatus: 'ok' | 'error' | 'skipped'; error?: string }>;
+    getTodayCashMovements: () => Promise<Array<{
+      id: number; tip: 'polog' | 'povrat'; iznos: number; korisnikId: number; korisnikIme: string;
+      tringStatus: 'ok' | 'error' | 'skipped'; napomena: string | null; createdAt: string;
+    }>>;
+    getLastPolog: () => Promise<number | null>;
+    getDrawerState: () => Promise<{
+      polozi: number; gotovinskiPromet: number; povrati: number;
+      gotovinskeReklamacije: number; ocekivanoStanje: number;
+    }>;
     listSavedCarts: () => Promise<Array<{ id: number; naziv: string; items: string; ukupno: number; createdAt: string }>>;
     saveCart: (naziv: string, items: Array<{ productId: number; kolicina: number; rabat: number }>, ukupno: number) => Promise<number>;
     deleteSavedCart: (id: number) => Promise<any>;
