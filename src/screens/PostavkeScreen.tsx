@@ -18,7 +18,7 @@ import {
   UserPlus, Wifi, WifiOff, Save, Trash2, Pencil,
   Users, Printer, Building2, Shield, Hash, KeyRound,
   MapPin, FileText, Image, CheckCircle2, AlertTriangle,
-  HardDrive, Download, Bug, RefreshCw, X, ChevronDown, ChevronUp, Settings, Landmark,
+  HardDrive, Download, Upload, Bug, RefreshCw, X, ChevronDown, ChevronUp, Settings, Landmark, Percent,
 } from 'lucide-react';
 
 type SettingsTab = 'korisnici' | 'fiskalni' | 'firma' | 'sistem';
@@ -60,6 +60,9 @@ export default function PostavkeScreen() {
   const [showDailyTotal, setShowDailyTotal] = useState(false);
   const [devLogging, setDevLogging] = useState(false);
   const [allowZeroStock, setAllowZeroStock] = useState(false);
+  const [unosBezPdv, setUnosBezPdv] = useState(false);
+  // Inline potvrda nakon promjene režima; sama se sakrije nakon 5 s.
+  const [pdvPotvrda, setPdvPotvrda] = useState('');
   const [kusurKalkulacija, setKusurKalkulacija] = useState(true);
   const [requirePinRefund, setRequirePinRefund] = useState(false);
   const [generatorEnabled, setGeneratorEnabled] = useState(false);
@@ -103,12 +106,19 @@ export default function PostavkeScreen() {
     window.api.getSetting('kasa.showDailyTotal').then((v) => setShowDailyTotal(v === 'true'));
     window.api.getSetting('dev.logging').then((v) => setDevLogging(v === 'true'));
     window.api.getSetting('kasa.allowZeroStock').then((v) => setAllowZeroStock(v === 'true'));
+    window.api.getSetting('cijene.unosBezPdv').then((v) => setUnosBezPdv(v === 'true'));
     // Kalkulacija kusura je podrazumijevano uključena — isključena samo na eksplicitno 'false'.
     window.api.getSetting('kasa.kusurKalkulacija').then((v) => setKusurKalkulacija(v !== 'false'));
     window.api.getSetting('kasa.requirePinRefund').then((v) => setRequirePinRefund(v === 'true'));
     window.api.getSetting('ui.showGenerator').then((v) => setGeneratorEnabled(v === 'true'));
     window.api.getSetting('racun.napomena').then((v) => setRacunNapomena(v || ''));
   }, []);
+
+  useEffect(() => {
+    if (!pdvPotvrda) return;
+    const t = setTimeout(() => setPdvPotvrda(''), 5000);
+    return () => clearTimeout(t);
+  }, [pdvPotvrda]);
 
   // ── Load Firma settings ──
   useEffect(() => {
@@ -1023,6 +1033,49 @@ export default function PostavkeScreen() {
                         }}
                       />
                     </div>
+                  </div>
+                </div>
+
+                {/* Cijene card */}
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm shadow-slate-200/50 overflow-hidden">
+                  <div className="px-6 py-4 border-b border-slate-100">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center">
+                        <Percent size={20} className="text-emerald-500" />
+                      </div>
+                      <div>
+                        <h3 className="text-[15px] font-semibold text-slate-800">Cijene</h3>
+                        <p className="text-[12px] text-slate-400 mt-0.5">Način unosa cijena u šifarniku</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="px-6 py-5 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div className="pr-4">
+                        <p className="text-[13px] font-medium text-slate-700">Cijene se unose bez PDV-a</p>
+                        <p className="text-[12px] text-slate-400 mt-0.5">
+                          Kod unosa artikla ili usluge upisuješ cijenu bez PDV-a; aplikacija sama dodaje 17 %
+                        </p>
+                      </div>
+                      <Switch
+                        checked={unosBezPdv}
+                        onCheckedChange={async (checked) => {
+                          setUnosBezPdv(checked);
+                          await window.api.setSetting('cijene.unosBezPdv', String(checked));
+                          setPdvPotvrda(
+                            checked
+                              ? 'Cijene se od sada unose bez PDV-a. Postojeći artikli nisu promijenjeni.'
+                              : 'Cijene se od sada unose sa PDV-om. Postojeći artikli nisu promijenjeni.'
+                          );
+                        }}
+                      />
+                    </div>
+                    {pdvPotvrda && (
+                      <div className="text-[12px] px-3 py-2.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-100 flex items-start gap-2">
+                        <CheckCircle2 size={14} className="mt-0.5 flex-shrink-0" />
+                        {pdvPotvrda}
+                      </div>
+                    )}
                   </div>
                 </div>
 
