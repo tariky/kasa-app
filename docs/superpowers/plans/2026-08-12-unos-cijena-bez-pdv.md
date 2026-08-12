@@ -60,9 +60,13 @@ test('rezultat je zaokruzen na dvije decimale', () => {
   expect(uBruto(85.47, 'E')).toBe(100);
 });
 
-test('povratna konverzija vraca polaznu bruto cijenu', () => {
+// Dva uzastopna zaokruživanja na fene ne mogu biti povratna za svaku
+// vrijednost: 1,00 → 0,85 → 0,99. Zato je invarijant "najviše jedan fening
+// odstupanja", a ne tačna jednakost. Upravo zbog ovoga forma za izmjenu
+// artikla čuva originalnu bruto cijenu kad polje nije dirano (Task 4 i 5).
+test('povratna konverzija odstupa najvise jedan fening', () => {
   for (const bruto of [1, 2.5, 10, 19.99, 100, 249.9, 1000]) {
-    expect(uBruto(uNetto(bruto, 'E'), 'E')).toBe(bruto);
+    expect(Math.abs(uBruto(uNetto(bruto, 'E'), 'E') - bruto)).toBeLessThanOrEqual(0.01);
   }
 });
 
@@ -113,7 +117,7 @@ export function uNetto(bruto: number, pdvStopa: string): number {
 Run: `bun test src/lib/pdvUnos.test.ts`
 Expected: PASS — 6 pass, 0 fail
 
-Ako test „povratna konverzija" padne za neku vrijednost, NE mijenjaj test da bi prošao — prijavi vrijednost koja puca, jer to znači da pravilo iz speca ne stoji.
+Ako neki test padne, NE mijenjaj test da bi prošao — prijavi vrijednost koja puca.
 
 - [ ] **Step 5: Pokreni cijeli test paket**
 
