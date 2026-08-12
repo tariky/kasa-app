@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Product, Primka, PrimkaStavka, Dobavljac } from '@/types';
 import { cn, formatKM, formatDate, parseDecimal } from '@/lib/utils';
+import { uBruto, uNetto } from '@/lib/pdvUnos';
+import { useUnosBezPdv } from '@/hooks/useUnosBezPdv';
 import { pdf } from '@react-pdf/renderer';
 import { UlazPdf } from '@/components/UlazPdf';
 import { Button } from '@/components/ui/button';
@@ -67,37 +69,63 @@ function ArtikalDialog({
   const [form, setForm] = useState<ArtikalFormData>(emptyArtikalForm);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const bezPdv = useUnosBezPdv(open);
+  // Tekst koji je pri otvaranju stavljen u polje cijene — služi da prepoznamo
+  // da korisnik cijenu uopšte nije dirao.
+  const [cijenaInit, setCijenaInit] = useState('');
 
   useEffect(() => {
-    if (open) {
-      setError('');
-      if (product) {
-        setForm({
-          sifra: product.sifra,
-          barkod: product.barkod ?? '',
-          naziv: product.naziv,
-          jm: product.jm,
-          cijena: String(product.cijena),
-          pdvStopa: product.pdvStopa,
-          stanje: String(product.stanje ?? 0),
-        });
-      } else {
-        setForm(emptyArtikalForm);
-      }
+    // Dok se postavka učitava ne diramo formu — inače bismo cijenu prikazali
+    // u pogrešnoj jedinici pa je pregazili kad postavka stigne.
+    if (!open || bezPdv === null) return;
+    setError('');
+    if (product) {
+      const prikaz = String(bezPdv ? uNetto(product.cijena, product.pdvStopa) : product.cijena);
+      setCijenaInit(prikaz);
+      setForm({
+        sifra: product.sifra,
+        barkod: product.barkod ?? '',
+        naziv: product.naziv,
+        jm: product.jm,
+        cijena: prikaz,
+        pdvStopa: product.pdvStopa,
+        stanje: String(product.stanje ?? 0),
+      });
+    } else {
+      setCijenaInit('');
+      setForm(emptyArtikalForm);
     }
-  }, [open, product]);
+  }, [open, product, bezPdv]);
+
+  // Režim "bez PDV-a" vrijedi samo za stopu E — kod K (0 %) bi oznaka
+  // "bez PDV-a" bila obmanjujuća.
+  const nettoRezim = bezPdv === true && form.pdvStopa === 'E';
+  const cijenaBroj = parseDecimal(form.cijena);
+  const previewBruto = nettoRezim && !isNaN(cijenaBroj) && form.cijena !== ''
+    ? uBruto(cijenaBroj, form.pdvStopa)
+    : null;
 
   const handleSave = async () => {
     if (!form.sifra || !form.naziv || !form.cijena || isNaN(parseDecimal(form.cijena))) return;
     setSaving(true);
     setError('');
     try {
+      // Uslov je napisan kao `product && ...` (a ne izdvojen u boolean varijablu)
+      // da bi TypeScript suzio `product` sa `Product | null` na `Product` u
+      // `true` grani — inače `product.cijena` puca na "possibly null".
+      const cijenaZaBazu =
+        product && form.cijena === cijenaInit && form.pdvStopa === product.pdvStopa
+          ? product.cijena
+          : bezPdv
+            ? uBruto(parseDecimal(form.cijena), form.pdvStopa)
+            : parseDecimal(form.cijena);
+
       const payload = {
         sifra: form.sifra,
         barkod: form.barkod || null,
         naziv: form.naziv,
         jm: form.jm,
-        cijena: parseDecimal(form.cijena),
+        cijena: cijenaZaBazu,
         pdvStopa: form.pdvStopa,
       };
       if (product) {
@@ -140,7 +168,14 @@ function ArtikalDialog({
                 {isEdit ? <Pencil className="h-5 w-5" /> : <PackagePlus className="h-5 w-5" />}
               </div>
               <div>
-                <DialogTitle className="text-lg">{isEdit ? 'Uredi artikal' : 'Novi artikal'}</DialogTitle>
+                <div className="flex items-center gap-2">
+                  <DialogTitle className="text-lg">{isEdit ? 'Uredi artikal' : 'Novi artikal'}</DialogTitle>
+                  {nettoRezim && (
+                    <Badge variant="secondary" className="bg-amber-50 text-amber-700 border-amber-200 text-[10px] font-semibold">
+                      bez PDV-a
+                    </Badge>
+                  )}
+                </div>
                 <DialogDescription className="text-xs mt-0.5">
                   {isEdit ? `Šifra: ${product.sifra}` : 'Unesite podatke o novom artiklu'}
                 </DialogDescription>
@@ -205,7 +240,7 @@ function ArtikalDialog({
             <div className="space-y-1.5">
               <Label htmlFor="cijena" className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
                 <DollarSign className="h-3 w-3" />
-                Cijena (KM)
+                {nettoRezim ? 'Cijena bez PDV-a (KM)' : 'Cijena (KM)'}
               </Label>
               <DecimalInput
                 id="cijena"
@@ -214,6 +249,11 @@ function ArtikalDialog({
                 onValueChange={(text) => setForm({ ...form, cijena: text })}
                 placeholder="0,00"
               />
+              {previewBruto !== null && (
+                <p className="text-[11px] text-slate-400 font-mono">
+                  Sa PDV-om: {formatKM(previewBruto)}
+                </p>
+              )}
             </div>
             <div className="space-y-1.5">
               <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
