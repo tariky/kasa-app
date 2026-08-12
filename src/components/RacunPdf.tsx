@@ -3,6 +3,8 @@ import { Document, Page, View, Text, Image, StyleSheet } from '@react-pdf/render
 import { Order, OrderItem, BankAccount } from '@/types';
 import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
 import { POTPIS_AUTORA, POTPIS_AUTORA_EN } from '@/lib/brend';
+import { pdvStavke, iznosStavke } from '@/lib/racun';
+import { uNetto } from '@/lib/pdvUnos';
 
 export type InvoiceLang = 'bs' | 'en';
 
@@ -36,9 +38,10 @@ const translations = {
     colDescription: 'Opis',
     colUnit: 'JM',
     colQty: 'Kol.',
-    colPrice: 'Cijena',
+    colPrice: 'Cijena\nbez PDV-a',
     colDiscount: 'Rabat',
-    colAmount: 'Iznos',
+    colVat: 'PDV',
+    colAmount: 'Iznos\nsa PDV-om',
     subtotal: 'Osnovica',
     vat: 'PDV (17%)',
     total: 'UKUPNO',
@@ -67,9 +70,10 @@ const translations = {
     colDescription: 'Description',
     colUnit: 'Unit',
     colQty: 'Qty',
-    colPrice: 'Price',
+    colPrice: 'Price\nexcl. VAT',
     colDiscount: 'Disc.',
-    colAmount: 'Amount',
+    colVat: 'VAT',
+    colAmount: 'Amount\nincl. VAT',
     subtotal: 'Subtotal',
     vat: 'VAT (17%)',
     total: 'TOTAL',
@@ -238,12 +242,13 @@ const s = StyleSheet.create({
     lineHeight: 1.3,
   },
   colRb: { width: '5%' },
-  colArtikal: { width: '37%' },
-  colJm: { width: '7%' },
-  colKol: { width: '9%', textAlign: 'right' },
-  colCijena: { width: '14%', textAlign: 'right' },
-  colRabat: { width: '10%', textAlign: 'right' },
-  colUkupno: { width: '18%', textAlign: 'right' },
+  colArtikal: { width: '31%' },
+  colJm: { width: '6%' },
+  colKol: { width: '8%', textAlign: 'right' },
+  colCijena: { width: '13%', textAlign: 'right' },
+  colRabat: { width: '8%', textAlign: 'right' },
+  colPdv: { width: '12%', textAlign: 'right' },
+  colUkupno: { width: '17%', textAlign: 'right' },
 
   /* ── Totals ── */
   totalsWrap: {
@@ -502,20 +507,29 @@ export function RacunPdf({ order, firma, lang = 'bs' }: RacunPdfProps) {
             <Text style={[s.tHeaderCell, s.colKol]}>{t.colQty}</Text>
             <Text style={[s.tHeaderCell, s.colCijena]}>{t.colPrice}</Text>
             <Text style={[s.tHeaderCell, s.colRabat]}>{t.colDiscount}</Text>
+            <Text style={[s.tHeaderCell, s.colPdv]}>{t.colVat}</Text>
             <Text style={[s.tHeaderCell, s.colUkupno]}>{t.colAmount}</Text>
           </View>
 
           {stavke.map((si, i) => {
-            const lineTotal = si.cijena * si.kolicina * (1 - si.rabat / 100);
+            // Jedinična cijena se prikazuje bez PDV-a (u bazi je bruto), a
+            // iznos stavke sa PDV-om — tako se kolona Iznos zbraja u UKUPNO.
+            const stopa = si.pdvStopa === 'E' ? 'E' : 'K';
+            const cijenaBezPdv = uNetto(si.cijena, stopa);
+            const linePdv = pdvStavke(si);
+            const lineTotal = iznosStavke(si);
             return (
               <View key={si.id} style={s.tRow}>
                 <Text style={[s.tCell, s.colRb]}>{i + 1}</Text>
                 <Text style={[s.tCellBold, s.colArtikal]}>{si.productNaziv ?? ''}</Text>
                 <Text style={[s.tCell, s.colJm]}>{si.productJm ?? ''}</Text>
                 <Text style={[s.tCell, s.colKol]}>{si.kolicina}</Text>
-                <Text style={[s.tCell, s.colCijena]}>{formatKM(si.cijena)}</Text>
+                <Text style={[s.tCell, s.colCijena]}>{formatKM(cijenaBezPdv)}</Text>
                 <Text style={[s.tCell, s.colRabat]}>
                   {si.rabat > 0 ? `${si.rabat.toFixed(0)}%` : '—'}
+                </Text>
+                <Text style={[s.tCell, s.colPdv]}>
+                  {si.pdvStopa === 'E' ? formatKM(linePdv) : '—'}
                 </Text>
                 <Text style={[s.tCellBold, s.colUkupno]}>{formatKM(lineTotal)}</Text>
               </View>

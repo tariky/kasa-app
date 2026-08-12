@@ -21,7 +21,7 @@ import {
 import { pdf } from '@react-pdf/renderer';
 import { PonudaPdf } from '@/components/PonudaPdf';
 import { formatBrojPonude, efektivniStatus, plusDana, danaIzmedju, DEFAULT_ROK_DANA } from '@/lib/ponuda';
-import { izracunajTotale } from '@/lib/racun';
+import { izracunajTotale, pdvStavke } from '@/lib/racun';
 import { cn, formatKM, formatDate } from '@/lib/utils';
 
 /** "8 dana od datuma ponude" — bosanska množina: 1/21/31 dan, ostalo dana. */
@@ -531,6 +531,9 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
                   <div className="divide-y divide-slate-50">
                     {(selected.stavke || []).map((s: any, i: number) => {
                       const lineTotal = s.cijena * s.kolicina * (1 - (s.rabat || 0) / 100);
+                      const linePdv = pdvStavke({
+                        cijena: s.cijena, kolicina: s.kolicina, rabat: s.rabat || 0, pdvStopa: s.pdvStopa,
+                      });
                       return (
                         <div key={s.id} className="px-5 py-2.5 flex items-center gap-3 hover:bg-slate-50/50 transition-colors">
                           <span className="text-[10px] text-slate-300 font-mono tabular-nums w-4 text-right flex-shrink-0">{i + 1}</span>
@@ -543,9 +546,14 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
                               )}
                             </div>
                           </div>
-                          <span className="text-[13px] font-mono font-semibold text-slate-800 tabular-nums flex-shrink-0">
-                            {formatKM(lineTotal)}
-                          </span>
+                          <div className="flex-shrink-0 text-right">
+                            <p className="text-[13px] font-mono font-semibold text-slate-800 tabular-nums">
+                              {formatKM(lineTotal)}
+                            </p>
+                            <p className="text-[10px] font-mono text-slate-400 tabular-nums mt-0.5">
+                              {s.pdvStopa === 'E' ? `PDV ${formatKM(linePdv)}` : 'bez PDV-a'}
+                            </p>
+                          </div>
                         </div>
                       );
                     })}
@@ -757,6 +765,7 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
                     <span className="w-16 text-right">Kol.</span>
                     <span className="w-20 text-right">Cijena</span>
                     <span className="w-14 text-right">Rabat %</span>
+                    <span className="w-20 text-right">PDV</span>
                     <span className="w-[14px] flex-shrink-0" />
                   </div>
                   {stavke.map((s, i) => (
@@ -788,6 +797,14 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
                           title="Rabat %"
                         />
                       </div>
+                      <span className="w-20 text-right text-[12px] font-mono tabular-nums text-slate-500">
+                        {s.pdvStopa === 'E'
+                          ? formatKM(pdvStavke({
+                              cijena: s.cijena || 0, kolicina: s.kolicina || 0,
+                              rabat: s.rabat || 0, pdvStopa: s.pdvStopa,
+                            }) || 0)
+                          : '—'}
+                      </span>
                       <button
                         onClick={() => setStavke(prev => prev.filter((_, xi) => xi !== i))}
                         className="text-slate-300 hover:text-red-500 transition-colors flex-shrink-0"
