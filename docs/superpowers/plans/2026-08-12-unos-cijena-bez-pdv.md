@@ -64,9 +64,12 @@ test('rezultat je zaokruzen na dvije decimale', () => {
 // vrijednost: 1,00 → 0,85 → 0,99. Zato je invarijant "najviše jedan fening
 // odstupanja", a ne tačna jednakost. Upravo zbog ovoga forma za izmjenu
 // artikla čuva originalnu bruto cijenu kad polje nije dirano (Task 4 i 5).
+// Poredi se u fenima kao cijelim brojevima: `Math.abs(a - b) <= 0.01` bi
+// palo na float artefaktu (razlika ispadne 0.010000000000000009).
 test('povratna konverzija odstupa najvise jedan fening', () => {
   for (const bruto of [1, 2.5, 10, 19.99, 100, 249.9, 1000]) {
-    expect(Math.abs(uBruto(uNetto(bruto, 'E'), 'E') - bruto)).toBeLessThanOrEqual(0.01);
+    const razlikaUFeninzima = Math.round(Math.abs(uBruto(uNetto(bruto, 'E'), 'E') - bruto) * 100);
+    expect(razlikaUFeninzima).toBeLessThanOrEqual(1);
   }
 });
 
