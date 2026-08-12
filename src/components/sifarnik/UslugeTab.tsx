@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { Product } from '@/types';
 import { cn, formatKM, parseDecimal } from '@/lib/utils';
+import { uBruto, uNetto } from '@/lib/pdvUnos';
+import { useUnosBezPdv } from '@/hooks/useUnosBezPdv';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { DecimalInput } from '@/components/ui/decimal-input';
@@ -36,30 +38,64 @@ function UslugaDialog({
   const [naziv, setNaziv] = useState('');
   const [cijena, setCijena] = useState('');
   const [pdvStopa, setPdvStopa] = useState<'E' | 'K'>('E');
+  const bezPdv = useUnosBezPdv(open);
+  // Tekst koji je pri otvaranju stavljen u polje — prepoznaje da cijena nije dirana.
+  const [cijenaInit, setCijenaInit] = useState('');
 
   useEffect(() => {
-    if (open) {
-      if (product) {
-        setSifra(product.sifra);
-        setNaziv(product.naziv);
-        setCijena(String(product.cijena));
-        setPdvStopa(product.pdvStopa);
-      } else {
-        setSifra('');
-        setNaziv('');
-        setCijena('');
-        setPdvStopa('E');
-      }
+    // Dok se postavka učitava ne diramo formu — inače bismo cijenu prikazali
+    // u pogrešnoj jedinici pa je pregazili kad postavka stigne.
+    if (!open || bezPdv === null) return;
+    if (product) {
+      const prikaz = String(bezPdv ? uNetto(product.cijena, product.pdvStopa) : product.cijena);
+      setSifra(product.sifra);
+      setNaziv(product.naziv);
+      setCijena(prikaz);
+      setCijenaInit(prikaz);
+      setPdvStopa(product.pdvStopa);
+    } else {
+      setSifra('');
+      setNaziv('');
+      setCijena('');
+      setCijenaInit('');
+      setPdvStopa('E');
     }
-  }, [open, product]);
+  }, [open, product, bezPdv]);
 
   const isEdit = !!product;
+  // Režim "bez PDV-a" vrijedi samo za stopu E — kod K (0 %) bi oznaka
+  // "bez PDV-a" bila obmanjujuća.
+  const nettoRezim = bezPdv === true && pdvStopa === 'E';
+  const cijenaBroj = parseDecimal(cijena);
+  const previewBruto = nettoRezim && !isNaN(cijenaBroj) && cijena !== ''
+    ? uBruto(cijenaBroj, pdvStopa)
+    : null;
+
+  const handleSpremi = () => {
+    // Uslov je napisan kao `product && ...` (a ne izdvojen u boolean varijablu)
+    // da bi TypeScript suzio `product` sa `Product | null` na `Product` u
+    // `true` grani — inače `product.cijena` puca na "possibly null".
+    const cijenaZaBazu =
+      product && cijena === cijenaInit && pdvStopa === product.pdvStopa
+        ? product.cijena
+        : bezPdv
+          ? uBruto(parseDecimal(cijena), pdvStopa)
+          : parseDecimal(cijena);
+    onSave({ sifra, naziv, cijena: cijenaZaBazu, pdvStopa });
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[420px]">
         <DialogHeader>
-          <DialogTitle>{isEdit ? 'Uredi uslugu' : 'Nova usluga'}</DialogTitle>
+          <div className="flex items-center gap-2">
+            <DialogTitle>{isEdit ? 'Uredi uslugu' : 'Nova usluga'}</DialogTitle>
+            {nettoRezim && (
+              <Badge variant="secondary" className="bg-amber-50 text-amber-700 border-amber-200 text-[10px] font-semibold">
+                bez PDV-a
+              </Badge>
+            )}
+          </div>
           <DialogDescription>
             {isEdit ? 'Izmjenite podatke o usluzi' : 'Dodajte novu uslugu'}
           </DialogDescription>
@@ -75,8 +111,13 @@ function UslugaDialog({
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Cijena</Label>
+              <Label>{nettoRezim ? 'Cijena bez PDV-a' : 'Cijena'}</Label>
               <DecimalInput value={cijena} onValueChange={text => setCijena(text)} placeholder="0,00" className="font-mono" />
+              {previewBruto !== null && (
+                <p className="text-[11px] text-slate-400 font-mono">
+                  Sa PDV-om: {formatKM(previewBruto)}
+                </p>
+              )}
             </div>
             <div className="space-y-2">
               <Label>PDV stopa</Label>
@@ -95,7 +136,7 @@ function UslugaDialog({
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>Otkaži</Button>
           <Button
-            onClick={() => onSave({ sifra, naziv, cijena: parseDecimal(cijena), pdvStopa })}
+            onClick={handleSpremi}
             disabled={!sifra || !naziv || !cijena || isNaN(parseDecimal(cijena))}
           >
             {isEdit ? 'Spremi' : 'Dodaj'}
