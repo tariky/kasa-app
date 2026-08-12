@@ -13,9 +13,19 @@ export function useUnosBezPdv(refreshKey?: unknown): boolean | null {
 
   useEffect(() => {
     let otkazano = false;
-    window.api.getSetting('cijene.unosBezPdv').then((v) => {
-      if (!otkazano) setBezPdv(v === 'true');
-    });
+    window.api
+      .getSetting('cijene.unosBezPdv')
+      .then((v) => {
+        if (!otkazano) setBezPdv(v === 'true');
+      })
+      .catch((err) => {
+        // Greška ne smije zaglaviti formu: pozivaoci čekaju dok je vrijednost
+        // `null`, pa bi bez ovoga dijalog ostao zauvijek nepopunjen. Vraćamo se
+        // na zatečeno ponašanje — cijene se unose sa PDV-om — da ono što piše
+        // na labeli uvijek odgovara onome što se sprema.
+        console.error('Ne mogu pročitati postavku cijene.unosBezPdv:', err);
+        if (!otkazano) setBezPdv(false);
+      });
     return () => {
       otkazano = true;
     };
