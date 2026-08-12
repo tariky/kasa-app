@@ -651,7 +651,9 @@ Rad se odvija direktno na `main`, pa se poredi sa commitom prije Taska 1 —
 kopiji postoji i nekomitovan rad na backup/restore funkciji koji **nije dio
 ovog plana**; on se ne commituje i zato se ne pojavljuje u ovom diffu.
 
-Run: `git diff --stat cd04bb1 HEAD`
+Diff je ograničen na `src/` da commitovi same dokumentacije ne zamute sliku.
+
+Run: `git diff --stat cd04bb1 HEAD -- src/`
 Expected: izmijenjeni su **samo** ovi fajlovi:
 
 ```
