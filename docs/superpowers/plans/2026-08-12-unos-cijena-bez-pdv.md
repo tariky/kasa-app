@@ -647,9 +647,11 @@ Expected: bez novih grešaka u `src/lib/pdvUnos.ts`, `src/hooks/useUnosBezPdv.ts
 - [ ] **Step 3: Potvrdi da van-dosega tokovi nisu dirani**
 
 Rad se odvija direktno na `main`, pa se poredi sa commitom prije Taska 1 —
-`0706277` (`docs: dizajn spec za unos cijena bez PDV-a`):
+`cd04bb1` (`docs: plan implementacije za unos cijena bez PDV-a`). U radnoj
+kopiji postoji i nekomitovan rad na backup/restore funkciji koji **nije dio
+ovog plana**; on se ne commituje i zato se ne pojavljuje u ovom diffu.
 
-Run: `git diff --stat 0706277 HEAD`
+Run: `git diff --stat cd04bb1 HEAD`
 Expected: izmijenjeni su **samo** ovi fajlovi:
 
 ```
