@@ -110,4 +110,5 @@ contextBridge.exposeInMainWorld('api', {
 
   // Database
   backupDatabase: () => ipcRenderer.invoke('db:backup'),
+  restoreDatabase: () => ipcRenderer.invoke('db:restore'),
 });

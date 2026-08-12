@@ -55,6 +55,7 @@ export default function PostavkeScreen() {
   ]);
   const [firmaStatus, setFirmaStatus] = useState('');
   const [backupStatus, setBackupStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [restoring, setRestoring] = useState(false);
 
   // ── Kasa settings ──
   const [showDailyTotal, setShowDailyTotal] = useState(false);
@@ -268,6 +269,23 @@ export default function PostavkeScreen() {
       }
     } catch {
       setBackupStatus({ type: 'error', message: 'Greška pri kreiranju backup-a.' });
+    }
+  };
+
+  const handleRestore = async () => {
+    setBackupStatus(null);
+    setRestoring(true);
+    try {
+      const result = await window.api.restoreDatabase();
+      if (result) {
+        // Main proces restartuje program; poruka stoji do restarta.
+        setBackupStatus({ type: 'success', message: 'Backup uvezen. Program se restartuje…' });
+      } else {
+        setRestoring(false);
+      }
+    } catch (err: any) {
+      setBackupStatus({ type: 'error', message: err?.message || 'Greška pri uvozu backup-a.' });
+      setRestoring(false);
     }
   };
 
@@ -1122,7 +1140,7 @@ export default function PostavkeScreen() {
                       </div>
                       <div>
                         <h3 className="text-[15px] font-semibold text-slate-800">Backup baze podataka</h3>
-                        <p className="text-[12px] text-slate-400 mt-0.5">Kreirajte kopiju baze na odabranu lokaciju</p>
+                        <p className="text-[12px] text-slate-400 mt-0.5">Kreirajte kopiju baze ili vratite podatke iz ranijeg backup-a</p>
                       </div>
                     </div>
                   </div>
@@ -1131,6 +1149,15 @@ export default function PostavkeScreen() {
                       <Button onClick={handleBackup} variant="outline" className="h-9 gap-2 text-[13px] border-slate-200">
                         <Download size={14} />
                         Kreiraj backup
+                      </Button>
+                      <Button
+                        onClick={handleRestore}
+                        disabled={restoring}
+                        variant="outline"
+                        className="h-9 gap-2 text-[13px] border-slate-200"
+                      >
+                        <Upload size={14} />
+                        {restoring ? 'Uvoz u toku…' : 'Uvezi backup'}
                       </Button>
                       {backupStatus && (
                         <div className={cn(
@@ -1142,6 +1169,11 @@ export default function PostavkeScreen() {
                         </div>
                       )}
                     </div>
+                    <p className="text-[11px] text-slate-400 mt-3 leading-relaxed">
+                      Uvoz zamjenjuje sve trenutne podatke podacima iz backup-a i restartuje program.
+                      Kopija trenutne baze se automatski sprema prije zamjene. Backup iz starije
+                      verzije programa se automatski nadograđuje na aktuelnu strukturu.
+                    </p>
                   </div>
                 </div>
 

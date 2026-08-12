@@ -1,7 +1,8 @@
 import { ipcMain, dialog, app } from 'electron';
 import { writeFileSync, copyFileSync } from 'fs';
 import path from 'node:path';
-import { getDb } from '../database/db';
+import { getDb, closeDb } from '../database/db';
+import { validateBackup, swapInBackup, type RestoreDeps } from '../database/restore';
 import { parseFiskalniBroj, izracunajPraznine } from '../lib/fiskalni';
 import { round2, localDateStr } from '../lib/novac';
 import {
@@ -18,7 +19,7 @@ import {
 import { buildTringRacun, buildTringReklamacija } from '../lib/tringRacun';
 import { addCashMovement, retryCashMovement, getTodayMovements, getDrawerState, getLastPologIznos } from '../lib/cash';
 import * as Tring from '../services/tring';
-import type Database from 'better-sqlite3';
+import Database from 'better-sqlite3';
 
 function handle<T>(channel: string, handler: (...args: any[]) => T): void {
   ipcMain.handle(channel, async (_event, ...args) => {
@@ -1296,5 +1297,59 @@ export function registerIpcHandlers(): void {
     db.pragma('wal_checkpoint(TRUNCATE)');
     copyFileSync(dbPath, result.filePath);
     return result.filePath;
+  });
+
+  // Uvoz backup-a. Handler radi samo dijaloge; sam rad s fajlovima je u
+  // `database/restore.ts`. getDb() nakon zamjene odradi schemu + migracije, pa
+  // backup iz starije verzije programa radi bez dodatnih koraka.
+  const restoreDeps: RestoreDeps = {
+    openReadonly: (filePath) => new Database(filePath, { readonly: true, fileMustExist: true }),
+    closeActive: closeDb,
+    openActive: () => { getDb(); },
+    checkpointActive: () => { getDb().pragma('wal_checkpoint(TRUNCATE)'); },
+  };
+
+  handle('db:restore', async () => {
+    const dbPath = path.join(app.getPath('userData'), 'kasa.db');
+
+    const picked = await dialog.showOpenDialog({
+      title: 'Odaberi backup baze',
+      properties: ['openFile'],
+      filters: [{ name: 'SQLite Database', extensions: ['db'] }],
+    });
+    if (picked.canceled || !picked.filePaths[0]) return null;
+    const source = picked.filePaths[0];
+
+    // Provjera prije potvrde — nema smisla plašiti korisnika upozorenjem ako
+    // odabrani fajl ionako nije upotrebljiv backup.
+    validateBackup(source, restoreDeps);
+
+    const confirm = await dialog.showMessageBox({
+      type: 'warning',
+      buttons: ['Otkaži', 'Uvezi i restartuj'],
+      defaultId: 0,
+      cancelId: 0,
+      title: 'Uvoz backup-a',
+      message: 'Zamijeniti trenutnu bazu podataka?',
+      detail:
+        'Svi trenutni podaci (računi, artikli, primke, korisnici) bit će zamijenjeni ' +
+        'podacima iz backup-a. Kopija trenutne baze se sprema automatski. ' +
+        'Program će se restartovati nakon uvoza.',
+    });
+    if (confirm.response !== 1) return null;
+
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const safetyPath = path.join(app.getPath('userData'), `kasa-prije-uvoza-${stamp}.db`);
+    swapInBackup(source, dbPath, safetyPath, restoreDeps);
+
+    // Renderer drži stanje stare baze (prijavljeni korisnik, korpa) — restart je
+    // jedini pouzdan način da se sve osvježi.
+    setTimeout(() => {
+      closeDb();
+      app.relaunch();
+      app.exit(0);
+    }, 500);
+
+    return { source, safetyPath };
   });
 }

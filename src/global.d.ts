@@ -98,5 +98,6 @@ interface Window {
     writeFile: (path: string, buffer: Buffer) => Promise<any>;
     getReportData: (type: string, from: string, to: string) => Promise<any[]>;
     backupDatabase: () => Promise<string | null>;
+    restoreDatabase: () => Promise<{ source: string; safetyPath: string } | null>;
   };
 }
