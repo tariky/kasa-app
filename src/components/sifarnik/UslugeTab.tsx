@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Product } from '@/types';
 import { cn, formatKM, parseDecimal } from '@/lib/utils';
-import { uBruto, uNetto } from '@/lib/pdvUnos';
+import { uBruto, uNetto, cijenaZaSpremanje } from '@/lib/pdvUnos';
 import { useUnosBezPdv } from '@/hooks/useUnosBezPdv';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -45,7 +45,8 @@ function UslugaDialog({
   useEffect(() => {
     // Dok se postavka učitava ne diramo formu — inače bismo cijenu prikazali
     // u pogrešnoj jedinici pa je pregazili kad postavka stigne.
-    if (!open || bezPdv === null) return;
+    if (!open) return;
+    if (bezPdv === null) return;
     if (product) {
       const prikaz = String(bezPdv ? uNetto(product.cijena, product.pdvStopa) : product.cijena);
       setSifra(product.sifra);
@@ -67,20 +68,24 @@ function UslugaDialog({
   // "bez PDV-a" bila obmanjujuća.
   const nettoRezim = bezPdv === true && pdvStopa === 'E';
   const cijenaBroj = parseDecimal(cijena);
+  // Rule 2: dok je polje cijene nedirano (isti tekst i ista stopa kao pri
+  // otvaranju), pregled mora prikazati STVARNU spremljenu (bruto) cijenu, a
+  // ne preračunatu — inače korisnik vidi fening razlike i "ispravi" ga, čime
+  // cijena stvarno postane pogrešna (vidi cijenaZaSpremanje).
+  const nedirano = !!product && cijena === cijenaInit && pdvStopa === product.pdvStopa;
   const previewBruto = nettoRezim && !isNaN(cijenaBroj) && cijena !== ''
-    ? uBruto(cijenaBroj, pdvStopa)
+    ? (nedirano ? product!.cijena : uBruto(cijenaBroj, pdvStopa))
     : null;
 
   const handleSpremi = () => {
-    // Uslov je napisan kao `product && ...` (a ne izdvojen u boolean varijablu)
-    // da bi TypeScript suzio `product` sa `Product | null` na `Product` u
-    // `true` grani — inače `product.cijena` puca na "possibly null".
-    const cijenaZaBazu =
-      product && cijena === cijenaInit && pdvStopa === product.pdvStopa
-        ? product.cijena
-        : bezPdv
-          ? uBruto(parseDecimal(cijena), pdvStopa)
-          : parseDecimal(cijena);
+    if (bezPdv === null) return;
+    const cijenaZaBazu = cijenaZaSpremanje({
+      unos: cijena,
+      unosInit: cijenaInit,
+      stopa: pdvStopa,
+      original: product,
+      bezPdv,
+    });
     onSave({ sifra, naziv, cijena: cijenaZaBazu, pdvStopa });
   };
 
@@ -137,7 +142,7 @@ function UslugaDialog({
           <Button variant="ghost" onClick={() => onOpenChange(false)}>Otkaži</Button>
           <Button
             onClick={handleSpremi}
-            disabled={!sifra || !naziv || !cijena || isNaN(parseDecimal(cijena))}
+            disabled={bezPdv === null || !sifra || !naziv || !cijena || isNaN(parseDecimal(cijena))}
           >
             {isEdit ? 'Spremi' : 'Dodaj'}
           </Button>

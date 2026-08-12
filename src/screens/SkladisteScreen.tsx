@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Product, Primka, PrimkaStavka, Dobavljac } from '@/types';
 import { cn, formatKM, formatDate, parseDecimal } from '@/lib/utils';
-import { uBruto, uNetto } from '@/lib/pdvUnos';
+import { uBruto, uNetto, cijenaZaSpremanje } from '@/lib/pdvUnos';
 import { useUnosBezPdv } from '@/hooks/useUnosBezPdv';
 import { pdf } from '@react-pdf/renderer';
 import { UlazPdf } from '@/components/UlazPdf';
@@ -77,8 +77,9 @@ function ArtikalDialog({
   useEffect(() => {
     // Dok se postavka učitava ne diramo formu — inače bismo cijenu prikazali
     // u pogrešnoj jedinici pa je pregazili kad postavka stigne.
-    if (!open || bezPdv === null) return;
+    if (!open) return;
     setError('');
+    if (bezPdv === null) return;
     if (product) {
       const prikaz = String(bezPdv ? uNetto(product.cijena, product.pdvStopa) : product.cijena);
       setCijenaInit(prikaz);
@@ -101,24 +102,28 @@ function ArtikalDialog({
   // "bez PDV-a" bila obmanjujuća.
   const nettoRezim = bezPdv === true && form.pdvStopa === 'E';
   const cijenaBroj = parseDecimal(form.cijena);
+  // Rule 2: dok je polje cijene nedirano (isti tekst i ista stopa kao pri
+  // otvaranju), pregled mora prikazati STVARNU spremljenu (bruto) cijenu, a
+  // ne preračunatu — inače korisnik vidi fening razlike i "ispravi" ga, čime
+  // cijena stvarno postane pogrešna (vidi cijenaZaSpremanje).
+  const nedirano = !!product && form.cijena === cijenaInit && form.pdvStopa === product.pdvStopa;
   const previewBruto = nettoRezim && !isNaN(cijenaBroj) && form.cijena !== ''
-    ? uBruto(cijenaBroj, form.pdvStopa)
+    ? (nedirano ? product!.cijena : uBruto(cijenaBroj, form.pdvStopa))
     : null;
 
   const handleSave = async () => {
+    if (bezPdv === null) return;
     if (!form.sifra || !form.naziv || !form.cijena || isNaN(parseDecimal(form.cijena))) return;
     setSaving(true);
     setError('');
     try {
-      // Uslov je napisan kao `product && ...` (a ne izdvojen u boolean varijablu)
-      // da bi TypeScript suzio `product` sa `Product | null` na `Product` u
-      // `true` grani — inače `product.cijena` puca na "possibly null".
-      const cijenaZaBazu =
-        product && form.cijena === cijenaInit && form.pdvStopa === product.pdvStopa
-          ? product.cijena
-          : bezPdv
-            ? uBruto(parseDecimal(form.cijena), form.pdvStopa)
-            : parseDecimal(form.cijena);
+      const cijenaZaBazu = cijenaZaSpremanje({
+        unos: form.cijena,
+        unosInit: cijenaInit,
+        stopa: form.pdvStopa,
+        original: product,
+        bezPdv,
+      });
 
       const payload = {
         sifra: form.sifra,
@@ -331,7 +336,7 @@ function ArtikalDialog({
             <Button variant="ghost" onClick={() => onOpenChange(false)}>
               Otkaži
             </Button>
-            <Button onClick={handleSave} disabled={saving || !form.sifra || !form.naziv || !form.cijena} className="min-w-[120px]">
+            <Button onClick={handleSave} disabled={saving || bezPdv === null || !form.sifra || !form.naziv || !form.cijena} className="min-w-[120px]">
               {saving ? 'Spremam...' : isEdit ? 'Spremi izmjene' : 'Dodaj artikal'}
             </Button>
           </div>

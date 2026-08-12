@@ -5,8 +5,10 @@ import { useState, useEffect } from 'react';
  * pozivalac tada NE smije popunjavati formu, jer bi prikazao cijenu u
  * pogrešnoj jedinici.
  *
- * `refreshKey` se koristi da se postavka ponovo pročita kad se dijalog
- * otvori, pa promjena u Postavkama vrijedi odmah, bez restarta aplikacije.
+ * Postavka se ponovo čita svaki put kad se komponenta koja poziva hook
+ * montira, i dodatno svaki put kad se promijeni `refreshKey` (npr. proslijedi
+ * se `open` stanje dijaloga) — tako promjena u Postavkama vrijedi odmah, bez
+ * restarta aplikacije.
  */
 export function useUnosBezPdv(refreshKey?: unknown): boolean | null {
   const [bezPdv, setBezPdv] = useState<boolean | null>(null);
