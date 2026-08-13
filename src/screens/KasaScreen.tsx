@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Search, Plus, Minus, X, ShoppingCart, User as UserIcon, Banknote, CreditCard, Building, FileCheck, Loader2, Printer, ScanBarcode, Save, FolderOpen, Percent, Trash2 } from 'lucide-react';
+import { Search, Plus, Minus, X, ShoppingCart, User as UserIcon, Banknote, CreditCard, Building, FileCheck, Loader2, Printer, ScanBarcode, Save, FolderOpen, Percent, Trash2, Paperclip } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
@@ -15,6 +15,7 @@ import { izracunajTotale, iznosStavke } from '@/lib/racun';
 import { dodajUKosaricu, restoreCart, postaviRabat, postaviRabatNaSve, type SavedCartItem } from '@/lib/kosarica';
 import { pdf } from '@react-pdf/renderer';
 import { OtpremnicaPdf } from '@/components/OtpremnicaPdf';
+import PrilogRacunDialog from '@/components/PrilogRacunDialog';
 import type { User, Product, CartItem, Kupac } from '@/types';
 
 type PaymentType = 'Gotovina' | 'Kartica' | 'Virman' | 'Ček';
@@ -82,6 +83,7 @@ export default function KasaScreen({ user }: KasaScreenProps) {
   const [scanMode, setScanMode] = useState(false);
   const [savedCarts, setSavedCarts] = useState<SavedCartRow[]>([]);
   const [savedOpen, setSavedOpen] = useState(false);
+  const [prilogOpen, setPrilogOpen] = useState(false);
   // productId za rabat po stavci, 'sve' za rabat na cijelu košaricu, null = zatvoren.
   const [rabatTarget, setRabatTarget] = useState<number | 'sve' | null>(null);
   const [rabatValue, setRabatValue] = useState('');
@@ -862,6 +864,18 @@ export default function KasaScreen({ user }: KasaScreenProps) {
                 <kbd className="ml-1 px-1.5 py-0.5 rounded-md bg-white/15 text-[11px] font-mono font-normal">F5</kbd>
               </span>
             </Button>
+
+            {/* Sekundarna akcija: fiskalni račun sa zbirnom stavkom */}
+            <button
+              type="button"
+              onClick={() => setPrilogOpen(true)}
+              disabled={loading}
+              className="w-full flex items-center justify-center gap-1.5 py-1.5 text-[11.5px] font-medium text-slate-400 hover:text-blue-600 transition-colors disabled:opacity-50"
+              title="Fiskalizuj ukupan iznos jednom zbirnom stavkom; stavke dodijeli kasnije"
+            >
+              <Paperclip className="h-3.5 w-3.5" />
+              Račun po prilogu
+            </button>
           </div>
         </div>
       </div>
@@ -1243,6 +1257,21 @@ export default function KasaScreen({ user }: KasaScreenProps) {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Račun po prilogu */}
+      <PrilogRacunDialog
+        open={prilogOpen}
+        onOpenChange={setPrilogOpen}
+        korisnikId={user.id}
+        onSuccess={(res) => {
+          setLastOrderId(null);
+          setMessage({
+            type: 'success',
+            text: `Fiskalizovan račun po prilogu br. ${res.prilogBroj} (BF ${res.brojFiskalnogRacuna ?? '?'}). Stavke dodijelite u sekciji Računi.`,
+          });
+          loadDailyTotal();
+        }}
+      />
 
       <style>{`
         @keyframes kasa-item-enter {
