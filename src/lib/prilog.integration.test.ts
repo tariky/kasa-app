@@ -8,7 +8,12 @@ import * as Tring from '@/services/tring';
 import { startMockTringServer } from '@/services/tring-mock-server';
 import { schema } from '@/database/schema';
 import type { SqlDb } from './sqldb';
-import { finalizePrilogAndPrint, type FinalizePrilogDeps } from './prilog';
+import {
+  finalizePrilogAndPrint, savePrilogStavkeInTransaction, prilogKompletan,
+  type FinalizePrilogDeps,
+} from './prilog';
+import { refundAndPrint } from './refund';
+import { getProductStock } from './skladiste';
 
 const PORT = 8098; // 8085 dev, 8097 refund, 8099 batch
 
@@ -142,3 +147,42 @@ test('snapshot pending reda nosi prilogBroj i prazne stavke', async () => {
   expect(snap.stavke).toEqual([]);
   expect(snap.ukupno).toBe(150);
 }, 15000);
+
+test('cijeli tok: fiskalizacija → dodjela stavki → skladište → storno → uređivanje blokirano', async () => {
+  db.prepare("INSERT INTO products (id, sifra, naziv, jm, cijena, pdvStopa, tip) VALUES (1, 'A1', 'Artikal', 'kom', 30, 'E', 'artikal')").run();
+  db.prepare("INSERT INTO products (id, sifra, naziv, jm, cijena, pdvStopa, tip) VALUES (2, 'U1', 'Usluga', 'kom', 90, 'E', 'usluga')").run();
+  db.prepare("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (1, 'ulaz', 100, 'test', 0)").run();
+
+  // 1. Kasa: fiskalizuj 150 KM po prilogu.
+  const res = await finalizePrilogAndPrint(deps(), { korisnikId: 1, iznos: 150, nacinPlacanja: 'Gotovina' });
+  expect(res.success).toBe(true);
+  const orderId = res.id!;
+
+  // 2. Računi: dodijeli 2×30 (artikal) + 1×90 (usluga) = 150.
+  const stavke = [
+    { productId: 1, kolicina: 2, cijena: 30, pdvStopa: 'E' },
+    { productId: 2, kolicina: 1, cijena: 90, pdvStopa: 'E' },
+  ];
+  expect(prilogKompletan(150, stavke)).toBe(true);
+  db.transaction(() => savePrilogStavkeInTransaction(db, orderId, stavke))();
+  expect(getProductStock(db, 1)).toBe(98);
+
+  // 3. Ponovno uređivanje ne skida duplo (količina 2 → 3).
+  db.transaction(() => savePrilogStavkeInTransaction(db, orderId, [
+    { productId: 1, kolicina: 3, cijena: 30, pdvStopa: 'E' },
+  ]))();
+  expect(getProductStock(db, 1)).toBe(97);
+
+  // 4. Storno vraća zalihu po stavkama priloga.
+  const storno = await refundAndPrint(
+    { db, transaction: (fn) => db.transaction(fn), print: (r) => Tring.stampatiReklamiraniRacun(r) },
+    { id: orderId }
+  );
+  expect(storno.success).toBe(true);
+  expect(getProductStock(db, 1)).toBe(100);
+
+  // 5. Prilog storniranog računa se više ne može mijenjati.
+  expect(() => savePrilogStavkeInTransaction(db, orderId, [
+    { productId: 1, kolicina: 1, cijena: 30, pdvStopa: 'E' },
+  ])).toThrow(/storniran/);
+}, 30000);
