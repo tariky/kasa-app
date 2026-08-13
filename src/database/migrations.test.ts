@@ -85,8 +85,9 @@ const ADDED_COLUMNS: Array<[string, string]> = [
   ['orders', 'kupacPostanskiBroj'],
   ['orders', 'isManual'],
   ['orders', 'refundedAt'],
+  ['orders', 'prilogBroj'],
 ];
-const ADDED_TABLES = ['dobavljaci', 'kupci', 'pending_receipts'];
+const ADDED_TABLES = ['dobavljaci', 'kupci', 'pending_receipts', 'prilog_stavke'];
 
 function columns(db: Db, table: string): Set<string> {
   const rows = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
@@ -182,6 +183,21 @@ test('nakon nadogradnje se u staru bazu može pisati kroz nove kolone', () => {
 
   const stavka = db.prepare('SELECT nabavnaCijena, rabat FROM primka_stavke WHERE id = 1').get() as any;
   expect(stavka).toEqual({ nabavnaCijena: 1.8, rabat: 5 });
+  db.close();
+});
+
+test('nakon nadogradnje se prilog može upisati na stari račun', () => {
+  const db = legacyDbWithData();
+  openAsCurrentVersion(db);
+
+  db.prepare('UPDATE orders SET prilogBroj = 1 WHERE id = 1').run();
+  db.prepare(
+    "INSERT INTO prilog_stavke (orderId, productId, kolicina, cijena, pdvStopa) VALUES (1, 1, 2, 2.5, 'E')"
+  ).run();
+
+  const stavka = db.prepare('SELECT orderId, kolicina, cijena FROM prilog_stavke WHERE id = 1').get() as any;
+  expect(stavka).toEqual({ orderId: 1, kolicina: 2, cijena: 2.5 });
+  expect((db.prepare('SELECT prilogBroj FROM orders WHERE id = 1').get() as any).prilogBroj).toBe(1);
   db.close();
 });
 

@@ -84,6 +84,7 @@ export const schema = `
     kupacGrad TEXT,
     kupacPostanskiBroj TEXT,
     isManual INTEGER NOT NULL DEFAULT 0,
+    prilogBroj INTEGER,
     refundedAt TEXT,
     createdAt TEXT DEFAULT (datetime('now','localtime')),
     FOREIGN KEY (korisnikId) REFERENCES users(id)
@@ -96,6 +97,17 @@ export const schema = `
     kolicina REAL NOT NULL,
     cijena REAL NOT NULL,
     rabat REAL DEFAULT 0,
+    pdvStopa TEXT NOT NULL,
+    FOREIGN KEY (orderId) REFERENCES orders(id),
+    FOREIGN KEY (productId) REFERENCES products(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS prilog_stavke (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    orderId INTEGER NOT NULL,
+    productId INTEGER NOT NULL,
+    kolicina REAL NOT NULL,
+    cijena REAL NOT NULL,
     pdvStopa TEXT NOT NULL,
     FOREIGN KEY (orderId) REFERENCES orders(id),
     FOREIGN KEY (productId) REFERENCES products(id)
@@ -211,4 +223,5 @@ export const schema = `
   CREATE INDEX IF NOT EXISTS idx_primka_stavke_primkaId ON primka_stavke(primkaId);
   CREATE INDEX IF NOT EXISTS idx_primka_stavke_productId ON primka_stavke(productId);
   CREATE INDEX IF NOT EXISTS idx_nivelacija_stavke_nivelacijaId ON nivelacija_stavke(nivelacijaId);
+  CREATE INDEX IF NOT EXISTS idx_prilog_stavke_orderId ON prilog_stavke(orderId);
 `;
