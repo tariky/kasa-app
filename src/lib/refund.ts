@@ -2,6 +2,7 @@ import type * as Tring from '@/services/tring';
 import type { SqlDb } from './sqldb';
 import { parseFiskalniBroj } from './fiskalni';
 import { buildTringReklamacija } from './tringRacun';
+import { PRILOG_SIFRA, prilogNaziv } from './prilog';
 
 /**
  * Označi račun storniranim, vrati zalihu i upiši broj reklamacije.
@@ -15,7 +16,8 @@ export function refundOrderInTransaction(
   id: number,
   brojReklamacije: string | null
 ): void {
-  const order = db.prepare("SELECT id FROM orders WHERE id = ? AND status = 'completed'").get(id);
+  const order = db.prepare("SELECT id, prilogBroj FROM orders WHERE id = ? AND status = 'completed'")
+    .get(id) as { id: number; prilogBroj: number | null } | undefined;
   if (!order) throw new Error('Račun ne postoji ili je već storniran');
 
   db.prepare(
@@ -23,8 +25,11 @@ export function refundOrderInTransaction(
     'brojReklamacije = COALESCE(?, brojReklamacije) WHERE id = ?'
   ).run(brojReklamacije, id);
 
-  const items = db.prepare('SELECT productId, kolicina FROM order_items WHERE orderId = ?')
-    .all(id) as Array<{ productId: number; kolicina: number }>;
+  // Prilog račun nema order_items — zaliha se vraća po stavkama priloga.
+  const items = (order.prilogBroj != null
+    ? db.prepare('SELECT productId, kolicina FROM prilog_stavke WHERE orderId = ?')
+    : db.prepare('SELECT productId, kolicina FROM order_items WHERE orderId = ?')
+  ).all(id) as Array<{ productId: number; kolicina: number }>;
 
   const insertStock = db.prepare(
     "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'ulaz', ?, 'refund', ?)"
@@ -82,12 +87,19 @@ export async function refundAndPrint(
     );
   }
 
-  const stavke = db.prepare(`
-    SELECT oi.*, p.naziv AS productNaziv, p.jm AS productJm, p.sifra AS productSifra, p.plu AS productPlu
-    FROM order_items oi
-    LEFT JOIN products p ON p.id = oi.productId
-    WHERE oi.orderId = ?
-  `).all(id);
+  // Reklamacija mora imati istu stavku kao original — prilog račun je
+  // fiskalizovan jednom zbirnom stavkom, pa se ona ovdje sintetizuje.
+  const stavke = order.prilogBroj != null
+    ? [{
+        sifra: PRILOG_SIFRA, naziv: prilogNaziv(order.prilogBroj), jm: 'kom', plu: 0,
+        cijena: order.ukupno, kolicina: 1, rabat: 0, pdvStopa: 'E',
+      }]
+    : db.prepare(`
+        SELECT oi.*, p.naziv AS productNaziv, p.jm AS productJm, p.sifra AS productSifra, p.plu AS productPlu
+        FROM order_items oi
+        LEFT JOIN products p ON p.id = oi.productId
+        WHERE oi.orderId = ?
+      `).all(id);
 
   refundsInFlight.add(id);
   try {

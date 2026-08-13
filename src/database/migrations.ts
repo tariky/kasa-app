@@ -81,6 +81,26 @@ export function runMigrations(database: Database.Database): void {
     database.exec("ALTER TABLE orders ADD COLUMN refundedAt TEXT");
   }
 
+  // Račun po prilogu: interni broj priloga (NULL = običan račun)
+  if (!orderCols.find(c => c.name === 'prilogBroj')) {
+    database.exec("ALTER TABLE orders ADD COLUMN prilogBroj INTEGER");
+  }
+
+  // Stavke priloga (specifikacija uz fiskalni račun)
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS prilog_stavke (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      orderId INTEGER NOT NULL,
+      productId INTEGER NOT NULL,
+      kolicina REAL NOT NULL,
+      cijena REAL NOT NULL,
+      pdvStopa TEXT NOT NULL,
+      FOREIGN KEY (orderId) REFERENCES orders(id),
+      FOREIGN KEY (productId) REFERENCES products(id)
+    )
+  `);
+  database.exec('CREATE INDEX IF NOT EXISTS idx_prilog_stavke_orderId ON prilog_stavke(orderId)');
+
   // Create pending_receipts table if missing (write-ahead intent log)
   database.exec(`
     CREATE TABLE IF NOT EXISTS pending_receipts (

@@ -10,16 +10,19 @@ import {
 import { Separator } from '@/components/ui/separator';
 import {
   RotateCcw, Receipt, AlertTriangle, Printer, Download,
-  User, Hash, CreditCard, Banknote, Building2, ChevronRight, KeyRound, Plus,
+  User, Hash, CreditCard, Banknote, Building2, ChevronRight, KeyRound, Plus, Paperclip,
 } from 'lucide-react';
 import { pdf } from '@react-pdf/renderer';
 import { RacunPdf, InvoiceLang } from '@/components/RacunPdf';
 import { OtpremnicaPdf } from '@/components/OtpremnicaPdf';
+import { PrilogPdf } from '@/components/PrilogPdf';
 import { Order, OrderItem } from '@/types';
 import { cn, formatKM, formatDateTime } from '@/lib/utils';
 import DodajRacunDialog from '@/components/DodajRacunDialog';
 import CashMovementDialog from '@/components/CashMovementDialog';
+import PrilogStavkeDialog from '@/components/PrilogStavkeDialog';
 import { gotovinskiIznos } from '@/lib/drawer';
+import { prilogKompletan, sumaPriloga } from '@/lib/prilog';
 import { round2 } from '@/lib/novac';
 
 export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
@@ -38,6 +41,7 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
   const [pologOpen, setPologOpen] = useState(false);
   const [gaps, setGaps] = useState<number[]>([]);
   const [prefillBroj, setPrefillBroj] = useState<string | undefined>(undefined);
+  const [prilogOpen, setPrilogOpen] = useState(false);
 
   useEffect(() => {
     loadOrders();
@@ -171,6 +175,33 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
     await window.api.writeFile(savePath, Array.from(new Uint8Array(arrayBuffer)) as any);
   };
 
+  /**
+   * Štampa A4 specifikacije priloga. Dozvoljena samo kad se suma dodijeljenih
+   * stavki poklopi sa fiskalnim iznosom — nepotpuna specifikacija bi
+   * pokazivala manji iznos od onog koji je fiskalizovan.
+   */
+  const handlePrintPrilog = async (order: Order) => {
+    setReklamacijaMsg(null);
+    try {
+      const stavke = await window.api.getPrilogStavke(order.id);
+      if (!prilogKompletan(order.ukupno, stavke as any)) {
+        setReklamacijaMsg({
+          type: 'error',
+          text: `Suma stavki priloga (${formatKM(sumaPriloga(stavke as any))}) se ne poklapa sa fiskalnim iznosom ` +
+            `(${formatKM(order.ukupno)}) — dopunite prilog prije štampe.`,
+        });
+        return;
+      }
+      const firma = await loadFirma();
+      const blob = await pdf(<PrilogPdf order={order} firma={firma} stavke={stavke as any} />).toBlob();
+      const url = URL.createObjectURL(blob);
+      const win = window.open(url, '_blank');
+      if (win) win.onafterprint = () => URL.revokeObjectURL(url);
+    } catch (err: any) {
+      setReklamacijaMsg({ type: 'error', text: `Greška pri štampanju specifikacije: ${err?.message || 'Nepoznata greška'}` });
+    }
+  };
+
   const handlePrintOtpremnica = async (order: Order) => {
     const fullOrder = order.stavke ? order : await window.api.getOrder(order.id);
     const firma = await loadFirma();
@@ -301,6 +332,9 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
                           <td className={cn('px-2 py-2.5 text-[12px] font-mono', selected ? 'text-white/60' : 'text-slate-400')}>
                             {order.brojFiskalnogRacuna || '—'}
                             {order.isManual ? <Badge variant="outline" className="ml-1 text-amber-600 border-amber-400">R</Badge> : null}
+                            {order.prilogBroj != null ? (
+                              <Badge variant="secondary" className="ml-1 text-[10px]">Prilog br. {order.prilogBroj}</Badge>
+                            ) : null}
                           </td>
                           <td className="pr-5 pl-2 py-2.5 text-center">
                             {refunded ? (
@@ -359,6 +393,9 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
                   <div className="flex items-center gap-1.5">
                     {selectedOrder?.isManual ? (
                       <Badge variant="outline" className="border-amber-400 text-amber-600">Ručno unesen</Badge>
+                    ) : null}
+                    {selectedOrder.prilogBroj != null ? (
+                      <Badge variant="secondary">Prilog br. {selectedOrder.prilogBroj}</Badge>
                     ) : null}
                     {isRefunded(selectedOrder.status) ? (
                       <span className="inline-flex items-center gap-1 text-[10px] font-semibold bg-red-50 text-red-500 border border-red-100 rounded-full px-2.5 py-1">
@@ -547,6 +584,27 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
                       <span>Otpremnica</span>
                     </button>
                   </div>
+
+                  {/* Prilog — dodjela stavki fiskalizovanoj zbirnoj stavci */}
+                  {selectedOrder.prilogBroj != null && (
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setPrilogOpen(true)}
+                        className="flex-1 h-9 flex items-center justify-center gap-2 rounded-lg border border-slate-200 text-[12px] font-medium text-slate-600 hover:bg-slate-50 transition-all"
+                      >
+                        <Paperclip size={13} />
+                        Uredi prilog
+                      </button>
+                      <button
+                        onClick={() => handlePrintPrilog(selectedOrder)}
+                        className="flex-1 h-9 flex items-center justify-center gap-2 rounded-lg border border-slate-200 text-[12px] font-medium text-slate-600 hover:bg-slate-50 transition-all"
+                        title="Štampaj A4 specifikaciju stavki priloga"
+                      >
+                        <Printer size={13} />
+                        Štampaj prilog
+                      </button>
+                    </div>
+                  )}
 
                   {/* Reklamacija result */}
                   {reklamacijaMsg && !reklamacijaOpen && (
@@ -765,6 +823,20 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
         prefillBroj={prefillBroj}
         onSaved={() => { loadOrders(); loadGaps(); setPrefillBroj(undefined); }}
       />
+
+      {/* ── Stavke priloga ── */}
+      {selectedOrder && selectedOrder.prilogBroj != null && (
+        <PrilogStavkeDialog
+          open={prilogOpen}
+          onOpenChange={setPrilogOpen}
+          order={selectedOrder}
+          onSaved={async () => {
+            await loadOrders();
+            const refreshed = await window.api.getOrder(selectedOrder.id);
+            if (refreshed) setSelectedOrder(refreshed);
+          }}
+        />
+      )}
 
       {/* Polog prije gotovinske reklamacije kad u ladici nema dovoljno */}
       <CashMovementDialog
