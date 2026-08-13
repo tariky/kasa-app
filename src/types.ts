@@ -69,6 +69,8 @@ export interface Order {
   brojReklamacije?: string;
   status: 'completed' | 'refunded';
   isManual?: boolean;
+  /** Interni broj priloga; NULL/undefined = običan račun. */
+  prilogBroj?: number | null;
   createdAt: string;
   stavke?: OrderItem[];
   korisnikIme?: string;

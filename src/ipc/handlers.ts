@@ -618,7 +618,7 @@ export function registerIpcHandlers(): void {
     // Prilog račun nema order_items — prikaz i kopija računa dobiju zbirnu stavku.
     if (order.prilogBroj != null) {
       order.stavke = [{
-        orderId: order.id, productId: 0, kolicina: 1, cijena: order.ukupno, rabat: 0,
+        id: 0, orderId: order.id, productId: 0, kolicina: 1, cijena: order.ukupno, rabat: 0,
         pdvStopa: 'E', productNaziv: prilogNaziv(order.prilogBroj),
         productJm: 'kom', productSifra: PRILOG_SIFRA, productPlu: 0,
       }];
