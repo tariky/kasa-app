@@ -10,6 +10,10 @@ import {
   isDobavljacUsed, type PriceChange,
 } from '../lib/skladiste';
 import { refundOrderInTransaction, refundAndPrint } from '../lib/refund';
+import {
+  sljedeciPrilogBroj, savePrilogStavkeInTransaction, finalizePrilogAndPrint,
+  PRILOG_SIFRA, prilogNaziv, type PrilogStavkaUnos,
+} from '../lib/prilog';
 import { saveCart, listSavedCarts, deleteSavedCart } from '../lib/savedCarts';
 import type { SavedCartItem } from '../lib/kosarica';
 import {
@@ -44,6 +48,8 @@ function insertCompletedOrder(
     kupac?: { naziv?: string; idBroj?: string; adresa?: string; grad?: string; postanskiBroj?: string };
     stavke: Array<{ productId: number; kolicina: number; cijena: number; rabat: number; pdvStopa: string }>;
     isManual?: 0 | 1; createdAt?: string;
+    // Račun po prilogu: nema stavki, nosi samo interni broj priloga.
+    prilogBroj?: number | null;
   }
 ): number {
   const isManual = data.isManual ?? 0;
@@ -52,14 +58,15 @@ function insertCompletedOrder(
   const result = db
     .prepare(`
       INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, status,
-        kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj, isManual${hasCreatedAt ? ', createdAt' : ''})
-      VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?${hasCreatedAt ? ', ?' : ''})
+        kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj, isManual${hasCreatedAt ? ', createdAt' : ''}, prilogBroj)
+      VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?${hasCreatedAt ? ', ?' : ''}, ?)
     `)
     .run(
       data.korisnikId, data.ukupno, data.pdvIznos, data.nacinPlacanja, data.brojFiskalnogRacuna,
       data.kupac?.naziv || null, data.kupac?.idBroj || null, data.kupac?.adresa || null,
       data.kupac?.grad || null, data.kupac?.postanskiBroj || null, isManual,
-      ...(hasCreatedAt ? [data.createdAt] : [])
+      ...(hasCreatedAt ? [data.createdAt] : []),
+      data.prilogBroj ?? null
     );
 
   const orderId = result.lastInsertRowid as number;
@@ -608,6 +615,15 @@ export function registerIpcHandlers(): void {
       `)
       .all(id);
 
+    // Prilog račun nema order_items — prikaz i kopija računa dobiju zbirnu stavku.
+    if (order.prilogBroj != null) {
+      order.stavke = [{
+        orderId: order.id, productId: 0, kolicina: 1, cijena: order.ukupno, rabat: 0,
+        pdvStopa: 'E', productNaziv: prilogNaziv(order.prilogBroj),
+        productJm: 'kom', productSifra: PRILOG_SIFRA, productPlu: 0,
+      }];
+    }
+
     return order;
   });
 
@@ -752,6 +768,42 @@ export function registerIpcHandlers(): void {
     const orderId = finalizeTx();
 
     return { success: true, id: orderId, brojFiskalnogRacuna, odgovori: result.odgovori };
+  });
+
+  // Račun po prilogu: jedna zbirna stavka na fiskalnom računu, stvarne stavke
+  // se dodjeljuju naknadno. Orkestracija živi u lib/prilog.ts (testabilna).
+  handle('order:finalizePrilog', async (data: {
+    korisnikId: number; iznos: number; nacinPlacanja: string;
+    kupac?: { naziv?: string; idBroj?: string; adresa?: string; grad?: string; postanskiBroj?: string };
+  }) => {
+    loadTringConfig();
+    return finalizePrilogAndPrint({
+      db,
+      transaction: (fn) => db.transaction(fn),
+      print: async (racun) => {
+        if (Tring.isLoggingEnabled()) console.log('[Tring] finalizePrilog request:', JSON.stringify(racun));
+        const result = await Tring.stampatiFiskalniRacun(racun);
+        if (Tring.isLoggingEnabled()) console.log('[Tring] finalizePrilog response:', JSON.stringify(result));
+        return result;
+      },
+    }, data);
+  });
+
+  handle('prilog:nextBroj', () => sljedeciPrilogBroj(db));
+
+  handle('prilog:getStavke', (orderId: number) => {
+    return db.prepare(`
+      SELECT ps.*, p.naziv AS productNaziv, p.jm AS productJm, p.sifra AS productSifra, p.tip AS productTip
+      FROM prilog_stavke ps
+      LEFT JOIN products p ON p.id = ps.productId
+      WHERE ps.orderId = ?
+      ORDER BY ps.id
+    `).all(orderId);
+  });
+
+  handle('prilog:saveStavke', (orderId: number, stavke: PrilogStavkaUnos[]) => {
+    db.transaction(() => savePrilogStavkeInTransaction(db, orderId, stavke))();
+    return { success: true };
   });
 
   handle('order:updateReklamacija', (id: number, brojReklamacije: string) => {
