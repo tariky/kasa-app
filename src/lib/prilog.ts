@@ -1,6 +1,8 @@
+import type * as Tring from '@/services/tring';
 import type { SqlDb } from './sqldb';
 import { round2 } from './novac';
-import { iznosStavke } from './racun';
+import { iznosStavke, izracunajTotale } from './racun';
+import { buildTringRacun } from './tringRacun';
 
 /**
  * Račun po prilogu: fiskalno se kuca jedna zbirna stavka, a stvarne stavke se
@@ -102,4 +104,102 @@ export function buildPrilogFiskalnaStavka(prilogBroj: number, iznos: number) {
     rabat: 0,
     pdvStopa: 'E',
   };
+}
+
+export interface FinalizePrilogDeps {
+  db: SqlDb;
+  /** Štampa fiskalni račun na uređaju. */
+  print: (racun: Tring.Racun) => Promise<Tring.TringResponse | null>;
+  /** Omotač koji izvrši callback u SQL transakciji. */
+  transaction: (fn: () => void) => () => void;
+}
+
+export interface FinalizePrilogResult {
+  success: boolean;
+  id?: number;
+  prilogBroj?: number;
+  brojFiskalnogRacuna?: string | null;
+  error?: string;
+  odgovori?: Record<string, string>;
+}
+
+/**
+ * Fiskalizuje račun po prilogu: jedna zbirna stavka, ručno unesen iznos.
+ * Isti write-ahead obrazac kao order:finalize — snapshot u pending_receipts
+ * prije štampe, pa atomični upis ordera + brisanje pending reda.
+ */
+export async function finalizePrilogAndPrint(
+  deps: FinalizePrilogDeps,
+  data: {
+    korisnikId: number;
+    iznos: number;
+    nacinPlacanja: string;
+    kupac?: { naziv?: string; idBroj?: string; adresa?: string; grad?: string; postanskiBroj?: string };
+  }
+): Promise<FinalizePrilogResult> {
+  const { db, print, transaction } = deps;
+  if (!data.korisnikId) throw new Error('Korisnik nije prijavljen');
+  if (!(data.iznos > 0)) throw new Error('Iznos mora biti veći od 0');
+
+  const prilogBroj = sljedeciPrilogBroj(db);
+  const stavka = buildPrilogFiskalnaStavka(prilogBroj, data.iznos);
+  const { ukupno, pdvIznos } = izracunajTotale([stavka]);
+
+  // Write-ahead: stavke:[] + prilogBroj → pending:resolve rekonstruiše prilog račun.
+  const snapshot = {
+    korisnikId: data.korisnikId, ukupno, pdvIznos,
+    nacinPlacanja: data.nacinPlacanja, kupac: data.kupac,
+    stavke: [], prilogBroj,
+  };
+  const pending = db
+    .prepare('INSERT INTO pending_receipts (korisnikId, snapshot) VALUES (?, ?)')
+    .run(data.korisnikId, JSON.stringify(snapshot));
+  const pendingId = pending.lastInsertRowid as number;
+
+  let result: Tring.TringResponse | null;
+  try {
+    result = await print(buildTringRacun({
+      ukupno, nacinPlacanja: data.nacinPlacanja, kupac: data.kupac, items: [stavka],
+    }));
+  } catch (err) {
+    // Izuzetak iz štampe — ništa nije odštampano, počisti write-ahead red.
+    db.prepare('DELETE FROM pending_receipts WHERE id = ?').run(pendingId);
+    throw err;
+  }
+
+  if (!result || !result.success) {
+    db.prepare('DELETE FROM pending_receipts WHERE id = ?').run(pendingId);
+    return {
+      success: false,
+      error: result?.error || result?.vrstaOdgovora || 'Nepoznata greška',
+      odgovori: result?.odgovori ?? {},
+    };
+  }
+
+  const brojFiskalnogRacuna = result.odgovori?.BrojFiskalnogRacuna || null;
+  let orderId = 0;
+  try {
+    transaction(() => {
+      const r = db.prepare(`
+        INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, status,
+          kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj, isManual, prilogBroj)
+        VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, 0, ?)
+      `).run(
+        data.korisnikId, ukupno, pdvIznos, data.nacinPlacanja, brojFiskalnogRacuna,
+        data.kupac?.naziv || null, data.kupac?.idBroj || null, data.kupac?.adresa || null,
+        data.kupac?.grad || null, data.kupac?.postanskiBroj || null, prilogBroj
+      );
+      orderId = Number(r.lastInsertRowid);
+      db.prepare('DELETE FROM pending_receipts WHERE id = ?').run(pendingId);
+    })();
+  } catch (err: any) {
+    // Račun je već na papiru; pending red namjerno ostaje da se može riješiti
+    // kroz pending:resolve, ali operater to mora znati odmah.
+    throw new Error(
+      `Fiskalni račun po prilogu br. ${prilogBroj} (BF ${brojFiskalnogRacuna ?? '?'}) JE odštampan, ` +
+      `ali nije zabilježen u bazi: ${err?.message || 'nepoznata greška'}. Riješite ga kroz nezavršene račune.`
+    );
+  }
+
+  return { success: true, id: orderId, prilogBroj, brojFiskalnogRacuna, odgovori: result.odgovori };
 }
