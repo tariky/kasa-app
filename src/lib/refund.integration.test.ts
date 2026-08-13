@@ -179,3 +179,68 @@ test('kupac sa računa se prosljeđuje uređaju', async () => {
   expect(poslato.brojRacuna).toBe(561); // broj originalnog računa, ne NaN
   expect(poslato.stavke[0].artikal.sifra).toBe('008');
 }, 15000);
+
+/** Prilog račun: nema order_items, stavke i izlazi žive u prilog_stavke. */
+function dodajPrilogRacun(opts: {
+  brojFiskalnog: string; prilogBroj: number; ukupno: number;
+  stavke?: Array<{ productId: number; kolicina: number; cijena: number }>;
+}): number {
+  const r = db.prepare(`
+    INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, status, prilogBroj)
+    VALUES (1, ?, 0, 'Gotovina', ?, 'completed', ?)
+  `).run(opts.ukupno, opts.brojFiskalnog, opts.prilogBroj);
+  const orderId = Number(r.lastInsertRowid);
+  for (const s of opts.stavke ?? []) {
+    db.prepare("INSERT INTO prilog_stavke (orderId, productId, kolicina, cijena, pdvStopa) VALUES (?, ?, ?, ?, 'E')")
+      .run(orderId, s.productId, s.kolicina, s.cijena);
+    db.prepare("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'izlaz', ?, 'prilog', ?)")
+      .run(s.productId, s.kolicina, orderId);
+  }
+  return orderId;
+}
+
+test('storno prilog računa vraća zalihu po prilog_stavke', async () => {
+  dodajArtikal(1, '009', 30);
+  const orderId = dodajPrilogRacun({
+    brojFiskalnog: '562', prilogBroj: 1, ukupno: 60,
+    stavke: [{ productId: 1, kolicina: 2, cijena: 30 }],
+  });
+  expect(getProductStock(db, 1)).toBe(98);
+
+  const result = await refundAndPrint(deps(), { id: orderId });
+
+  expect(result.success).toBe(true);
+  expect(getProductStock(db, 1)).toBe(100); // 100 ulaz - 2 prilog + 2 refund
+  const order = db.prepare('SELECT status FROM orders WHERE id = ?').get(orderId) as any;
+  expect(order.status).toBe('refunded');
+}, 15000);
+
+test('reklamacija prilog računa nosi istu zbirnu stavku kao original', async () => {
+  dodajArtikal(1, '010', 30);
+  const orderId = dodajPrilogRacun({
+    brojFiskalnog: '563', prilogBroj: 7, ukupno: 60,
+    stavke: [{ productId: 1, kolicina: 2, cijena: 30 }],
+  });
+
+  let poslato: any = null;
+  const result = await refundAndPrint(
+    { ...deps(), print: async (racun) => { poslato = racun; return Tring.stampatiReklamiraniRacun(racun); } },
+    { id: orderId }
+  );
+
+  expect(result.success).toBe(true);
+  expect(poslato.stavke.length).toBe(1);
+  expect(poslato.stavke[0].artikal.naziv).toBe('Stavke po računu br. 7');
+  expect(poslato.stavke[0].artikal.sifra).toBe('PRILOG');
+  expect(poslato.stavke[0].artikal.cijena).toBe(60);
+  expect(poslato.stavke[0].kolicina).toBe(1);
+  expect(poslato.brojRacuna).toBe(563);
+}, 15000);
+
+test('storno prilog računa bez dodijeljenih stavki prolazi (nema šta vratiti)', async () => {
+  const orderId = dodajPrilogRacun({ brojFiskalnog: '564', prilogBroj: 2, ukupno: 60 });
+  const result = await refundAndPrint(deps(), { id: orderId });
+  expect(result.success).toBe(true);
+  const order = db.prepare('SELECT status FROM orders WHERE id = ?').get(orderId) as any;
+  expect(order.status).toBe('refunded');
+}, 15000);
