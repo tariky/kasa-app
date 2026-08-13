@@ -15,12 +15,14 @@ import {
 import { pdf } from '@react-pdf/renderer';
 import { RacunPdf, InvoiceLang } from '@/components/RacunPdf';
 import { OtpremnicaPdf } from '@/components/OtpremnicaPdf';
+import { PrilogPdf } from '@/components/PrilogPdf';
 import { Order, OrderItem } from '@/types';
 import { cn, formatKM, formatDateTime } from '@/lib/utils';
 import DodajRacunDialog from '@/components/DodajRacunDialog';
 import CashMovementDialog from '@/components/CashMovementDialog';
 import PrilogStavkeDialog from '@/components/PrilogStavkeDialog';
 import { gotovinskiIznos } from '@/lib/drawer';
+import { prilogKompletan, sumaPriloga } from '@/lib/prilog';
 import { round2 } from '@/lib/novac';
 
 export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
@@ -171,6 +173,33 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
     if (!savePath) return;
     const arrayBuffer = await blob.arrayBuffer();
     await window.api.writeFile(savePath, Array.from(new Uint8Array(arrayBuffer)) as any);
+  };
+
+  /**
+   * Štampa A4 specifikacije priloga. Dozvoljena samo kad se suma dodijeljenih
+   * stavki poklopi sa fiskalnim iznosom — nepotpuna specifikacija bi
+   * pokazivala manji iznos od onog koji je fiskalizovan.
+   */
+  const handlePrintPrilog = async (order: Order) => {
+    setReklamacijaMsg(null);
+    try {
+      const stavke = await window.api.getPrilogStavke(order.id);
+      if (!prilogKompletan(order.ukupno, stavke as any)) {
+        setReklamacijaMsg({
+          type: 'error',
+          text: `Suma stavki priloga (${formatKM(sumaPriloga(stavke as any))}) se ne poklapa sa fiskalnim iznosom ` +
+            `(${formatKM(order.ukupno)}) — dopunite prilog prije štampe.`,
+        });
+        return;
+      }
+      const firma = await loadFirma();
+      const blob = await pdf(<PrilogPdf order={order} firma={firma} stavke={stavke as any} />).toBlob();
+      const url = URL.createObjectURL(blob);
+      const win = window.open(url, '_blank');
+      if (win) win.onafterprint = () => URL.revokeObjectURL(url);
+    } catch (err: any) {
+      setReklamacijaMsg({ type: 'error', text: `Greška pri štampanju specifikacije: ${err?.message || 'Nepoznata greška'}` });
+    }
   };
 
   const handlePrintOtpremnica = async (order: Order) => {
@@ -558,13 +587,23 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
 
                   {/* Prilog — dodjela stavki fiskalizovanoj zbirnoj stavci */}
                   {selectedOrder.prilogBroj != null && (
-                    <button
-                      onClick={() => setPrilogOpen(true)}
-                      className="w-full h-9 flex items-center justify-center gap-2 rounded-lg border border-slate-200 text-[12px] font-medium text-slate-600 hover:bg-slate-50 transition-all"
-                    >
-                      <Paperclip size={13} />
-                      Uredi prilog
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setPrilogOpen(true)}
+                        className="flex-1 h-9 flex items-center justify-center gap-2 rounded-lg border border-slate-200 text-[12px] font-medium text-slate-600 hover:bg-slate-50 transition-all"
+                      >
+                        <Paperclip size={13} />
+                        Uredi prilog
+                      </button>
+                      <button
+                        onClick={() => handlePrintPrilog(selectedOrder)}
+                        className="flex-1 h-9 flex items-center justify-center gap-2 rounded-lg border border-slate-200 text-[12px] font-medium text-slate-600 hover:bg-slate-50 transition-all"
+                        title="Štampaj A4 specifikaciju stavki priloga"
+                      >
+                        <Printer size={13} />
+                        Štampaj prilog
+                      </button>
+                    </div>
                   )}
 
                   {/* Reklamacija result */}
