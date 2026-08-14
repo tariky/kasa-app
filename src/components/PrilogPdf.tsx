@@ -4,6 +4,7 @@ import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
 import { POTPIS_AUTORA } from '@/lib/brend';
 import { iznosStavke, pdvStavke } from '@/lib/racun';
 import { round2 } from '@/lib/novac';
+import { prilogNaziv } from '@/lib/prilog';
 
 /** Red iz `prilog:getStavke` (prilog_stavke + JOIN na products). */
 export interface PrilogPdfStavka {
@@ -35,6 +36,8 @@ const F = PDF_FONT_FAMILY;
 const FB = PDF_FONT_FAMILY_BOLD;
 
 const formatKM = (n: number) => n.toFixed(2).replace('.', ',') + ' KM';
+/** Količina bez suvišnih nula: 2 → "2", 10.5 → "10,5". */
+const formatKol = (n: number) => String(n).replace('.', ',');
 
 const s = StyleSheet.create({
   page: { padding: 50, paddingBottom: 70, fontFamily: F, fontSize: 9, color: '#000' },
@@ -47,7 +50,11 @@ const s = StyleSheet.create({
   firmaLine: { fontSize: 8, color: '#444', marginTop: 1 },
   docLabel: { textAlign: 'right' },
   docTitle: { fontSize: 22, fontFamily: FB, fontWeight: 700, letterSpacing: 1 },
-  docNumber: { fontSize: 10, fontFamily: FB, fontWeight: 700, marginTop: 3 },
+  docTitleNum: { fontSize: 22, fontFamily: F, fontWeight: 400, color: '#777', letterSpacing: 0 },
+  docSubtitle: {
+    fontSize: 8, fontFamily: FB, fontWeight: 700, textTransform: 'uppercase',
+    letterSpacing: 1.5, color: '#555', marginTop: 4,
+  },
 
   dividerThick: { borderBottom: '2pt solid #000', marginBottom: 20 },
 
@@ -72,21 +79,27 @@ const s = StyleSheet.create({
 
   /* ── Table ── */
   table: { marginBottom: 16 },
-  tHeaderRow: { flexDirection: 'row', borderBottom: '1.5pt solid #000', paddingBottom: 5, marginBottom: 2 },
-  tHeaderCell: {
-    fontSize: 7, fontFamily: FB, fontWeight: 700, textTransform: 'uppercase',
-    letterSpacing: 0.8, color: '#555',
+  tHeaderRow: {
+    flexDirection: 'row', alignItems: 'flex-end',
+    borderBottom: '1.5pt solid #000', paddingBottom: 4, marginBottom: 2,
   },
+  tHeaderCell: {
+    fontSize: 6.5, fontFamily: FB, fontWeight: 700, textTransform: 'uppercase',
+    letterSpacing: 0.5, color: '#555', paddingRight: 6,
+  },
+  tHeaderCellLast: { paddingRight: 0 },
   tRow: { flexDirection: 'row', paddingVertical: 5, borderBottom: '0.5pt solid #ddd', alignItems: 'flex-start' },
-  tCell: { fontSize: 8.5, lineHeight: 1.3 },
-  tCellBold: { fontSize: 8.5, fontFamily: FB, fontWeight: 700, lineHeight: 1.3 },
-  colRb: { width: '6%' },
-  colSifra: { width: '14%' },
-  colNaziv: { width: '38%' },
-  colJm: { width: '8%' },
-  colKol: { width: '10%', textAlign: 'right' },
-  colCijena: { width: '12%', textAlign: 'right' },
-  colIznos: { width: '12%', textAlign: 'right' },
+  tCell: { fontSize: 8.5, lineHeight: 1.3, paddingRight: 6 },
+  tCellBold: { fontSize: 8.5, fontFamily: FB, fontWeight: 700, lineHeight: 1.3, paddingRight: 6 },
+  tCellLast: { paddingRight: 0 },
+  colRb: { width: '4%' },
+  colSifra: { width: '12%' },
+  colNaziv: { width: '31%', paddingRight: 10 },
+  colJm: { width: '5%' },
+  colKol: { width: '8%', textAlign: 'right' },
+  colCijena: { width: '14%', textAlign: 'right' },
+  colPdv: { width: '12%', textAlign: 'right' },
+  colIznos: { width: '14%', textAlign: 'right' },
 
   /* ── Totals ── */
   totalsWrap: { flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 10 },
@@ -101,7 +114,19 @@ const s = StyleSheet.create({
   totalsFinalLabel: { fontSize: 10, fontFamily: FB, fontWeight: 700 },
   totalsFinalValue: { fontSize: 12, fontFamily: FB, fontWeight: 700 },
 
-  napomena: { fontSize: 7.5, color: '#666', marginTop: 8, lineHeight: 1.4 },
+  /* ── Veza sa fiskalnim računom ── */
+  vezaBox: {
+    marginTop: 14, paddingLeft: 10,
+    borderLeft: '0.5pt solid #ddd',
+  },
+  vezaLabel: {
+    fontSize: 6.5, fontFamily: FB, fontWeight: 700, textTransform: 'uppercase',
+    letterSpacing: 1.2, color: '#aaa', marginBottom: 4,
+  },
+  vezaRow: { flexDirection: 'row', marginBottom: 1.5 },
+  vezaKey: { width: 78, fontSize: 7.5, color: '#999' },
+  vezaValue: { fontSize: 7.5, color: '#444' },
+  vezaNota: { fontSize: 7, color: '#999', marginTop: 4, lineHeight: 1.4 },
 
   /* ── Signatures ── */
   signaturesWrap: {
@@ -124,7 +149,7 @@ const s = StyleSheet.create({
 });
 
 /**
- * A4 specifikacija stavki uz fiskalni račun po prilogu. Veza sa fiskalnim
+ * A4 prilog uz fiskalni račun — stvarne stavke iza zbirne stavke. Veza sa fiskalnim
  * računom (BF broj) je zakonski obavezna — bez nje je ovo samo papir.
  */
 export function PrilogPdf({ order, firma, stavke }: PrilogPdfProps) {
@@ -136,8 +161,11 @@ export function PrilogPdf({ order, firma, stavke }: PrilogPdfProps) {
   const today = fmtDate(new Date());
   const hasKupac = order.kupacNaziv || order.kupacIdBroj;
 
+  // Cijene u sistemu su sa uračunatim PDV-om; za fakturni prikaz se jedinična
+  // cijena bez PDV-a izlučuje iz bruto cijene po stopi stavke.
   const linije = stavke.map(si => ({
     ...si,
+    cijenaBezPdv: si.pdvStopa === 'E' ? round2(si.cijena / 1.17) : round2(si.cijena),
     iznos: iznosStavke({ cijena: si.cijena, kolicina: si.kolicina, rabat: 0, pdvStopa: si.pdvStopa }),
     pdv: pdvStavke({ cijena: si.cijena, kolicina: si.kolicina, rabat: 0, pdvStopa: si.pdvStopa }),
   }));
@@ -159,9 +187,12 @@ export function PrilogPdf({ order, firma, stavke }: PrilogPdfProps) {
             </View>
           </View>
           <View style={s.docLabel}>
-            <Text style={s.docTitle}>SPECIFIKACIJA</Text>
-            <Text style={s.docNumber}>br. {order.prilogBroj}</Text>
-            <Text style={s.firmaLine}>Uz fiskalni račun BF: {order.brojFiskalnogRacuna || '—'}</Text>
+            <Text style={s.docTitle}>
+              PRILOG <Text style={s.docTitleNum}>br. {order.prilogBroj}</Text>
+            </Text>
+            <Text style={s.docSubtitle}>
+              uz fiskalni račun BF {order.brojFiskalnogRacuna || '—'}
+            </Text>
           </View>
         </View>
 
@@ -219,9 +250,10 @@ export function PrilogPdf({ order, firma, stavke }: PrilogPdfProps) {
             <Text style={[s.tHeaderCell, s.colSifra]}>Šifra</Text>
             <Text style={[s.tHeaderCell, s.colNaziv]}>Naziv</Text>
             <Text style={[s.tHeaderCell, s.colJm]}>JM</Text>
-            <Text style={[s.tHeaderCell, s.colKol]}>Količina</Text>
-            <Text style={[s.tHeaderCell, s.colCijena]}>Cijena</Text>
-            <Text style={[s.tHeaderCell, s.colIznos]}>Iznos</Text>
+            <Text style={[s.tHeaderCell, s.colKol]}>Kol.</Text>
+            <Text style={[s.tHeaderCell, s.colCijena]}>Cijena bez PDV</Text>
+            <Text style={[s.tHeaderCell, s.colPdv]}>PDV</Text>
+            <Text style={[s.tHeaderCell, s.tHeaderCellLast, s.colIznos]}>Ukupno</Text>
           </View>
 
           {linije.map((l, i) => (
@@ -230,9 +262,10 @@ export function PrilogPdf({ order, firma, stavke }: PrilogPdfProps) {
               <Text style={[s.tCell, s.colSifra]}>{l.productSifra ?? ''}</Text>
               <Text style={[s.tCellBold, s.colNaziv]}>{l.productNaziv ?? `#${l.productId}`}</Text>
               <Text style={[s.tCell, s.colJm]}>{l.productJm ?? ''}</Text>
-              <Text style={[s.tCell, s.colKol]}>{l.kolicina}</Text>
-              <Text style={[s.tCell, s.colCijena]}>{formatKM(l.cijena)}</Text>
-              <Text style={[s.tCellBold, s.colIznos]}>{formatKM(l.iznos)}</Text>
+              <Text style={[s.tCell, s.colKol]}>{formatKol(l.kolicina)}</Text>
+              <Text style={[s.tCell, s.colCijena]}>{formatKM(l.cijenaBezPdv)}</Text>
+              <Text style={[s.tCell, s.colPdv]}>{formatKM(round2(l.pdv))}</Text>
+              <Text style={[s.tCellBold, s.tCellLast, s.colIznos]}>{formatKM(l.iznos)}</Text>
             </View>
           ))}
         </View>
@@ -241,7 +274,7 @@ export function PrilogPdf({ order, firma, stavke }: PrilogPdfProps) {
         <View style={s.totalsWrap}>
           <View style={s.totalsBox}>
             <View style={s.totalsRow}>
-              <Text style={s.totalsLabel}>Ukupno bez PDV</Text>
+              <Text style={s.totalsLabel}>Osnovica (bez PDV)</Text>
               <Text style={s.totalsValue}>{formatKM(osnovica)}</Text>
             </View>
             <View style={s.totalsRow}>
@@ -249,16 +282,27 @@ export function PrilogPdf({ order, firma, stavke }: PrilogPdfProps) {
               <Text style={s.totalsValue}>{formatKM(pdvIznos)}</Text>
             </View>
             <View style={s.totalsFinalRow}>
-              <Text style={s.totalsFinalLabel}>UKUPNO</Text>
+              <Text style={s.totalsFinalLabel}>UKUPNO SA PDV</Text>
               <Text style={s.totalsFinalValue}>{formatKM(ukupno)}</Text>
             </View>
           </View>
         </View>
 
-        <Text style={s.napomena}>
-          Ova specifikacija je sastavni dio fiskalnog računa br. {order.brojFiskalnogRacuna || '—'} od {orderDate},
-          na kojem je iznos iskazan zbirnom stavkom &bdquo;Stavke po računu br. {order.prilogBroj}&ldquo;.
-        </Text>
+        {/* ── Veza sa fiskalnim računom — bez nje je ovo samo papir ── */}
+        <View style={s.vezaBox} wrap={false}>
+          <Text style={s.vezaLabel}>Veza sa fiskalnim računom</Text>
+          <View style={s.vezaRow}>
+            <Text style={s.vezaKey}>Fiskalni račun</Text>
+            <Text style={s.vezaValue}>BF {order.brojFiskalnogRacuna || '—'} &middot; {orderDate}</Text>
+          </View>
+          <View style={s.vezaRow}>
+            <Text style={s.vezaKey}>Zbirna stavka</Text>
+            <Text style={s.vezaValue}>&bdquo;{prilogNaziv(order.prilogBroj ?? 0)}&ldquo; &middot; {formatKM(ukupno)}</Text>
+          </View>
+          <Text style={s.vezaNota}>
+            Ovaj prilog razrađuje tu zbirnu stavku i vrijedi samo uz navedeni fiskalni račun.
+          </Text>
+        </View>
 
         {/* ── Signatures ── */}
         <View style={s.signaturesWrap} wrap={false}>

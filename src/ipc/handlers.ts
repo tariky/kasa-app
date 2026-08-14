@@ -12,6 +12,7 @@ import {
 import { refundOrderInTransaction, refundAndPrint } from '../lib/refund';
 import {
   sljedeciPrilogBroj, savePrilogStavkeInTransaction, finalizePrilogAndPrint,
+  najveciPrilogBroj, pocetniPrilogBroj, postaviPocetniPrilogBroj,
   PRILOG_SIFRA, prilogNaziv, type PrilogStavkaUnos,
 } from '../lib/prilog';
 import { saveCart, listSavedCarts, deleteSavedCart } from '../lib/savedCarts';
@@ -773,8 +774,9 @@ export function registerIpcHandlers(): void {
   // Račun po prilogu: jedna zbirna stavka na fiskalnom računu, stvarne stavke
   // se dodjeljuju naknadno. Orkestracija živi u lib/prilog.ts (testabilna).
   handle('order:finalizePrilog', async (data: {
-    korisnikId: number; iznos: number; nacinPlacanja: string;
+    korisnikId: number; iznos?: number; nacinPlacanja: string;
     kupac?: { naziv?: string; idBroj?: string; adresa?: string; grad?: string; postanskiBroj?: string };
+    stavke?: PrilogStavkaUnos[];
   }) => {
     loadTringConfig();
     return finalizePrilogAndPrint({
@@ -790,6 +792,17 @@ export function registerIpcHandlers(): void {
   });
 
   handle('prilog:nextBroj', () => sljedeciPrilogBroj(db));
+
+  handle('prilog:getNumeracija', () => ({
+    sljedeci: sljedeciPrilogBroj(db),
+    najveciIzdati: najveciPrilogBroj(db),
+    pocetni: pocetniPrilogBroj(db),
+  }));
+
+  handle('prilog:setPocetniBroj', (broj: number) => ({
+    success: true,
+    sljedeci: postaviPocetniPrilogBroj(db, broj) && sljedeciPrilogBroj(db),
+  }));
 
   handle('prilog:getStavke', (orderId: number) => {
     return db.prepare(`
@@ -862,6 +875,10 @@ export function registerIpcHandlers(): void {
         isManual: 1,
         createdAt: data.createdAt,
       });
+      // Prilog račun: stvarne stavke žive u snapshotu odvojeno od order_items.
+      if (Array.isArray(snap.prilogStavke) && snap.prilogStavke.length > 0) {
+        savePrilogStavkeInTransaction(db, orderId, snap.prilogStavke);
+      }
       db.prepare('DELETE FROM pending_receipts WHERE id = ?').run(data.id);
       return orderId;
     });

@@ -148,6 +148,77 @@ test('snapshot pending reda nosi prilogBroj i prazne stavke', async () => {
   expect(snap.ukupno).toBe(150);
 }, 15000);
 
+test('stavke unesene na kasi određuju iznos i upisuju se uz račun', async () => {
+  db.prepare("INSERT INTO products (id, sifra, naziv, jm, cijena, pdvStopa, tip) VALUES (1, 'A1', 'Artikal', 'kom', 30, 'E', 'artikal')").run();
+  db.prepare("INSERT INTO products (id, sifra, naziv, jm, cijena, pdvStopa, tip) VALUES (2, 'U1', 'Usluga', 'kom', 90, 'E', 'usluga')").run();
+  db.prepare("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (1, 'ulaz', 100, 'test', 0)").run();
+
+  let poslato: any = null;
+  const res = await finalizePrilogAndPrint(
+    { ...deps(), print: async (racun) => { poslato = racun; return Tring.stampatiFiskalniRacun(racun); } },
+    {
+      korisnikId: 1, nacinPlacanja: 'Gotovina',
+      // Ukucani iznos se ignoriše kad stavke postoje — suma je jedini izvor istine.
+      iznos: 999,
+      stavke: [
+        { productId: 1, kolicina: 2, cijena: 30, pdvStopa: 'E' },
+        { productId: 2, kolicina: 1, cijena: 90, pdvStopa: 'E' },
+      ],
+    }
+  );
+
+  expect(res.success).toBe(true);
+  expect(poslato.stavke.length).toBe(1);
+  expect(poslato.stavke[0].artikal.naziv).toBe('Stavke po računu br. 1');
+  expect(poslato.stavke[0].artikal.cijena).toBe(150);
+
+  const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(res.id!) as any;
+  expect(order.ukupno).toBe(150);
+
+  const stavke = db.prepare('SELECT * FROM prilog_stavke WHERE orderId = ? ORDER BY productId').all(res.id!) as any[];
+  expect(stavke.length).toBe(2);
+  expect(stavke[0].kolicina).toBe(2);
+  // Usluga ne dira zalihu, artikal da.
+  expect(getProductStock(db, 1)).toBe(98);
+  expect(db.prepare('SELECT * FROM pending_receipts').all().length).toBe(0);
+}, 15000);
+
+test('pad baze nakon štampe ostavlja stavke u snapshotu', async () => {
+  db.prepare("INSERT INTO products (id, sifra, naziv, jm, cijena, pdvStopa, tip) VALUES (1, 'A1', 'Artikal', 'kom', 30, 'E', 'artikal')").run();
+
+  await expect(finalizePrilogAndPrint(
+    { ...deps(), transaction: () => () => { throw new Error('database is locked'); } },
+    {
+      korisnikId: 1, nacinPlacanja: 'Gotovina',
+      stavke: [{ productId: 1, kolicina: 2, cijena: 30, pdvStopa: 'E' }],
+    }
+  )).rejects.toThrow('JE odštampan');
+
+  const rows = db.prepare('SELECT snapshot FROM pending_receipts').all() as Array<{ snapshot: string }>;
+  const snap = JSON.parse(rows[0].snapshot);
+  expect(snap.ukupno).toBe(60);
+  expect(snap.stavke).toEqual([]);
+  expect(snap.prilogStavke).toEqual([{ productId: 1, kolicina: 2, cijena: 30, pdvStopa: 'E' }]);
+}, 15000);
+
+test('neispravna stavka se odbija prije štampe', async () => {
+  db.prepare("INSERT INTO products (id, sifra, naziv, jm, cijena, pdvStopa, tip) VALUES (1, 'K1', 'Oslobođeno', 'kom', 30, 'K', 'artikal')").run();
+  let stampano = false;
+
+  await expect(finalizePrilogAndPrint(
+    { ...deps(), print: async (r) => { stampano = true; return Tring.stampatiFiskalniRacun(r); } },
+    {
+      korisnikId: 1, nacinPlacanja: 'Gotovina',
+      stavke: [{ productId: 1, kolicina: 1, cijena: 30, pdvStopa: 'K' }],
+    }
+  )).rejects.toThrow(/stopom E/);
+
+  // Ništa nije odštampano — greška poslije štampe bi bila papir bez pokrića.
+  expect(stampano).toBe(false);
+  expect(db.prepare('SELECT * FROM orders').all().length).toBe(0);
+  expect(db.prepare('SELECT * FROM pending_receipts').all().length).toBe(0);
+});
+
 test('cijeli tok: fiskalizacija → dodjela stavki → skladište → storno → uređivanje blokirano', async () => {
   db.prepare("INSERT INTO products (id, sifra, naziv, jm, cijena, pdvStopa, tip) VALUES (1, 'A1', 'Artikal', 'kom', 30, 'E', 'artikal')").run();
   db.prepare("INSERT INTO products (id, sifra, naziv, jm, cijena, pdvStopa, tip) VALUES (2, 'U1', 'Usluga', 'kom', 90, 'E', 'usluga')").run();

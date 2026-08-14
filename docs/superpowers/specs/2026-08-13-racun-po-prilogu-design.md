@@ -72,6 +72,30 @@ interni broj priloga.
   cijena = iznos, PDV stopa `E`), zatim snima order sa `prilogBroj` i
   `brojFiskalnogRacuna` iz odgovora printera. `pdvIznos` se računa standardno.
 
+### 2a. Dopuna (2026-08-14): stavke se mogu unijeti odmah na kasi
+
+Dijalog na kasi je prerastao u radnu površinu (širok ~1180px, 92vh) sa dvije
+kolone i prekidačem izvora iznosa:
+
+- **Tab "Stavke"** (podrazumijevan): pretraga šifarnika (samo stopa `E`),
+  lista sa količinom i cijenom po stavci. Iznos je **izveden** — suma stavki,
+  polje se ne kuca. Tastatura: `↑↓` izbor, `Enter` dodaj, `F2` promjena taba,
+  `F5` fiskalizuj, `Esc` čisti pretragu pa zatvara dijalog.
+- **Tab "Ručni iznos"**: raniji tok — ukuca se samo ukupan iznos, stavke se
+  dodjeljuju kasnije u sekciji Računi.
+- Desna kolona je zajednička: displej iznosa, način plaćanja, kupac
+  (pretraga sačuvanih kupaca + ručni unos), dugme za fiskalizaciju.
+
+`finalizePrilogAndPrint` prima opcione `stavke`; kad ih ima, one su jedini
+izvor istine za iznos (`sumaPriloga`), a ukucani `iznos` se ignoriše. Stavke
+se validiraju **prije štampe** (`validirajPrilogStavke`) da neispravan unos ne
+proizvede papir bez pokrića, i upisuju se u **istoj transakciji** kao i račun.
+Write-ahead snapshot nosi `prilogStavke`, pa ih `pending:resolve` ne izgubi
+kad baza padne nakon uspješne štampe.
+
+Stavke unesene na kasi ostaju izmjenjive kroz "Uredi prilog" — fiskalni iznos
+je zaključan štampom, suma stavki se i dalje mora poklopiti s njim.
+
 ### 3. Sekcija Računi (NarudzbeScreen)
 
 - Prilog računi u listi označeni badge-om "Prilog br. N".

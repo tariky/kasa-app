@@ -19,6 +19,7 @@ import {
   Users, Printer, Building2, Shield, Hash, KeyRound,
   MapPin, FileText, Image, CheckCircle2, AlertTriangle,
   HardDrive, Download, Upload, Bug, RefreshCw, X, ChevronDown, ChevronUp, Settings, Landmark, Percent,
+  Paperclip,
 } from 'lucide-react';
 
 type SettingsTab = 'korisnici' | 'fiskalni' | 'firma' | 'sistem';
@@ -66,8 +67,13 @@ export default function PostavkeScreen() {
   const [pdvPotvrda, setPdvPotvrda] = useState('');
   const [kusurKalkulacija, setKusurKalkulacija] = useState(true);
   const [requirePinRefund, setRequirePinRefund] = useState(false);
+  const [pologPrompt, setPologPrompt] = useState(true);
   const [generatorEnabled, setGeneratorEnabled] = useState(false);
   const [racunNapomena, setRacunNapomena] = useState('');
+  // ── Numeracija priloga ──
+  const [prilogNumeracija, setPrilogNumeracija] = useState<{ sljedeci: number; najveciIzdati: number } | null>(null);
+  const [prilogUnos, setPrilogUnos] = useState('');
+  const [prilogStatus, setPrilogStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // ── Debug state ──
   const [debugOpen, setDebugOpen] = useState(false);
@@ -111,9 +117,33 @@ export default function PostavkeScreen() {
     // Kalkulacija kusura je podrazumijevano uključena — isključena samo na eksplicitno 'false'.
     window.api.getSetting('kasa.kusurKalkulacija').then((v) => setKusurKalkulacija(v !== 'false'));
     window.api.getSetting('kasa.requirePinRefund').then((v) => setRequirePinRefund(v === 'true'));
+    // Prompt za polog je podrazumijevano uključen — isključen samo na eksplicitno 'false'.
+    window.api.getSetting('kasa.pologPrompt').then((v) => setPologPrompt(v !== 'false'));
     window.api.getSetting('ui.showGenerator').then((v) => setGeneratorEnabled(v === 'true'));
     window.api.getSetting('racun.napomena').then((v) => setRacunNapomena(v || ''));
+    loadPrilogNumeracija();
   }, []);
+
+  const loadPrilogNumeracija = async () => {
+    try {
+      const n = await window.api.getPrilogNumeracija();
+      setPrilogNumeracija(n);
+      setPrilogUnos(String(n.sljedeci));
+    } catch { /* postavka nije kritična za rad ekrana */ }
+  };
+
+  const handleSavePrilogBroj = async () => {
+    setPrilogStatus(null);
+    const broj = parseInt(prilogUnos, 10);
+    try {
+      const res = await window.api.setPrilogPocetniBroj(broj);
+      await loadPrilogNumeracija();
+      setPrilogStatus({ type: 'success', message: `Sljedeći prilog nosi br. ${res.sljedeci}.` });
+    } catch (err: any) {
+      const raw = err?.message || 'Nepoznata greška';
+      setPrilogStatus({ type: 'error', message: raw.replace(/^Error invoking remote method '[^']*':\s*(Error:\s*)?/, '') });
+    }
+  };
 
   useEffect(() => {
     if (!pdvPotvrda) return;
@@ -1010,6 +1040,20 @@ export default function PostavkeScreen() {
                     <Separator />
                     <div className="flex items-center justify-between">
                       <div>
+                        <p className="text-[13px] font-medium text-slate-700">Traži početni polog</p>
+                        <p className="text-[12px] text-slate-400 mt-0.5">Nakon prve prijave u danu otvara prozor za unos gotovine u ladici</p>
+                      </div>
+                      <Switch
+                        checked={pologPrompt}
+                        onCheckedChange={async (checked) => {
+                          setPologPrompt(checked);
+                          await window.api.setSetting('kasa.pologPrompt', String(checked));
+                        }}
+                      />
+                    </div>
+                    <Separator />
+                    <div className="flex items-center justify-between">
+                      <div>
                         <p className="text-[13px] font-medium text-slate-700">Zahtijevaj PIN za storniranje</p>
                         <p className="text-[12px] text-slate-400 mt-0.5">Traži unos admin PIN-a prije reklamacije računa</p>
                       </div>
@@ -1128,6 +1172,63 @@ export default function PostavkeScreen() {
                       <Save size={13} />
                       Sačuvaj napomenu
                     </Button>
+                  </div>
+                </div>
+
+                {/* Prilog numbering card */}
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm shadow-slate-200/50 overflow-hidden">
+                  <div className="px-6 py-4 border-b border-slate-100">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-sky-50 flex items-center justify-center">
+                        <Paperclip size={20} className="text-sky-500" />
+                      </div>
+                      <div>
+                        <h3 className="text-[15px] font-semibold text-slate-800">Numeracija priloga</h3>
+                        <p className="text-[12px] text-slate-400 mt-0.5">
+                          Broj koji nosi sljedeći račun po prilogu — podesite ga ako je numeracija počela prije programa
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="px-6 py-5">
+                    <div className="flex items-end gap-3">
+                      <div>
+                        <Label className="text-[12px] text-slate-500">Sljedeći broj priloga</Label>
+                        <Input
+                          value={prilogUnos}
+                          onChange={e => setPrilogUnos(e.target.value.replace(/\D/g, ''))}
+                          onKeyDown={e => { if (e.key === 'Enter') handleSavePrilogBroj(); }}
+                          inputMode="numeric"
+                          maxLength={9}
+                          className="mt-1 h-9 w-32 bg-slate-50 border-slate-200 text-[13px] font-mono tabular-nums"
+                        />
+                      </div>
+                      <Button
+                        size="sm"
+                        className="h-9 gap-1.5 text-[12px]"
+                        onClick={handleSavePrilogBroj}
+                        disabled={!prilogUnos || (prilogNumeracija != null && parseInt(prilogUnos, 10) === prilogNumeracija.sljedeci)}
+                      >
+                        <Save size={13} />
+                        Sačuvaj broj
+                      </Button>
+                      {prilogStatus && (
+                        <div className={cn(
+                          'flex items-center gap-1.5 pb-2 text-[12px] font-medium',
+                          prilogStatus.type === 'success' ? 'text-emerald-600' : 'text-red-500'
+                        )}>
+                          {prilogStatus.type === 'success' ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}
+                          {prilogStatus.message}
+                        </div>
+                      )}
+                    </div>
+                    <p className="mt-3 text-[12px] text-slate-400">
+                      {prilogNumeracija == null
+                        ? 'Učitavanje…'
+                        : prilogNumeracija.najveciIzdati === 0
+                          ? 'Još nijedan prilog nije izdat iz programa.'
+                          : `Posljednji izdati prilog: br. ${prilogNumeracija.najveciIzdati}. Novi broj mora biti veći od njega.`}
+                    </p>
                   </div>
                 </div>
 
