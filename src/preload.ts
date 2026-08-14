@@ -54,6 +54,8 @@ contextBridge.exposeInMainWorld('api', {
   finalizeOrder: (data: any) => ipcRenderer.invoke('order:finalize', data),
   finalizePrilogOrder: (data: any) => ipcRenderer.invoke('order:finalizePrilog', data),
   getNextPrilogBroj: () => ipcRenderer.invoke('prilog:nextBroj'),
+  getPrilogNumeracija: () => ipcRenderer.invoke('prilog:getNumeracija'),
+  setPrilogPocetniBroj: (broj: number) => ipcRenderer.invoke('prilog:setPocetniBroj', broj),
   getPrilogStavke: (orderId: number) => ipcRenderer.invoke('prilog:getStavke', orderId),
   savePrilogStavke: (orderId: number, stavke: any[]) => ipcRenderer.invoke('prilog:saveStavke', orderId, stavke),
   listPending: () => ipcRenderer.invoke('pending:list'),

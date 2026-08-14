@@ -176,8 +176,8 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
   };
 
   /**
-   * Štampa A4 specifikacije priloga. Dozvoljena samo kad se suma dodijeljenih
-   * stavki poklopi sa fiskalnim iznosom — nepotpuna specifikacija bi
+   * Štampa A4 priloga uz fiskalni račun. Dozvoljena samo kad se suma dodijeljenih
+   * stavki poklopi sa fiskalnim iznosom — nepotpun prilog bi
    * pokazivala manji iznos od onog koji je fiskalizovan.
    */
   const handlePrintPrilog = async (order: Order) => {
@@ -198,7 +198,7 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
       const win = window.open(url, '_blank');
       if (win) win.onafterprint = () => URL.revokeObjectURL(url);
     } catch (err: any) {
-      setReklamacijaMsg({ type: 'error', text: `Greška pri štampanju specifikacije: ${err?.message || 'Nepoznata greška'}` });
+      setReklamacijaMsg({ type: 'error', text: `Greška pri štampanju priloga: ${err?.message || 'Nepoznata greška'}` });
     }
   };
 
@@ -598,7 +598,7 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
                       <button
                         onClick={() => handlePrintPrilog(selectedOrder)}
                         className="flex-1 h-9 flex items-center justify-center gap-2 rounded-lg border border-slate-200 text-[12px] font-medium text-slate-600 hover:bg-slate-50 transition-all"
-                        title="Štampaj A4 specifikaciju stavki priloga"
+                        title="Štampaj A4 prilog uz fiskalni račun"
                       >
                         <Printer size={13} />
                         Štampaj prilog

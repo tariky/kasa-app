@@ -49,11 +49,16 @@ interface Window {
       success: boolean; brojReklamacije?: string | null; error?: string; odgovori?: Record<string, string>;
     }>;
     finalizeOrder: (data: any) => Promise<{ success: boolean; id?: number; brojFiskalnogRacuna?: string | null; error?: string; odgovori?: Record<string, string> }>;
-    finalizePrilogOrder: (data: { korisnikId: number; iznos: number; nacinPlacanja: string; kupac?: any }) => Promise<{
+    finalizePrilogOrder: (data: {
+      korisnikId: number; iznos?: number; nacinPlacanja: string; kupac?: any;
+      stavke?: Array<{ productId: number; kolicina: number; cijena: number; pdvStopa: string }>;
+    }) => Promise<{
       success: boolean; id?: number; prilogBroj?: number; brojFiskalnogRacuna?: string | null;
       error?: string; odgovori?: Record<string, string>;
     }>;
     getNextPrilogBroj: () => Promise<number>;
+    getPrilogNumeracija: () => Promise<{ sljedeci: number; najveciIzdati: number; pocetni: number }>;
+    setPrilogPocetniBroj: (broj: number) => Promise<{ success: boolean; sljedeci: number }>;
     getPrilogStavke: (orderId: number) => Promise<any[]>;
     savePrilogStavke: (orderId: number, stavke: Array<{ productId: number; kolicina: number; cijena: number; pdvStopa: string }>) => Promise<{ success: boolean }>;
     listPending: () => Promise<Array<{ id: number; korisnikId: number; createdAt: string; snapshot: any }>>;

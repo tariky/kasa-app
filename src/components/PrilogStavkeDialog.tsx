@@ -35,7 +35,7 @@ interface PrilogStavkeDialogProps {
 /**
  * Dodjela stvarnih stavki fiskalizovanom računu po prilogu. Suma stavki mora
  * na kraju pasti tačno na fiskalni iznos, ali se smije spremati i nekompletna
- * (rad u više navrata) — print specifikacije je ono što je zaključano.
+ * (rad u više navrata) — štampa priloga je ono što je zaključano.
  */
 export default function PrilogStavkeDialog({ open, onOpenChange, order, onSaved }: PrilogStavkeDialogProps) {
   const [stavke, setStavke] = useState<StavkaRed[]>([]);

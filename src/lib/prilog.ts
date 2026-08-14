@@ -6,7 +6,7 @@ import { buildTringRacun } from './tringRacun';
 
 /**
  * Račun po prilogu: fiskalno se kuca jedna zbirna stavka, a stvarne stavke se
- * naknadno dodjeljuju (prilog_stavke) i printaju kao specifikacija sa BF
+ * naknadno dodjeljuju (prilog_stavke) i printaju kao prilog uz fiskalni račun sa BF
  * brojem. Vidi docs/superpowers/specs/2026-08-13-racun-po-prilogu-design.md.
  */
 
@@ -16,12 +16,47 @@ export function prilogNaziv(broj: number): string {
   return `Stavke po računu br. ${broj}`;
 }
 
-/** Interni broj priloga: nastavlja se na najveći do sada izdati. */
-export function sljedeciPrilogBroj(db: SqlDb): number {
+/** Postavka: od kojeg broja numeracija priloga kreće (za nastavak stare serije). */
+export const PRILOG_POCETNI_KEY = 'prilog.pocetniBroj';
+
+/** Najveći do sada izdati broj priloga (0 kad ih još nema). */
+export function najveciPrilogBroj(db: SqlDb): number {
   const row = db
-    .prepare('SELECT COALESCE(MAX(prilogBroj), 0) + 1 AS broj FROM orders')
+    .prepare('SELECT COALESCE(MAX(prilogBroj), 0) AS broj FROM orders')
     .get() as { broj: number };
   return row.broj;
+}
+
+/** Podešeni početni broj; 1 kad postavka nije postavljena ili je neispravna. */
+export function pocetniPrilogBroj(db: SqlDb): number {
+  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(PRILOG_POCETNI_KEY) as
+    { value: string } | undefined;
+  const broj = row ? parseInt(row.value, 10) : NaN;
+  return Number.isInteger(broj) && broj >= 1 ? broj : 1;
+}
+
+/**
+ * Interni broj priloga: nastavlja se na najveći do sada izdati, ali nikad ne
+ * ide ispod podešenog početnog broja — klijent koji je prije programa izdao 20
+ * priloga podesi 21 i numeracija se dalje vodi sama.
+ */
+export function sljedeciPrilogBroj(db: SqlDb): number {
+  return Math.max(najveciPrilogBroj(db) + 1, pocetniPrilogBroj(db));
+}
+
+/**
+ * Promjena početnog broja. Broj koji je već izdat ne smije se ponoviti, pa
+ * postavka mora biti veća od najvećeg iskorištenog.
+ */
+export function postaviPocetniPrilogBroj(db: SqlDb, broj: number): number {
+  if (!Number.isInteger(broj) || broj < 1) throw new Error('Broj priloga mora biti cijeli broj veći od 0');
+  const najveci = najveciPrilogBroj(db);
+  if (broj <= najveci) {
+    throw new Error(`Broj ${broj} je već iskorišten — posljednji izdati prilog je br. ${najveci}.`);
+  }
+  db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+    .run(PRILOG_POCETNI_KEY, String(broj));
+  return broj;
 }
 
 export interface PrilogStavkaUnos {
@@ -39,6 +74,26 @@ export function sumaPriloga(stavke: PrilogStavkaUnos[]): number {
 /** Prilog je kompletan tek kad se suma stavki poklopi sa fiskalnim iznosom. */
 export function prilogKompletan(ukupno: number, stavke: PrilogStavkaUnos[]): boolean {
   return sumaPriloga(stavke) === round2(ukupno);
+}
+
+/**
+ * Provjeri stavke priloga i vrati tip proizvoda po id-u (usluge ne diraju
+ * zalihu). Odvojeno od upisa da se stavke mogu odbiti i prije štampe —
+ * greška poslije štampe znači papir bez pokrića.
+ */
+export function validirajPrilogStavke(db: SqlDb, stavke: PrilogStavkaUnos[]): Map<number, string> {
+  const tipovi = new Map<number, string>();
+  for (const s of stavke) {
+    if (!(s.kolicina > 0)) throw new Error('Količina mora biti veća od 0');
+    if (s.cijena < 0) throw new Error('Cijena ne može biti negativna');
+    if (s.pdvStopa !== 'E') {
+      throw new Error('U prilog smiju samo stavke sa PDV stopom E (zbirna stavka je fiskalizovana sa E)');
+    }
+    const product = db.prepare('SELECT tip FROM products WHERE id = ?').get(s.productId) as { tip: string } | undefined;
+    if (!product) throw new Error(`Proizvod #${s.productId} ne postoji`);
+    tipovi.set(s.productId, product.tip);
+  }
+  return tipovi;
 }
 
 /**
@@ -62,18 +117,7 @@ export function savePrilogStavkeInTransaction(
   if (order.prilogBroj == null) throw new Error('Ovo nije račun po prilogu');
   if (order.status !== 'completed') throw new Error('Račun je storniran — prilog se ne može mijenjati');
 
-  // Tip proizvoda odlučuje da li stavka dira zalihu (usluge nemaju zalihu).
-  const tipovi = new Map<number, string>();
-  for (const s of stavke) {
-    if (!(s.kolicina > 0)) throw new Error('Količina mora biti veća od 0');
-    if (s.cijena < 0) throw new Error('Cijena ne može biti negativna');
-    if (s.pdvStopa !== 'E') {
-      throw new Error('U prilog smiju samo stavke sa PDV stopom E (zbirna stavka je fiskalizovana sa E)');
-    }
-    const product = db.prepare('SELECT tip FROM products WHERE id = ?').get(s.productId) as { tip: string } | undefined;
-    if (!product) throw new Error(`Proizvod #${s.productId} ne postoji`);
-    tipovi.set(s.productId, product.tip);
-  }
+  const tipovi = validirajPrilogStavke(db, stavke);
 
   db.prepare('DELETE FROM prilog_stavke WHERE orderId = ?').run(orderId);
   db.prepare("DELETE FROM stock_movements WHERE referenceType = 'prilog' AND referenceId = ?").run(orderId);
@@ -124,7 +168,13 @@ export interface FinalizePrilogResult {
 }
 
 /**
- * Fiskalizuje račun po prilogu: jedna zbirna stavka, ručno unesen iznos.
+ * Fiskalizuje račun po prilogu: jedna zbirna stavka na uređaju.
+ *
+ * Iznos dolazi na dva načina — ručno ukucan, ili izveden iz stavki koje je
+ * operater unio odmah na kasi. Kad stavke postoje, one su jedini izvor
+ * istine za iznos i upisuju se u istoj transakciji kao i račun, pa nema
+ * stanja u kojem je račun fiskalizovan a stavke izgubljene.
+ *
  * Isti write-ahead obrazac kao order:finalize — snapshot u pending_receipts
  * prije štampe, pa atomični upis ordera + brisanje pending reda.
  */
@@ -132,24 +182,33 @@ export async function finalizePrilogAndPrint(
   deps: FinalizePrilogDeps,
   data: {
     korisnikId: number;
-    iznos: number;
+    /** Ručno ukucan iznos; ignoriše se kad su poslate stavke. */
+    iznos?: number;
     nacinPlacanja: string;
     kupac?: { naziv?: string; idBroj?: string; adresa?: string; grad?: string; postanskiBroj?: string };
+    /** Stavke unesene odmah na kasi — iznos se računa iz njih. */
+    stavke?: PrilogStavkaUnos[];
   }
 ): Promise<FinalizePrilogResult> {
   const { db, print, transaction } = deps;
   if (!data.korisnikId) throw new Error('Korisnik nije prijavljen');
-  if (!(data.iznos > 0)) throw new Error('Iznos mora biti veći od 0');
+
+  const stavke = data.stavke ?? [];
+  // Prije bilo kakve štampe: neispravna stavka ne smije proizvesti papir.
+  if (stavke.length > 0) validirajPrilogStavke(db, stavke);
+  const iznos = stavke.length > 0 ? sumaPriloga(stavke) : (data.iznos ?? 0);
+  if (!(iznos > 0)) throw new Error('Iznos mora biti veći od 0');
 
   const prilogBroj = sljedeciPrilogBroj(db);
-  const stavka = buildPrilogFiskalnaStavka(prilogBroj, data.iznos);
+  const stavka = buildPrilogFiskalnaStavka(prilogBroj, iznos);
   const { ukupno, pdvIznos } = izracunajTotale([stavka]);
 
-  // Write-ahead: stavke:[] + prilogBroj → pending:resolve rekonstruiše prilog račun.
+  // Write-ahead: stavke:[] + prilogBroj → pending:resolve rekonstruiše prilog
+  // račun; prilogStavke nosi stvarne stavke da se ne izgube pri spašavanju.
   const snapshot = {
     korisnikId: data.korisnikId, ukupno, pdvIznos,
     nacinPlacanja: data.nacinPlacanja, kupac: data.kupac,
-    stavke: [], prilogBroj,
+    stavke: [], prilogBroj, prilogStavke: stavke,
   };
   const pending = db
     .prepare('INSERT INTO pending_receipts (korisnikId, snapshot) VALUES (?, ?)')
@@ -190,6 +249,7 @@ export async function finalizePrilogAndPrint(
         data.kupac?.grad || null, data.kupac?.postanskiBroj || null, prilogBroj
       );
       orderId = Number(r.lastInsertRowid);
+      if (stavke.length > 0) savePrilogStavkeInTransaction(db, orderId, stavke);
       db.prepare('DELETE FROM pending_receipts WHERE id = ?').run(pendingId);
     })();
   } catch (err: any) {

@@ -15,6 +15,7 @@ import { izracunajTotale, iznosStavke } from '@/lib/racun';
 import { dodajUKosaricu, restoreCart, postaviRabat, postaviRabatNaSve, type SavedCartItem } from '@/lib/kosarica';
 import { pdf } from '@react-pdf/renderer';
 import { OtpremnicaPdf } from '@/components/OtpremnicaPdf';
+import { PrilogPdf } from '@/components/PrilogPdf';
 import PrilogRacunDialog from '@/components/PrilogRacunDialog';
 import type { User, Product, CartItem, Kupac } from '@/types';
 
@@ -472,6 +473,30 @@ export default function KasaScreen({ user }: KasaScreenProps) {
     }
   };
 
+  /**
+   * Otvara A4 prilog odmah nakon fiskalizacije sa stavkama —
+   * operater je već uz štampač, pa prilog ide uz fiskalni račun bez
+   * odlaska u sekciju Računi.
+   */
+  const handlePrintPrilog = async (orderId: number) => {
+    try {
+      const order = await window.api.getOrder(orderId);
+      if (!order) return;
+      const stavke = await window.api.getPrilogStavke(orderId);
+      if (stavke.length === 0) return;
+      const firma = await window.api.getFirmaSettings();
+      const blob = await pdf(<PrilogPdf order={order} firma={firma} stavke={stavke as any} />).toBlob();
+      const url = URL.createObjectURL(blob);
+      const win = window.open(url, '_blank');
+      if (win) win.onafterprint = () => URL.revokeObjectURL(url);
+    } catch (err: any) {
+      setMessage({
+        type: 'error',
+        text: `Račun je fiskalizovan, ali prilog se nije otvorio: ${err?.message || 'Nepoznata greška'}. Štampajte je u sekciji Računi.`,
+      });
+    }
+  };
+
   const qtyMax = (qtyProduct?.tip === 'usluga' || allowZeroStock) ? 999 : (qtyProduct?.stanje ?? 999);
 
   return (
@@ -754,75 +779,118 @@ export default function KasaScreen({ user }: KasaScreenProps) {
 
         {/* ─── Checkout footer ─── */}
         <div className="border-t border-slate-100 bg-slate-50/50">
-          {/* Totals */}
-          <div className="px-5 pt-3.5 pb-3">
-            <div className="flex items-center justify-between text-[12px] mb-1">
-              <span className="text-slate-400">Osnovica</span>
-              <span className="font-mono tabular-nums text-slate-400">{formatKM(total - pdvAmount)}</span>
-            </div>
-            <div className="flex items-center justify-between text-[12px] mb-2">
-              <span className="text-slate-400">PDV (17%)</span>
-              <span className="font-mono tabular-nums text-slate-400">{formatKM(pdvAmount)}</span>
-            </div>
-            <div className="flex items-baseline justify-between border-t border-slate-200 pt-2.5">
-              <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Ukupno</span>
-              <span className="text-[26px] font-bold font-mono tabular-nums tracking-tight text-slate-900 leading-none">
-                {formatKM(total)}
-              </span>
+          {/* Displej ukupnog iznosa — isti jezik kao dijalog računa po prilogu */}
+          <div className="px-5 pt-4">
+            <div className="rounded-xl bg-slate-900 px-5 py-3.5">
+              <div className="flex items-baseline justify-between">
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Ukupno</span>
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">KM</span>
+              </div>
+              <p className={cn(
+                'text-right font-mono text-[38px] font-semibold leading-tight tabular-nums',
+                total > 0 ? 'text-white' : 'text-slate-700',
+              )}>
+                {total.toFixed(2).replace('.', ',')}
+              </p>
+              <div className="mt-2 flex items-center justify-between border-t border-dashed border-slate-700 pt-2.5 text-[11.5px] text-slate-400">
+                <span>Osnovica <span className="font-mono tabular-nums text-slate-300">{formatKM(total - pdvAmount)}</span></span>
+                <span>PDV 17% <span className="font-mono tabular-nums text-slate-300">{formatKM(pdvAmount)}</span></span>
+              </div>
             </div>
           </div>
 
-          <div className="px-5 pb-4 space-y-2.5">
-            {/* Payment type chips */}
-            <div className="grid grid-cols-4 gap-1.5">
-              {(['Gotovina', 'Kartica', 'Virman', 'Ček'] as PaymentType[]).map(type => (
-                <button
-                  key={type}
-                  className={cn(
-                    'flex flex-col items-center gap-0.5 py-2 rounded-xl text-[10.5px] font-medium transition-all duration-150',
-                    paymentType === type
-                      ? 'bg-blue-600 text-white shadow-md shadow-blue-500/25'
-                      : 'bg-white text-slate-500 border border-slate-200 hover:border-blue-200 hover:text-blue-600'
-                  )}
-                  onClick={() => {
-                    setPaymentType(type);
-                    // Virman zahtijeva kupca — odmah otvori dialog za odabir
-                    if (type === 'Virman' && !kupacIdBroj.trim()) setKupacOpen(true);
-                  }}
-                >
-                  {paymentIcons[type]}
-                  {type}
-                </button>
-              ))}
+          <div className="px-5 pb-4 pt-3 space-y-2.5">
+            {/* Način plaćanja */}
+            <div
+              className="flex gap-1 rounded-xl border border-slate-200 bg-white p-1"
+              role="radiogroup"
+              aria-label="Način plaćanja"
+              onKeyDown={e => {
+                if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+                e.preventDefault();
+                const tipovi: PaymentType[] = ['Gotovina', 'Kartica', 'Virman', 'Ček'];
+                const i = tipovi.indexOf(paymentType);
+                const next = e.key === 'ArrowRight'
+                  ? (i + 1) % tipovi.length
+                  : (i - 1 + tipovi.length) % tipovi.length;
+                setPaymentType(tipovi[next]);
+                if (tipovi[next] === 'Virman' && !kupacIdBroj.trim()) setKupacOpen(true);
+                (e.currentTarget.children[next] as HTMLElement | undefined)?.focus();
+              }}
+            >
+              {(['Gotovina', 'Kartica', 'Virman', 'Ček'] as PaymentType[]).map(type => {
+                const aktivan = paymentType === type;
+                return (
+                  <button
+                    key={type}
+                    type="button"
+                    role="radio"
+                    aria-checked={aktivan}
+                    className={cn(
+                      'flex flex-1 flex-col items-center gap-1 rounded-lg py-2 text-[11px] transition-colors',
+                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50',
+                      aktivan
+                        ? 'bg-slate-900 font-medium text-white'
+                        : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700',
+                    )}
+                    onClick={() => {
+                      setPaymentType(type);
+                      // Virman zahtijeva kupca — odmah otvori dialog za odabir
+                      if (type === 'Virman' && !kupacIdBroj.trim()) setKupacOpen(true);
+                    }}
+                  >
+                    <span className={aktivan ? 'text-white' : 'text-slate-400'}>{paymentIcons[type]}</span>
+                    {type}
+                  </button>
+                );
+              })}
             </div>
-
 
             {/* Kupac */}
-            <div className="rounded-xl border border-slate-200/60 flex items-center">
+            {kupacIdBroj.trim() ? (
+              <div className="flex items-start gap-3 rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-2.5">
+                <UserIcon className="mt-0.5 h-4 w-4 flex-shrink-0 text-blue-500" />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-[13px] font-medium text-slate-800">
+                      {kupacNaziv.trim() || 'Kupac odabran'}
+                    </span>
+                    <span className="flex-shrink-0 font-mono text-[11px] text-slate-500">{kupacIdBroj}</span>
+                  </div>
+                  <div className="mt-1 flex gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setKupacOpen(true)}
+                      className="text-[11px] text-slate-500 transition-colors hover:text-slate-700"
+                    >
+                      Promijeni
+                    </button>
+                    <button
+                      type="button"
+                      onClick={clearKupac}
+                      className="inline-flex items-center gap-1 text-[11px] text-slate-400 transition-colors hover:text-red-500"
+                    >
+                      <X className="h-3 w-3" /> Ukloni
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : (
               <button
                 type="button"
-                className="flex items-center gap-2 flex-1 min-w-0 px-3.5 py-2.5 text-sm text-slate-500 hover:text-slate-700 transition-colors"
                 onClick={() => setKupacOpen(true)}
+                className="flex w-full items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-[13px] text-slate-500 transition-colors hover:border-slate-300 hover:text-slate-700"
               >
                 <UserIcon className="h-3.5 w-3.5 flex-shrink-0" />
-                <span className="text-[13px] truncate">
-                  {kupacIdBroj.trim() ? kupacNaziv.trim() || 'Kupac odabran' : 'Dodaj kupca'}
+                Dodaj kupca
+                <span className={cn(
+                  'ml-auto text-[11px]',
+                  paymentType === 'Virman' ? 'font-medium text-amber-600' : 'text-slate-400',
+                )}>
+                  {paymentType === 'Virman' ? 'obavezno za virman' : 'opcionalno'}
                 </span>
-                {kupacIdBroj.trim() && (
-                  <span className="text-[10px] font-mono text-slate-400 flex-shrink-0">{kupacIdBroj}</span>
-                )}
               </button>
-              {kupacIdBroj.trim() && (
-                <button
-                  type="button"
-                  onClick={clearKupac}
-                  className="px-3 py-2.5 text-slate-300 hover:text-red-400 transition-colors flex-shrink-0"
-                  title="Ukloni kupca"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              )}
-            </div>
+            )}
 
             {/* Message */}
             {message && (
@@ -1267,9 +1335,13 @@ export default function KasaScreen({ user }: KasaScreenProps) {
           setLastOrderId(null);
           setMessage({
             type: 'success',
-            text: `Fiskalizovan račun po prilogu br. ${res.prilogBroj} (BF ${res.brojFiskalnogRacuna ?? '?'}). Stavke dodijelite u sekciji Računi.`,
+            text: res.brojStavki > 0
+              ? `Fiskalizovan račun po prilogu br. ${res.prilogBroj} (BF ${res.brojFiskalnogRacuna ?? '?'}) sa ${formatArtikliCount(res.brojStavki)}. Prilog se otvara za štampu.`
+              : `Fiskalizovan račun po prilogu br. ${res.prilogBroj} (BF ${res.brojFiskalnogRacuna ?? '?'}). Stavke dodijelite u sekciji Računi.`,
           });
           loadDailyTotal();
+          // Stavke unesene na kasi → prilog je kompletan i ide odmah.
+          if (res.brojStavki > 0) handlePrintPrilog(res.id);
         }}
       />
 

@@ -18,6 +18,13 @@ export default function PologPrompt({ korisnikId }: { korisnikId: number }) {
     if (skippedForDate === localDateStr()) return;
     (async () => {
       try {
+        // Postavka je podrazumijevano uključena — gasi je samo eksplicitno 'false'.
+        const enabled = await window.api.getSetting('kasa.pologPrompt');
+        if (enabled === 'false') return;
+      } catch {
+        return;
+      }
+      try {
         const today = await window.api.getTodayCashMovements();
         if (today.some(m => m.tip === 'polog')) return;
       } catch {
