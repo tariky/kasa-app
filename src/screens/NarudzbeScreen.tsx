@@ -1,16 +1,16 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
-  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
 import { Separator } from '@/components/ui/separator';
 import {
-  RotateCcw, Receipt, AlertTriangle, Printer, Download,
-  User, Hash, CreditCard, Banknote, Building2, ChevronRight, KeyRound, Plus, Paperclip,
+  RefreshCw, Receipt, AlertTriangle, Printer, Download, Undo2, Truck,
+  CreditCard, Banknote, KeyRound, Plus, Paperclip, CornerDownLeft, ChevronsUpDown, CalendarClock,
 } from 'lucide-react';
 import { pdf } from '@react-pdf/renderer';
 import { RacunPdf, InvoiceLang } from '@/components/RacunPdf';
@@ -18,16 +18,46 @@ import { OtpremnicaPdf } from '@/components/OtpremnicaPdf';
 import { PrilogPdf } from '@/components/PrilogPdf';
 import { Order, OrderItem } from '@/types';
 import { cn, formatKM, formatDateTime } from '@/lib/utils';
+import { ActionRow, Eyebrow, LedgerHead, SegmentedFilter } from '@/components/ui/ledger';
+import { DatePicker } from '@/components/ui/date-picker';
 import DodajRacunDialog from '@/components/DodajRacunDialog';
 import CashMovementDialog from '@/components/CashMovementDialog';
 import PrilogStavkeDialog from '@/components/PrilogStavkeDialog';
 import { gotovinskiIznos } from '@/lib/drawer';
 import { prilogKompletan, sumaPriloga } from '@/lib/prilog';
+import { formatDatumValute } from '@/lib/valuta';
 import { round2 } from '@/lib/novac';
+
+type Filter = 'sve' | 'aktivni' | 'storno';
+
+const FILTERS: { id: Filter; label: string }[] = [
+  { id: 'sve', label: 'Sve' },
+  { id: 'aktivni', label: 'Aktivni' },
+  { id: 'storno', label: 'Storno' },
+];
+
+function StatusChip({ refunded, size = 'sm' }: { refunded: boolean; size?: 'sm' | 'md' }) {
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center gap-1 rounded-full font-semibold border',
+        size === 'sm' ? 'text-[10px] px-2 py-0.5' : 'text-[10px] px-2.5 py-1',
+        refunded
+          ? 'bg-rose-50 text-rose-600 border-rose-100'
+          : 'bg-emerald-50 text-emerald-600 border-emerald-100',
+      )}
+    >
+      {refunded && <Undo2 size={10} />}
+      {refunded ? 'Storno' : 'Završen'}
+    </span>
+  );
+}
 
 export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
   const [orders, setOrders] = useState<Order[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
+  const [filter, setFilter] = useState<Filter>('sve');
+  const [lang, setLang] = useState<InvoiceLang>('bs');
   const [reklamacijaOpen, setReklamacijaOpen] = useState(false);
   const [reklamacijaBroj, setReklamacijaBroj] = useState('');
   const [reklamacijaLoading, setReklamacijaLoading] = useState(false);
@@ -42,6 +72,11 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
   const [gaps, setGaps] = useState<number[]>([]);
   const [prefillBroj, setPrefillBroj] = useState<string | undefined>(undefined);
   const [prilogOpen, setPrilogOpen] = useState(false);
+  const [valutaOpen, setValutaOpen] = useState(false);
+  const [valutaDatum, setValutaDatum] = useState('');
+  const [valutaError, setValutaError] = useState('');
+
+  const rowRefs = useRef<(HTMLTableRowElement | null)[]>([]);
 
   useEffect(() => {
     loadOrders();
@@ -111,21 +146,35 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
     }
   };
 
-  const parseNacinPlacanja = (json: string): { gotovina?: number; kartica?: number; virman?: boolean; raw?: string } => {
+  /**
+   * Datum valute nije dio fiskalnog zapisa — dogovara se s kupcem naknadno, pa
+   * se smije mijenjati i uklanjati na svakom računu, uključujući stornirane.
+   * Vidljiv je samo na A4 kopiji računa.
+   */
+  const openValuta = (order: Order) => {
+    setValutaDatum(order.datumValute || '');
+    setValutaError('');
+    setValutaOpen(true);
+  };
+
+  const spremiValutu = async (datum: string | null) => {
+    if (!selectedOrder) return;
     try {
-      const parsed = JSON.parse(json);
-      return parsed;
-    } catch {
-      return { raw: json };
+      await window.api.setOrderDatumValute(selectedOrder.id, datum);
+      setValutaOpen(false);
+      setSelectedOrder({ ...selectedOrder, datumValute: datum });
+      setOrders(prev => prev.map(o => (o.id === selectedOrder.id ? { ...o, datumValute: datum } : o)));
+    } catch (err: any) {
+      setValutaError(err?.message || 'Greška pri spremanju datuma valute');
     }
   };
 
   const parseNacinPlacanjaLabel = (json: string): string => {
     try {
       const parsed = JSON.parse(json);
-      if (parsed.gotovina && parsed.kartica) return `Gotovina: ${formatKM(parsed.gotovina)}, Kartica: ${formatKM(parsed.kartica)}`;
-      if (parsed.gotovina) return `Gotovina: ${formatKM(parsed.gotovina)}`;
-      if (parsed.kartica) return `Kartica: ${formatKM(parsed.kartica)}`;
+      if (parsed.gotovina && parsed.kartica) return `Gotovina ${formatKM(parsed.gotovina)} · Kartica ${formatKM(parsed.kartica)}`;
+      if (parsed.gotovina) return `Gotovina ${formatKM(parsed.gotovina)}`;
+      if (parsed.kartica) return `Kartica ${formatKM(parsed.kartica)}`;
       return json;
     } catch {
       return json;
@@ -135,11 +184,11 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
   const getPaymentIcon = (json: string) => {
     try {
       const parsed = JSON.parse(json);
-      if (parsed.kartica && parsed.gotovina) return <><Banknote size={13} className="text-slate-400" /><CreditCard size={13} className="text-slate-400" /></>;
-      if (parsed.kartica) return <CreditCard size={13} className="text-slate-400" />;
-      return <Banknote size={13} className="text-slate-400" />;
+      if (parsed.kartica && parsed.gotovina) return <><Banknote size={12} className="text-slate-400" /><CreditCard size={12} className="text-slate-400" /></>;
+      if (parsed.kartica) return <CreditCard size={12} className="text-slate-400" />;
+      return <Banknote size={12} className="text-slate-400" />;
     } catch {
-      return <Banknote size={13} className="text-slate-400" />;
+      return <Banknote size={12} className="text-slate-400" />;
     }
   };
 
@@ -151,20 +200,20 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
     }
   };
 
-  const handlePrintPdf = async (order: Order, lang: InvoiceLang = 'bs') => {
+  const handlePrintPdf = async (order: Order, l: InvoiceLang = 'bs') => {
     const fullOrder = order.stavke ? order : await window.api.getOrder(order.id);
     const firma = await loadFirma();
-    const blob = await pdf(<RacunPdf order={fullOrder} firma={firma} lang={lang} />).toBlob();
+    const blob = await pdf(<RacunPdf order={fullOrder} firma={firma} lang={l} />).toBlob();
     const url = URL.createObjectURL(blob);
     const win = window.open(url, '_blank');
     if (win) win.onafterprint = () => URL.revokeObjectURL(url);
   };
 
-  const handleExportPdf = async (order: Order, lang: InvoiceLang = 'bs') => {
+  const handleExportPdf = async (order: Order, l: InvoiceLang = 'bs') => {
     const fullOrder = order.stavke ? order : await window.api.getOrder(order.id);
     const firma = await loadFirma();
-    const blob = await pdf(<RacunPdf order={fullOrder} firma={firma} lang={lang} />).toBlob();
-    const prefix = lang === 'en' ? 'Invoice' : 'Racun';
+    const blob = await pdf(<RacunPdf order={fullOrder} firma={firma} lang={l} />).toBlob();
+    const prefix = l === 'en' ? 'Invoice' : 'Racun';
     const fileName = `${prefix}-${order.brojFiskalnogRacuna || order.id}.pdf`;
     const savePath = await window.api.showSaveDialog({
       defaultName: fileName,
@@ -225,260 +274,353 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
     await window.api.writeFile(savePath, Array.from(new Uint8Array(arrayBuffer)) as any);
   };
 
+  const openReklamacija = useCallback(() => {
+    setReklamacijaMsg(null);
+    if (requirePinRefund) {
+      setPinValue('');
+      setPinError('');
+      setPinDialogOpen(true);
+    } else {
+      setReklamacijaOpen(true);
+    }
+  }, [requirePinRefund]);
+
   const isRefunded = (status: Order['status']) => status === 'refunded';
 
-  const completedOrders = orders.filter(o => o.status === 'completed');
-  const refundedOrders = orders.filter(o => o.status === 'refunded');
+  const visible = useMemo(() => {
+    if (filter === 'aktivni') return orders.filter(o => o.status === 'completed');
+    if (filter === 'storno') return orders.filter(o => o.status === 'refunded');
+    return orders;
+  }, [orders, filter]);
+
+  const counts = useMemo(() => ({
+    sve: orders.length,
+    aktivni: orders.filter(o => o.status === 'completed').length,
+    storno: orders.filter(o => o.status === 'refunded').length,
+  }), [orders]);
+
+  const selIndex = visible.findIndex(o => o.id === selectedOrder?.id);
+
+  /** Pomjera izbor u listi i drži fokus na redu — osnova za tastaturnu navigaciju. */
+  const focusRow = useCallback((index: number) => {
+    if (index < 0 || index >= visible.length) return;
+    handleSelectOrder(visible[index]);
+    const el = rowRefs.current[index];
+    el?.focus();
+    el?.scrollIntoView({ block: 'nearest' });
+  }, [visible]);
+
+  const handleListKeyDown = (e: React.KeyboardEvent<HTMLTableSectionElement>) => {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const current = selIndex < 0 ? -1 : selIndex;
+    const last = visible.length - 1;
+    const go = (i: number) => { e.preventDefault(); focusRow(Math.max(0, Math.min(last, i))); };
+
+    switch (e.key) {
+      case 'ArrowDown': return go(current + 1);
+      case 'ArrowUp': return go(current < 0 ? 0 : current - 1);
+      case 'PageDown': return go(current + 10);
+      case 'PageUp': return go(current < 0 ? 0 : current - 10);
+      case 'Home': return go(0);
+      case 'End': return go(last);
+      case 'Enter':
+        if (selectedOrder) { e.preventDefault(); handlePrintPdf(selectedOrder, lang); }
+        return;
+      default:
+    }
+  };
+
+  const anyDialogOpen = reklamacijaOpen || pinDialogOpen || dodajOpen || prilogOpen || pologOpen || valutaOpen;
+
+  // Prečice za akcije desnog panela. Vrijede samo kad je račun izabran, nijedan
+  // dijalog nije otvoren i fokus nije u polju za unos.
+  useEffect(() => {
+    if (!selectedOrder || anyDialogOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+
+      switch (e.key.toLowerCase()) {
+        case 'p': e.preventDefault(); handlePrintPdf(selectedOrder, lang); break;
+        case 's': e.preventDefault(); handleExportPdf(selectedOrder, lang); break;
+        case 'o': e.preventDefault(); handlePrintOtpremnica(selectedOrder); break;
+        case 'v': e.preventDefault(); openValuta(selectedOrder); break;
+        case 'r':
+          if (selectedOrder.status === 'completed' && selectedOrder.brojFiskalnogRacuna) {
+            e.preventDefault();
+            openReklamacija();
+          }
+          break;
+        default:
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedOrder, lang, anyDialogOpen, openReklamacija]);
 
   return (
-    <div className="flex flex-col h-full bg-[hsl(220,20%,97%)]">
-      {/* Top bar */}
-      <div className="flex-shrink-0 bg-white border-b px-6 py-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <span className="text-[15px] font-semibold text-slate-800">Računi</span>
-            {orders.length > 0 && (
-              <Badge variant="secondary" className="text-[10px] font-mono px-1.5 py-0 h-5">
-                {orders.length}
-              </Badge>
-            )}
+    <div className="flex flex-col h-full bg-[#f4f6f9]">
+      {/* ── Top bar ── */}
+      <div className="flex-shrink-0 bg-white border-b border-slate-200/80 px-6 py-3.5">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <h2 className="text-[15px] font-semibold text-slate-800 tracking-tight">Računi</h2>
+            <SegmentedFilter options={FILTERS} value={filter} onChange={setFilter} counts={counts} />
           </div>
-          <Button variant="outline" size="sm" onClick={loadOrders} className="h-8 gap-1.5 text-[12px]">
-            <RotateCcw className="h-3.5 w-3.5" />
-            Osvježi
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => { loadOrders(); loadGaps(); }} className="h-8 gap-1.5 text-[12px]">
+              <RefreshCw className="h-3.5 w-3.5" />
+              Osvježi
+            </Button>
+            <Button size="sm" onClick={() => setDodajOpen(true)} className="h-8 gap-1.5 text-[12px]">
+              <Plus className="h-3.5 w-3.5" />
+              Dodaj račun
+            </Button>
+          </div>
         </div>
       </div>
 
       {gaps.length > 0 && (
-        <div className="mx-4 mb-2 rounded border border-amber-300 bg-amber-50 p-3">
-          <p className="text-sm font-medium text-amber-800">
-            Nedostaju fiskalni brojevi u nizu — mogući neupisani računi:
-          </p>
-          <div className="flex flex-wrap gap-2 mt-2">
+        <div className="mx-5 mt-4 rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-3">
+          <div className="flex items-center gap-2">
+            <AlertTriangle size={14} className="text-amber-500" />
+            <p className="text-[12px] font-semibold text-amber-800">
+              Nedostaju fiskalni brojevi u nizu — mogući neupisani računi
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-1.5 mt-2.5">
             {gaps.map(n => (
-              <div key={n} className="flex items-center gap-1">
-                <Button
-                  variant="outline" size="sm"
-                  className="h-7 text-amber-700 border-amber-400"
+              <div key={n} className="flex items-center rounded-lg border border-amber-300 bg-white overflow-hidden">
+                <button
+                  className="h-7 px-2.5 text-[11.5px] font-medium text-amber-700 hover:bg-amber-50 transition-colors"
                   onClick={() => { setPrefillBroj(String(n)); setDodajOpen(true); }}
                 >
-                  Unesi #{n}
-                </Button>
-                <Button
-                  variant="ghost" size="sm" className="h-7 text-slate-400"
+                  Unesi <span className="font-mono">#{n}</span>
+                </button>
+                <div className="w-px h-4 bg-amber-200" />
+                <button
+                  className="h-7 w-6 text-[13px] text-amber-400 hover:bg-amber-50 hover:text-amber-600 transition-colors"
+                  title={`Zanemari #${n}`}
                   onClick={async () => { await window.api.dismissFiscalGap(n); loadGaps(); }}
                 >
                   ×
-                </Button>
+                </button>
               </div>
             ))}
           </div>
         </div>
       )}
 
-      {/* Content */}
+      {/* ── Content ── */}
       <div className="flex-1 min-h-0 flex gap-4 p-5 overflow-hidden">
 
-        {/* ── Left: Orders table ── */}
+        {/* ── Ledger ── */}
         <div className="flex-1 min-w-0">
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm shadow-slate-200/50 h-full flex flex-col overflow-hidden">
-            <div className="flex-shrink-0 flex justify-end px-4 pt-3 pb-1">
-              <Button size="sm" onClick={() => setDodajOpen(true)} className="h-8 gap-1.5 text-[12px]">
-                <Plus className="h-3.5 w-3.5" />
-                Dodaj račun ručno
-              </Button>
-            </div>
-            {orders.length === 0 ? (
+          <div className="bg-white rounded-2xl border border-slate-200/70 shadow-sm shadow-slate-200/40 h-full flex flex-col overflow-hidden">
+            {visible.length === 0 ? (
               <div className="flex-1 flex flex-col items-center justify-center text-slate-400 select-none">
-                <div className="w-14 h-14 rounded-2xl bg-slate-50 flex items-center justify-center mb-3">
-                  <Receipt size={24} className="text-slate-300" />
+                <div className="w-12 h-12 rounded-2xl bg-slate-50 flex items-center justify-center mb-3">
+                  <Receipt size={20} className="text-slate-300" strokeWidth={1.5} />
                 </div>
-                <p className="text-[13px] font-medium text-slate-500">Nema računa</p>
+                <p className="text-[13px] font-medium text-slate-500">
+                  {filter === 'sve' ? 'Još nema računa' : 'Nema računa u ovom filteru'}
+                </p>
+                <p className="text-[12px] text-slate-400 mt-0.5">
+                  {filter === 'sve' ? 'Naplaćeni računi se pojavljuju ovdje.' : 'Promijenite filter da vidite ostale.'}
+                </p>
               </div>
             ) : (
-              <ScrollArea className="flex-1">
-                <table className="w-full">
-                  <thead className="sticky top-0 bg-slate-50/80 backdrop-blur-sm">
-                    <tr className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
-                      <th className="text-left pl-5 pr-2 py-2.5 w-[50px]">#</th>
-                      <th className="text-left px-2 py-2.5">Datum</th>
-                      <th className="text-left px-2 py-2.5">Kasir</th>
-                      <th className="text-right px-2 py-2.5">Ukupno</th>
-                      <th className="text-left px-2 py-2.5">Fiskalni br.</th>
-                      <th className="text-center pr-5 pl-2 py-2.5 w-[90px]">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {orders.map((order) => {
-                      const refunded = isRefunded(order.status);
-                      const selected = selectedOrder?.id === order.id;
-                      return (
-                        <tr
-                          key={order.id}
-                          className={cn(
-                            'border-t border-slate-50 transition-colors cursor-pointer',
-                            selected ? 'bg-slate-900 text-white' : 'hover:bg-slate-50/50',
-                            refunded && !selected && 'bg-red-50/30',
-                          )}
-                          onClick={() => handleSelectOrder(order)}
-                        >
-                          <td className={cn('pl-5 pr-2 py-2.5 text-[12px] font-mono', selected ? 'text-white/60' : 'text-slate-400')}>{order.id}</td>
-                          <td className={cn('px-2 py-2.5 text-[12px] tabular-nums', selected ? 'text-white/80' : 'text-slate-600')}>{formatDateTime(order.createdAt)}</td>
-                          <td className={cn('px-2 py-2.5 text-[12px]', selected ? 'text-white/80' : 'text-slate-600')}>{order.korisnikIme || '—'}</td>
-                          <td className={cn('px-2 py-2.5 text-[13px] font-mono font-semibold text-right tabular-nums', selected ? 'text-white' : 'text-slate-800')}>
-                            {formatKM(order.ukupno)}
-                          </td>
-                          <td className={cn('px-2 py-2.5 text-[12px] font-mono', selected ? 'text-white/60' : 'text-slate-400')}>
-                            {order.brojFiskalnogRacuna || '—'}
-                            {order.isManual ? <Badge variant="outline" className="ml-1 text-amber-600 border-amber-400">R</Badge> : null}
-                            {order.prilogBroj != null ? (
-                              <Badge variant="secondary" className="ml-1 text-[10px]">Prilog br. {order.prilogBroj}</Badge>
-                            ) : null}
-                          </td>
-                          <td className="pr-5 pl-2 py-2.5 text-center">
-                            {refunded ? (
-                              <span className={cn(
-                                'inline-flex items-center gap-1 text-[10px] font-semibold rounded-full px-2 py-0.5',
-                                selected ? 'bg-white/10 text-red-300' : 'bg-red-50 text-red-500 border border-red-100'
-                              )}>
-                                <RotateCcw size={10} />
-                                Storno
-                              </span>
-                            ) : (
-                              <span className={cn(
-                                'inline-flex items-center gap-1 text-[10px] font-semibold rounded-full px-2 py-0.5',
-                                selected ? 'bg-white/10 text-emerald-300' : 'bg-emerald-50 text-emerald-600 border border-emerald-100'
-                              )}>
-                                OK
-                              </span>
+              <>
+                <ScrollArea className="flex-1">
+                  <table className="w-full border-separate border-spacing-0">
+                    <LedgerHead
+                      columns={[
+                        { label: '#', className: 'text-left pl-5 pr-2 w-[54px]' },
+                        { label: 'Datum', className: 'text-left px-2' },
+                        { label: 'Kasir', className: 'text-left px-2' },
+                        { label: 'Fiskalni br.', className: 'text-left px-2' },
+                        { label: 'Ukupno', className: 'text-right px-2' },
+                        { label: 'Status', className: 'text-right pr-5 pl-2 w-[100px]' },
+                      ]}
+                    />
+                    <tbody onKeyDown={handleListKeyDown}>
+                      {visible.map((order, i) => {
+                        const refunded = isRefunded(order.status);
+                        const selected = selectedOrder?.id === order.id;
+                        return (
+                          <tr
+                            key={order.id}
+                            ref={el => { rowRefs.current[i] = el; }}
+                            tabIndex={selected || (selIndex < 0 && i === 0) ? 0 : -1}
+                            aria-selected={selected}
+                            className={cn(
+                              'cursor-pointer transition-colors duration-100 group',
+                              'focus:outline focus:outline-2 focus:-outline-offset-2 focus:outline-blue-500',
+                              selected ? 'bg-blue-50/80' : refunded ? 'bg-rose-50/30 hover:bg-rose-50/60' : 'hover:bg-slate-50',
                             )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </ScrollArea>
+                            onClick={() => { handleSelectOrder(order); rowRefs.current[i]?.focus(); }}
+                          >
+                            <td
+                              className={cn(
+                                'pl-5 pr-2 py-2.5 border-b border-slate-100 font-mono text-[11.5px] tabular-nums',
+                                // Šina lijevo označava isključivo izabrani red — status ide kroz čip i iznos.
+                                selected ? 'text-blue-500 shadow-[inset_3px_0_0_0_#2563eb]' : 'text-slate-300',
+                              )}
+                            >
+                              {order.id}
+                            </td>
+                            <td className={cn('px-2 py-2.5 border-b border-slate-100 text-[12px] tabular-nums', selected ? 'text-slate-700' : 'text-slate-500')}>
+                              {formatDateTime(order.createdAt)}
+                            </td>
+                            <td className={cn('px-2 py-2.5 border-b border-slate-100 text-[12px]', selected ? 'text-slate-700' : 'text-slate-500')}>
+                              {order.korisnikIme || '—'}
+                            </td>
+                            <td className="px-2 py-2.5 border-b border-slate-100">
+                              <div className="flex items-center gap-1.5">
+                                <span className={cn('font-mono text-[11.5px] tabular-nums', selected ? 'text-slate-700' : 'text-slate-400')}>
+                                  {order.brojFiskalnogRacuna || '—'}
+                                </span>
+                                {/* isManual dolazi kao INTEGER 0/1 — bez Boolean() bi se `0` ispisala u redu. */}
+                                {Boolean(order.isManual) && (
+                                  <span className="inline-flex h-4 items-center rounded border border-amber-300 bg-amber-50 px-1 font-mono text-[9px] font-bold text-amber-600" title="Ručno unesen">
+                                    R
+                                  </span>
+                                )}
+                                {order.prilogBroj != null && (
+                                  <span className="inline-flex h-4 items-center gap-0.5 rounded border border-slate-200 bg-slate-50 px-1 font-mono text-[9px] font-semibold text-slate-500" title={`Prilog br. ${order.prilogBroj}`}>
+                                    <Paperclip size={8} />{order.prilogBroj}
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                            <td className={cn(
+                              'px-2 py-2.5 border-b border-slate-100 text-right font-mono text-[12.5px] font-semibold tabular-nums',
+                              refunded ? 'text-rose-500' : 'text-slate-800',
+                            )}>
+                              {formatKM(order.ukupno)}
+                            </td>
+                            <td className="pr-5 pl-2 py-2.5 border-b border-slate-100 text-right">
+                              <StatusChip refunded={refunded} />
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </ScrollArea>
+
+                {/* Legenda prečica — tastatura je vidljiva, ne skrivena funkcija */}
+                <div className="flex-shrink-0 flex items-center gap-4 border-t border-slate-100 px-5 py-2 text-[10.5px] text-slate-400">
+                  <span className="flex items-center gap-1.5">
+                    <ChevronsUpDown size={11} /> kretanje kroz listu
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <CornerDownLeft size={11} /> štampa račun
+                  </span>
+                  <span className="ml-auto font-mono tabular-nums">
+                    {selIndex >= 0 ? `${selIndex + 1} / ${visible.length}` : `${visible.length}`}
+                  </span>
+                </div>
+              </>
             )}
           </div>
         </div>
 
-        {/* ── Right: Detail panel ── */}
-        <div className="w-[400px] flex-shrink-0">
+        {/* ── Detail / actions panel ── */}
+        <div className="w-[380px] flex-shrink-0">
           {selectedOrder ? (
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm shadow-slate-200/50 h-full flex flex-col overflow-hidden">
+            <div className="bg-white rounded-2xl border border-slate-200/70 shadow-sm shadow-slate-200/40 h-full flex flex-col overflow-hidden">
 
-              {/* ── Header: number + status ── */}
+              {/* Zaglavlje */}
               <div className="flex-shrink-0 px-5 pt-5 pb-4">
-                <div className="flex items-start justify-between">
+                <div className="flex items-start justify-between gap-3">
                   <div>
-                    <div className="flex items-center gap-2.5">
-                      <div className={cn(
-                        'w-9 h-9 rounded-xl flex items-center justify-center',
-                        isRefunded(selectedOrder.status) ? 'bg-red-50' : 'bg-emerald-50'
-                      )}>
-                        <Receipt size={18} className={isRefunded(selectedOrder.status) ? 'text-red-500' : 'text-emerald-500'} />
-                      </div>
-                      <div>
-                        <h3 className="text-[16px] font-bold text-slate-800 leading-tight">
-                          Račun #{selectedOrder.brojFiskalnogRacuna || selectedOrder.id}
-                        </h3>
-                        <p className="text-[11px] text-slate-400 mt-0.5 tabular-nums">
-                          {formatDateTime(selectedOrder.createdAt)}
-                        </p>
-                      </div>
-                    </div>
+                    <Eyebrow>{selectedOrder.prilogBroj != null ? 'Račun po prilogu' : 'Fiskalni račun'}</Eyebrow>
+                    <h3 className="text-[19px] font-bold font-mono tracking-tight text-slate-900 leading-tight mt-1">
+                      #{selectedOrder.brojFiskalnogRacuna || selectedOrder.id}
+                    </h3>
+                    <p className="text-[11.5px] text-slate-400 mt-0.5 tabular-nums">
+                      {formatDateTime(selectedOrder.createdAt)}
+                    </p>
                   </div>
-                  <div className="flex items-center gap-1.5">
-                    {selectedOrder?.isManual ? (
-                      <Badge variant="outline" className="border-amber-400 text-amber-600">Ručno unesen</Badge>
-                    ) : null}
-                    {selectedOrder.prilogBroj != null ? (
-                      <Badge variant="secondary">Prilog br. {selectedOrder.prilogBroj}</Badge>
-                    ) : null}
-                    {isRefunded(selectedOrder.status) ? (
-                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold bg-red-50 text-red-500 border border-red-100 rounded-full px-2.5 py-1">
-                        <RotateCcw size={10} />
-                        Storno
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center text-[10px] font-semibold bg-emerald-50 text-emerald-600 border border-emerald-100 rounded-full px-2.5 py-1">
-                        Završeno
-                      </span>
+                  <div className="flex flex-col items-end gap-1.5">
+                    <StatusChip refunded={isRefunded(selectedOrder.status)} size="md" />
+                    {Boolean(selectedOrder.isManual) && (
+                      <Badge variant="outline" className="border-amber-300 text-amber-600 text-[10px]">Ručno unesen</Badge>
+                    )}
+                    {selectedOrder.prilogBroj != null && (
+                      <Badge variant="secondary" className="text-[10px]">Prilog br. {selectedOrder.prilogBroj}</Badge>
                     )}
                   </div>
                 </div>
               </div>
 
-              {/* ── Meta info ── */}
+              {/* Meta */}
               <div className="flex-shrink-0 px-5 pb-4">
-                <div className="rounded-xl bg-slate-50/80 border border-slate-100 px-4 py-3 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <User size={13} className="text-slate-400" />
-                      <span className="text-[11px] text-slate-400">Kasir</span>
-                    </div>
-                    <span className="text-[12px] font-medium text-slate-700">{selectedOrder.korisnikIme || '—'}</span>
+                <dl className="rounded-xl bg-slate-50/80 border border-slate-100 px-4 py-3 space-y-2 text-[12px]">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <dt className="text-slate-400">Kasir</dt>
+                    <dd className="font-medium text-slate-700">{selectedOrder.korisnikIme || '—'}</dd>
                   </div>
-                  {selectedOrder.brojFiskalnogRacuna && (
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Hash size={13} className="text-slate-400" />
-                        <span className="text-[11px] text-slate-400">Fiskalni br.</span>
-                      </div>
-                      <span className="text-[12px] font-mono font-medium text-slate-700">{selectedOrder.brojFiskalnogRacuna}</span>
-                    </div>
-                  )}
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      {getPaymentIcon(selectedOrder.nacinPlacanja)}
-                      <span className="text-[11px] text-slate-400">Plaćanje</span>
-                    </div>
-                    <span className="text-[12px] font-medium text-slate-700">{parseNacinPlacanjaLabel(selectedOrder.nacinPlacanja)}</span>
+                  <div className="flex items-center justify-between gap-3">
+                    <dt className="flex items-center gap-1.5 text-slate-400">
+                      {getPaymentIcon(selectedOrder.nacinPlacanja)} Plaćanje
+                    </dt>
+                    <dd className="font-medium text-slate-700 text-right">{parseNacinPlacanjaLabel(selectedOrder.nacinPlacanja)}</dd>
                   </div>
                   {selectedOrder.kupacNaziv && (
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Building2 size={13} className="text-slate-400" />
-                        <span className="text-[11px] text-slate-400">Kupac</span>
-                      </div>
-                      <div className="text-right">
-                        <span className="text-[12px] font-medium text-slate-700">{selectedOrder.kupacNaziv}</span>
+                    <div className="flex items-baseline justify-between gap-3">
+                      <dt className="text-slate-400 flex-shrink-0">Kupac</dt>
+                      <dd className="font-medium text-slate-700 text-right truncate">
+                        {selectedOrder.kupacNaziv}
                         {selectedOrder.kupacIdBroj && (
-                          <span className="text-[10px] text-slate-400 font-mono ml-1.5">({selectedOrder.kupacIdBroj})</span>
+                          <span className="ml-1.5 font-mono text-[10.5px] text-slate-400">{selectedOrder.kupacIdBroj}</span>
                         )}
-                      </div>
+                      </dd>
                     </div>
                   )}
+                  <div className="flex items-center justify-between gap-3">
+                    <dt className="flex items-center gap-1.5 text-slate-400">
+                      <CalendarClock size={12} className="text-slate-400" /> Valuta
+                    </dt>
+                    <dd>
+                      <button
+                        type="button"
+                        onClick={() => openValuta(selectedOrder)}
+                        title="Postavi datum valute (rok plaćanja) — V"
+                        className={cn(
+                          'rounded-md px-1.5 py-0.5 -mr-1.5 transition-colors hover:bg-slate-200/70',
+                          selectedOrder.datumValute ? 'font-medium text-slate-700' : 'text-slate-400',
+                        )}
+                      >
+                        {formatDatumValute(selectedOrder.datumValute) ?? 'Postavi'}
+                      </button>
+                    </dd>
+                  </div>
                   {selectedOrder.brojReklamacije && (
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <AlertTriangle size={13} className="text-red-400" />
-                        <span className="text-[11px] text-red-400">Reklamacija</span>
-                      </div>
-                      <span className="text-[12px] font-mono font-medium text-red-500">{selectedOrder.brojReklamacije}</span>
+                    <div className="flex items-baseline justify-between gap-3">
+                      <dt className="text-rose-400">Reklamacija</dt>
+                      <dd className="font-mono font-medium text-rose-500">{selectedOrder.brojReklamacije}</dd>
                     </div>
                   )}
-                </div>
+                </dl>
               </div>
 
-              {/* ── Items table ── */}
+              {/* Stavke */}
               <div className="flex-1 min-h-0 flex flex-col border-t border-slate-100">
-                <div className="px-5 py-2 bg-slate-50/40">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Stavke</span>
-                    <Badge variant="secondary" className="text-[10px] font-mono px-1.5 py-0 h-4">
-                      {(selectedOrder.stavke || []).length}
-                    </Badge>
-                  </div>
+                <div className="flex items-center justify-between px-5 py-2 bg-slate-50/40">
+                  <Eyebrow>Stavke</Eyebrow>
+                  <span className="font-mono text-[10px] tabular-nums text-slate-400">
+                    {(selectedOrder.stavke || []).length}
+                  </span>
                 </div>
                 <ScrollArea className="flex-1">
                   <div className="divide-y divide-slate-50">
                     {(selectedOrder.stavke || []).map((stavka: OrderItem, i: number) => {
                       const lineTotal = stavka.cijena * stavka.kolicina * (1 - (stavka.rabat || 0) / 100);
                       return (
-                        <div key={stavka.id} className="px-5 py-2.5 flex items-center gap-3 hover:bg-slate-50/50 transition-colors">
+                        <div key={stavka.id} className="px-5 py-2.5 flex items-center gap-3 hover:bg-slate-50/60 transition-colors">
                           <span className="text-[10px] text-slate-300 font-mono tabular-nums w-4 text-right flex-shrink-0">{i + 1}</span>
                           <div className="flex-1 min-w-0">
                             <p className="text-[12px] font-medium text-slate-700 truncate">{stavka.productNaziv || `#${stavka.productId}`}</p>
@@ -489,7 +631,7 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
                               )}
                             </div>
                           </div>
-                          <span className="text-[13px] font-mono font-semibold text-slate-800 tabular-nums flex-shrink-0">
+                          <span className="text-[12.5px] font-mono font-semibold text-slate-800 tabular-nums flex-shrink-0">
                             {formatKM(lineTotal)}
                           </span>
                         </div>
@@ -499,155 +641,107 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
                 </ScrollArea>
               </div>
 
-              {/* ── Summary footer ── */}
-              <div className="flex-shrink-0 border-t border-slate-100">
-                {/* Subtotal + PDV */}
-                <div className="px-5 py-3 space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] text-slate-400">Osnovica</span>
-                    <span className="text-[12px] font-mono tabular-nums text-slate-600">{formatKM(selectedOrder.ukupno - selectedOrder.pdvIznos)}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] text-slate-400">PDV (17%)</span>
-                    <span className="text-[12px] font-mono tabular-nums text-slate-600">{formatKM(selectedOrder.pdvIznos)}</span>
+              {/* Iznos */}
+              <div className="flex-shrink-0 border-t border-slate-100 px-5 py-3">
+                <div className="flex items-center justify-between text-[11.5px]">
+                  <span className="text-slate-400">Osnovica</span>
+                  <span className="font-mono tabular-nums text-slate-600">{formatKM(selectedOrder.ukupno - selectedOrder.pdvIznos)}</span>
+                </div>
+                <div className="flex items-center justify-between text-[11.5px] mt-1">
+                  <span className="text-slate-400">PDV (17%)</span>
+                  <span className="font-mono tabular-nums text-slate-600">{formatKM(selectedOrder.pdvIznos)}</span>
+                </div>
+                <div className="mt-2.5 pt-2.5 border-t border-slate-100 flex items-baseline justify-between">
+                  <span className="text-[12.5px] font-semibold text-slate-800">Ukupno</span>
+                  <span className="text-[22px] font-bold font-mono tabular-nums tracking-tight text-slate-900">
+                    {formatKM(selectedOrder.ukupno)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Akcije — po dokumentu koji proizvode */}
+              <div className="flex-shrink-0 border-t border-slate-100 px-5 py-3.5 space-y-2">
+                <div className="flex items-center justify-between pb-0.5">
+                  <Eyebrow>Jezik dokumenta</Eyebrow>
+                  <div className="inline-flex rounded-lg bg-slate-100 p-0.5">
+                    {(['bs', 'en'] as InvoiceLang[]).map(l => (
+                      <button
+                        key={l}
+                        onClick={() => setLang(l)}
+                        className={cn(
+                          'rounded-[6px] px-2.5 h-6 font-mono text-[10.5px] font-semibold uppercase transition-colors duration-150',
+                          'focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50',
+                          lang === l ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-400 hover:text-slate-600',
+                        )}
+                      >
+                        {l}
+                      </button>
+                    ))}
                   </div>
                 </div>
 
-                {/* Total */}
-                <div className="mx-5 border-t border-slate-100" />
-                <div className="px-5 py-3 flex items-center justify-between">
-                  <span className="text-[13px] font-semibold text-slate-800">Ukupno</span>
-                  <span className="text-[18px] font-bold font-mono tabular-nums tracking-tight text-slate-900">{formatKM(selectedOrder.ukupno)}</span>
-                </div>
+                <ActionRow
+                  icon={Printer}
+                  label="Štampaj račun"
+                  hint="P"
+                  tone="primary"
+                  onClick={() => handlePrintPdf(selectedOrder, lang)}
+                  trailing={{ icon: Download, onClick: () => handleExportPdf(selectedOrder, lang), title: `Spremi račun kao PDF (${lang.toUpperCase()}) — S` }}
+                />
 
-                {/* Actions */}
-                <div className="px-5 pb-4 pt-1 flex flex-col gap-2">
-                  {/* Print / Export row */}
-                  <div className="flex items-center gap-2">
-                    <div className="flex items-center flex-1 bg-slate-50 rounded-lg border border-slate-100 overflow-hidden">
-                      <button
-                        onClick={() => handlePrintPdf(selectedOrder, 'bs')}
-                        className="flex-1 flex items-center justify-center gap-1.5 h-8 text-[11px] font-medium text-slate-600 hover:bg-slate-100 transition-colors"
-                        title="Štampaj (BS)"
-                      >
-                        <Printer size={13} />
-                        <span>BS</span>
-                      </button>
-                      <div className="w-px h-4 bg-slate-200" />
-                      <button
-                        onClick={() => handlePrintPdf(selectedOrder, 'en')}
-                        className="flex-1 flex items-center justify-center gap-1.5 h-8 text-[11px] font-medium text-slate-600 hover:bg-slate-100 transition-colors"
-                        title="Print (EN)"
-                      >
-                        <Printer size={13} />
-                        <span>EN</span>
-                      </button>
-                    </div>
-                    <div className="flex items-center flex-1 bg-slate-50 rounded-lg border border-slate-100 overflow-hidden">
-                      <button
-                        onClick={() => handleExportPdf(selectedOrder, 'bs')}
-                        className="flex-1 flex items-center justify-center gap-1.5 h-8 text-[11px] font-medium text-slate-600 hover:bg-slate-100 transition-colors"
-                        title="Eksportuj PDF (BS)"
-                      >
-                        <Download size={13} />
-                        <span>BS</span>
-                      </button>
-                      <div className="w-px h-4 bg-slate-200" />
-                      <button
-                        onClick={() => handleExportPdf(selectedOrder, 'en')}
-                        className="flex-1 flex items-center justify-center gap-1.5 h-8 text-[11px] font-medium text-slate-600 hover:bg-slate-100 transition-colors"
-                        title="Export PDF (EN)"
-                      >
-                        <Download size={13} />
-                        <span>EN</span>
-                      </button>
-                    </div>
+                <ActionRow
+                  icon={Truck}
+                  label="Otpremnica"
+                  hint="O"
+                  onClick={() => handlePrintOtpremnica(selectedOrder)}
+                  trailing={{ icon: Download, onClick: () => handleExportOtpremnica(selectedOrder), title: 'Spremi otpremnicu kao PDF' }}
+                />
+
+                {selectedOrder.prilogBroj != null && (
+                  <ActionRow
+                    icon={Paperclip}
+                    label="Uredi prilog"
+                    onClick={() => setPrilogOpen(true)}
+                    trailing={{ icon: Printer, onClick: () => handlePrintPrilog(selectedOrder), title: 'Štampaj A4 prilog uz fiskalni račun' }}
+                  />
+                )}
+
+                {reklamacijaMsg && !reklamacijaOpen && (
+                  <div className={cn(
+                    'flex items-start gap-2 rounded-lg px-3 py-2 text-[11px] font-medium',
+                    reklamacijaMsg.type === 'error'
+                      ? 'bg-rose-50 border border-rose-100 text-rose-600'
+                      : 'bg-emerald-50 border border-emerald-100 text-emerald-600',
+                  )}>
+                    {reklamacijaMsg.type === 'error'
+                      ? <AlertTriangle size={12} className="mt-0.5 flex-shrink-0" />
+                      : <Receipt size={12} className="mt-0.5 flex-shrink-0" />}
+                    {reklamacijaMsg.text}
                   </div>
+                )}
 
-                  {/* Otpremnica */}
-                  <div className="flex items-center flex-1 bg-slate-50 rounded-lg border border-slate-100 overflow-hidden">
-                    <button
-                      onClick={() => handlePrintOtpremnica(selectedOrder)}
-                      className="flex-1 flex items-center justify-center gap-1.5 h-8 text-[11px] font-medium text-slate-600 hover:bg-slate-100 transition-colors"
-                      title="Štampaj otpremnicu"
-                    >
-                      <Printer size={13} />
-                      <span>Otpremnica</span>
-                    </button>
-                    <div className="w-px h-4 bg-slate-200" />
-                    <button
-                      onClick={() => handleExportOtpremnica(selectedOrder)}
-                      className="flex-1 flex items-center justify-center gap-1.5 h-8 text-[11px] font-medium text-slate-600 hover:bg-slate-100 transition-colors"
-                      title="Eksportuj otpremnicu (PDF)"
-                    >
-                      <Download size={13} />
-                      <span>Otpremnica</span>
-                    </button>
+                {selectedOrder.status === 'completed' && selectedOrder.brojFiskalnogRacuna && (
+                  <div className="pt-2 mt-1 border-t border-slate-100">
+                    <ActionRow
+                      icon={Undo2}
+                      label="Reklamacija"
+                      hint="R"
+                      tone="danger"
+                      onClick={openReklamacija}
+                    />
                   </div>
-
-                  {/* Prilog — dodjela stavki fiskalizovanoj zbirnoj stavci */}
-                  {selectedOrder.prilogBroj != null && (
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => setPrilogOpen(true)}
-                        className="flex-1 h-9 flex items-center justify-center gap-2 rounded-lg border border-slate-200 text-[12px] font-medium text-slate-600 hover:bg-slate-50 transition-all"
-                      >
-                        <Paperclip size={13} />
-                        Uredi prilog
-                      </button>
-                      <button
-                        onClick={() => handlePrintPrilog(selectedOrder)}
-                        className="flex-1 h-9 flex items-center justify-center gap-2 rounded-lg border border-slate-200 text-[12px] font-medium text-slate-600 hover:bg-slate-50 transition-all"
-                        title="Štampaj A4 prilog uz fiskalni račun"
-                      >
-                        <Printer size={13} />
-                        Štampaj prilog
-                      </button>
-                    </div>
-                  )}
-
-                  {/* Reklamacija result */}
-                  {reklamacijaMsg && !reklamacijaOpen && (
-                    <div className={cn(
-                      'flex items-center gap-2 rounded-lg px-3 py-2 text-[11px] font-medium',
-                      reklamacijaMsg.type === 'error'
-                        ? 'bg-red-50 border border-red-100 text-red-600'
-                        : 'bg-emerald-50 border border-emerald-100 text-emerald-600',
-                    )}>
-                      {reklamacijaMsg.type === 'error' ? <AlertTriangle size={12} /> : <Receipt size={12} />}
-                      {reklamacijaMsg.text}
-                    </div>
-                  )}
-
-                  {/* Reklamacija */}
-                  {selectedOrder.status === 'completed' && selectedOrder.brojFiskalnogRacuna && (
-                    <button
-                      onClick={() => {
-                        setReklamacijaMsg(null);
-                        if (requirePinRefund) {
-                          setPinValue('');
-                          setPinError('');
-                          setPinDialogOpen(true);
-                        } else {
-                          setReklamacijaOpen(true);
-                        }
-                      }}
-                      className="w-full h-9 flex items-center justify-center gap-2 rounded-lg border border-red-200 text-[12px] font-medium text-red-500 hover:bg-red-50 hover:border-red-300 transition-all"
-                    >
-                      <RotateCcw size={13} />
-                      Reklamacija
-                    </button>
-                  )}
-                </div>
+                )}
               </div>
             </div>
           ) : (
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm shadow-slate-200/50 h-full flex flex-col items-center justify-center text-slate-400 select-none">
-              <div className="w-14 h-14 rounded-2xl bg-slate-50 flex items-center justify-center mb-3">
-                <ChevronRight size={24} className="text-slate-300" />
+            <div className="bg-white rounded-2xl border border-slate-200/70 shadow-sm shadow-slate-200/40 h-full flex flex-col items-center justify-center px-8 text-center select-none">
+              <div className="w-12 h-12 rounded-2xl bg-slate-50 flex items-center justify-center mb-3">
+                <Receipt size={20} className="text-slate-300" strokeWidth={1.5} />
               </div>
               <p className="text-[13px] font-medium text-slate-500">Odaberite račun</p>
-              <p className="text-[12px] text-slate-400 mt-0.5">iz liste za prikaz detalja</p>
+              <p className="text-[12px] text-slate-400 mt-0.5">
+                Kliknite red ili se krećite strelicama — detalji i akcije se pojavljuju ovdje.
+              </p>
             </div>
           )}
         </div>
@@ -659,8 +753,8 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
           <div className="px-6 pt-6 pb-4">
             <DialogHeader>
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-red-50 flex items-center justify-center">
-                  <AlertTriangle className="h-5 w-5 text-red-500" />
+                <div className="w-10 h-10 rounded-xl bg-rose-50 flex items-center justify-center">
+                  <Undo2 className="h-5 w-5 text-rose-500" />
                 </div>
                 <div>
                   <DialogTitle className="text-lg">Reklamacija #{selectedOrder?.id}</DialogTitle>
@@ -675,11 +769,11 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
           <Separator />
 
           <div className="px-6 py-5 space-y-4">
-            <div className="flex items-start gap-3 bg-red-50/60 border border-red-100 rounded-xl px-4 py-3">
-              <AlertTriangle size={16} className="text-red-500 mt-0.5 flex-shrink-0" />
+            <div className="flex items-start gap-3 bg-rose-50/60 border border-rose-100 rounded-xl px-4 py-3">
+              <AlertTriangle size={16} className="text-rose-500 mt-0.5 flex-shrink-0" />
               <div>
-                <p className="text-[12px] font-semibold text-red-700">Pažnja: Ova akcija je nepovratna</p>
-                <p className="text-[11px] text-red-600/70 mt-0.5">
+                <p className="text-[12px] font-semibold text-rose-700">Pažnja: Ova akcija je nepovratna</p>
+                <p className="text-[11px] text-rose-600/70 mt-0.5">
                   Povratni račun će biti automatski odštampan na Tring fiskalnom printeru. Provjerite da je printer uključen.
                 </p>
               </div>
@@ -724,7 +818,7 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
             <div className={cn(
               'mx-6 mb-2 flex items-center gap-2 rounded-xl px-4 py-3 text-[12px] font-medium',
               reklamacijaMsg.type === 'error'
-                ? 'bg-red-50/60 border border-red-100 text-red-600'
+                ? 'bg-rose-50/60 border border-rose-100 text-rose-600'
                 : 'bg-emerald-50/60 border border-emerald-100 text-emerald-600',
             )}>
               {reklamacijaMsg.type === 'error' ? <AlertTriangle size={14} /> : <Receipt size={14} />}
@@ -790,7 +884,7 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
               autoFocus
             />
             {pinError && (
-              <p className="text-[12px] text-red-500 font-medium text-center">{pinError}</p>
+              <p className="text-[12px] text-rose-500 font-medium text-center">{pinError}</p>
             )}
           </div>
           <div className="border-t bg-slate-50/50 px-6 py-4 flex items-center justify-end gap-3">
@@ -811,6 +905,66 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
             >
               Potvrdi
             </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Datum valute Dialog ── */}
+      <Dialog open={valutaOpen} onOpenChange={setValutaOpen}>
+        <DialogContent className="sm:max-w-[380px] p-0 gap-0 overflow-hidden">
+          <div className="px-6 pt-6 pb-4">
+            <DialogHeader>
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center">
+                  <CalendarClock className="h-5 w-5 text-slate-500" />
+                </div>
+                <div>
+                  <DialogTitle className="text-lg">Datum valute</DialogTitle>
+                  <DialogDescription className="text-xs mt-0.5">
+                    Rok plaćanja za račun #{selectedOrder?.brojFiskalnogRacuna || selectedOrder?.id}
+                  </DialogDescription>
+                </div>
+              </div>
+            </DialogHeader>
+          </div>
+
+          <Separator />
+
+          <div className="px-6 py-5 space-y-3">
+            <DatePicker
+              value={valutaDatum}
+              onChange={(v) => { setValutaDatum(v); setValutaError(''); }}
+              className="h-9 text-[13px] w-full"
+            />
+            <p className="text-[11px] text-slate-400">
+              Prikazuje se samo na A4 kopiji računa — fiskalni zapis ostaje netaknut.
+            </p>
+            {valutaError && <p className="text-[11.5px] text-rose-500">{valutaError}</p>}
+          </div>
+
+          <Separator />
+
+          <div className="px-6 py-4 flex items-center justify-between gap-2">
+            <Button
+              variant="ghost" size="sm"
+              className="text-[12px] text-slate-500 hover:text-rose-600"
+              disabled={!selectedOrder?.datumValute}
+              onClick={() => spremiValutu(null)}
+            >
+              Ukloni
+            </Button>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" className="text-[12px]" onClick={() => setValutaOpen(false)}>
+                Odustani
+              </Button>
+              <Button
+                size="sm" className="text-[12px]"
+                disabled={!valutaDatum}
+                onClick={() => spremiValutu(valutaDatum)}
+              >
+                Spremi
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>

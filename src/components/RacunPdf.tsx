@@ -5,6 +5,7 @@ import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
 import { POTPIS_AUTORA, POTPIS_AUTORA_EN } from '@/lib/brend';
 import { pdvStavke, iznosStavke } from '@/lib/racun';
 import { uNetto } from '@/lib/pdvUnos';
+import { formatDatumValute } from '@/lib/valuta';
 
 export type InvoiceLang = 'bs' | 'en';
 
@@ -30,6 +31,7 @@ const translations = {
     seller: 'Izdavač',
     buyer: 'Kupac',
     date: 'Datum',
+    dueDate: 'Datum valute',
     cashier: 'Kasir',
     payment: 'Plaćanje',
     status: 'Status',
@@ -62,6 +64,7 @@ const translations = {
     seller: 'From',
     buyer: 'Bill to',
     date: 'Date',
+    dueDate: 'Due date',
     cashier: 'Cashier',
     payment: 'Payment',
     status: 'Status',
@@ -413,6 +416,8 @@ export function RacunPdf({ order, firma, lang = 'bs' }: RacunPdfProps) {
   const orderDate = fmtDateTime(new Date(order.createdAt));
   const today = fmtDate(new Date());
 
+  const datumValute = formatDatumValute(order.datumValute);
+
   const parseNacinPlacanja = (json: string): string => {
     try {
       const parsed = JSON.parse(json);
@@ -496,6 +501,12 @@ export function RacunPdf({ order, firma, lang = 'bs' }: RacunPdfProps) {
             <Text style={s.metaLabel}>{t.payment}</Text>
             <Text style={s.metaValue}>{parseNacinPlacanja(order.nacinPlacanja)}</Text>
           </View>
+          {datumValute && (
+            <View style={s.metaItem}>
+              <Text style={s.metaLabel}>{t.dueDate}</Text>
+              <Text style={s.metaValue}>{datumValute}</Text>
+            </View>
+          )}
         </View>
 
         {/* ── Items table ── */}

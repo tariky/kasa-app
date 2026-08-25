@@ -10,6 +10,7 @@ import {
   isDobavljacUsed, type PriceChange,
 } from '../lib/skladiste';
 import { refundOrderInTransaction, refundAndPrint } from '../lib/refund';
+import { postaviDatumValute } from '../lib/valuta';
 import {
   sljedeciPrilogBroj, savePrilogStavkeInTransaction, finalizePrilogAndPrint,
   najveciPrilogBroj, pocetniPrilogBroj, postaviPocetniPrilogBroj,
@@ -824,6 +825,10 @@ export function registerIpcHandlers(): void {
       .prepare('UPDATE orders SET brojReklamacije = ? WHERE id = ?')
       .run(brojReklamacije, id);
     return { changes: result.changes };
+  });
+
+  handle('order:setDatumValute', (id: number, datum: string | null) => {
+    return { datumValute: postaviDatumValute(db, id, datum) };
   });
 
   handle('order:refund', (id: number, brojReklamacije?: string) => {

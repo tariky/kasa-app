@@ -68,9 +68,12 @@ export interface Order {
   brojFiskalnogRacuna?: string;
   brojReklamacije?: string;
   status: 'completed' | 'refunded';
-  isManual?: boolean;
+  /** SQLite INTEGER 0/1 — u JSX uvijek kroz Boolean(), inače se `0` ispiše. */
+  isManual?: 0 | 1;
   /** Interni broj priloga; NULL/undefined = običan račun. */
   prilogBroj?: number | null;
+  /** Datum valute (rok plaćanja), `YYYY-MM-DD`; upisuje se naknadno. */
+  datumValute?: string | null;
   createdAt: string;
   stavke?: OrderItem[];
   korisnikIme?: string;

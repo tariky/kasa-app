@@ -85,6 +85,7 @@ export const schema = `
     kupacPostanskiBroj TEXT,
     isManual INTEGER NOT NULL DEFAULT 0,
     prilogBroj INTEGER,
+    datumValute TEXT,
     refundedAt TEXT,
     createdAt TEXT DEFAULT (datetime('now','localtime')),
     FOREIGN KEY (korisnikId) REFERENCES users(id)

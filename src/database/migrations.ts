@@ -86,6 +86,11 @@ export function runMigrations(database: Database.Database): void {
     database.exec("ALTER TABLE orders ADD COLUMN prilogBroj INTEGER");
   }
 
+  // Datum valute (rok plaćanja) — upisuje se naknadno, nakon izdavanja računa.
+  if (!orderCols.find(c => c.name === 'datumValute')) {
+    database.exec("ALTER TABLE orders ADD COLUMN datumValute TEXT");
+  }
+
   // Stavke priloga (specifikacija uz fiskalni račun)
   database.exec(`
     CREATE TABLE IF NOT EXISTS prilog_stavke (

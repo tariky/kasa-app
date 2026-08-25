@@ -49,6 +49,7 @@ contextBridge.exposeInMainWorld('api', {
   createOrder: (data: any) => ipcRenderer.invoke('order:create', data),
   createManualOrder: (data: any) => ipcRenderer.invoke('order:createManual', data),
   updateOrderReklamacija: (id: number, broj: string) => ipcRenderer.invoke('order:updateReklamacija', id, broj),
+  setOrderDatumValute: (id: number, datum: string | null) => ipcRenderer.invoke('order:setDatumValute', id, datum),
   refundOrder: (id: number, brojReklamacije?: string) => ipcRenderer.invoke('order:refund', id, brojReklamacije),
   refundAndPrintOrder: (data: { id: number; brojReklamacije?: string }) => ipcRenderer.invoke('order:refundAndPrint', data),
   finalizeOrder: (data: any) => ipcRenderer.invoke('order:finalize', data),

@@ -44,6 +44,7 @@ interface Window {
     createOrder: (data: any) => Promise<any>;
     createManualOrder: (data: any) => Promise<{ id: number }>;
     updateOrderReklamacija: (id: number, broj: string) => Promise<any>;
+    setOrderDatumValute: (id: number, datum: string | null) => Promise<{ datumValute: string | null }>;
     refundOrder: (id: number, brojReklamacije?: string) => Promise<any>;
     refundAndPrintOrder: (data: { id: number; brojReklamacije?: string }) => Promise<{
       success: boolean; brojReklamacije?: string | null; error?: string; odgovori?: Record<string, string>;

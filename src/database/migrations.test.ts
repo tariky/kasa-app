@@ -86,6 +86,7 @@ const ADDED_COLUMNS: Array<[string, string]> = [
   ['orders', 'isManual'],
   ['orders', 'refundedAt'],
   ['orders', 'prilogBroj'],
+  ['orders', 'datumValute'],
 ];
 const ADDED_TABLES = ['dobavljaci', 'kupci', 'pending_receipts', 'prilog_stavke'];
 
