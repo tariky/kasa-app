@@ -53,6 +53,7 @@ interface Window {
     finalizePrilogOrder: (data: {
       korisnikId: number; iznos?: number; nacinPlacanja: string; kupac?: any;
       stavke?: Array<{ productId: number; kolicina: number; cijena: number; pdvStopa: string }>;
+      prilogOpis?: string; prilogVeza?: string;
     }) => Promise<{
       success: boolean; id?: number; prilogBroj?: number; brojFiskalnogRacuna?: string | null;
       error?: string; odgovori?: Record<string, string>;

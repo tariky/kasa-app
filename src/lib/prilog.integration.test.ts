@@ -83,6 +83,20 @@ test('zbirna stavka koja ide uređaju nosi naziv sa brojem priloga', async () =>
   expect(poslato.vrstePlacanja).toEqual([{ oznaka: 'Gotovina', iznos: 150 }]);
 }, 15000);
 
+test('naziv zbirne stavke se preuzima iz unosa i pamti uz račun', async () => {
+  let poslato: any = null;
+  const res = await finalizePrilogAndPrint(
+    { ...deps(), print: async (racun) => { poslato = racun; return Tring.stampatiFiskalniRacun(racun); } },
+    { korisnikId: 1, iznos: 150, nacinPlacanja: 'Gotovina', prilogOpis: 'CNC obrada', prilogVeza: 'fakturi' }
+  );
+
+  expect(res.success).toBe(true);
+  expect(poslato.stavke[0].artikal.naziv).toBe('CNC obrada po fakturi br. 1');
+  // Storno i kopija računa čitaju naziv iz baze — mora biti isti kao odštampani.
+  const order = db.prepare('SELECT prilogNaziv FROM orders WHERE id = ?').get(res.id!) as any;
+  expect(order.prilogNaziv).toBe('CNC obrada po fakturi br. 1');
+}, 15000);
+
 test('drugi prilog račun dobija sljedeći broj', async () => {
   await finalizePrilogAndPrint(deps(), { korisnikId: 1, iznos: 10, nacinPlacanja: 'Gotovina' });
   const res = await finalizePrilogAndPrint(deps(), { korisnikId: 1, iznos: 20, nacinPlacanja: 'Kartica' });

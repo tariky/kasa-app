@@ -91,7 +91,7 @@ export async function refundAndPrint(
   // fiskalizovan jednom zbirnom stavkom, pa se ona ovdje sintetizuje.
   const stavke = order.prilogBroj != null
     ? [{
-        sifra: PRILOG_SIFRA, naziv: prilogNaziv(order.prilogBroj), jm: 'kom', plu: 0,
+        sifra: PRILOG_SIFRA, naziv: order.prilogNaziv || prilogNaziv(order.prilogBroj), jm: 'kom', plu: 0,
         cijena: order.ukupno, kolicina: 1, rabat: 0, pdvStopa: 'E',
       }]
     : db.prepare(`

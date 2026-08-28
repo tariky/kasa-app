@@ -50,8 +50,9 @@ function insertCompletedOrder(
     kupac?: { naziv?: string; idBroj?: string; adresa?: string; grad?: string; postanskiBroj?: string };
     stavke: Array<{ productId: number; kolicina: number; cijena: number; rabat: number; pdvStopa: string }>;
     isManual?: 0 | 1; createdAt?: string;
-    // Račun po prilogu: nema stavki, nosi samo interni broj priloga.
+    // Račun po prilogu: nema stavki, nosi interni broj priloga i naziv zbirne stavke.
     prilogBroj?: number | null;
+    prilogNaziv?: string | null;
   }
 ): number {
   const isManual = data.isManual ?? 0;
@@ -60,15 +61,16 @@ function insertCompletedOrder(
   const result = db
     .prepare(`
       INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, status,
-        kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj, isManual${hasCreatedAt ? ', createdAt' : ''}, prilogBroj)
-      VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?${hasCreatedAt ? ', ?' : ''}, ?)
+        kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj, isManual${hasCreatedAt ? ', createdAt' : ''}, prilogBroj, prilogNaziv)
+      VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?${hasCreatedAt ? ', ?' : ''}, ?, ?)
     `)
     .run(
       data.korisnikId, data.ukupno, data.pdvIznos, data.nacinPlacanja, data.brojFiskalnogRacuna,
       data.kupac?.naziv || null, data.kupac?.idBroj || null, data.kupac?.adresa || null,
       data.kupac?.grad || null, data.kupac?.postanskiBroj || null, isManual,
       ...(hasCreatedAt ? [data.createdAt] : []),
-      data.prilogBroj ?? null
+      data.prilogBroj ?? null,
+      data.prilogNaziv ?? null
     );
 
   const orderId = result.lastInsertRowid as number;
@@ -621,7 +623,7 @@ export function registerIpcHandlers(): void {
     if (order.prilogBroj != null) {
       order.stavke = [{
         id: 0, orderId: order.id, productId: 0, kolicina: 1, cijena: order.ukupno, rabat: 0,
-        pdvStopa: 'E', productNaziv: prilogNaziv(order.prilogBroj),
+        pdvStopa: 'E', productNaziv: order.prilogNaziv || prilogNaziv(order.prilogBroj),
         productJm: 'kom', productSifra: PRILOG_SIFRA, productPlu: 0,
       }];
     }
@@ -778,6 +780,7 @@ export function registerIpcHandlers(): void {
     korisnikId: number; iznos?: number; nacinPlacanja: string;
     kupac?: { naziv?: string; idBroj?: string; adresa?: string; grad?: string; postanskiBroj?: string };
     stavke?: PrilogStavkaUnos[];
+    prilogOpis?: string; prilogVeza?: string;
   }) => {
     loadTringConfig();
     return finalizePrilogAndPrint({

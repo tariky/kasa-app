@@ -72,6 +72,7 @@ export interface Order {
   isManual?: 0 | 1;
   /** Interni broj priloga; NULL/undefined = običan račun. */
   prilogBroj?: number | null;
+  prilogNaziv?: string | null;
   /** Datum valute (rok plaćanja), `YYYY-MM-DD`; upisuje se naknadno. */
   datumValute?: string | null;
   createdAt: string;

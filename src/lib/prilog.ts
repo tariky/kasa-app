@@ -12,8 +12,23 @@ import { buildTringRacun } from './tringRacun';
 
 export const PRILOG_SIFRA = 'PRILOG';
 
-export function prilogNaziv(broj: number): string {
-  return `Stavke po računu br. ${broj}`;
+/** Zadani dijelovi naziva zbirne stavke — „Stavke po računu br. 5". */
+export const PRILOG_OPIS_DEFAULT = 'Stavke';
+export const PRILOG_VEZA_DEFAULT = 'računu';
+
+/** Fiskalni uređaj ima kratko polje naziva stavke — dijelovi se ograničavaju već na unosu. */
+export const PRILOG_OPIS_MAX = 24;
+export const PRILOG_VEZA_MAX = 14;
+
+/**
+ * Naziv zbirne stavke. Operater po računu bira uvodni dio i vezu — „CNC obrada
+ * po fakturi br. 5" — a prazan unos pada na zadane vrijednosti da stari računi
+ * (bez upisanog naziva) i dalje daju isti tekst kao prije.
+ */
+export function prilogNaziv(broj: number, opis?: string | null, veza?: string | null): string {
+  const o = (opis ?? '').trim().slice(0, PRILOG_OPIS_MAX) || PRILOG_OPIS_DEFAULT;
+  const v = (veza ?? '').trim().slice(0, PRILOG_VEZA_MAX) || PRILOG_VEZA_DEFAULT;
+  return `${o} po ${v} br. ${broj}`;
 }
 
 /** Postavka: od kojeg broja numeracija priloga kreće (za nastavak stare serije). */
@@ -136,11 +151,11 @@ export function savePrilogStavkeInTransaction(
 }
 
 /** Zbirna stavka kako se šalje fiskalnom uređaju (i sintetizuje u prikazima). */
-export function buildPrilogFiskalnaStavka(prilogBroj: number, iznos: number) {
+export function buildPrilogFiskalnaStavka(prilogBroj: number, iznos: number, naziv?: string | null) {
   return {
     productId: 0,
     sifra: PRILOG_SIFRA,
-    naziv: prilogNaziv(prilogBroj),
+    naziv: naziv || prilogNaziv(prilogBroj),
     jm: 'kom',
     plu: 0,
     cijena: round2(iznos),
@@ -188,6 +203,10 @@ export async function finalizePrilogAndPrint(
     kupac?: { naziv?: string; idBroj?: string; adresa?: string; grad?: string; postanskiBroj?: string };
     /** Stavke unesene odmah na kasi — iznos se računa iz njih. */
     stavke?: PrilogStavkaUnos[];
+    /** Uvodni dio naziva zbirne stavke ("CNC obrada"); prazno = "Stavke". */
+    prilogOpis?: string;
+    /** Veza u nazivu ("fakturi"); prazno = "računu". */
+    prilogVeza?: string;
   }
 ): Promise<FinalizePrilogResult> {
   const { db, print, transaction } = deps;
@@ -200,7 +219,10 @@ export async function finalizePrilogAndPrint(
   if (!(iznos > 0)) throw new Error('Iznos mora biti veći od 0');
 
   const prilogBroj = sljedeciPrilogBroj(db);
-  const stavka = buildPrilogFiskalnaStavka(prilogBroj, iznos);
+  // Naziv se zamrzava ovdje: storno i kopija računa moraju odštampati isti
+  // tekst koji je otišao na fiskalni uređaj, pa se čuva uz račun.
+  const naziv = prilogNaziv(prilogBroj, data.prilogOpis, data.prilogVeza);
+  const stavka = buildPrilogFiskalnaStavka(prilogBroj, iznos, naziv);
   const { ukupno, pdvIznos } = izracunajTotale([stavka]);
 
   // Write-ahead: stavke:[] + prilogBroj → pending:resolve rekonstruiše prilog
@@ -208,7 +230,7 @@ export async function finalizePrilogAndPrint(
   const snapshot = {
     korisnikId: data.korisnikId, ukupno, pdvIznos,
     nacinPlacanja: data.nacinPlacanja, kupac: data.kupac,
-    stavke: [], prilogBroj, prilogStavke: stavke,
+    stavke: [], prilogBroj, prilogNaziv: naziv, prilogStavke: stavke,
   };
   const pending = db
     .prepare('INSERT INTO pending_receipts (korisnikId, snapshot) VALUES (?, ?)')
@@ -241,12 +263,12 @@ export async function finalizePrilogAndPrint(
     transaction(() => {
       const r = db.prepare(`
         INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, status,
-          kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj, isManual, prilogBroj)
-        VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, 0, ?)
+          kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj, isManual, prilogBroj, prilogNaziv)
+        VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, 0, ?, ?)
       `).run(
         data.korisnikId, ukupno, pdvIznos, data.nacinPlacanja, brojFiskalnogRacuna,
         data.kupac?.naziv || null, data.kupac?.idBroj || null, data.kupac?.adresa || null,
-        data.kupac?.grad || null, data.kupac?.postanskiBroj || null, prilogBroj
+        data.kupac?.grad || null, data.kupac?.postanskiBroj || null, prilogBroj, naziv
       );
       orderId = Number(r.lastInsertRowid);
       if (stavke.length > 0) savePrilogStavkeInTransaction(db, orderId, stavke);

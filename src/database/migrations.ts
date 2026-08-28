@@ -86,6 +86,12 @@ export function runMigrations(database: Database.Database): void {
     database.exec("ALTER TABLE orders ADD COLUMN prilogBroj INTEGER");
   }
 
+  // Naziv zbirne stavke priloga kako je otišao na fiskalni uređaj
+  // (NULL = stari računi, naziv se rekonstruiše iz zadanih dijelova).
+  if (!orderCols.find(c => c.name === 'prilogNaziv')) {
+    database.exec("ALTER TABLE orders ADD COLUMN prilogNaziv TEXT");
+  }
+
   // Datum valute (rok plaćanja) — upisuje se naknadno, nakon izdavanja računa.
   if (!orderCols.find(c => c.name === 'datumValute')) {
     database.exec("ALTER TABLE orders ADD COLUMN datumValute TEXT");

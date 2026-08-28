@@ -182,13 +182,13 @@ test('kupac sa računa se prosljeđuje uređaju', async () => {
 
 /** Prilog račun: nema order_items, stavke i izlazi žive u prilog_stavke. */
 function dodajPrilogRacun(opts: {
-  brojFiskalnog: string; prilogBroj: number; ukupno: number;
+  brojFiskalnog: string; prilogBroj: number; ukupno: number; prilogNaziv?: string;
   stavke?: Array<{ productId: number; kolicina: number; cijena: number }>;
 }): number {
   const r = db.prepare(`
-    INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, status, prilogBroj)
-    VALUES (1, ?, 0, 'Gotovina', ?, 'completed', ?)
-  `).run(opts.ukupno, opts.brojFiskalnog, opts.prilogBroj);
+    INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, status, prilogBroj, prilogNaziv)
+    VALUES (1, ?, 0, 'Gotovina', ?, 'completed', ?, ?)
+  `).run(opts.ukupno, opts.brojFiskalnog, opts.prilogBroj, opts.prilogNaziv ?? null);
   const orderId = Number(r.lastInsertRowid);
   for (const s of opts.stavke ?? []) {
     db.prepare("INSERT INTO prilog_stavke (orderId, productId, kolicina, cijena, pdvStopa) VALUES (?, ?, ?, ?, 'E')")
@@ -235,6 +235,24 @@ test('reklamacija prilog računa nosi istu zbirnu stavku kao original', async ()
   expect(poslato.stavke[0].artikal.cijena).toBe(60);
   expect(poslato.stavke[0].kolicina).toBe(1);
   expect(poslato.brojRacuna).toBe(563);
+}, 15000);
+
+test('reklamacija koristi naziv zbirne stavke zapamćen uz račun', async () => {
+  dodajArtikal(1, '011', 30);
+  const orderId = dodajPrilogRacun({
+    brojFiskalnog: '564', prilogBroj: 8, ukupno: 60,
+    prilogNaziv: 'CNC obrada po fakturi br. 8',
+    stavke: [{ productId: 1, kolicina: 2, cijena: 30 }],
+  });
+
+  let poslato: any = null;
+  const result = await refundAndPrint(
+    { ...deps(), print: async (racun) => { poslato = racun; return Tring.stampatiReklamiraniRacun(racun); } },
+    { id: orderId }
+  );
+
+  expect(result.success).toBe(true);
+  expect(poslato.stavke[0].artikal.naziv).toBe('CNC obrada po fakturi br. 8');
 }, 15000);
 
 test('storno prilog računa bez dodijeljenih stavki prolazi (nema šta vratiti)', async () => {

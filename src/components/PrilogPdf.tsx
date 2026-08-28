@@ -297,7 +297,7 @@ export function PrilogPdf({ order, firma, stavke }: PrilogPdfProps) {
           </View>
           <View style={s.vezaRow}>
             <Text style={s.vezaKey}>Zbirna stavka</Text>
-            <Text style={s.vezaValue}>&bdquo;{prilogNaziv(order.prilogBroj ?? 0)}&ldquo; &middot; {formatKM(ukupno)}</Text>
+            <Text style={s.vezaValue}>&bdquo;{order.prilogNaziv || prilogNaziv(order.prilogBroj ?? 0)}&ldquo; &middot; {formatKM(ukupno)}</Text>
           </View>
           <Text style={s.vezaNota}>
             Ovaj prilog razrađuje tu zbirnu stavku i vrijedi samo uz navedeni fiskalni račun.

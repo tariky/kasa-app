@@ -10,7 +10,10 @@ import {
   Paperclip, Search, X, UserRound, Pencil, AlertCircle, Trash2, Package,
   Banknote, CreditCard, Landmark, ReceiptText, type LucideIcon,
 } from 'lucide-react';
-import { prilogNaziv, sumaPriloga } from '@/lib/prilog';
+import {
+  prilogNaziv, sumaPriloga,
+  PRILOG_OPIS_DEFAULT, PRILOG_VEZA_DEFAULT, PRILOG_OPIS_MAX, PRILOG_VEZA_MAX,
+} from '@/lib/prilog';
 import { iznosStavke } from '@/lib/racun';
 import { formatKM, cn } from '@/lib/utils';
 import type { Kupac, Product } from '@/types';
@@ -62,6 +65,9 @@ export default function PrilogRacunDialog({ open, onOpenChange, korisnikId, onSu
   const [mode, setMode] = useState<Mode>('stavke');
   const [stavke, setStavke] = useState<StavkaRed[]>([]);
   const [rucniIznos, setRucniIznos] = useState<number | null>(null);
+  // Naziv zbirne stavke se bira po računu — „CNC obrada po fakturi br. 5".
+  const [opis, setOpis] = useState(PRILOG_OPIS_DEFAULT);
+  const [veza, setVeza] = useState(PRILOG_VEZA_DEFAULT);
   const [nacinPlacanja, setNacinPlacanja] = useState<PaymentType>('Gotovina');
 
   const [query, setQuery] = useState('');
@@ -90,6 +96,7 @@ export default function PrilogRacunDialog({ open, onOpenChange, korisnikId, onSu
   useEffect(() => {
     if (!open) return;
     setMode('stavke'); setStavke([]); setRucniIznos(null); setNacinPlacanja('Gotovina');
+    setOpis(PRILOG_OPIS_DEFAULT); setVeza(PRILOG_VEZA_DEFAULT);
     setQuery(''); setResults([]); setFocusedIndex(-1);
     setKupacNaziv(''); setKupacIdBroj(''); setKupacAdresa(''); setKupacGrad(''); setKupacPostanskiBroj('');
     setKupacSearch(''); setManualKupac(false);
@@ -118,6 +125,10 @@ export default function PrilogRacunDialog({ open, onOpenChange, korisnikId, onSu
     [stavke],
   );
   const iznos = mode === 'stavke' ? sumaStavki : (rucniIznos ?? 0);
+  const nazivStavke = useMemo(
+    () => (nextBroj !== null ? prilogNaziv(nextBroj, opis, veza) : null),
+    [nextBroj, opis, veza],
+  );
 
   const addProduct = useCallback((p: Product) => {
     setStavke(prev => {
@@ -236,6 +247,8 @@ export default function PrilogRacunDialog({ open, onOpenChange, korisnikId, onSu
         ...(mode === 'stavke'
           ? { stavke: stavke.map(s => ({ productId: s.productId, kolicina: s.kolicina, cijena: s.cijena, pdvStopa: s.pdvStopa })) }
           : { iznos }),
+        prilogOpis: opis.trim(),
+        prilogVeza: veza.trim(),
         kupac: kupacIdBroj.trim() ? {
           naziv: kupacNaziv.trim(), idBroj: kupacIdBroj.trim(), adresa: kupacAdresa.trim(),
           grad: kupacGrad.trim(), postanskiBroj: kupacPostanskiBroj.trim(),
@@ -259,7 +272,7 @@ export default function PrilogRacunDialog({ open, onOpenChange, korisnikId, onSu
     } finally {
       setBusy(false);
     }
-  }, [iznos, mode, virmanBezKupca, stavke, korisnikId, nacinPlacanja,
+  }, [iznos, mode, virmanBezKupca, stavke, korisnikId, nacinPlacanja, opis, veza,
       kupacIdBroj, kupacNaziv, kupacAdresa, kupacGrad, kupacPostanskiBroj, onSuccess, onOpenChange]);
 
   // F2 mijenja izvor iznosa, F5 fiskalizuje — isti raspored kao na kasi.
@@ -288,7 +301,7 @@ export default function PrilogRacunDialog({ open, onOpenChange, korisnikId, onSu
             </DialogTitle>
             <DialogDescription className="mt-0.5 text-sm text-slate-500">
               Na fiskalni račun ide jedna zbirna stavka
-              {nextBroj !== null ? ` — „${prilogNaziv(nextBroj)}".` : '.'}
+              {nazivStavke !== null ? ` — „${nazivStavke}".` : '.'}
             </DialogDescription>
           </DialogHeader>
 
@@ -505,10 +518,40 @@ export default function PrilogRacunDialog({ open, onOpenChange, korisnikId, onSu
                   <span className="truncate text-[11.5px] text-slate-400">
                     {mode === 'stavke' && stavke.length > 0
                       ? `${stavke.length} ${stavke.length === 1 ? 'stavka' : stavke.length < 5 ? 'stavke' : 'stavki'} na prilogu`
-                      : nextBroj !== null ? prilogNaziv(nextBroj) : 'Zbirna stavka'}
+                      : nazivStavke ?? 'Zbirna stavka'}
                   </span>
                 </div>
               </label>
+
+              {/* Naziv zbirne stavke — ono što stvarno piše na fiskalnom računu */}
+              <div className="pt-4">
+                <p className="text-[11px] font-medium uppercase tracking-wider text-slate-400">Naziv zbirne stavke</p>
+                <div className="mt-1.5 flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-1.5 py-1.5">
+                  <Input
+                    value={opis}
+                    onChange={e => setOpis(e.target.value)}
+                    placeholder={PRILOG_OPIS_DEFAULT}
+                    maxLength={PRILOG_OPIS_MAX}
+                    aria-label="Naziv zbirne stavke"
+                    className="h-8 min-w-0 flex-1 rounded-lg border-0 px-2 text-[13px] shadow-none focus-visible:ring-1 focus-visible:ring-blue-500/50"
+                  />
+                  <span className="shrink-0 text-[12px] text-slate-400">po</span>
+                  <Input
+                    value={veza}
+                    onChange={e => setVeza(e.target.value)}
+                    placeholder={PRILOG_VEZA_DEFAULT}
+                    maxLength={PRILOG_VEZA_MAX}
+                    aria-label="Veza u nazivu zbirne stavke"
+                    className="h-8 w-[86px] shrink-0 rounded-lg border-0 px-2 text-[13px] shadow-none focus-visible:ring-1 focus-visible:ring-blue-500/50"
+                  />
+                  <span className="shrink-0 pr-1 font-mono text-[12px] text-slate-400">
+                    br. {nextBroj ?? '—'}
+                  </span>
+                </div>
+                <p className="mt-1 truncate text-[11px] text-slate-400">
+                  {nazivStavke !== null ? `Na računu: „${nazivStavke}"` : 'Naziv se formira kad se dodijeli broj priloga.'}
+                </p>
+              </div>
 
               {/* Način plaćanja */}
               <div className="pt-4">

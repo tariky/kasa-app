@@ -36,6 +36,19 @@ test('prilogNaziv formira tačan naziv stavke', () => {
   expect(prilogNaziv(17)).toBe('Stavke po računu br. 17');
 });
 
+test('prilogNaziv koristi zadani uvod i vezu iz unosa', () => {
+  expect(prilogNaziv(5, 'CNC obrada', 'fakturi')).toBe('CNC obrada po fakturi br. 5');
+});
+
+test('prilogNaziv pada na zadane dijelove kad je unos prazan', () => {
+  expect(prilogNaziv(5, '   ', '')).toBe('Stavke po računu br. 5');
+});
+
+test('buildPrilogFiskalnaStavka preuzima zadani naziv', () => {
+  expect(buildPrilogFiskalnaStavka(5, 100, 'CNC obrada po fakturi br. 5').naziv)
+    .toBe('CNC obrada po fakturi br. 5');
+});
+
 test('sljedeciPrilogBroj počinje od 1 na praznoj bazi', () => {
   expect(sljedeciPrilogBroj(db)).toBe(1);
 });
