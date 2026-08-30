@@ -69,6 +69,9 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
   const [dodajOpen, setDodajOpen] = useState(false);
   const [drawerWarning, setDrawerWarning] = useState<{ stanje: number; potrebno: number } | null>(null);
   const [pologOpen, setPologOpen] = useState(false);
+  // Printer je odbio gotovinski storno zbog prazne ladice — operater može
+  // svjesno pregaziti stanje (manjak se evidentira kao polog).
+  const [overrideManjak, setOverrideManjak] = useState<number | null>(null);
   const [gaps, setGaps] = useState<number[]>([]);
   const [prefillBroj, setPrefillBroj] = useState<string | undefined>(undefined);
   const [prilogOpen, setPrilogOpen] = useState(false);
@@ -102,6 +105,7 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
   // upozorenje (ne blokada) kad očekivano stanje ladice ne pokriva povrat.
   useEffect(() => {
     setDrawerWarning(null);
+    setOverrideManjak(null);
     if (!reklamacijaOpen || !selectedOrder) return;
     const potrebno = gotovinskiIznos(selectedOrder.nacinPlacanja, selectedOrder.ukupno);
     if (potrebno <= 0) return;
@@ -110,29 +114,40 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
       .catch(() => { /* informativno */ });
   }, [reklamacijaOpen, selectedOrder, pologOpen]);
 
-  const handleReklamacija = async () => {
+  const handleReklamacija = async (dozvoliPolog = false) => {
     if (!selectedOrder || !selectedOrder.brojFiskalnogRacuna) return;
 
     if (reklamacijaLoading) return;
     setReklamacijaLoading(true);
     setReklamacijaMsg(null);
+    if (dozvoliPolog) setOverrideManjak(null);
     try {
       // Štampa i upis storna idu kroz jedan poziv da ne ostane odštampana
       // reklamacija bez zapisa u bazi ako nešto pukne između.
       const result = await window.api.refundAndPrintOrder({
         id: selectedOrder.id,
         brojReklamacije: reklamacijaBroj.trim() || undefined,
+        dozvoliPolog,
+        korisnikId,
       });
 
       if (!result || !result.success) {
         const details = result?.odgovori ? Object.entries(result.odgovori).map(([k, v]) => `${k}: ${v}`).join(', ') : '';
         setReklamacijaMsg({ type: 'error', text: `Greška: ${result?.error || 'Nepoznata greška'}${details ? ` (${details})` : ''}` });
+        // Prazna ladica nije razlog da se storno ne može napraviti — operateru
+        // se ponudi override koji manjak evidentira kao polog i ponovi štampu.
+        setOverrideManjak(result?.nedovoljnoSredstava ? (result.manjak ?? 0) : null);
         return;
       }
 
       setReklamacijaOpen(false);
       setReklamacijaBroj('');
-      setReklamacijaMsg({ type: 'success', text: `Reklamacija #${result.brojReklamacije ?? ''} uspješno kreirana` });
+      setOverrideManjak(null);
+      setReklamacijaMsg({
+        type: 'success',
+        text: `Reklamacija #${result.brojReklamacije ?? ''} uspješno kreirana`
+          + (result.pologIznos ? ` (evidentiran polog ${formatKM(result.pologIznos)})` : ''),
+      });
       await loadOrders();
 
       // getOrders vraća samo zaglavlja — detalj mora ponovo učitati stavke.
@@ -789,13 +804,24 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
                   <p className="text-[11px] text-amber-600/70 mt-0.5">
                     Očekivano stanje je {formatKM(drawerWarning.stanje)}, a povrat traži {formatKM(drawerWarning.potrebno)}.
                     Tring zahtijeva unos novca prije gotovinske reklamacije — printer može odbiti štampu.
+                    Možeš unijeti polog ručno ili pregaziti stanje: manjak se tada automatski
+                    evidentira kao polog i storno prolazi.
                   </p>
-                  <Button
-                    variant="outline" size="sm" className="h-7 mt-2 text-[11px] border-amber-200 text-amber-700"
-                    onClick={() => setPologOpen(true)}
-                  >
-                    Unesi polog
-                  </Button>
+                  <div className="flex items-center gap-2 mt-2">
+                    <Button
+                      variant="outline" size="sm" className="h-7 text-[11px] border-amber-200 text-amber-700"
+                      onClick={() => setPologOpen(true)}
+                    >
+                      Unesi polog
+                    </Button>
+                    <Button
+                      variant="outline" size="sm" className="h-7 text-[11px] border-amber-300 text-amber-700"
+                      disabled={reklamacijaLoading}
+                      onClick={() => handleReklamacija(true)}
+                    >
+                      Reklamiraj uz polog {formatKM(round2(drawerWarning.potrebno - drawerWarning.stanje))}
+                    </Button>
+                  </div>
                 </div>
               </div>
             )}
@@ -826,13 +852,33 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
             </div>
           )}
 
+          {overrideManjak !== null && (
+            <div className="mx-6 mb-2 rounded-xl border border-amber-200 bg-amber-50/60 px-4 py-3">
+              <p className="text-[12px] font-semibold text-amber-700">
+                Printer je odbio storno zbog stanja kase
+              </p>
+              <p className="text-[11px] text-amber-600/80 mt-0.5">
+                Za povrat fali {formatKM(overrideManjak)}. Možeš pregaziti stanje kase — taj iznos
+                će biti evidentiran kao polog (i na printeru i u evidenciji ladice), pa se
+                reklamacija odmah ponovo štampa.
+              </p>
+              <Button
+                variant="outline" size="sm" className="h-7 mt-2 text-[11px] border-amber-300 text-amber-700"
+                disabled={reklamacijaLoading}
+                onClick={() => handleReklamacija(true)}
+              >
+                Ipak reklamiraj (polog {formatKM(overrideManjak)})
+              </Button>
+            </div>
+          )}
+
           <div className="border-t bg-slate-50/50 px-6 py-4 flex items-center justify-end gap-3">
             <Button variant="ghost" onClick={() => setReklamacijaOpen(false)}>
               Otkaži
             </Button>
             <Button
               variant="destructive"
-              onClick={handleReklamacija}
+              onClick={() => handleReklamacija()}
               disabled={reklamacijaLoading}
               className="min-w-[140px]"
             >

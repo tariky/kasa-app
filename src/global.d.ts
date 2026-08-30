@@ -46,8 +46,11 @@ interface Window {
     updateOrderReklamacija: (id: number, broj: string) => Promise<any>;
     setOrderDatumValute: (id: number, datum: string | null) => Promise<{ datumValute: string | null }>;
     refundOrder: (id: number, brojReklamacije?: string) => Promise<any>;
-    refundAndPrintOrder: (data: { id: number; brojReklamacije?: string }) => Promise<{
+    refundAndPrintOrder: (data: {
+      id: number; brojReklamacije?: string; dozvoliPolog?: boolean; korisnikId?: number;
+    }) => Promise<{
       success: boolean; brojReklamacije?: string | null; error?: string; odgovori?: Record<string, string>;
+      nedovoljnoSredstava?: boolean; manjak?: number; pologIznos?: number;
     }>;
     finalizeOrder: (data: any) => Promise<{ success: boolean; id?: number; brojFiskalnogRacuna?: string | null; error?: string; odgovori?: Record<string, string> }>;
     finalizePrilogOrder: (data: {

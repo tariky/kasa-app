@@ -842,7 +842,9 @@ export function registerIpcHandlers(): void {
 
   // Orkestracija (štampa → atomični upis) živi u lib/refund.ts da bi bila
   // testabilna nad mock fiskalnim serverom, bez Electron ovisnosti.
-  handle('order:refundAndPrint', async (data: { id: number; brojReklamacije?: string }) => {
+  handle('order:refundAndPrint', async (data: {
+    id: number; brojReklamacije?: string; dozvoliPolog?: boolean; korisnikId?: number;
+  }) => {
     loadTringConfig();
     return refundAndPrint({
       db,
@@ -852,6 +854,17 @@ export function registerIpcHandlers(): void {
         const result = await Tring.stampatiReklamiraniRacun(racun);
         if (Tring.isLoggingEnabled()) console.log('[Tring] refundAndPrint response:', JSON.stringify(result));
         return result;
+      },
+      drawerState: () => getDrawerState(db),
+      // Override iz UI-ja: manjak se evidentira kao pravi polog (Tring
+      // UnosNovca + cash_movements) da uređaj dozvoli gotovinski storno.
+      depositCash: async (iznos, napomena) => {
+        const res = await addCashMovement(cashDeps(), {
+          tip: 'polog', iznos, korisnikId: data.korisnikId ?? 0, napomena,
+        });
+        if (res.tringStatus === 'error') {
+          throw new Error(`Polog od ${iznos} KM nije prihvaćen na printeru: ${res.error ?? 'nepoznata greška'}`);
+        }
       },
     }, data);
   });

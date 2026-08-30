@@ -1,7 +1,7 @@
 import { test, expect, beforeEach } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { schema } from '@/database/schema';
-import { refundOrderInTransaction } from './refund';
+import { refundOrderInTransaction, refundAndPrint, type RefundDeps } from './refund';
 import { getProductStock } from './skladiste';
 import type { SqlDb } from './sqldb';
 
@@ -102,4 +102,64 @@ test('decimalna količina se vraća u cijelosti', () => {
 
   refundOrderInTransaction(db, orderId, 'R-3');
   expect(getProductStock(db, 1)).toBe(100);
+});
+
+// ── Override praznog stanja kase ─────────────────────────────────────────────
+// Tring odbija gotovinski storno kad u kasi nema evidentirane gotovine.
+// Operater smije pregaziti stanje: manjak se upiše kao polog pa štampa prolazi.
+
+function refundDeps(over: Partial<RefundDeps> = {}): RefundDeps {
+  return {
+    db,
+    transaction: (fn) => db.transaction(fn),
+    print: async () => ({ success: true, vrstaOdgovora: 'OK', odgovori: { BrojFiskalnogRacuna: 'R-1' } }),
+    drawerState: () => ({ ocekivanoStanje: 0 }),
+    ...over,
+  };
+}
+
+test('neuspjela štampa uz praznu ladicu nudi override s izračunatim manjkom', async () => {
+  dodajArtikal(1);
+  const orderId = dodajRacun([{ productId: 1, kolicina: 1 }]);
+
+  const res = await refundAndPrint(refundDeps({
+    print: async () => ({ success: false, vrstaOdgovora: 'Greska', odgovori: { Poruka: 'Nema dovoljno sredstava' } }),
+  }), { id: orderId });
+
+  expect(res.success).toBe(false);
+  expect(res.nedovoljnoSredstava).toBe(true);
+  expect(res.manjak).toBe(100); // cijeli gotovinski iznos — ladica je prazna
+  expect(db.prepare('SELECT status FROM orders WHERE id = ?').get(orderId) as any).toMatchObject({ status: 'completed' });
+});
+
+test('override evidentira polog za manjak i storno prolazi', async () => {
+  dodajArtikal(1);
+  const orderId = dodajRacun([{ productId: 1, kolicina: 1 }]);
+  const polozi: Array<{ iznos: number; napomena: string }> = [];
+
+  const res = await refundAndPrint(refundDeps({
+    drawerState: () => ({ ocekivanoStanje: 30 }),
+    depositCash: async (iznos, napomena) => { polozi.push({ iznos, napomena }); },
+  }), { id: orderId, dozvoliPolog: true });
+
+  expect(res.success).toBe(true);
+  expect(polozi).toHaveLength(1);
+  expect(polozi[0].iznos).toBe(70); // 100 povrat − 30 u ladici
+  expect(polozi[0].napomena).toContain(`#${orderId}`);
+  expect(res.pologIznos).toBe(70);
+  expect(db.prepare('SELECT status FROM orders WHERE id = ?').get(orderId) as any).toMatchObject({ status: 'refunded' });
+});
+
+test('kartični račun ne traži polog ni kad je ladica prazna', async () => {
+  dodajArtikal(1);
+  const orderId = dodajRacun([{ productId: 1, kolicina: 1 }]);
+  db.prepare("UPDATE orders SET nacinPlacanja = 'Kartica' WHERE id = ?").run(orderId);
+  let deposited = false;
+
+  const res = await refundAndPrint(refundDeps({
+    depositCash: async () => { deposited = true; },
+  }), { id: orderId, dozvoliPolog: true });
+
+  expect(res.success).toBe(true);
+  expect(deposited).toBe(false);
 });

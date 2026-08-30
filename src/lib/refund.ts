@@ -3,6 +3,8 @@ import type { SqlDb } from './sqldb';
 import { parseFiskalniBroj } from './fiskalni';
 import { buildTringReklamacija } from './tringRacun';
 import { PRILOG_SIFRA, prilogNaziv } from './prilog';
+import { gotovinskiIznos } from './drawer';
+import { round2 } from './novac';
 
 /**
  * Označi račun storniranim, vrati zalihu i upiši broj reklamacije.
@@ -50,6 +52,10 @@ export interface RefundDeps {
   print: (racun: Tring.ReklamiraniRacun) => Promise<Tring.TringResponse | null>;
   /** Omotač koji izvrši callback u SQL transakciji. */
   transaction: (fn: () => void) => () => void;
+  /** Očekivana gotovina u ladici; bez nje se manjak ne može izračunati. */
+  drawerState?: () => { ocekivanoStanje: number };
+  /** Evidentira polog (Tring UnosNovca + zapis u cash_movements). */
+  depositCash?: (iznos: number, napomena: string) => Promise<void>;
 }
 
 export interface RefundResult {
@@ -57,6 +63,28 @@ export interface RefundResult {
   brojReklamacije?: string | null;
   error?: string;
   odgovori?: Record<string, string>;
+  /**
+   * Štampa je pala, a u ladici nema evidentirane gotovine za povrat —
+   * renderer nudi override ("ipak reklamiraj uz automatski polog").
+   */
+  nedovoljnoSredstava?: boolean;
+  /** Koliko gotovine fali do iznosa povrata (za prijedlog pologa). */
+  manjak?: number;
+  /** Iznos automatski evidentiranog pologa kad je override iskorišten. */
+  pologIznos?: number;
+}
+
+/**
+ * Tring ne vraća šifru greške za praznu ladicu, samo tekst, pa se prepoznaje
+ * po ključnim riječima. Ako se tekst promijeni, override se i dalje nudi jer
+ * ga pali i lokalno stanje ladice.
+ */
+const NEDOVOLJNO_RE = /nedovoljno|nema dovoljno|insufficient|nedostaje|manjak|prazna kasa/i;
+
+function jeNedovoljnoSredstava(r: Tring.TringResponse): boolean {
+  return NEDOVOLJNO_RE.test(
+    [r.error ?? '', r.vrstaOdgovora ?? '', ...Object.values(r.odgovori ?? {})].join(' ')
+  );
 }
 
 /** Računi kojima se storno trenutno štampa — zaštita od dvoklika. */
@@ -70,7 +98,7 @@ const refundsInFlight = new Set<number>();
  */
 export async function refundAndPrint(
   deps: RefundDeps,
-  data: { id: number; brojReklamacije?: string }
+  data: { id: number; brojReklamacije?: string; dozvoliPolog?: boolean }
 ): Promise<RefundResult> {
   const { db, print, transaction } = deps;
   const id = data.id;
@@ -101,8 +129,26 @@ export async function refundAndPrint(
         WHERE oi.orderId = ?
       `).all(id);
 
+  // Gotovinski dio računa — samo on troši gotovinu iz ladice.
+  const potrebnoGotovine = gotovinskiIznos(order.nacinPlacanja, order.ukupno);
+  let manjak = 0;
+  if (potrebnoGotovine > 0 && deps.drawerState) {
+    try {
+      manjak = Math.max(0, round2(potrebnoGotovine - deps.drawerState().ocekivanoStanje));
+    } catch { /* stanje ladice je informativno — ne smije oboriti storno */ }
+  }
+
   refundsInFlight.add(id);
   try {
+    // Override: operater je upozoren i svjesno gura storno preko praznog
+    // stanja. Tring ne dopušta gotovinski povrat bez evidentirane gotovine,
+    // pa se manjak prvo upiše kao polog (i u uređaj i u cash_movements).
+    let pologIznos = 0;
+    if (data.dozvoliPolog && manjak > 0 && deps.depositCash) {
+      await deps.depositCash(manjak, `Automatski polog za reklamaciju računa #${id}`);
+      pologIznos = manjak;
+    }
+
     const racun = buildTringReklamacija({
       stavke,
       brojRacuna,
@@ -122,6 +168,10 @@ export async function refundAndPrint(
         success: false,
         error: result?.error || result?.vrstaOdgovora || 'Nepoznata greška',
         odgovori: result?.odgovori ?? {},
+        nedovoljnoSredstava:
+          !data.dozvoliPolog && potrebnoGotovine > 0 &&
+          (manjak > 0 || (!!result && jeNedovoljnoSredstava(result))),
+        manjak: manjak > 0 ? manjak : round2(potrebnoGotovine),
       };
     }
 
@@ -138,7 +188,7 @@ export async function refundAndPrint(
       );
     }
 
-    return { success: true, brojReklamacije, odgovori: result.odgovori };
+    return { success: true, brojReklamacije, odgovori: result.odgovori, pologIznos };
   } finally {
     refundsInFlight.delete(id);
   }
