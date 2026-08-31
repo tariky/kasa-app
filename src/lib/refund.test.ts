@@ -161,7 +161,7 @@ test('kartični račun se pokriva samo u uređaju — evidencija ladice se ne di
   const res = await refundAndPrint(refundDeps({
     depositCash: async (iznos) => { evidentirano.push(iznos); },
     deviceCashIn: async (iznos) => { uUredjaj.push(iznos); },
-  }), { id: orderId, dozvoliPolog: true });
+  }), { id: orderId });
 
   expect(res.success).toBe(true);
   expect(evidentirano).toEqual([]); // iz ladice fizički ne izlazi ništa
@@ -169,20 +169,21 @@ test('kartični račun se pokriva samo u uređaju — evidencija ladice se ne di
   expect(res.pologIznos).toBe(0);
 });
 
-test('virmanski račun nudi override iako gotovinski dio ne postoji', async () => {
+test('virmanski račun prolazi bez ijednog override klika', async () => {
   dodajArtikal(1);
   const orderId = dodajRacun([{ productId: 1, kolicina: 1 }]);
   db.prepare("UPDATE orders SET nacinPlacanja = 'Virman' WHERE id = ?").run(orderId);
+  const uUredjaj: number[] = [];
 
+  // Bez dozvoliPolog — obično 'Potvrdi reklamaciju'.
   const res = await refundAndPrint(refundDeps({
-    print: async () => ({
-      success: false, vrstaOdgovora: 'Greska',
-      odgovori: { 'Štampanje reklamiranog računa': 'ERROR_FISCAL_INSUFFICIENT_MONEY' },
-    }),
+    deviceCashIn: async (iznos) => { uUredjaj.push(iznos); },
   }), { id: orderId });
 
-  expect(res.nedovoljnoSredstava).toBe(true);
-  expect(res.manjak).toBe(100);
+  expect(res.success).toBe(true);
+  expect(uUredjaj).toEqual([100]); // pokriće za uređaj, automatski
+  expect(res.pologIznos).toBe(0);  // ladica ostaje netaknuta
+  expect(db.prepare("SELECT COUNT(*) AS n FROM cash_movements").get() as any).toMatchObject({ n: 0 });
 });
 
 test('override dopunjava uređaj i ponavlja štampu kad stanje ladice laže', async () => {
@@ -203,4 +204,33 @@ test('override dopunjava uređaj i ponavlja štampu kad stanje ladice laže', as
   expect(res.success).toBe(true);
   expect(uUredjaj).toEqual([100]); // dopuna do punog iznosa računa
   expect(pokusaj).toBe(2);
+});
+
+test('mješovito plaćanje: override traži samo gotovinski dio, ostatak ide sam', async () => {
+  dodajArtikal(1);
+  const orderId = dodajRacun([{ productId: 1, kolicina: 1 }]);
+  db.prepare(`UPDATE orders SET nacinPlacanja = '{"gotovina":30,"kartica":70}' WHERE id = ?`).run(orderId);
+  const evidentirano: number[] = [];
+  const uUredjaj: number[] = [];
+  // Uređaj traži pokriće u punom iznosu računa, kao pravi Tring.
+  const pokriveno = () => [...evidentirano, ...uUredjaj].reduce((a, b) => a + b, 0);
+  const deps = () => refundDeps({
+    depositCash: async (iznos) => { evidentirano.push(iznos); },
+    deviceCashIn: async (iznos) => { uUredjaj.push(iznos); },
+    print: async (): Promise<TringResponse> => (pokriveno() >= 100
+      ? { success: true, vrstaOdgovora: 'OK', odgovori: { BrojFiskalnogRacuna: 'R-3' } }
+      : { success: false, vrstaOdgovora: 'Greska', odgovori: { Poruka: 'ERROR_FISCAL_INSUFFICIENT_MONEY' } }),
+  });
+
+  // Bez overrida: kartični dio se pokrije sam, ali za 30 KM gotovine se pita.
+  const prvi = await refundAndPrint(deps(), { id: orderId });
+  expect(prvi.success).toBe(false);
+  expect(prvi.nedovoljnoSredstava).toBe(true);
+  expect(prvi.manjak).toBe(30);
+  expect(uUredjaj).toEqual([70]);
+  expect(evidentirano).toEqual([]);
+
+  const drugi = await refundAndPrint(deps(), { id: orderId, dozvoliPolog: true });
+  expect(drugi.success).toBe(true);
+  expect(evidentirano).toEqual([30]);
 });

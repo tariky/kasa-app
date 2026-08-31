@@ -25,6 +25,7 @@ import CashMovementDialog from '@/components/CashMovementDialog';
 import PrilogStavkeDialog from '@/components/PrilogStavkeDialog';
 import { prilogKompletan, sumaPriloga } from '@/lib/prilog';
 import { formatDatumValute } from '@/lib/valuta';
+import { gotovinskiIznos } from '@/lib/drawer';
 import { round2 } from '@/lib/novac';
 
 type Filter = 'sve' | 'aktivni' | 'storno';
@@ -106,9 +107,9 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
     setDrawerWarning(null);
     setOverrideManjak(null);
     if (!reklamacijaOpen || !selectedOrder) return;
-    // Tring povrat po reklamaciji ide uvijek gotovinom — i za virmanski račun
-    // uređaj traži pokriće u punom iznosu, inače ERROR_FISCAL_INSUFFICIENT_MONEY.
-    const potrebno = selectedOrder.ukupno;
+    // Upozorava se samo na stvarnu gotovinu koja izlazi iz ladice. Nenovčani
+    // dio (virman, kartica) uređaj također traži, ali ga app pokrije sama.
+    const potrebno = gotovinskiIznos(selectedOrder.nacinPlacanja, selectedOrder.ukupno);
     if (potrebno <= 0) return;
     window.api.getDrawerState()
       .then(s => { if (s.ocekivanoStanje < potrebno) setDrawerWarning({ stanje: s.ocekivanoStanje, potrebno }); })
@@ -804,10 +805,9 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
                   </p>
                   <p className="text-[11px] text-amber-600/70 mt-0.5">
                     Očekivano stanje je {formatKM(drawerWarning.stanje)}, a povrat traži {formatKM(drawerWarning.potrebno)}.
-                    Tring povrat po reklamaciji uvijek ide gotovinom (i za virmanski račun), pa
-                    printer bez pokrića odbija štampu s ERROR_FISCAL_INSUFFICIENT_MONEY.
-                    Možeš unijeti polog ručno ili pregaziti stanje: manjak se tada automatski
-                    unosi u printer i storno prolazi.
+                    Tring povrat po reklamaciji ide gotovinom, pa printer bez pokrića odbija
+                    štampu. Možeš unijeti polog ručno ili pregaziti stanje: manjak se tada
+                    evidentira kao polog i storno prolazi.
                   </p>
                   <div className="flex items-center gap-2 mt-2">
                     <Button

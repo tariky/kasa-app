@@ -57,10 +57,10 @@ export interface RefundDeps {
   /** Evidentira polog (Tring UnosNovca + zapis u cash_movements). */
   depositCash?: (iznos: number, napomena: string) => Promise<void>;
   /**
-   * Samo Tring UnosNovca, bez zapisa u cash_movements. Koristi se za dio
-   * pokrića koji fizički ne ulazi u ladicu (storno virmanskog/kartičnog
-   * računa): uređaj ga traži, a storno ga odmah potroši, pa bi zapis u
-   * evidenciji ladice lažno napuhao očekivano stanje.
+   * Samo Tring UnosNovca, bez zapisa u cash_movements. Pokriva nenovčani dio
+   * računa (virman, kartica): uređaj ga traži jer storno isplaćuje gotovinom,
+   * ali iz ladice ništa ne izlazi i storno ga odmah potroši — zapis u
+   * evidenciji bi lažno napuhao očekivano stanje. Ide automatski, bez pitanja.
    */
   deviceCashIn?: (iznos: number) => Promise<void>;
 }
@@ -155,22 +155,24 @@ export async function refundAndPrint(
 
   refundsInFlight.add(id);
   try {
-    // Override: operater je upozoren i svjesno gura storno preko stanja kase.
-    // Manjak se prvo unese u uređaj; gotovinski dio ide i u evidenciju ladice
-    // (stvaran novac), ostatak samo u uređaj (potroši ga isti storno).
-    let pologIznos = 0;
     let uneseno = 0;
-    if (data.dozvoliPolog) {
-      if (manjakLadica > 0 && deps.depositCash) {
-        await deps.depositCash(manjakLadica, `Automatski polog za reklamaciju računa #${id}`);
-        pologIznos = manjakLadica;
-        uneseno = manjakLadica;
-      }
-      const samoUredjaj = round2(manjakUredjaj - uneseno);
-      if (samoUredjaj > 0 && deps.deviceCashIn) {
-        await deps.deviceCashIn(samoUredjaj);
-        uneseno = round2(uneseno + samoUredjaj);
-      }
+
+    // Nenovčani dio pokrića ide automatski — nema odluke za operatera jer
+    // nikakav stvaran novac ne mijenja vlasnika (virmanski račun se ovdje
+    // pokriva u cijelosti, pa storno prolazi bez ijednog dodatnog klika).
+    const samoUredjaj = Math.max(0, round2(manjakUredjaj - manjakLadica));
+    if (samoUredjaj > 0 && deps.deviceCashIn) {
+      await deps.deviceCashIn(samoUredjaj);
+      uneseno = samoUredjaj;
+    }
+
+    // Gotovinski manjak je stvaran novac iz ladice — samo se on gura kroz
+    // override i samo se on evidentira kao polog.
+    let pologIznos = 0;
+    if (data.dozvoliPolog && manjakLadica > 0 && deps.depositCash) {
+      await deps.depositCash(manjakLadica, `Automatski polog za reklamaciju računa #${id}`);
+      pologIznos = manjakLadica;
+      uneseno = round2(uneseno + manjakLadica);
     }
 
     const racun = buildTringReklamacija({
@@ -190,8 +192,9 @@ export async function refundAndPrint(
     // Stanje ladice je samo procjena brojača u uređaju (pologi se mogu voditi
     // i mimo aplikacije), pa ako uređaj i dalje javlja manjak — dopuni do
     // punog iznosa računa i pokušaj još jednom. Storno taj iznos odmah
-    // potroši, tako da brojač uređaja ne ostane napuhan.
-    if (data.dozvoliPolog && result && !result.success && jeNedovoljnoSredstava(result)) {
+    // potroši, tako da brojač uređaja ne ostane napuhan. Bez pitanja kad
+    // gotovinski manjak ne postoji; inače tek uz override.
+    if ((manjakLadica === 0 || data.dozvoliPolog) && result && !result.success && jeNedovoljnoSredstava(result)) {
       const dopuna = round2(potrebnoUredjaj - uneseno);
       if (dopuna > 0 && deps.deviceCashIn) {
         await deps.deviceCashIn(dopuna);
@@ -205,9 +208,13 @@ export async function refundAndPrint(
         success: false,
         error: result?.error || result?.vrstaOdgovora || 'Nepoznata greška',
         odgovori: result?.odgovori ?? {},
+        // Override se nudi samo ako može pomoći: kad fali stvarna gotovina, ili
+        // kad uređaj i dalje traži novac a nismo ga dopunili do punog iznosa.
         nedovoljnoSredstava:
-          !data.dozvoliPolog && (manjakUredjaj > 0 || (!!result && jeNedovoljnoSredstava(result))),
-        manjak: manjakUredjaj > 0 ? manjakUredjaj : potrebnoUredjaj,
+          !data.dozvoliPolog &&
+          (manjakLadica > 0 ||
+            (!!result && jeNedovoljnoSredstava(result) && uneseno < potrebnoUredjaj)),
+        manjak: manjakLadica > 0 ? manjakLadica : round2(potrebnoUredjaj - uneseno),
       };
     }
 
