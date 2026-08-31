@@ -57,7 +57,10 @@ export function buildTringReklamacija(data: {
 }): Tring.ReklamiraniRacun {
   return {
     stavke: (data.items || data.stavke || []).map(mapStavka),
-    vrstePlacanja: [],
+    // Gotovinski povrat se uređaju javlja kao Gotovina/0 — tako traži TFS
+    // (greška 573 kad vrsta plaćanja fali). Pozitivan iznos bi značio doplatu
+    // kupca, ne povrat.
+    vrstePlacanja: [{ oznaka: 'Gotovina', iznos: 0 }],
     kupac: mapKupac(data.kupac),
     brojRacuna: data.brojRacuna,
   };

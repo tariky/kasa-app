@@ -197,11 +197,16 @@ function handleRequest(
       return { status: 200, xml: okResponse() };
     }
 
+    // Puni nazivi komandi su dokumentovana forma; kratki oblik je konvencija
+    // imena datoteke i klijent ga koristi kao rezervu.
+    case "/unosnovca":
     case "/un":
+    case "/povratnovca":
     case "/pn": {
-      const smjer = path === "/un" ? "Unos novca (polog)" : "Povrat novca";
-      const iznos = body.match(/<Naziv>iznos<\/Naziv><Vrijednost>(.*?)<\/Vrijednost>/)?.[1] ?? "?";
-      console.log(`[mock-tring] ${smjer}: ${iznos} KM (Gotovina)`);
+      const smjer = path.startsWith("/un") ? "Unos novca (polog)" : "Povrat novca";
+      const iznos = body.match(/<Iznos>(.*?)<\/Iznos>/)?.[1] ?? "?";
+      const oznaka = body.match(/<Oznaka>(.*?)<\/Oznaka>/)?.[1] ?? "?";
+      console.log(`[mock-tring] ${smjer}: ${iznos} KM (${oznaka})`);
       return { status: 200, xml: okResponse() };
     }
 

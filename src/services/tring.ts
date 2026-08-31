@@ -61,6 +61,8 @@ export interface TringResponse {
   vrstaOdgovora: string;
   odgovori: Record<string, string>;
   error?: string;
+  /** HTTP status odgovora; null kad veza nije ni uspostavljena. */
+  statusCode?: number | null;
 }
 
 export interface Artikal {
@@ -146,6 +148,7 @@ function postXml(urlPath: string, body: string): Promise<TringResponse> {
         res.on("end", () => {
           const xml = Buffer.concat(chunks).toString("utf-8");
           const parsed = parseResponse(xml);
+          parsed.statusCode = res.statusCode ?? null;
           addLog({
             method: "POST",
             path: urlPath,
@@ -167,6 +170,7 @@ function postXml(urlPath: string, body: string): Promise<TringResponse> {
         vrstaOdgovora: "Greska",
         odgovori: {},
         error: "Request timed out",
+        statusCode: null,
       };
       addLog({
         method: "POST",
@@ -186,6 +190,7 @@ function postXml(urlPath: string, body: string): Promise<TringResponse> {
         vrstaOdgovora: "Greska",
         odgovori: {},
         error: err.message,
+        statusCode: null,
       };
       addLog({
         method: "POST",
@@ -204,6 +209,23 @@ function postXml(urlPath: string, body: string): Promise<TringResponse> {
   });
 }
 
+/**
+ * Kodovi grešaka koje vraća Tring.Fiscal.Server (Lista_greSaka uz TFS 3.4.522
+ * i 3.5.x). Vrijedi samo za one na koje aplikacija zna smisleno reagovati —
+ * ostali se prikazuju kako ih uređaj vrati.
+ */
+const TFS_GRESKE: Record<string, string> = {
+  '516': 'Prekoračenje broja stavki računa ili reklamacije',
+  '517': 'Prekoračenje u iznosu reklamacije',
+  '518': 'Ne postoji artikal za reklamaciju',
+  '521': 'Prekoračenje iznosa plaćanja',
+  '522': 'Pogrešna vrsta plaćanja ili nedozvoljen režim',
+  '523': 'Plaćanje karticom ili čekom veće od iznosa računa',
+  '524': 'Ukupna suma plaćanja veća od sume računa',
+  '535': 'Nedovoljno novca u kasi',
+  '573': 'Reklamacija zahtijeva jednu vrstu plaćanja s iznosom 0',
+};
+
 function parseResponse(xml: string): TringResponse {
   const odgovori: Record<string, string> = {};
 
@@ -220,10 +242,21 @@ function parseResponse(xml: string): TringResponse {
     odgovori[match[1]] = match[2] ?? '';
   }
 
+  // Uređaj greške vraća kao <Greska><Broj/><Opis/></Greska> (greska.xsd) —
+  // bez ovoga korisnik vidi samo golo "Greska".
+  const broj = xml.match(/<Broj>(\d+)<\/Broj>/)?.[1];
+  const opis = xml.match(/<Opis>([\s\S]*?)<\/Opis>/)?.[1]?.trim();
+  const poznata = broj ? TFS_GRESKE[broj] : undefined;
+  const error = broj
+    ? [poznata ?? opis, opis && poznata && opis !== poznata ? `(${opis})` : '', `[${broj}]`]
+        .filter(Boolean).join(' ')
+    : undefined;
+
   return {
     success: vrstaOdgovora === "OK",
     vrstaOdgovora,
     odgovori,
+    ...(error ? { error } : {}),
   };
 }
 
@@ -352,6 +385,24 @@ export function stampatiReklamiraniRacun(
 
   const kupacXml = racun.kupac ? kupacToXml(racun.kupac) : "";
 
+  // Reklamacija mora nositi tačno jednu vrstu plaćanja — gotovinski povrat se
+  // šalje kao Gotovina/0 (tako radi i Tringov vlastiti POS na FP1, a isporučeni
+  // primjer srr.reklamirani.xml je identičan). Prazan <VrstePlacanja/> iz teksta
+  // uputstva je zastario i TFS ga odbija greškom 573. Pozitivan iznos NIJE
+  // povrat nego doplata kupca, pa se nikad ne šalje.
+  const placanja = racun.vrstePlacanja.length > 0
+    ? racun.vrstePlacanja
+    : [{ oznaka: 'Gotovina', iznos: 0 }];
+  const placanjaXml = placanja
+    .map(
+      (v) =>
+        `<VrstaPlacanja>` +
+        `<Oznaka>${escapeXml(v.oznaka)}</Oznaka>` +
+        `<Iznos>${v.iznos}</Iznos>` +
+        `</VrstaPlacanja>`
+    )
+    .join("");
+
   const body =
     `${XML_DECL}` +
     `<RacunZahtjev ${XMLNS}>` +
@@ -360,7 +411,7 @@ export function stampatiReklamiraniRacun(
     `<NoviObjekat>` +
     kupacXml +
     `<StavkeRacuna>${stavkeXml}</StavkeRacuna>` +
-    `<VrstePlacanja />` +
+    `<VrstePlacanja>${placanjaXml}</VrstePlacanja>` +
     `<Napomena>${racun.napomena ? escapeXml(racun.napomena) : ""}</Napomena>` +
     `<BrojRacuna>${racun.brojRacuna}</BrojRacuna>` +
     `</NoviObjekat>` +
@@ -397,46 +448,63 @@ export function stampatiDnevniIzvjestaj(): Promise<TringResponse> {
   return postXml("/sdi", body);
 }
 
-// NEPOTVRĐENO: adrese /un i /pn te VrstaZahtjeva=7 su izvedeni iz Tring
-// uputstva (sekcija 7.5 — datoteke un.xml/pn.xml, primjer "0 7 Gotovina 125.35")
-// po analogiji s postojećim kratkim adresama. Provjeriti uz XSD primjere u
-// /xml/primjeri Tring.Fiscal instalacije prije produkcijske upotrebe.
-const UNOS_NOVCA_PATH = "/un";
-const POVRAT_NOVCA_PATH = "/pn";
-const UNOS_POVRAT_VRSTA_ZAHTJEVA = 7;
+// Oblik potvrđen iz isporučenih Tring primjera (unosnovca.xml / povratnovca.xml)
+// i XSD šema: korijen je RacunZahtjev, tijelo <NoviObjekat><Oznaka/><Iznos/>.
+// UnosNovca je VrstaZahtjeva 7, PovratNovca 8 (tekst uputstva za obje piše 7,
+// ali isporučeni povratnovca.xml kaže 8). Dokumentovan HTTP path je puni naziv
+// komande; kratki oblik (/un, /pn) je konvencija imena datoteke pa ostaje kao
+// rezerva ako server puni naziv ne poznaje.
+const UNOS_NOVCA_PATHS = ["/unosnovca", "/un"];
+const POVRAT_NOVCA_PATHS = ["/povratnovca", "/pn"];
+const UNOS_NOVCA_VRSTA_ZAHTJEVA = 7;
+const POVRAT_NOVCA_VRSTA_ZAHTJEVA = 8;
 
-function novacXml(brojZahtjeva: number, iznos: number): string {
+/** Oznake su case-sensitive i iz zatvorene liste (vrstaplacanja.xsd). */
+export type OznakaPlacanja = "Gotovina" | "Cek" | "Kartica" | "Virman";
+
+function novacXml(brojZahtjeva: number, vrstaZahtjeva: number, iznos: number, oznaka: OznakaPlacanja): string {
   const iznosZaokruzen = Math.round((iznos + Number.EPSILON) * 100) / 100;
   return (
     `${XML_DECL}` +
-    `<Zahtjev ${XMLNS}>` +
+    `<RacunZahtjev ${XMLNS}>` +
     `<BrojZahtjeva>${brojZahtjeva}</BrojZahtjeva>` +
-    `<VrstaZahtjeva>${UNOS_POVRAT_VRSTA_ZAHTJEVA}</VrstaZahtjeva>` +
-    `<Parametri>` +
-    `<Parametar><Naziv>vrstaPlacanja</Naziv><Vrijednost>Gotovina</Vrijednost></Parametar>` +
-    `<Parametar><Naziv>iznos</Naziv><Vrijednost>${iznosZaokruzen}</Vrijednost></Parametar>` +
-    `</Parametri>` +
-    `</Zahtjev>`
+    `<VrstaZahtjeva>${vrstaZahtjeva}</VrstaZahtjeva>` +
+    `<NoviObjekat>` +
+    `<Oznaka>${oznaka}</Oznaka>` +
+    `<Iznos>${iznosZaokruzen}</Iznos>` +
+    `</NoviObjekat>` +
+    `</RacunZahtjev>`
   );
 }
 
-export function buildUnosNovcaXml(brojZahtjeva: number, iznos: number): string {
-  return novacXml(brojZahtjeva, iznos);
+export function buildUnosNovcaXml(brojZahtjeva: number, iznos: number, oznaka: OznakaPlacanja = "Gotovina"): string {
+  return novacXml(brojZahtjeva, UNOS_NOVCA_VRSTA_ZAHTJEVA, iznos, oznaka);
 }
 
-export function buildPovratNovcaXml(brojZahtjeva: number, iznos: number): string {
-  return novacXml(brojZahtjeva, iznos);
+export function buildPovratNovcaXml(brojZahtjeva: number, iznos: number, oznaka: OznakaPlacanja = "Gotovina"): string {
+  return novacXml(brojZahtjeva, POVRAT_NOVCA_VRSTA_ZAHTJEVA, iznos, oznaka);
+}
+
+/** Puni naziv komande je dokumentovan, kratki nije — 404 znači "probaj drugi". */
+async function postXmlFallback(paths: string[], body: string): Promise<TringResponse> {
+  let last: TringResponse | null = null;
+  for (const path of paths) {
+    const result = await postXml(path, body);
+    if (result.success || result.statusCode !== 404) return result;
+    last = result;
+  }
+  return last as TringResponse;
 }
 
 // Službeni unos gotovine u kasu (polog). Uvijek Gotovina — polog drugim
 // sredstvima ne mijenja ladicu pa ga aplikacija ne nudi.
-export function unosNovca(iznos: number): Promise<TringResponse> {
-  return postXml(UNOS_NOVCA_PATH, buildUnosNovcaXml(nextRequestNumber(), iznos));
+export function unosNovca(iznos: number, oznaka: OznakaPlacanja = "Gotovina"): Promise<TringResponse> {
+  return postXmlFallback(UNOS_NOVCA_PATHS, buildUnosNovcaXml(nextRequestNumber(), iznos, oznaka));
 }
 
 // Službeni iznos gotovine iz kase (npr. pražnjenje ladice na kraju dana).
-export function povratNovca(iznos: number): Promise<TringResponse> {
-  return postXml(POVRAT_NOVCA_PATH, buildPovratNovcaXml(nextRequestNumber(), iznos));
+export function povratNovca(iznos: number, oznaka: OznakaPlacanja = "Gotovina"): Promise<TringResponse> {
+  return postXmlFallback(POVRAT_NOVCA_PATHS, buildPovratNovcaXml(nextRequestNumber(), iznos, oznaka));
 }
 
 // POST /spi - VrstaZahtjeva=5
