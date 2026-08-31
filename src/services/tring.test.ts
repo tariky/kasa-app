@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test';
-import { buildUnosNovcaXml, buildPovratNovcaXml } from './tring';
+import { buildUnosNovcaXml, buildPovratNovcaXml, normalizeOznaka } from './tring';
 
 // Oblik je preslikan iz Tringovih isporučenih primjera unosnovca.xml /
 // povratnovca.xml — vidjeti docs/research/2026-08-31-tring-reklamacija-vrsta-placanja.md.
@@ -29,4 +29,14 @@ test('oznaka plaćanja se može zadati (case-sensitive lista iz vrstaplacanja.xs
 test('iznos se zaokružuje na fene prije slanja', () => {
   const xml = buildUnosNovcaXml(1, 0.1 + 0.2);
   expect(xml).toContain('<Iznos>0.3</Iznos>');
+});
+
+// Omotač i oznake su iz stampatifiskalniracun.xsd / vrstaplacanja.xsd.
+test('oznaka plaćanja se normalizuje u Tringovu enumeraciju', () => {
+  expect(normalizeOznaka('Ček')).toBe('Cek');
+  expect(normalizeOznaka('ček')).toBe('Cek');
+  expect(normalizeOznaka('Virman')).toBe('Virman');
+  expect(normalizeOznaka('kartica')).toBe('Kartica');
+  // Nepoznato (npr. legacy JSON zapis) ne smije oboriti račun.
+  expect(normalizeOznaka('{"gotovina":30}')).toBe('Gotovina');
 });

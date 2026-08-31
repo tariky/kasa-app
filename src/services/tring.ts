@@ -260,6 +260,24 @@ function parseResponse(xml: string): TringResponse {
   };
 }
 
+/**
+ * Uređaj prima samo Gotovina|Cek|Kartica|Virman, case-sensitive i bez kvačice
+ * (vrstaplacanja.xsd). Aplikacija u bazi drži "Ček", pa se ovdje prevodi.
+ * Nepoznata oznaka pada na Gotovinu — bolje nego da uređaj odbije račun
+ * greškom 522, jer je iznos ionako naplaćen.
+ */
+export function normalizeOznaka(oznaka: string): OznakaPlacanja {
+  switch (oznaka.trim().toLowerCase()) {
+    case 'gotovina': return 'Gotovina';
+    case 'kartica': return 'Kartica';
+    case 'virman': return 'Virman';
+    case 'ček':
+    case 'cek':
+    case 'ĉek': return 'Cek';
+    default: return 'Gotovina';
+  }
+}
+
 function escapeXml(str: string): string {
   return str
     .replace(/&/g, "&amp;")
@@ -341,7 +359,7 @@ export function stampatiFiskalniRacun(racun: Racun): Promise<TringResponse> {
     .map(
       (v) =>
         `<VrstaPlacanja>` +
-        `<Oznaka>${escapeXml(v.oznaka)}</Oznaka>` +
+        `<Oznaka>${normalizeOznaka(v.oznaka)}</Oznaka>` +
         `<Iznos>${v.iznos}</Iznos>` +
         `</VrstaPlacanja>`
     )
@@ -357,7 +375,10 @@ export function stampatiFiskalniRacun(racun: Racun): Promise<TringResponse> {
     `<NoviObjekat>` +
     kupacXml +
     `<StavkeRacuna>${stavkeXml}</StavkeRacuna>` +
-    `<VrstaPlacanja>${placanjaXml}</VrstaPlacanja>` +
+    // Omotač je VrstePlacanja (množina) — ime iz stampatifiskalniracun.xsd.
+    // Ranije je stajalo VrstaPlacanja, što TFS-ov deserializator tiho ignoriše,
+    // pa je uređaj svaki račun knjižio kao gotovinski bez obzira na plaćanje.
+    `<VrstePlacanja>${placanjaXml}</VrstePlacanja>` +
     `<Napomena>${racun.napomena ? escapeXml(racun.napomena) : ""}</Napomena>` +
     `<BrojRacuna>${racun.brojRacuna ?? 0}</BrojRacuna>` +
     `</NoviObjekat>` +
@@ -397,7 +418,7 @@ export function stampatiReklamiraniRacun(
     .map(
       (v) =>
         `<VrstaPlacanja>` +
-        `<Oznaka>${escapeXml(v.oznaka)}</Oznaka>` +
+        `<Oznaka>${normalizeOznaka(v.oznaka)}</Oznaka>` +
         `<Iznos>${v.iznos}</Iznos>` +
         `</VrstaPlacanja>`
     )
