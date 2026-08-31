@@ -866,6 +866,15 @@ export function registerIpcHandlers(): void {
           throw new Error(`Polog od ${iznos} KM nije prihvaćen na printeru: ${res.error ?? 'nepoznata greška'}`);
         }
       },
+      // Pokriće koje fizički ne ulazi u ladicu — samo brojač uređaja.
+      deviceCashIn: async (iznos) => {
+        loadTringConfig();
+        const res = await Tring.unosNovca(iznos);
+        if (Tring.isLoggingEnabled()) console.log('[Tring] deviceCashIn:', JSON.stringify(res));
+        if (!res.success) {
+          throw new Error(`Unos novca od ${iznos} KM nije prihvaćen na printeru: ${res.error || res.vrstaOdgovora}`);
+        }
+      },
     }, data);
   });
 

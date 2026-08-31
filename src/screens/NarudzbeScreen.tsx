@@ -23,7 +23,6 @@ import { DatePicker } from '@/components/ui/date-picker';
 import DodajRacunDialog from '@/components/DodajRacunDialog';
 import CashMovementDialog from '@/components/CashMovementDialog';
 import PrilogStavkeDialog from '@/components/PrilogStavkeDialog';
-import { gotovinskiIznos } from '@/lib/drawer';
 import { prilogKompletan, sumaPriloga } from '@/lib/prilog';
 import { formatDatumValute } from '@/lib/valuta';
 import { round2 } from '@/lib/novac';
@@ -107,7 +106,9 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
     setDrawerWarning(null);
     setOverrideManjak(null);
     if (!reklamacijaOpen || !selectedOrder) return;
-    const potrebno = gotovinskiIznos(selectedOrder.nacinPlacanja, selectedOrder.ukupno);
+    // Tring povrat po reklamaciji ide uvijek gotovinom — i za virmanski račun
+    // uređaj traži pokriće u punom iznosu, inače ERROR_FISCAL_INSUFFICIENT_MONEY.
+    const potrebno = selectedOrder.ukupno;
     if (potrebno <= 0) return;
     window.api.getDrawerState()
       .then(s => { if (s.ocekivanoStanje < potrebno) setDrawerWarning({ stanje: s.ocekivanoStanje, potrebno }); })
@@ -803,9 +804,10 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
                   </p>
                   <p className="text-[11px] text-amber-600/70 mt-0.5">
                     Očekivano stanje je {formatKM(drawerWarning.stanje)}, a povrat traži {formatKM(drawerWarning.potrebno)}.
-                    Tring zahtijeva unos novca prije gotovinske reklamacije — printer može odbiti štampu.
+                    Tring povrat po reklamaciji uvijek ide gotovinom (i za virmanski račun), pa
+                    printer bez pokrića odbija štampu s ERROR_FISCAL_INSUFFICIENT_MONEY.
                     Možeš unijeti polog ručno ili pregaziti stanje: manjak se tada automatski
-                    evidentira kao polog i storno prolazi.
+                    unosi u printer i storno prolazi.
                   </p>
                   <div className="flex items-center gap-2 mt-2">
                     <Button

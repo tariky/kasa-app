@@ -56,6 +56,13 @@ export interface RefundDeps {
   drawerState?: () => { ocekivanoStanje: number };
   /** Evidentira polog (Tring UnosNovca + zapis u cash_movements). */
   depositCash?: (iznos: number, napomena: string) => Promise<void>;
+  /**
+   * Samo Tring UnosNovca, bez zapisa u cash_movements. Koristi se za dio
+   * pokrića koji fizički ne ulazi u ladicu (storno virmanskog/kartičnog
+   * računa): uređaj ga traži, a storno ga odmah potroši, pa bi zapis u
+   * evidenciji ladice lažno napuhao očekivano stanje.
+   */
+  deviceCashIn?: (iznos: number) => Promise<void>;
 }
 
 export interface RefundResult {
@@ -129,24 +136,41 @@ export async function refundAndPrint(
         WHERE oi.orderId = ?
       `).all(id);
 
-  // Gotovinski dio računa — samo on troši gotovinu iz ladice.
-  const potrebnoGotovine = gotovinskiIznos(order.nacinPlacanja, order.ukupno);
-  let manjak = 0;
-  if (potrebnoGotovine > 0 && deps.drawerState) {
+  // Tring povrat po reklamiranom računu ide isključivo gotovinom, bez obzira
+  // kako je original plaćen — uređaj traži pokriće u punom iznosu računa i
+  // inače vrati ERROR_FISCAL_INSUFFICIENT_MONEY. Iz ladice, međutim, fizički
+  // izlazi samo gotovinski dio originala.
+  const potrebnoUredjaj = round2(order.ukupno);
+  const potrebnoLadica = gotovinskiIznos(order.nacinPlacanja, order.ukupno);
+  let stanjeLadice = 0;
+  let manjakUredjaj = 0;
+  let manjakLadica = 0;
+  if (deps.drawerState) {
     try {
-      manjak = Math.max(0, round2(potrebnoGotovine - deps.drawerState().ocekivanoStanje));
+      stanjeLadice = deps.drawerState().ocekivanoStanje;
+      manjakUredjaj = Math.max(0, round2(potrebnoUredjaj - stanjeLadice));
+      manjakLadica = Math.max(0, round2(Math.min(potrebnoLadica, potrebnoUredjaj) - stanjeLadice));
     } catch { /* stanje ladice je informativno — ne smije oboriti storno */ }
   }
 
   refundsInFlight.add(id);
   try {
-    // Override: operater je upozoren i svjesno gura storno preko praznog
-    // stanja. Tring ne dopušta gotovinski povrat bez evidentirane gotovine,
-    // pa se manjak prvo upiše kao polog (i u uređaj i u cash_movements).
+    // Override: operater je upozoren i svjesno gura storno preko stanja kase.
+    // Manjak se prvo unese u uređaj; gotovinski dio ide i u evidenciju ladice
+    // (stvaran novac), ostatak samo u uređaj (potroši ga isti storno).
     let pologIznos = 0;
-    if (data.dozvoliPolog && manjak > 0 && deps.depositCash) {
-      await deps.depositCash(manjak, `Automatski polog za reklamaciju računa #${id}`);
-      pologIznos = manjak;
+    let uneseno = 0;
+    if (data.dozvoliPolog) {
+      if (manjakLadica > 0 && deps.depositCash) {
+        await deps.depositCash(manjakLadica, `Automatski polog za reklamaciju računa #${id}`);
+        pologIznos = manjakLadica;
+        uneseno = manjakLadica;
+      }
+      const samoUredjaj = round2(manjakUredjaj - uneseno);
+      if (samoUredjaj > 0 && deps.deviceCashIn) {
+        await deps.deviceCashIn(samoUredjaj);
+        uneseno = round2(uneseno + samoUredjaj);
+      }
     }
 
     const racun = buildTringReklamacija({
@@ -161,7 +185,20 @@ export async function refundAndPrint(
       } : undefined,
     });
 
-    const result = await print(racun);
+    let result = await print(racun);
+
+    // Stanje ladice je samo procjena brojača u uređaju (pologi se mogu voditi
+    // i mimo aplikacije), pa ako uređaj i dalje javlja manjak — dopuni do
+    // punog iznosa računa i pokušaj još jednom. Storno taj iznos odmah
+    // potroši, tako da brojač uređaja ne ostane napuhan.
+    if (data.dozvoliPolog && result && !result.success && jeNedovoljnoSredstava(result)) {
+      const dopuna = round2(potrebnoUredjaj - uneseno);
+      if (dopuna > 0 && deps.deviceCashIn) {
+        await deps.deviceCashIn(dopuna);
+        uneseno = round2(uneseno + dopuna);
+        result = await print(racun);
+      }
+    }
 
     if (!result || !result.success) {
       return {
@@ -169,9 +206,8 @@ export async function refundAndPrint(
         error: result?.error || result?.vrstaOdgovora || 'Nepoznata greška',
         odgovori: result?.odgovori ?? {},
         nedovoljnoSredstava:
-          !data.dozvoliPolog && potrebnoGotovine > 0 &&
-          (manjak > 0 || (!!result && jeNedovoljnoSredstava(result))),
-        manjak: manjak > 0 ? manjak : round2(potrebnoGotovine),
+          !data.dozvoliPolog && (manjakUredjaj > 0 || (!!result && jeNedovoljnoSredstava(result))),
+        manjak: manjakUredjaj > 0 ? manjakUredjaj : potrebnoUredjaj,
       };
     }
 

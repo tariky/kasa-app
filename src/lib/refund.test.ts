@@ -2,6 +2,7 @@ import { test, expect, beforeEach } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { schema } from '@/database/schema';
 import { refundOrderInTransaction, refundAndPrint, type RefundDeps } from './refund';
+import type { TringResponse } from '@/services/tring';
 import { getProductStock } from './skladiste';
 import type { SqlDb } from './sqldb';
 
@@ -150,16 +151,56 @@ test('override evidentira polog za manjak i storno prolazi', async () => {
   expect(db.prepare('SELECT status FROM orders WHERE id = ?').get(orderId) as any).toMatchObject({ status: 'refunded' });
 });
 
-test('kartični račun ne traži polog ni kad je ladica prazna', async () => {
+test('kartični račun se pokriva samo u uređaju — evidencija ladice se ne dira', async () => {
   dodajArtikal(1);
   const orderId = dodajRacun([{ productId: 1, kolicina: 1 }]);
   db.prepare("UPDATE orders SET nacinPlacanja = 'Kartica' WHERE id = ?").run(orderId);
-  let deposited = false;
+  const evidentirano: number[] = [];
+  const uUredjaj: number[] = [];
 
   const res = await refundAndPrint(refundDeps({
-    depositCash: async () => { deposited = true; },
+    depositCash: async (iznos) => { evidentirano.push(iznos); },
+    deviceCashIn: async (iznos) => { uUredjaj.push(iznos); },
   }), { id: orderId, dozvoliPolog: true });
 
   expect(res.success).toBe(true);
-  expect(deposited).toBe(false);
+  expect(evidentirano).toEqual([]); // iz ladice fizički ne izlazi ništa
+  expect(uUredjaj).toEqual([100]);  // ali Tring traži gotovinsko pokriće
+  expect(res.pologIznos).toBe(0);
+});
+
+test('virmanski račun nudi override iako gotovinski dio ne postoji', async () => {
+  dodajArtikal(1);
+  const orderId = dodajRacun([{ productId: 1, kolicina: 1 }]);
+  db.prepare("UPDATE orders SET nacinPlacanja = 'Virman' WHERE id = ?").run(orderId);
+
+  const res = await refundAndPrint(refundDeps({
+    print: async () => ({
+      success: false, vrstaOdgovora: 'Greska',
+      odgovori: { 'Štampanje reklamiranog računa': 'ERROR_FISCAL_INSUFFICIENT_MONEY' },
+    }),
+  }), { id: orderId });
+
+  expect(res.nedovoljnoSredstava).toBe(true);
+  expect(res.manjak).toBe(100);
+});
+
+test('override dopunjava uređaj i ponavlja štampu kad stanje ladice laže', async () => {
+  dodajArtikal(1);
+  const orderId = dodajRacun([{ productId: 1, kolicina: 1 }]);
+  const uUredjaj: number[] = [];
+  let pokusaj = 0;
+
+  const res = await refundAndPrint(refundDeps({
+    // Ladica tvrdi da ima dovoljno, ali brojač u uređaju je prazan.
+    drawerState: () => ({ ocekivanoStanje: 100 }),
+    deviceCashIn: async (iznos) => { uUredjaj.push(iznos); },
+    print: async (): Promise<TringResponse> => (++pokusaj === 1
+      ? { success: false, vrstaOdgovora: 'Greska', odgovori: { Poruka: 'ERROR_FISCAL_INSUFFICIENT_MONEY' } }
+      : { success: true, vrstaOdgovora: 'OK', odgovori: { BrojFiskalnogRacuna: 'R-2' } }),
+  }), { id: orderId, dozvoliPolog: true });
+
+  expect(res.success).toBe(true);
+  expect(uUredjaj).toEqual([100]); // dopuna do punog iznosa računa
+  expect(pokusaj).toBe(2);
 });
