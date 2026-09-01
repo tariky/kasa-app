@@ -120,11 +120,11 @@ export default function PrilogStavkeDialog({ open, onOpenChange, order, onSaved 
       <DialogContent className="max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
         <DialogHeader>
           <DialogTitle className="text-[15px]">
-            Prilog br. {order.prilogBroj} — račun #{order.brojFiskalnogRacuna || order.id}
+            Faktura br. {order.prilogBroj} — račun #{order.brojFiskalnogRacuna || order.id}
           </DialogTitle>
           <DialogDescription className="text-sm text-slate-500">
             {readOnly
-              ? 'Račun je storniran — prilog se ne može mijenjati.'
+              ? 'Račun je storniran — faktura se ne može mijenjati.'
               : 'Dodajte stavke tako da njihova suma bude jednaka fiskalnom iznosu računa.'}
           </DialogDescription>
         </DialogHeader>
@@ -212,7 +212,7 @@ export default function PrilogStavkeDialog({ open, onOpenChange, order, onSaved 
           </div>
           {kompletan ? (
             <span className="flex items-center gap-1.5 text-[12px] font-semibold text-emerald-600">
-              <Check size={14} /> Prilog je kompletan
+              <Check size={14} /> Faktura je kompletna
             </span>
           ) : (
             <span className="flex items-center gap-1.5 text-[12px] font-semibold text-amber-700">

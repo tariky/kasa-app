@@ -5,6 +5,7 @@ import { POTPIS_AUTORA } from '@/lib/brend';
 import { iznosStavke, pdvStavke } from '@/lib/racun';
 import { round2 } from '@/lib/novac';
 import { prilogNaziv } from '@/lib/prilog';
+import { formatDatumValute } from '@/lib/valuta';
 
 /** Red iz `prilog:getStavke` (prilog_stavke + JOIN na products). */
 export interface PrilogPdfStavka {
@@ -149,7 +150,7 @@ const s = StyleSheet.create({
 });
 
 /**
- * A4 prilog uz fiskalni račun — stvarne stavke iza zbirne stavke. Veza sa fiskalnim
+ * A4 faktura uz fiskalni račun — stvarne stavke iza zbirne stavke. Veza sa fiskalnim
  * računom (BF broj) je zakonski obavezna — bez nje je ovo samo papir.
  */
 export function PrilogPdf({ order, firma, stavke }: PrilogPdfProps) {
@@ -159,6 +160,7 @@ export function PrilogPdf({ order, firma, stavke }: PrilogPdfProps) {
 
   const orderDate = fmtDateTime(new Date(order.createdAt));
   const today = fmtDate(new Date());
+  const datumValute = formatDatumValute(order.datumValute);
   const hasKupac = order.kupacNaziv || order.kupacIdBroj;
 
   // Cijene u sistemu su sa uračunatim PDV-om; za fakturni prikaz se jedinična
@@ -188,7 +190,7 @@ export function PrilogPdf({ order, firma, stavke }: PrilogPdfProps) {
           </View>
           <View style={s.docLabel}>
             <Text style={s.docTitle}>
-              PRILOG <Text style={s.docTitleNum}>br. {order.prilogBroj}</Text>
+              FAKTURA <Text style={s.docTitleNum}>br. {order.prilogBroj}</Text>
             </Text>
             <Text style={s.docSubtitle}>
               uz fiskalni račun BF {order.brojFiskalnogRacuna || '—'}
@@ -241,6 +243,12 @@ export function PrilogPdf({ order, firma, stavke }: PrilogPdfProps) {
             <Text style={s.metaLabel}>Plaćanje</Text>
             <Text style={s.metaValue}>{order.nacinPlacanja}</Text>
           </View>
+          {datumValute && (
+            <View style={s.metaItem}>
+              <Text style={s.metaLabel}>Datum valute</Text>
+              <Text style={s.metaValue}>{datumValute}</Text>
+            </View>
+          )}
         </View>
 
         {/* ── Items table ── */}

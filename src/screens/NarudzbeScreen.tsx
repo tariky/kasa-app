@@ -242,8 +242,8 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
   };
 
   /**
-   * Štampa A4 priloga uz fiskalni račun. Dozvoljena samo kad se suma dodijeljenih
-   * stavki poklopi sa fiskalnim iznosom — nepotpun prilog bi
+   * Štampa A4 fakture uz fiskalni račun. Dozvoljena samo kad se suma dodijeljenih
+   * stavki poklopi sa fiskalnim iznosom — nepotpuna faktura bi
    * pokazivala manji iznos od onog koji je fiskalizovan.
    */
   const handlePrintPrilog = async (order: Order) => {
@@ -253,8 +253,8 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
       if (!prilogKompletan(order.ukupno, stavke as any)) {
         setReklamacijaMsg({
           type: 'error',
-          text: `Suma stavki priloga (${formatKM(sumaPriloga(stavke as any))}) se ne poklapa sa fiskalnim iznosom ` +
-            `(${formatKM(order.ukupno)}) — dopunite prilog prije štampe.`,
+          text: `Suma stavki fakture (${formatKM(sumaPriloga(stavke as any))}) se ne poklapa sa fiskalnim iznosom ` +
+            `(${formatKM(order.ukupno)}) — dopunite fakturu prije štampe.`,
         });
         return;
       }
@@ -264,7 +264,7 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
       const win = window.open(url, '_blank');
       if (win) win.onafterprint = () => URL.revokeObjectURL(url);
     } catch (err: any) {
-      setReklamacijaMsg({ type: 'error', text: `Greška pri štampanju priloga: ${err?.message || 'Nepoznata greška'}` });
+      setReklamacijaMsg({ type: 'error', text: `Greška pri štampanju fakture: ${err?.message || 'Nepoznata greška'}` });
     }
   };
 
@@ -505,7 +505,7 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
                                   </span>
                                 )}
                                 {order.prilogBroj != null && (
-                                  <span className="inline-flex h-4 items-center gap-0.5 rounded border border-slate-200 bg-slate-50 px-1 font-mono text-[9px] font-semibold text-slate-500" title={`Prilog br. ${order.prilogBroj}`}>
+                                  <span className="inline-flex h-4 items-center gap-0.5 rounded border border-slate-200 bg-slate-50 px-1 font-mono text-[9px] font-semibold text-slate-500" title={`Faktura br. ${order.prilogBroj}`}>
                                     <Paperclip size={8} />{order.prilogBroj}
                                   </span>
                                 )}
@@ -567,7 +567,7 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
                       <Badge variant="outline" className="border-amber-300 text-amber-600 text-[10px]">Ručno unesen</Badge>
                     )}
                     {selectedOrder.prilogBroj != null && (
-                      <Badge variant="secondary" className="text-[10px]">Prilog br. {selectedOrder.prilogBroj}</Badge>
+                      <Badge variant="secondary" className="text-[10px]">Faktura br. {selectedOrder.prilogBroj}</Badge>
                     )}
                   </div>
                 </div>
@@ -717,9 +717,9 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
                 {selectedOrder.prilogBroj != null && (
                   <ActionRow
                     icon={Paperclip}
-                    label="Uredi prilog"
+                    label="Uredi fakturu"
                     onClick={() => setPrilogOpen(true)}
-                    trailing={{ icon: Printer, onClick: () => handlePrintPrilog(selectedOrder), title: 'Štampaj A4 prilog uz fiskalni račun' }}
+                    trailing={{ icon: Printer, onClick: () => handlePrintPrilog(selectedOrder), title: 'Štampaj A4 fakturu uz fiskalni račun' }}
                   />
                 )}
 
@@ -985,7 +985,7 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
               className="h-9 text-[13px] w-full"
             />
             <p className="text-[11px] text-slate-400">
-              Prikazuje se samo na A4 kopiji računa — fiskalni zapis ostaje netaknut.
+              Prikazuje se samo na A4 kopiji računa i na fakturi — fiskalni zapis ostaje netaknut.
             </p>
             {valutaError && <p className="text-[11.5px] text-rose-500">{valutaError}</p>}
           </div>

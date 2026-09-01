@@ -474,8 +474,8 @@ export default function KasaScreen({ user }: KasaScreenProps) {
   };
 
   /**
-   * Otvara A4 prilog odmah nakon fiskalizacije sa stavkama —
-   * operater je već uz štampač, pa prilog ide uz fiskalni račun bez
+   * Otvara A4 fakturu odmah nakon fiskalizacije sa stavkama —
+   * operater je već uz štampač, pa faktura ide uz fiskalni račun bez
    * odlaska u sekciju Računi.
    */
   const handlePrintPrilog = async (orderId: number) => {
@@ -492,7 +492,7 @@ export default function KasaScreen({ user }: KasaScreenProps) {
     } catch (err: any) {
       setMessage({
         type: 'error',
-        text: `Račun je fiskalizovan, ali prilog se nije otvorio: ${err?.message || 'Nepoznata greška'}. Štampajte je u sekciji Računi.`,
+        text: `Račun je fiskalizovan, ali faktura se nije otvorila: ${err?.message || 'Nepoznata greška'}. Štampajte je u sekciji Računi.`,
       });
     }
   };

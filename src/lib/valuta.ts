@@ -3,7 +3,8 @@ import type { SqlDb } from './sqldb';
 /**
  * Datum valute (rok plaćanja) na izdatom računu. Nije dio fiskalnog zapisa —
  * upisuje se naknadno, po dogovoru s kupcem, i prikazuje se samo na A4 kopiji
- * računa. Zato se smije mijenjati i brisati bez ograničenja, i na stornu.
+ * računa i na A4 fakturi (računu po prilogu). Zato se smije mijenjati i brisati
+ * bez ograničenja, i na stornu.
  */
 
 /** ISO datum bez vremena, onako kako ga vraća `DatePicker`. */
