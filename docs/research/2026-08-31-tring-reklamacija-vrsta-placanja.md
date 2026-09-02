@@ -317,11 +317,16 @@ Puna tablica `VrstaZahtjeva` rekonstruisana iz isporučenih primjera (svi provje
 | 3 | StampatiPresjekStanja | `Zahtjev` | `Parametri /` |
 | 4 | StampatiDnevniIzvjestaj | `Zahtjev` | `Parametri /` |
 | 5 | StampatiPeriodicniIzvjestaj | `Zahtjev` | `Parametri{odDatuma,doDatuma}` |
-| 6 | StampatiNefiskalniDokument / duplikati | `Zahtjev` | `Parametri{Text}` |
+| 6 | StampatiNefiskalniDokument | `Zahtjev` | `Parametri{Parametar{Naziv=Text,Vrijednost}}` |
+| 6 | StampatiDuplikatPresjekaStanja | `Zahtjev` | `Parametri /` |
+| 3 (?) | StampatiDuplikatFiskalnogRacuna | `Zahtjev` | `Parametri /` — vidjeti napomenu ispod |
 | **7** | **UnosNovca** | `RacunZahtjev` | `NoviObjekat{Oznaka,Iznos}` |
 | **8** | **PovratNovca** | `RacunZahtjev` | `NoviObjekat{Oznaka,Iznos}` |
 | 9 | PrekiniRacun | `Zahtjev` | `Parametri /` |
 | 105 | UpisiArtikal | `RacunZahtjev` | `NoviObjekat` (artikal) |
+| — | `oi.xml` / `oi.di.xml` / `oi.period.xml` | `Zahtjev` | **bez `VrstaZahtjeva`** — vidjeti §10.5 |
+
+⚠️ Isporučeni `stampatiduplikatfiskalnogracuna.xml` nosi `<VrstaZahtjeva>3</VrstaZahtjeva>`, isto kao presjek stanja, dok `stampatiduplikatpresjektastanja.xml` nosi `6`, isto kao nefiskalni dokument. Ta dva primjera su međusobno nekonzistentna i **nisu pouzdana** (isti tip Tringovog copy-paste baga kao `srr.reklamirani.xml` s `VrstaZahtjeva 0`). Duplikate ne implementirati po ovim brojevima bez testa na uređaju.
 
 ### NEPOTVRĐENO — HTTP path `/un` i `/pn`
 
@@ -529,3 +534,266 @@ Sekundarni:
 4. **Šta TFS 3.4.522 vrati na prazan `<VrstePlacanja />` u `srr`** — očekujem 573. Ovo je jedini test koji direktno potvrđuje uzrok trenutnog problema.
 5. Da li `UnosNovca` na FP1 štampa nefiskalni isječak (kod FK2/Favourite štampa).
 6. Da li se stanje po vrstama plaćanja resetuje dnevnim izvještajem (očekivano da; utiče na to kada nuditi polog).
+
+---
+
+## 10. Presjek stanja, dnevni i periodični izvještaj — parametri i format datuma
+
+Dopuna istraživanja (2026-08-31). Svi citati su iz artefakata navedenih u §0; uz svaki je naznačen paket.
+
+### 10.1 Kratki odgovori
+
+| Pitanje | Odgovor | Status |
+|---|---|---|
+| Korijen za sva tri izvještaja | **`<Zahtjev>`** (ne `RacunZahtjev`) | POTVRĐENO |
+| Šalje li presjek stanja datum? | **NE.** `<Parametri />`, prazno | POTVRĐENO |
+| Ima li presjek varijante (po operateru/artiklima)? | **NE** kroz parametre; XSD ne dopušta djecu u `Parametri` | POTVRĐENO |
+| Dnevni izvještaj | **`<Parametri />`**, prazno | POTVRĐENO |
+| Nazivi parametara periodičnog | **`odDatuma` / `doDatuma`** — naši su tačni | POTVRĐENO |
+| Format datuma | **`d.M.yyyy H:mm:ss`** — vrijeme se **uvijek** šalje | POTVRĐENO |
+| Naš `1.8.2026 00:00:00` / `31.8.2026 23:59:59` | **ISPRAVAN**, identičan primjeru iz uputstva | POTVRĐENO |
+| Vodeće nule | Tolerisane (postoji isporučen primjer s `01.1.2020`) | POTVRĐENO za dan; za mjesec NEPOTVRĐENO |
+| Periodični po brojevima DI umjesto datuma | **Ne za štampani** izvještaj; postoji samo za *elektronski* (`oi.di.xml`, parametar `BrojDI`) | POTVRĐENO |
+
+### 10.2 StampatiPresjekStanja (VrstaZahtjeva = 3)
+
+**Isporučeni primjer** `/xml/primjeri/stampatipresjekstanja.xml` (klijentski MSI, `14-TringFiscal-v2.zip`), doslovno:
+
+```xml
+<?xml version="1.0" encoding="utf-8"?><Zahtjev xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"><BrojZahtjeva>198020</BrojZahtjeva><VrstaZahtjeva>3</VrstaZahtjeva><Parametri /></Zahtjev>
+```
+
+**Uputstvo** `Programersko_uputstvo_v3.0.1.pdf`, sekcija 7.6.1, str. 37–38 — „Naziv komande datoteke: StampatiPresjekStanja.xml ili sps.xml":
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<Zahtjev xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <BrojZahtjeva>149678</BrojZahtjeva>
+  <VrstaZahtjeva>3</VrstaZahtjeva>
+  <Parametri />
+</Zahtjev>
+```
+
+Opis iz istog mjesta:
+
+> Izvještaj „Presjek stanja“ ili X-report, je izvještaj o trenutnom stanju kase: ukupna prodaja, ukupno reklamirano, prodaja i reklamiranje po poreznim stopama, stanje novca u kasi.
+> Moguće je pozvati ovaj izvještaj više puta u toku dana.
+> Ovaj izvještaj ne vrši „Nuliranje“ vijednosti !
+
+C# potpis (ista strana) — **bez ijednog argumenta**:
+
+```csharp
+odgovor = printer.StampatiPresjekStanja();
+```
+
+**XSD** `XML primjeri/XSD/stampatipresjekstanja.xsd` (TFS **3.4.522**, verzija za FP1), doslovno:
+
+```xml
+<xs:element name="Zahtjev">
+  <xs:complexType>
+    <xs:sequence>
+      <xs:element name="BrojZahtjeva" type="xs:string" minOccurs="0" />
+      <xs:element name="VrstaZahtjeva" type="xs:string" minOccurs="0" />
+      <xs:element name="Parametri" type="xs:string" minOccurs="0" />
+    </xs:sequence>
+  </xs:complexType>
+</xs:element>
+```
+
+Ključno: **`Parametri` je `type="xs:string"`** — prost tip, dakle po šemi **ne može imati djecu**. Presjek stanja formalno ne prima nijedan parametar.
+
+**Odgovor** (uputstvo, str. 38) je prazan — samo status:
+
+```xml
+<KasaOdgovor …><Odgovori /><VrstaOdgovora>OK</VrstaOdgovora></KasaOdgovor>
+```
+
+**Varijante presjeka (po operateru / po artiklima): NE preko ove komande.** Lista grešaka TFS-a doduše sadrži statuse `Printanje_izvjestaja_po_artiklima` (20) i `Printanje_izvjestaja_po_operaterima` (22), pa uređaj takve izvještaje zna štampati — ali **u uputstvu ni u jednom isporučenom primjeru nema XML komande za njih**, niti parametra kojim bi se birali. NEPOTVRĐENO kako se pozivaju; vjerovatno samo s tastature uređaja.
+
+→ **Naš `stampatiPresjekStanja()` je tačan** i ne treba mu datum.
+
+### 10.3 StampatiDnevniIzvjestaj (VrstaZahtjeva = 4)
+
+**Isporučeni primjer** `/xml/primjeri/stampatidnevniizvjestaj.xml` (klijentski MSI):
+
+```xml
+<?xml version="1.0" encoding="utf-8"?><Zahtjev xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"><BrojZahtjeva>61529</BrojZahtjeva><VrstaZahtjeva>4</VrstaZahtjeva><Parametri /></Zahtjev>
+```
+
+**XSD** `stampatidnevniizvjestaj.xsd` (TFS 3.4.522) je **bajt-identičan** onom za presjek stanja — `Parametri` opet `type="xs:string"`.
+
+Uputstvo, sekcija 7.6.2, str. 38 — „Naziv komande datoteke: StampatiDnevniIzvjestaj.xml ili sdi.xml", primjer s `<Parametri />`; C#: `odgovor = printer.StampatiDnevniIzvjestaj();` (bez argumenata). Opis:
+
+> Ovo je obavezan izvještaj koji se, obično, pokreće na kraju dana. Moguće je pozvati ovaj izvještaj više puta u toku dana ali je ograničenje fiskalnog uređaja 2000 dnevnih izvještaja nakon čega se moraju zamjeniti fiskalna memorija i elktronični žurnal.
+> Ovaj izvještaj vrši „Nuliranje“ vijednosti !
+
+→ **Prazan `Parametri`. Naš `stampatiDnevniIzvjestaj()` je tačan.**
+
+### 10.4 StampatiPeriodicniIzvjestaj (VrstaZahtjeva = 5)
+
+**Isporučeni primjer** `/xml/primjeri/stampatiperiodicniizvjestaj.xml` (klijentski MSI), doslovno:
+
+```xml
+<?xml version="1.0" encoding="utf-8"?><Zahtjev xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"><BrojZahtjeva>695503</BrojZahtjeva><VrstaZahtjeva>5</VrstaZahtjeva><Parametri><Parametar><Naziv>odDatuma</Naziv><Vrijednost>23.10.2010 8:56:58</Vrijednost></Parametar><Parametar><Naziv>doDatuma</Naziv><Vrijednost>23.10.2010 8:56:58</Vrijednost></Parametar></Parametri></Zahtjev>
+```
+
+**Uputstvo** `Programersko_uputstvo_v3.0.1.pdf`, sekcija 7.6.3, str. 38–39 — „Naziv komande datoteke: StampatiPeriodicniIzvjestaj.xml ili spi.xml":
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<Zahtjev xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <BrojZahtjeva>129345</BrojZahtjeva>
+  <VrstaZahtjeva>5</VrstaZahtjeva>
+  <Parametri>
+    <Parametar>
+      <Naziv>odDatuma</Naziv>
+      <Vrijednost>1.1.2011 00:00:00</Vrijednost>
+    </Parametar>
+    <Parametar>
+      <Naziv>doDatuma</Naziv>
+      <Vrijednost>31.1.2011 23:59:59</Vrijednost>
+    </Parametar>
+  </Parametri>
+```
+
+Opis (ista strana):
+
+> „Periodični izvještaj“, je izvještaj o ukupnom stanju kase između dva vremenska intervala: ukupna prodaja, ukupno reklamirano, prodaja i reklamiranje po poreznim stopama.
+> Ovo je obavezan izvještaj koji se pokreće na kraju mjeseca a za period od prvog do posljednjeg dana u datom mjesecu.
+> Ovaj izvještaj ne vrši „Nuliranje“ vijednosti !
+
+C# potpis pokazuje da su parametri `DateTime`, ne stringovi:
+
+```csharp
+odgovor = printer.StampatiPeriodicniIzvjestaj(new DateTime(2010, 10, 10), new DateTime(2010, 10, 10));
+```
+
+**XSD** `stampatiperiodicniizvjestaj.xsd` (TFS 3.4.522) — jedini od tri koji `Parametri` definiše kao složeni tip:
+
+```xml
+<xs:element name="Parametri" minOccurs="0" maxOccurs="unbounded">
+  <xs:complexType>
+    <xs:sequence>
+      <xs:element name="Parametar" minOccurs="0" maxOccurs="unbounded">
+        <xs:complexType>
+          <xs:sequence>
+            <xs:element name="Naziv" type="xs:string" minOccurs="0" />
+            <xs:element name="Vrijednost" type="xs:string" minOccurs="0" />
+          </xs:sequence>
+        </xs:complexType>
+      </xs:element>
+    </xs:sequence>
+  </xs:complexType>
+</xs:element>
+```
+
+`Vrijednost` je **`xs:string`**, ne `xs:date`/`xs:dateTime` — dakle format nije definisan šemom nego parsiranjem na strani TFS-a (.NET `DateTime.Parse` s bs-BA/hr-HR kulturom).
+
+#### Format datuma — svi primjeri koje Tring isporučuje
+
+| Vrijednost | Izvor |
+|---|---|
+| `1.1.2011 14:59:58` / `9.1.2011 14:59:58` | uputstvo 2013 (`7-uputstvo-za-integraciju.pdf`) |
+| `1.1.2011 14:59:58` / `9.1.2011 14:59:58` | uputstvo 2016 (`Programersko_uputstvo_v30.pdf`, uz TFS **3.4.522**) |
+| `1.1.2011 00:00:00` / `31.1.2011 23:59:59` | uputstvo v3.0.1, sekcija 7.6.3 |
+| `23.10.2010 8:56:58` | isporučeni `stampatiperiodicniizvjestaj.xml` |
+| `01.1.2020 00:00:01` / `20.11.2020 23:59:58` | isporučeni `oi.period.xml` (TFS 3.4.522) |
+| `1.9.2023 00:00:00` / `30.9.2023 23:59:59` | uputstvo v3.0.1, sekcija 7.9.4 |
+
+Zaključci:
+
+- **Obrazac je `d.M.yyyy H:mm:ss`** — dan i mjesec bez vodećih nula, godina četverocifreno, tačka kao separator, razmak, pa vrijeme.
+- **Vrijeme se šalje uvijek.** Ne postoji nijedan primjer samo s datumom. Varijanta samo-datum je **NEPOTVRĐENA** i ne treba je koristiti.
+- **Vodeće nule su tolerisane**: `01.1.2020` (dan s nulom, mjesec bez) prolazi u Tringovom vlastitom isporučenom primjeru, a `00:00:00` (sat s nulom) u uputstvu naspram `8:56:58` (bez nule) u primjeru. Oba oblika se pojavljuju kod Tringa → parser je tolerantan. **Vodeća nula na mjesecu (`01.08.2026`) nije potvrđena nijednim primjerom** — pošto nam ionako ne treba, ne riskirati.
+- **Naš kod je ISPRAVAN.** `src/services/tring.ts:531-556` proizvodi `${parseInt(dan)}.${parseInt(mjesec)}.${godina} 00:00:00` odnosno `… 23:59:59` — npr. `1.8.2026 00:00:00` / `31.8.2026 23:59:59`, što je znak za znak isti oblik kao primjer iz uputstva `1.1.2011 00:00:00` / `31.1.2011 23:59:59`. `parseInt` uz to skida eventualne vodeće nule iz ISO ulaza, što nas dodatno drži na dokumentovanom obliku.
+
+#### Varijanta po brojevima dnevnih izvještaja
+
+**Za štampani periodični izvještaj (VZ=5) NE POSTOJI** — ni uputstvo ni XSD ni jedan primjer ne poznaju parametar tipa `odBroja`/`doBroja`/`BrojDI` u toj komandi.
+
+Postoji samo za **elektronski** (podatkovni, nefiskalni) izvještaj, koji je zasebna komanda iz `oi.*` familije — uputstvo v3.0.1, sekcija 7.9.3 „Elektonski Dnevni Izvjestaj", „Naziv komande datoteke: oi.di.xml"; isporučeni `XML primjeri/oi.di.xml` (TFS 3.4.522), doslovno:
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<Zahtjev xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+    <Parametri>
+        <Parametar>
+            <Naziv>BrojDI</Naziv>
+            <Vrijednost>1235</Vrijednost>
+        </Parametar>
+    </Parametri>
+</Zahtjev>
+```
+
+### 10.5 Usputni nalaz: `oi.*` komande nemaju `VrstaZahtjeva`
+
+Isporučeni `oi.di.xml` i `oi.period.xml` (TFS 3.4.522) — i njihovi pandani u uputstvu v3.0.1, sekcije 7.9.3 i 7.9.4 — **nemaju ni `<BrojZahtjeva>` ni `<VrstaZahtjeva>`**, samo `<Parametri>`. To je nezavisna potvrda da TFS rutira **po adresi/nazivu komande**, a ne po `VrstaZahtjeva`. Praktična posljedica za §3: nesigurnost oko `PovratNovca` = 7 ili 8 je vjerovatno bezopasna dokle god pogađamo tačan path.
+
+Stroža, ručno pisana šema `zahtjev.xsd` (TFS **3.5.172**, `TringFiscalDriverXSDSchemas/`) ipak traži `VrstaZahtjeva`:
+
+```xml
+<xs:complexType name="Zahtjev">
+  <xs:sequence>
+    <xs:element minOccurs="0" maxOccurs="1" name="BrojZahtjeva" type="xs:string" />
+    <xs:element minOccurs="1" maxOccurs="1" name="VrstaZahtjeva" type="xs:int" />
+    <xs:element minOccurs="0" maxOccurs="1" name="Parametri" type="ArrayOfParametar" />
+  </xs:sequence>
+</xs:complexType>
+<xs:complexType name="ArrayOfParametar">
+  <xs:sequence>
+    <xs:element minOccurs="0" maxOccurs="unbounded" name="Parametar" nillable="true" type="Parametar" />
+  </xs:sequence>
+</xs:complexType>
+```
+
+Tj. `VrstaZahtjeva` je **obavezan i `xs:int`**, `BrojZahtjeva` opcion, a `Parametri` je niz koji smije biti prazan → `<Parametri />` je validan.
+
+### 10.6 Greške vezane za datum i opseg
+
+Iz `Lista_greSaka.pdf` (uz TFS **3.4.522**) i `error_codes.h` (linux tring_fiscal_library) — vrijednosti se poklapaju u oba izvora:
+
+**Sloj drivera/biblioteke (validacija ulaza, grupa 1700):**
+
+| Kôd | Naziv |
+|---|---|
+| 1705 | `INVALID_COMMAND` |
+| **1707** | **`START_DATE_WRONG_FORMAT`** |
+| **1708** | **`START_DATE_MISSING`** |
+| **1709** | **`END_DATE_WRONG_FORMAT`** |
+| **1710** | **`END_DATE_MISSING`** |
+
+Doslovno iz `error_codes.h`:
+
+```c
+	NO_ITEM							= 1706,
+	START_DATE_WRONG_FORMAT			= 1707,
+	START_DATE_MISSING				= 1708,
+	END_DATE_WRONG_FORMAT			= 1709,
+	END_DATE_MISSING				= 1710,
+```
+
+**Sloj firmvera uređaja (grupa 100):**
+
+| Kôd | Naziv |
+|---|---|
+| 100 | `ERROR_FISCAL_FORBIDEN_PERIOD` |
+| 104 | `ERROR_FISCAL_SAME_Z_REPORT_DATETIME` |
+| 112 | `ERROR_FISCAL_INVALID_LAST_FISCAL_DATE` |
+| 116 | `ERROR_FISCAL_INVALID_DATETIME` |
+| **118** | **`ERROR_FISCAL_INVALID_PERIOD`** |
+
+**Sloj TFS-a (poruke koje vraća server):** 410 `Neispravno_vrijeme`, 418 `Pogresno_vrijeme`, 501 `Neispravno_vrijeme_2`, 502 `Neispravno_Fiskalno_Vrijeme`, 537 `Vrijeme_manje_od_vremena_zadnjeg_fiskalnog_dokumenta`, 412 `Napravite_dnevni_izvjestaj`.
+
+**Eksplicitno NEPOTVRĐENO:** ne postoji nijedan kôd ni naziv koji bi značio „od datuma veći od do datuma". Najbliži kandidat je `ERROR_FISCAL_INVALID_PERIOD` (118), ali Tring mu **nije dao opis** — kolona „Opis problema/rješenja" je za taj red prazna. Obrnut opseg treba validirati u našoj aplikaciji prije slanja, ne oslanjati se na uređaj.
+
+### 10.7 Zaključak za kod
+
+Ništa ne treba mijenjati u sve tri funkcije:
+
+- `stampatiPresjekStanja()` — `<Zahtjev>`, VZ 3, `<Parametri />`. ✅ tačno, datum se ne šalje.
+- `stampatiDnevniIzvjestaj()` — `<Zahtjev>`, VZ 4, `<Parametri />`. ✅ tačno.
+- `stampatiPeriodicniIzvjestaj()` — `odDatuma`/`doDatuma`, `d.M.yyyy HH:mm:ss`. ✅ tačno.
+
+Jedino poboljšanje (opciono): validirati `odDatuma <= doDatuma` u aplikaciji, jer uređaj za taj slučaj nema dokumentovanu grešku, i mapirati 1707–1710 te 118 u razumljive poruke.

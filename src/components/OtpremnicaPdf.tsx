@@ -43,8 +43,8 @@ const s = StyleSheet.create({
     gap: 10,
   },
   logo: {
-    width: 44,
-    height: 44,
+    width: 100,
+    height: 100,
     objectFit: 'contain' as const,
   },
   firmaNaziv: {
@@ -55,7 +55,7 @@ const s = StyleSheet.create({
   },
   firmaLine: {
     fontSize: 8,
-    color: '#444',
+    color: '#000',
     marginTop: 1,
   },
   docLabel: {
@@ -69,7 +69,7 @@ const s = StyleSheet.create({
   },
   docNumber: {
     fontSize: 10,
-    color: '#444',
+    color: '#000',
     marginTop: 2,
   },
 
@@ -94,7 +94,7 @@ const s = StyleSheet.create({
     fontWeight: 700,
     textTransform: 'uppercase',
     letterSpacing: 1.5,
-    color: '#888',
+    color: '#000',
     marginBottom: 6,
   },
   infoBlockName: {
@@ -105,7 +105,7 @@ const s = StyleSheet.create({
   },
   infoBlockLine: {
     fontSize: 8.5,
-    color: '#333',
+    color: '#000',
     marginBottom: 1.5,
   },
 
@@ -122,7 +122,7 @@ const s = StyleSheet.create({
     fontWeight: 700,
     textTransform: 'uppercase',
     letterSpacing: 1,
-    color: '#888',
+    color: '#000',
     marginBottom: 3,
   },
   metaValue: {
@@ -145,7 +145,7 @@ const s = StyleSheet.create({
     fontWeight: 700,
     textTransform: 'uppercase',
     letterSpacing: 0.8,
-    color: '#555',
+    color: '#000',
   },
   tRow: {
     flexDirection: 'row',
@@ -189,7 +189,7 @@ const s = StyleSheet.create({
     fontWeight: 700,
     textTransform: 'uppercase',
     letterSpacing: 1,
-    color: '#555',
+    color: '#000',
     textAlign: 'center',
   },
 

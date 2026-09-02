@@ -55,7 +55,7 @@ const s = StyleSheet.create({
   },
   fieldLabel: {
     fontSize: 7,
-    color: '#555',
+    color: '#000',
     width: 100,
   },
   fieldValue: {

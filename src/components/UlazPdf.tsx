@@ -93,7 +93,7 @@ const s = StyleSheet.create({
   },
   fieldLabel: {
     fontSize: 6.5,
-    color: '#555',
+    color: '#000',
     width: 120,
   },
   fieldValue: {

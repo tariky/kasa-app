@@ -27,7 +27,7 @@ const s = StyleSheet.create({
   headerGrid: { flexDirection: 'row', marginBottom: 16, gap: 20 },
   headerCol: { width: '50%' },
   fieldRow: { flexDirection: 'row', marginBottom: 3 },
-  fieldLabel: { fontSize: 7, color: '#555', width: 100 },
+  fieldLabel: { fontSize: 7, color: '#000', width: 100 },
   fieldValue: { fontSize: 8, fontFamily: FB, fontWeight: 700, flex: 1 },
   table: { marginBottom: 16 },
   tHeadRow: { flexDirection: 'row', borderTop: '1pt solid #000', borderBottom: '1pt solid #000' },

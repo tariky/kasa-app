@@ -46,15 +46,15 @@ const s = StyleSheet.create({
   /* ── Top bar ── */
   topBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 30 },
   logoWrap: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  logo: { width: 44, height: 44, objectFit: 'contain' as const },
+  logo: { width: 100, height: 100, objectFit: 'contain' as const },
   firmaNaziv: { fontSize: 14, fontFamily: FB, fontWeight: 700, letterSpacing: 0.3 },
-  firmaLine: { fontSize: 8, color: '#444', marginTop: 1 },
+  firmaLine: { fontSize: 8, color: '#000', marginTop: 1 },
   docLabel: { textAlign: 'right' },
   docTitle: { fontSize: 22, fontFamily: FB, fontWeight: 700, letterSpacing: 1 },
-  docTitleNum: { fontSize: 22, fontFamily: F, fontWeight: 400, color: '#777', letterSpacing: 0 },
+  docTitleNum: { fontSize: 22, fontFamily: F, fontWeight: 400, color: '#000', letterSpacing: 0 },
   docSubtitle: {
     fontSize: 8, fontFamily: FB, fontWeight: 700, textTransform: 'uppercase',
-    letterSpacing: 1.5, color: '#555', marginTop: 4,
+    letterSpacing: 1.5, color: '#000', marginTop: 4,
   },
 
   dividerThick: { borderBottom: '2pt solid #000', marginBottom: 20 },
@@ -64,17 +64,17 @@ const s = StyleSheet.create({
   infoBlock: { width: '48%' },
   infoBlockLabel: {
     fontSize: 7, fontFamily: FB, fontWeight: 700, textTransform: 'uppercase',
-    letterSpacing: 1.5, color: '#888', marginBottom: 6,
+    letterSpacing: 1.5, color: '#000', marginBottom: 6,
   },
   infoBlockName: { fontSize: 11, fontFamily: FB, fontWeight: 700, marginBottom: 3 },
-  infoBlockLine: { fontSize: 8.5, color: '#333', marginBottom: 1.5 },
+  infoBlockLine: { fontSize: 8.5, color: '#000', marginBottom: 1.5 },
 
   /* ── Meta row ── */
   metaRow: { flexDirection: 'row', marginBottom: 22, gap: 40 },
   metaItem: {},
   metaLabel: {
     fontSize: 7, fontFamily: FB, fontWeight: 700, textTransform: 'uppercase',
-    letterSpacing: 1, color: '#888', marginBottom: 3,
+    letterSpacing: 1, color: '#000', marginBottom: 3,
   },
   metaValue: { fontSize: 9 },
 
@@ -86,7 +86,7 @@ const s = StyleSheet.create({
   },
   tHeaderCell: {
     fontSize: 6.5, fontFamily: FB, fontWeight: 700, textTransform: 'uppercase',
-    letterSpacing: 0.5, color: '#555', paddingRight: 6,
+    letterSpacing: 0.5, color: '#000', paddingRight: 6,
   },
   tHeaderCellLast: { paddingRight: 0 },
   tRow: { flexDirection: 'row', paddingVertical: 5, borderBottom: '0.5pt solid #ddd', alignItems: 'flex-start' },
@@ -106,7 +106,7 @@ const s = StyleSheet.create({
   totalsWrap: { flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 10 },
   totalsBox: { width: '45%' },
   totalsRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 2.5 },
-  totalsLabel: { fontSize: 8.5, color: '#444' },
+  totalsLabel: { fontSize: 8.5, color: '#000' },
   totalsValue: { fontSize: 8.5 },
   totalsFinalRow: {
     flexDirection: 'row', justifyContent: 'space-between',
@@ -122,12 +122,12 @@ const s = StyleSheet.create({
   },
   vezaLabel: {
     fontSize: 6.5, fontFamily: FB, fontWeight: 700, textTransform: 'uppercase',
-    letterSpacing: 1.2, color: '#aaa', marginBottom: 4,
+    letterSpacing: 1.2, color: '#000', marginBottom: 4,
   },
   vezaRow: { flexDirection: 'row', marginBottom: 1.5 },
-  vezaKey: { width: 78, fontSize: 7.5, color: '#999' },
-  vezaValue: { fontSize: 7.5, color: '#444' },
-  vezaNota: { fontSize: 7, color: '#999', marginTop: 4, lineHeight: 1.4 },
+  vezaKey: { width: 78, fontSize: 7.5, color: '#000' },
+  vezaValue: { fontSize: 7.5, color: '#000' },
+  vezaNota: { fontSize: 7, color: '#000', marginTop: 4, lineHeight: 1.4 },
 
   /* ── Signatures ── */
   signaturesWrap: {
@@ -138,7 +138,7 @@ const s = StyleSheet.create({
   signatureLine: { borderTop: '0.5pt solid #000', marginBottom: 4 },
   signatureLabel: {
     fontSize: 7, fontFamily: FB, fontWeight: 700, textTransform: 'uppercase',
-    letterSpacing: 1, color: '#555', textAlign: 'center',
+    letterSpacing: 1, color: '#000', textAlign: 'center',
   },
 
   /* ── Footer ── */
@@ -305,7 +305,7 @@ export function PrilogPdf({ order, firma, stavke }: PrilogPdfProps) {
           </View>
           <View style={s.vezaRow}>
             <Text style={s.vezaKey}>Zbirna stavka</Text>
-            <Text style={s.vezaValue}>&bdquo;{order.prilogNaziv || prilogNaziv(order.prilogBroj ?? 0)}&ldquo; &middot; {formatKM(ukupno)}</Text>
+            <Text style={s.vezaValue}>&bdquo;{order.prilogNaziv || prilogNaziv(order.prilogBroj ?? null)}&ldquo; &middot; {formatKM(ukupno)}</Text>
           </View>
           <Text style={s.vezaNota}>
             Ovaj prilog razrađuje tu zbirnu stavku i vrijedi samo uz navedeni fiskalni račun.
