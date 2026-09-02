@@ -85,7 +85,6 @@ export default function PrilogRacunDialog({ open, onOpenChange, korisnikId, onSu
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [nextBroj, setNextBroj] = useState<number | null>(null);
 
   const searchRef = useRef<HTMLInputElement>(null);
   const iznosRef = useRef<HTMLInputElement>(null);
@@ -100,8 +99,7 @@ export default function PrilogRacunDialog({ open, onOpenChange, korisnikId, onSu
     setQuery(''); setResults([]); setFocusedIndex(-1);
     setKupacNaziv(''); setKupacIdBroj(''); setKupacAdresa(''); setKupacGrad(''); setKupacPostanskiBroj('');
     setKupacSearch(''); setManualKupac(false);
-    setError(null); setBusy(false); setNextBroj(null);
-    window.api.getNextPrilogBroj().then(setNextBroj).catch(() => setNextBroj(null));
+    setError(null); setBusy(false);
     window.api.getKupci().then(setAllKupci).catch(() => setAllKupci([]));
   }, [open]);
 
@@ -125,10 +123,8 @@ export default function PrilogRacunDialog({ open, onOpenChange, korisnikId, onSu
     [stavke],
   );
   const iznos = mode === 'stavke' ? sumaStavki : (rucniIznos ?? 0);
-  const nazivStavke = useMemo(
-    () => (nextBroj !== null ? prilogNaziv(nextBroj, opis, veza) : null),
-    [nextBroj, opis, veza],
-  );
+  // Broj se ne kuca na isječak — faktura ga dobija iz BF broja nakon štampe.
+  const nazivStavke = useMemo(() => prilogNaziv(null, opis, veza), [opis, veza]);
 
   const addProduct = useCallback((p: Product) => {
     setStavke(prev => {
@@ -295,13 +291,10 @@ export default function PrilogRacunDialog({ open, onOpenChange, korisnikId, onSu
             <DialogTitle className="flex items-center gap-2 text-[15px]">
               <Paperclip className="h-4 w-4 text-slate-400" />
               Račun po prilogu
-              {nextBroj !== null && (
-                <span className="font-mono text-[12px] font-normal text-slate-400">br. {nextBroj}</span>
-              )}
             </DialogTitle>
             <DialogDescription className="mt-0.5 text-sm text-slate-500">
-              Na fiskalni račun ide jedna zbirna stavka
-              {nazivStavke !== null ? ` — „${nazivStavke}".` : '.'}
+              Na fiskalni račun ide jedna zbirna stavka — „{nazivStavke}".
+              Faktura dobija broj fiskalnog računa.
             </DialogDescription>
           </DialogHeader>
 
@@ -518,7 +511,7 @@ export default function PrilogRacunDialog({ open, onOpenChange, korisnikId, onSu
                   <span className="truncate text-[11.5px] text-slate-400">
                     {mode === 'stavke' && stavke.length > 0
                       ? `${stavke.length} ${stavke.length === 1 ? 'stavka' : stavke.length < 5 ? 'stavke' : 'stavki'} na prilogu`
-                      : nazivStavke ?? 'Zbirna stavka'}
+                      : nazivStavke}
                   </span>
                 </div>
               </label>
@@ -544,12 +537,9 @@ export default function PrilogRacunDialog({ open, onOpenChange, korisnikId, onSu
                     aria-label="Veza u nazivu zbirne stavke"
                     className="h-8 w-[86px] shrink-0 rounded-lg border-0 px-2 text-[13px] shadow-none focus-visible:ring-1 focus-visible:ring-blue-500/50"
                   />
-                  <span className="shrink-0 pr-1 font-mono text-[12px] text-slate-400">
-                    br. {nextBroj ?? '—'}
-                  </span>
                 </div>
                 <p className="mt-1 truncate text-[11px] text-slate-400">
-                  {nazivStavke !== null ? `Na računu: „${nazivStavke}"` : 'Naziv se formira kad se dodijeli broj priloga.'}
+                  {`Na računu: „${nazivStavke}"`}
                 </p>
               </div>
 

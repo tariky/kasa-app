@@ -902,6 +902,11 @@ export function registerIpcHandlers(): void {
       const orderId = insertCompletedOrder(db, {
         ...snap,
         brojFiskalnogRacuna: data.brojFiskalnogRacuna.trim(),
+        // Prilog račun: broj fakture je BF koji operater ovdje ukuca; rezervni
+        // broj iz snapshota ostaje samo kad BF nije numerički.
+        prilogBroj: snap.prilogBroj == null
+          ? null
+          : parseFiskalniBroj(data.brojFiskalnogRacuna.trim()) ?? snap.prilogBroj,
         isManual: 1,
         createdAt: data.createdAt,
       });

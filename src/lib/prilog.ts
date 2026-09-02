@@ -1,5 +1,6 @@
 import type * as Tring from '@/services/tring';
 import type { SqlDb } from './sqldb';
+import { parseFiskalniBroj } from './fiskalni';
 import { round2 } from './novac';
 import { iznosStavke, izracunajTotale } from './racun';
 import { buildTringRacun } from './tringRacun';
@@ -22,13 +23,17 @@ export const PRILOG_VEZA_MAX = 14;
 
 /**
  * Naziv zbirne stavke. Operater po računu bira uvodni dio i vezu — „CNC obrada
- * po fakturi br. 5" — a prazan unos pada na zadane vrijednosti da stari računi
- * (bez upisanog naziva) i dalje daju isti tekst kao prije.
+ * po fakturi" — a prazan unos pada na zadane vrijednosti.
+ *
+ * Broj se više ne kuca na isječak: broj fakture je BF broj tog istog računa, a
+ * njega uređaj vrati tek nakon štampe. `broj` zato prima `null` za nove račune,
+ * a broj samo za stare (prije prelaska na BF), da im kopija i storno daju isti
+ * tekst koji je odštampan.
  */
-export function prilogNaziv(broj: number, opis?: string | null, veza?: string | null): string {
+export function prilogNaziv(broj: number | null, opis?: string | null, veza?: string | null): string {
   const o = (opis ?? '').trim().slice(0, PRILOG_OPIS_MAX) || PRILOG_OPIS_DEFAULT;
   const v = (veza ?? '').trim().slice(0, PRILOG_VEZA_MAX) || PRILOG_VEZA_DEFAULT;
-  return `${o} po ${v} br. ${broj}`;
+  return broj == null ? `${o} po ${v}` : `${o} po ${v} br. ${broj}`;
 }
 
 /** Postavka: od kojeg broja numeracija priloga kreće (za nastavak stare serije). */
@@ -151,7 +156,7 @@ export function savePrilogStavkeInTransaction(
 }
 
 /** Zbirna stavka kako se šalje fiskalnom uređaju (i sintetizuje u prikazima). */
-export function buildPrilogFiskalnaStavka(prilogBroj: number, iznos: number, naziv?: string | null) {
+export function buildPrilogFiskalnaStavka(prilogBroj: number | null, iznos: number, naziv?: string | null) {
   return {
     productId: 0,
     sifra: PRILOG_SIFRA,
@@ -218,11 +223,14 @@ export async function finalizePrilogAndPrint(
   const iznos = stavke.length > 0 ? sumaPriloga(stavke) : (data.iznos ?? 0);
   if (!(iznos > 0)) throw new Error('Iznos mora biti veći od 0');
 
-  const prilogBroj = sljedeciPrilogBroj(db);
+  // Broj fakture je BF broj sa isječka, a njega uređaj vrati tek nakon štampe —
+  // ovaj redni broj služi samo kao rezerva kad BF nije numerički (npr. „R-12").
+  const rezervniBroj = sljedeciPrilogBroj(db);
   // Naziv se zamrzava ovdje: storno i kopija računa moraju odštampati isti
-  // tekst koji je otišao na fiskalni uređaj, pa se čuva uz račun.
-  const naziv = prilogNaziv(prilogBroj, data.prilogOpis, data.prilogVeza);
-  const stavka = buildPrilogFiskalnaStavka(prilogBroj, iznos, naziv);
+  // tekst koji je otišao na fiskalni uređaj, pa se čuva uz račun. Bez broja —
+  // broj se u tom trenutku još ne zna.
+  const naziv = prilogNaziv(null, data.prilogOpis, data.prilogVeza);
+  const stavka = buildPrilogFiskalnaStavka(null, iznos, naziv);
   const { ukupno, pdvIznos } = izracunajTotale([stavka]);
 
   // Write-ahead: stavke:[] + prilogBroj → pending:resolve rekonstruiše prilog
@@ -230,7 +238,7 @@ export async function finalizePrilogAndPrint(
   const snapshot = {
     korisnikId: data.korisnikId, ukupno, pdvIznos,
     nacinPlacanja: data.nacinPlacanja, kupac: data.kupac,
-    stavke: [], prilogBroj, prilogNaziv: naziv, prilogStavke: stavke,
+    stavke: [], prilogBroj: rezervniBroj, prilogNaziv: naziv, prilogStavke: stavke,
   };
   const pending = db
     .prepare('INSERT INTO pending_receipts (korisnikId, snapshot) VALUES (?, ?)')
@@ -258,6 +266,8 @@ export async function finalizePrilogAndPrint(
   }
 
   const brojFiskalnogRacuna = result.odgovori?.BrojFiskalnogRacuna || null;
+  // Faktura nosi isti broj kao fiskalni isječak uz koji ide.
+  const prilogBroj = parseFiskalniBroj(brojFiskalnogRacuna) ?? rezervniBroj;
   let orderId = 0;
   try {
     transaction(() => {

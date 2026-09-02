@@ -32,21 +32,26 @@ function dodajArtikal(id: number, cijena: number, tip = 'artikal', pdvStopa = 'E
     .run(id);
 }
 
-test('prilogNaziv formira tačan naziv stavke', () => {
-  expect(prilogNaziv(17)).toBe('Stavke po računu br. 17');
+test('prilogNaziv bez broja je ono što se kuca na isječak', () => {
+  expect(prilogNaziv(null)).toBe('Stavke po računu');
 });
 
 test('prilogNaziv koristi zadani uvod i vezu iz unosa', () => {
-  expect(prilogNaziv(5, 'CNC obrada', 'fakturi')).toBe('CNC obrada po fakturi br. 5');
+  expect(prilogNaziv(null, 'CNC obrada', 'fakturi')).toBe('CNC obrada po fakturi');
 });
 
 test('prilogNaziv pada na zadane dijelove kad je unos prazan', () => {
-  expect(prilogNaziv(5, '   ', '')).toBe('Stavke po računu br. 5');
+  expect(prilogNaziv(null, '   ', '')).toBe('Stavke po računu');
+});
+
+test('prilogNaziv sa brojem rekonstruiše tekst starih računa', () => {
+  // Računi izdati prije prelaska na BF broj imaju broj u odštampanom nazivu.
+  expect(prilogNaziv(17)).toBe('Stavke po računu br. 17');
 });
 
 test('buildPrilogFiskalnaStavka preuzima zadani naziv', () => {
-  expect(buildPrilogFiskalnaStavka(5, 100, 'CNC obrada po fakturi br. 5').naziv)
-    .toBe('CNC obrada po fakturi br. 5');
+  expect(buildPrilogFiskalnaStavka(null, 100, 'CNC obrada po fakturi').naziv)
+    .toBe('CNC obrada po fakturi');
 });
 
 test('sljedeciPrilogBroj počinje od 1 na praznoj bazi', () => {

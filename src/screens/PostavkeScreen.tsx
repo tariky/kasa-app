@@ -138,7 +138,7 @@ export default function PostavkeScreen() {
     try {
       const res = await window.api.setPrilogPocetniBroj(broj);
       await loadPrilogNumeracija();
-      setPrilogStatus({ type: 'success', message: `Sljedeći prilog nosi br. ${res.sljedeci}.` });
+      setPrilogStatus({ type: 'success', message: `Rezervni broj je sada ${res.sljedeci}.` });
     } catch (err: any) {
       const raw = err?.message || 'Nepoznata greška';
       setPrilogStatus({ type: 'error', message: raw.replace(/^Error invoking remote method '[^']*':\s*(Error:\s*)?/, '') });
@@ -1183,9 +1183,9 @@ export default function PostavkeScreen() {
                         <Paperclip size={20} className="text-sky-500" />
                       </div>
                       <div>
-                        <h3 className="text-[15px] font-semibold text-slate-800">Numeracija priloga</h3>
+                        <h3 className="text-[15px] font-semibold text-slate-800">Rezervna numeracija fakture</h3>
                         <p className="text-[12px] text-slate-400 mt-0.5">
-                          Broj koji nosi sljedeći račun po prilogu — podesite ga ako je numeracija počela prije programa
+                          Faktura nosi broj fiskalnog računa (BF). Ovaj broj se koristi samo kad uređaj vrati BF koji nije broj
                         </p>
                       </div>
                     </div>
@@ -1193,7 +1193,7 @@ export default function PostavkeScreen() {
                   <div className="px-6 py-5">
                     <div className="flex items-end gap-3">
                       <div>
-                        <Label className="text-[12px] text-slate-500">Sljedeći broj priloga</Label>
+                        <Label className="text-[12px] text-slate-500">Sljedeći rezervni broj</Label>
                         <Input
                           value={prilogUnos}
                           onChange={e => setPrilogUnos(e.target.value.replace(/\D/g, ''))}
@@ -1226,8 +1226,8 @@ export default function PostavkeScreen() {
                       {prilogNumeracija == null
                         ? 'Učitavanje…'
                         : prilogNumeracija.najveciIzdati === 0
-                          ? 'Još nijedan prilog nije izdat iz programa.'
-                          : `Posljednji izdati prilog: br. ${prilogNumeracija.najveciIzdati}. Novi broj mora biti veći od njega.`}
+                          ? 'Još nijedna faktura nije izdata iz programa.'
+                          : `Najveći do sada iskorišten broj fakture: ${prilogNumeracija.najveciIzdati}. Novi broj mora biti veći od njega.`}
                     </p>
                   </div>
                 </div>

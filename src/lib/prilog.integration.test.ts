@@ -50,11 +50,12 @@ test('fiskalizuje zbirnu stavku i upiše prilog račun bez order_items', async (
   });
 
   expect(res.success).toBe(true);
-  expect(res.prilogBroj).toBe(1);
   expect(res.brojFiskalnogRacuna).toBeTruthy();
+  // Broj fakture je BF broj sa isječka uz koji ide.
+  expect(res.prilogBroj).toBe(Number(res.brojFiskalnogRacuna));
 
   const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(res.id!) as any;
-  expect(order.prilogBroj).toBe(1);
+  expect(order.prilogBroj).toBe(Number(res.brojFiskalnogRacuna));
   expect(order.ukupno).toBe(150);
   expect(order.pdvIznos).toBeCloseTo(150 - 150 / 1.17, 2);
   expect(order.status).toBe('completed');
@@ -67,7 +68,7 @@ test('fiskalizuje zbirnu stavku i upiše prilog račun bez order_items', async (
   expect(pending.length).toBe(0);
 }, 15000);
 
-test('zbirna stavka koja ide uređaju nosi naziv sa brojem priloga', async () => {
+test('zbirna stavka koja ide uređaju nosi naziv bez broja', async () => {
   let poslato: any = null;
   const res = await finalizePrilogAndPrint(
     { ...deps(), print: async (racun) => { poslato = racun; return Tring.stampatiFiskalniRacun(racun); } },
@@ -76,7 +77,8 @@ test('zbirna stavka koja ide uređaju nosi naziv sa brojem priloga', async () =>
 
   expect(res.success).toBe(true);
   expect(poslato.stavke.length).toBe(1);
-  expect(poslato.stavke[0].artikal.naziv).toBe('Stavke po računu br. 1');
+  // Broj se ne kuca: on je BF broj tog istog isječka, poznat tek nakon štampe.
+  expect(poslato.stavke[0].artikal.naziv).toBe('Stavke po računu');
   expect(poslato.stavke[0].artikal.sifra).toBe('PRILOG');
   expect(poslato.stavke[0].artikal.stopa).toBe('E');
   expect(poslato.stavke[0].kolicina).toBe(1);
@@ -91,17 +93,33 @@ test('naziv zbirne stavke se preuzima iz unosa i pamti uz račun', async () => {
   );
 
   expect(res.success).toBe(true);
-  expect(poslato.stavke[0].artikal.naziv).toBe('CNC obrada po fakturi br. 1');
+  expect(poslato.stavke[0].artikal.naziv).toBe('CNC obrada po fakturi');
   // Storno i kopija računa čitaju naziv iz baze — mora biti isti kao odštampani.
   const order = db.prepare('SELECT prilogNaziv FROM orders WHERE id = ?').get(res.id!) as any;
-  expect(order.prilogNaziv).toBe('CNC obrada po fakturi br. 1');
+  expect(order.prilogNaziv).toBe('CNC obrada po fakturi');
 }, 15000);
 
-test('drugi prilog račun dobija sljedeći broj', async () => {
-  await finalizePrilogAndPrint(deps(), { korisnikId: 1, iznos: 10, nacinPlacanja: 'Gotovina' });
-  const res = await finalizePrilogAndPrint(deps(), { korisnikId: 1, iznos: 20, nacinPlacanja: 'Kartica' });
-  expect(res.prilogBroj).toBe(2);
+test('svaki prilog račun nosi BF broj svog isječka', async () => {
+  const prvi = await finalizePrilogAndPrint(deps(), { korisnikId: 1, iznos: 10, nacinPlacanja: 'Gotovina' });
+  const drugi = await finalizePrilogAndPrint(deps(), { korisnikId: 1, iznos: 20, nacinPlacanja: 'Kartica' });
+  expect(prvi.prilogBroj).toBe(Number(prvi.brojFiskalnogRacuna));
+  expect(drugi.prilogBroj).toBe(Number(drugi.brojFiskalnogRacuna));
+  expect(drugi.prilogBroj).toBe(prvi.prilogBroj! + 1);
 }, 20000);
+
+test('nenumerički BF pada na rezervni redni broj', async () => {
+  // Uređaj koji vrati npr. „R-12" ne smije ostaviti fakturu bez broja.
+  const res = await finalizePrilogAndPrint(
+    { ...deps(), print: async () => ({ success: true, vrstaOdgovora: 'OK', odgovori: { BrojFiskalnogRacuna: 'R-12' } }) },
+    { korisnikId: 1, iznos: 150, nacinPlacanja: 'Gotovina' }
+  );
+
+  expect(res.success).toBe(true);
+  expect(res.brojFiskalnogRacuna).toBe('R-12');
+  expect(res.prilogBroj).toBe(1);
+  const order = db.prepare('SELECT prilogBroj FROM orders WHERE id = ?').get(res.id!) as any;
+  expect(order.prilogBroj).toBe(1);
+});
 
 test('kupac se upisuje na račun', async () => {
   const res = await finalizePrilogAndPrint(deps(), {
@@ -157,6 +175,7 @@ test('snapshot pending reda nosi prilogBroj i prazne stavke', async () => {
   const rows = db.prepare('SELECT snapshot FROM pending_receipts').all() as Array<{ snapshot: string }>;
   expect(rows.length).toBe(1);
   const snap = JSON.parse(rows[0].snapshot);
+  // Snapshot nosi rezervni redni broj; pending:resolve ga zamijeni ukucanim BF-om.
   expect(snap.prilogBroj).toBe(1);
   expect(snap.stavke).toEqual([]);
   expect(snap.ukupno).toBe(150);
@@ -183,7 +202,7 @@ test('stavke unesene na kasi određuju iznos i upisuju se uz račun', async () =
 
   expect(res.success).toBe(true);
   expect(poslato.stavke.length).toBe(1);
-  expect(poslato.stavke[0].artikal.naziv).toBe('Stavke po računu br. 1');
+  expect(poslato.stavke[0].artikal.naziv).toBe('Stavke po računu');
   expect(poslato.stavke[0].artikal.cijena).toBe(150);
 
   const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(res.id!) as any;
