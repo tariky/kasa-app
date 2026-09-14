@@ -3,7 +3,10 @@ import { writeFileSync, copyFileSync } from 'fs';
 import path from 'node:path';
 import { getDb, closeDb } from '../database/db';
 import { validateBackup, swapInBackup, type RestoreDeps } from '../database/restore';
-import { parseFiskalniBroj, izracunajPraznine } from '../lib/fiskalni';
+import {
+  parseFiskalniBroj, izracunajPraznine, zadnjiFiskalniBroj,
+  zadnjiUpisaniFiskalniBroj, postaviZadnjiFiskalniBroj, predvidjeniFiskalniBroj,
+} from '../lib/fiskalni';
 import { round2, localDateStr } from '../lib/novac';
 import {
   collectPriceChanges, applyPricesWithoutStock, revertNivelacijaPrices,
@@ -12,8 +15,7 @@ import {
 import { refundOrderInTransaction, refundAndPrint } from '../lib/refund';
 import { postaviDatumValute } from '../lib/valuta';
 import {
-  sljedeciPrilogBroj, savePrilogStavkeInTransaction, finalizePrilogAndPrint,
-  najveciPrilogBroj, pocetniPrilogBroj, postaviPocetniPrilogBroj,
+  savePrilogStavkeInTransaction, finalizePrilogAndPrint,
   PRILOG_SIFRA, prilogNaziv, type PrilogStavkaUnos,
 } from '../lib/prilog';
 import { saveCart, listSavedCarts, deleteSavedCart } from '../lib/savedCarts';
@@ -795,18 +797,17 @@ export function registerIpcHandlers(): void {
     }, data);
   });
 
-  handle('prilog:nextBroj', () => sljedeciPrilogBroj(db));
-
-  handle('prilog:getNumeracija', () => ({
-    sljedeci: sljedeciPrilogBroj(db),
-    najveciIzdati: najveciPrilogBroj(db),
-    pocetni: pocetniPrilogBroj(db),
+  // Fiskalni niz: račun po prilogu mora znati broj isječka prije nego ga odštampa.
+  handle('fiscal:getNumeracija', () => ({
+    zadnjiUBazi: zadnjiFiskalniBroj(db),
+    zadnjiUpisani: zadnjiUpisaniFiskalniBroj(db),
+    predvidjeni: predvidjeniFiskalniBroj(db),
   }));
 
-  handle('prilog:setPocetniBroj', (broj: number) => ({
-    success: true,
-    sljedeci: postaviPocetniPrilogBroj(db, broj) && sljedeciPrilogBroj(db),
-  }));
+  handle('fiscal:setZadnjiBroj', (broj: number) => {
+    postaviZadnjiFiskalniBroj(db, broj);
+    return { success: true, predvidjeni: predvidjeniFiskalniBroj(db) };
+  });
 
   handle('prilog:getStavke', (orderId: number) => {
     return db.prepare(`

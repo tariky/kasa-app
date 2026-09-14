@@ -52,6 +52,8 @@ interface PrilogRacunDialogProps {
     id: number; prilogBroj: number; brojFiskalnogRacuna: string | null;
     /** Broj stavki unesenih odmah na kasi (0 = dodjeljuju se kasnije). */
     brojStavki: number;
+    /** Stvarni BF se razišao sa brojem odštampanim u nazivu stavke. */
+    upozorenje?: string | null;
   }) => void;
 }
 
@@ -85,6 +87,10 @@ export default function PrilogRacunDialog({ open, onOpenChange, korisnikId, onSu
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Broj koji će isječak po svoj prilici nositi — kuca se u naziv zbirne stavke. */
+  const [predvidjeniBroj, setPredvidjeniBroj] = useState<number | null>(null);
+  const [zadnjiBrojUnos, setZadnjiBrojUnos] = useState('');
+  const [zadnjiBrojGreska, setZadnjiBrojGreska] = useState<string | null>(null);
 
   const searchRef = useRef<HTMLInputElement>(null);
   const iznosRef = useRef<HTMLInputElement>(null);
@@ -100,6 +106,10 @@ export default function PrilogRacunDialog({ open, onOpenChange, korisnikId, onSu
     setKupacNaziv(''); setKupacIdBroj(''); setKupacAdresa(''); setKupacGrad(''); setKupacPostanskiBroj('');
     setKupacSearch(''); setManualKupac(false);
     setError(null); setBusy(false);
+    setPredvidjeniBroj(null); setZadnjiBrojUnos(''); setZadnjiBrojGreska(null);
+    window.api.getFiskalnaNumeracija()
+      .then(n => setPredvidjeniBroj(n.predvidjeni))
+      .catch(() => setPredvidjeniBroj(null));
     window.api.getKupci().then(setAllKupci).catch(() => setAllKupci([]));
   }, [open]);
 
@@ -123,8 +133,23 @@ export default function PrilogRacunDialog({ open, onOpenChange, korisnikId, onSu
     [stavke],
   );
   const iznos = mode === 'stavke' ? sumaStavki : (rucniIznos ?? 0);
-  // Broj se ne kuca na isječak — faktura ga dobija iz BF broja nakon štampe.
-  const nazivStavke = useMemo(() => prilogNaziv(null, opis, veza), [opis, veza]);
+  // Isti tekst koji ide uređaju: nosi predviđeni broj isječka.
+  const nazivStavke = useMemo(
+    () => prilogNaziv(predvidjeniBroj, opis, veza),
+    [predvidjeniBroj, opis, veza],
+  );
+
+  /** Bez poznatog fiskalnog broja naziv stavke ne može nositi broj — štampa čeka. */
+  const spremiZadnjiBroj = useCallback(async () => {
+    setZadnjiBrojGreska(null);
+    const broj = parseInt(zadnjiBrojUnos, 10);
+    try {
+      const res = await window.api.setZadnjiFiskalniBroj(broj);
+      setPredvidjeniBroj(res.predvidjeni);
+    } catch (err: any) {
+      setZadnjiBrojGreska(porukaGreske(err));
+    }
+  }, [zadnjiBrojUnos]);
 
   const addProduct = useCallback((p: Product) => {
     setStavke(prev => {
@@ -208,7 +233,7 @@ export default function PrilogRacunDialog({ open, onOpenChange, korisnikId, onSu
   };
 
   const virmanBezKupca = nacinPlacanja === 'Virman' && !kupacIdBroj.trim();
-  const spreman = iznos > 0 && !virmanBezKupca && !busy;
+  const spreman = iznos > 0 && !virmanBezKupca && !busy && predvidjeniBroj != null;
 
   const switchMode = useCallback((next: Mode) => {
     setMode(next);
@@ -257,6 +282,7 @@ export default function PrilogRacunDialog({ open, onOpenChange, korisnikId, onSu
           prilogBroj: res.prilogBroj!,
           brojFiskalnogRacuna: res.brojFiskalnogRacuna ?? null,
           brojStavki: mode === 'stavke' ? stavke.length : 0,
+          upozorenje: res.upozorenje ?? null,
         });
         onOpenChange(false);
       } else {
@@ -294,7 +320,7 @@ export default function PrilogRacunDialog({ open, onOpenChange, korisnikId, onSu
             </DialogTitle>
             <DialogDescription className="mt-0.5 text-sm text-slate-500">
               Na fiskalni račun ide jedna zbirna stavka — „{nazivStavke}".
-              Faktura dobija broj fiskalnog računa.
+              Faktura nosi broj tog istog fiskalnog računa.
             </DialogDescription>
           </DialogHeader>
 
@@ -541,6 +567,42 @@ export default function PrilogRacunDialog({ open, onOpenChange, korisnikId, onSu
                 <p className="mt-1 truncate text-[11px] text-slate-400">
                   {`Na računu: „${nazivStavke}"`}
                 </p>
+
+                {/* Broj isječka se kuca u naziv stavke — bez njega nema štampe. */}
+                {predvidjeniBroj === null && (
+                  <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5">
+                    <p className="text-[11.5px] font-medium text-amber-700">
+                      Nepoznat fiskalni niz
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-amber-600">
+                      U bazi nema fiskalizovanih računa. Upišite posljednji broj sa uređaja da naziv stavke može nositi broj.
+                    </p>
+                    <div className="mt-2 flex items-center gap-2">
+                      <Input
+                        value={zadnjiBrojUnos}
+                        onChange={e => setZadnjiBrojUnos(e.target.value.replace(/\D/g, ''))}
+                        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); spremiZadnjiBroj(); } }}
+                        inputMode="numeric"
+                        maxLength={9}
+                        placeholder="npr. 127"
+                        aria-label="Posljednji izdati fiskalni broj"
+                        className="h-8 w-28 rounded-lg border-amber-200 bg-white px-2 text-[13px] font-mono tabular-nums"
+                      />
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-8 text-[12px]"
+                        disabled={!zadnjiBrojUnos}
+                        onClick={spremiZadnjiBroj}
+                      >
+                        Sačuvaj
+                      </Button>
+                    </div>
+                    {zadnjiBrojGreska && (
+                      <p className="mt-1.5 text-[11px] text-red-500">{zadnjiBrojGreska}</p>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Način plaćanja */}

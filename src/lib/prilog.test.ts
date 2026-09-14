@@ -3,9 +3,9 @@ import { Database } from 'bun:sqlite';
 import { schema } from '@/database/schema';
 import type { SqlDb } from './sqldb';
 import {
-  PRILOG_SIFRA, prilogNaziv, sljedeciPrilogBroj,
+  PRILOG_SIFRA, prilogNaziv,
   sumaPriloga, prilogKompletan, buildPrilogFiskalnaStavka,
-  savePrilogStavkeInTransaction, postaviPocetniPrilogBroj, pocetniPrilogBroj,
+  savePrilogStavkeInTransaction,
 } from './prilog';
 import { getProductStock } from './skladiste';
 
@@ -52,37 +52,6 @@ test('prilogNaziv sa brojem rekonstruiše tekst starih računa', () => {
 test('buildPrilogFiskalnaStavka preuzima zadani naziv', () => {
   expect(buildPrilogFiskalnaStavka(null, 100, 'CNC obrada po fakturi').naziv)
     .toBe('CNC obrada po fakturi');
-});
-
-test('sljedeciPrilogBroj počinje od 1 na praznoj bazi', () => {
-  expect(sljedeciPrilogBroj(db)).toBe(1);
-});
-
-test('sljedeciPrilogBroj ignorira obične račune i nastavlja od maksimuma', () => {
-  dodajOrder({ ukupno: 10 });                    // običan račun, prilogBroj NULL
-  dodajOrder({ ukupno: 20, prilogBroj: 4 });
-  expect(sljedeciPrilogBroj(db)).toBe(5);
-});
-
-test('postaviPocetniPrilogBroj pomjera numeraciju na nastavak stare serije', () => {
-  // Klijent je prije programa izdao 20 priloga — sljedeći mora biti 21.
-  expect(postaviPocetniPrilogBroj(db, 21)).toBe(21);
-  expect(sljedeciPrilogBroj(db)).toBe(21);
-  expect(pocetniPrilogBroj(db)).toBe(21);
-});
-
-test('numeracija se nakon podešavanja vodi sama', () => {
-  postaviPocetniPrilogBroj(db, 21);
-  dodajOrder({ ukupno: 10, prilogBroj: 21 });
-  expect(sljedeciPrilogBroj(db)).toBe(22);
-});
-
-test('postaviPocetniPrilogBroj odbija broj koji je već izdat', () => {
-  dodajOrder({ ukupno: 10, prilogBroj: 7 });
-  expect(() => postaviPocetniPrilogBroj(db, 7)).toThrow(/već iskorišten/);
-  expect(() => postaviPocetniPrilogBroj(db, 3)).toThrow(/već iskorišten/);
-  expect(() => postaviPocetniPrilogBroj(db, 0)).toThrow(/veći od 0/);
-  expect(sljedeciPrilogBroj(db)).toBe(8);
 });
 
 test('sumaPriloga zaokružuje po stavci pa zbir', () => {

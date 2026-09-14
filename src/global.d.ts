@@ -59,11 +59,12 @@ interface Window {
       prilogOpis?: string; prilogVeza?: string;
     }) => Promise<{
       success: boolean; id?: number; prilogBroj?: number; brojFiskalnogRacuna?: string | null;
-      error?: string; odgovori?: Record<string, string>;
+      upozorenje?: string; error?: string; odgovori?: Record<string, string>;
     }>;
-    getNextPrilogBroj: () => Promise<number>;
-    getPrilogNumeracija: () => Promise<{ sljedeci: number; najveciIzdati: number; pocetni: number }>;
-    setPrilogPocetniBroj: (broj: number) => Promise<{ success: boolean; sljedeci: number }>;
+    getFiskalnaNumeracija: () => Promise<{
+      zadnjiUBazi: number | null; zadnjiUpisani: number | null; predvidjeni: number | null;
+    }>;
+    setZadnjiFiskalniBroj: (broj: number) => Promise<{ success: boolean; predvidjeni: number | null }>;
     getPrilogStavke: (orderId: number) => Promise<any[]>;
     savePrilogStavke: (orderId: number, stavke: Array<{ productId: number; kolicina: number; cijena: number; pdvStopa: string }>) => Promise<{ success: boolean }>;
     listPending: () => Promise<Array<{ id: number; korisnikId: number; createdAt: string; snapshot: any }>>;

@@ -1333,12 +1333,16 @@ export default function KasaScreen({ user }: KasaScreenProps) {
         korisnikId={user.id}
         onSuccess={(res) => {
           setLastOrderId(null);
-          setMessage({
-            type: 'success',
-            text: res.brojStavki > 0
-              ? `Fiskalizovan račun po prilogu br. ${res.prilogBroj} (BF ${res.brojFiskalnogRacuna ?? '?'}) sa ${formatArtikliCount(res.brojStavki)}. Prilog se otvara za štampu.`
-              : `Fiskalizovan račun po prilogu br. ${res.prilogBroj} (BF ${res.brojFiskalnogRacuna ?? '?'}). Stavke dodijelite u sekciji Računi.`,
-          });
+          // Razlika predviđenog i stvarnog BF-a znači da isječak nosi pogrešan
+          // broj u nazivu stavke — to operater mora vidjeti, ne uspješnu poruku.
+          setMessage(res.upozorenje
+            ? { type: 'error', text: res.upozorenje }
+            : {
+              type: 'success',
+              text: res.brojStavki > 0
+                ? `Fiskalizovana faktura br. ${res.prilogBroj} (BF ${res.brojFiskalnogRacuna ?? '?'}) sa ${formatArtikliCount(res.brojStavki)}. Faktura se otvara za štampu.`
+                : `Fiskalizovana faktura br. ${res.prilogBroj} (BF ${res.brojFiskalnogRacuna ?? '?'}). Stavke dodijelite u sekciji Računi.`,
+            });
           loadDailyTotal();
           // Stavke unesene na kasi → prilog je kompletan i ide odmah.
           if (res.brojStavki > 0) handlePrintPrilog(res.id);

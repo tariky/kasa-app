@@ -70,10 +70,12 @@ export default function PostavkeScreen() {
   const [pologPrompt, setPologPrompt] = useState(true);
   const [generatorEnabled, setGeneratorEnabled] = useState(false);
   const [racunNapomena, setRacunNapomena] = useState('');
-  // ── Numeracija priloga ──
-  const [prilogNumeracija, setPrilogNumeracija] = useState<{ sljedeci: number; najveciIzdati: number } | null>(null);
-  const [prilogUnos, setPrilogUnos] = useState('');
-  const [prilogStatus, setPrilogStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  // ── Fiskalni niz (posljednji BF broj) ──
+  const [fiskalnaNumeracija, setFiskalnaNumeracija] = useState<
+    { zadnjiUBazi: number | null; zadnjiUpisani: number | null; predvidjeni: number | null } | null
+  >(null);
+  const [fiskalniUnos, setFiskalniUnos] = useState('');
+  const [fiskalniStatus, setFiskalniStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // ── Debug state ──
   const [debugOpen, setDebugOpen] = useState(false);
@@ -121,27 +123,32 @@ export default function PostavkeScreen() {
     window.api.getSetting('kasa.pologPrompt').then((v) => setPologPrompt(v !== 'false'));
     window.api.getSetting('ui.showGenerator').then((v) => setGeneratorEnabled(v === 'true'));
     window.api.getSetting('racun.napomena').then((v) => setRacunNapomena(v || ''));
-    loadPrilogNumeracija();
+    loadFiskalnaNumeracija();
   }, []);
 
-  const loadPrilogNumeracija = async () => {
+  const loadFiskalnaNumeracija = async () => {
     try {
-      const n = await window.api.getPrilogNumeracija();
-      setPrilogNumeracija(n);
-      setPrilogUnos(String(n.sljedeci));
+      const n = await window.api.getFiskalnaNumeracija();
+      setFiskalnaNumeracija(n);
+      setFiskalniUnos(String(n.predvidjeni != null ? n.predvidjeni - 1 : ''));
     } catch { /* postavka nije kritična za rad ekrana */ }
   };
 
-  const handleSavePrilogBroj = async () => {
-    setPrilogStatus(null);
-    const broj = parseInt(prilogUnos, 10);
+  const handleSaveFiskalniBroj = async () => {
+    setFiskalniStatus(null);
+    const broj = parseInt(fiskalniUnos, 10);
     try {
-      const res = await window.api.setPrilogPocetniBroj(broj);
-      await loadPrilogNumeracija();
-      setPrilogStatus({ type: 'success', message: `Rezervni broj je sada ${res.sljedeci}.` });
+      const res = await window.api.setZadnjiFiskalniBroj(broj);
+      await loadFiskalnaNumeracija();
+      setFiskalniStatus({
+        type: 'success',
+        message: res.predvidjeni != null
+          ? `Sljedeći isječak se očekuje pod br. ${res.predvidjeni}.`
+          : 'Broj je sačuvan.',
+      });
     } catch (err: any) {
       const raw = err?.message || 'Nepoznata greška';
-      setPrilogStatus({ type: 'error', message: raw.replace(/^Error invoking remote method '[^']*':\s*(Error:\s*)?/, '') });
+      setFiskalniStatus({ type: 'error', message: raw.replace(/^Error invoking remote method '[^']*':\s*(Error:\s*)?/, '') });
     }
   };
 
@@ -1175,7 +1182,7 @@ export default function PostavkeScreen() {
                   </div>
                 </div>
 
-                {/* Prilog numbering card */}
+                {/* Fiscal sequence card */}
                 <div className="bg-white rounded-2xl border border-slate-100 shadow-sm shadow-slate-200/50 overflow-hidden">
                   <div className="px-6 py-4 border-b border-slate-100">
                     <div className="flex items-center gap-3">
@@ -1183,9 +1190,9 @@ export default function PostavkeScreen() {
                         <Paperclip size={20} className="text-sky-500" />
                       </div>
                       <div>
-                        <h3 className="text-[15px] font-semibold text-slate-800">Rezervna numeracija fakture</h3>
+                        <h3 className="text-[15px] font-semibold text-slate-800">Posljednji fiskalni broj</h3>
                         <p className="text-[12px] text-slate-400 mt-0.5">
-                          Faktura nosi broj fiskalnog računa (BF). Ovaj broj se koristi samo kad uređaj vrati BF koji nije broj
+                          Račun po prilogu kuca broj isječka u naziv stavke, pa ga mora znati unaprijed — upišite posljednji broj sa uređaja ako u bazi još nema fiskalizovanih računa
                         </p>
                       </div>
                     </div>
@@ -1193,11 +1200,11 @@ export default function PostavkeScreen() {
                   <div className="px-6 py-5">
                     <div className="flex items-end gap-3">
                       <div>
-                        <Label className="text-[12px] text-slate-500">Sljedeći rezervni broj</Label>
+                        <Label className="text-[12px] text-slate-500">Posljednji izdati broj</Label>
                         <Input
-                          value={prilogUnos}
-                          onChange={e => setPrilogUnos(e.target.value.replace(/\D/g, ''))}
-                          onKeyDown={e => { if (e.key === 'Enter') handleSavePrilogBroj(); }}
+                          value={fiskalniUnos}
+                          onChange={e => setFiskalniUnos(e.target.value.replace(/\D/g, ''))}
+                          onKeyDown={e => { if (e.key === 'Enter') handleSaveFiskalniBroj(); }}
                           inputMode="numeric"
                           maxLength={9}
                           className="mt-1 h-9 w-32 bg-slate-50 border-slate-200 text-[13px] font-mono tabular-nums"
@@ -1206,28 +1213,32 @@ export default function PostavkeScreen() {
                       <Button
                         size="sm"
                         className="h-9 gap-1.5 text-[12px]"
-                        onClick={handleSavePrilogBroj}
-                        disabled={!prilogUnos || (prilogNumeracija != null && parseInt(prilogUnos, 10) === prilogNumeracija.sljedeci)}
+                        onClick={handleSaveFiskalniBroj}
+                        disabled={!fiskalniUnos || (fiskalnaNumeracija != null && parseInt(fiskalniUnos, 10) + 1 === fiskalnaNumeracija.predvidjeni)}
                       >
                         <Save size={13} />
                         Sačuvaj broj
                       </Button>
-                      {prilogStatus && (
+                      {fiskalniStatus && (
                         <div className={cn(
                           'flex items-center gap-1.5 pb-2 text-[12px] font-medium',
-                          prilogStatus.type === 'success' ? 'text-emerald-600' : 'text-red-500'
+                          fiskalniStatus.type === 'success' ? 'text-emerald-600' : 'text-red-500'
                         )}>
-                          {prilogStatus.type === 'success' ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}
-                          {prilogStatus.message}
+                          {fiskalniStatus.type === 'success' ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}
+                          {fiskalniStatus.message}
                         </div>
                       )}
                     </div>
                     <p className="mt-3 text-[12px] text-slate-400">
-                      {prilogNumeracija == null
+                      {fiskalnaNumeracija == null
                         ? 'Učitavanje…'
-                        : prilogNumeracija.najveciIzdati === 0
-                          ? 'Još nijedna faktura nije izdata iz programa.'
-                          : `Najveći do sada iskorišten broj fakture: ${prilogNumeracija.najveciIzdati}. Novi broj mora biti veći od njega.`}
+                        : fiskalnaNumeracija.predvidjeni == null
+                          ? 'U bazi nema fiskalizovanih računa i broj nije upisan — račun po prilogu se ne može odštampati dok ga ne unesete.'
+                          : `Sljedeći isječak se očekuje pod br. ${fiskalnaNumeracija.predvidjeni}.`
+                            + (fiskalnaNumeracija.zadnjiUBazi != null
+                              ? ` Posljednji fiskalizovan račun u bazi nosi br. ${fiskalnaNumeracija.zadnjiUBazi}.`
+                              : ' U bazi još nema fiskalizovanih računa.')
+                            + ' Ručni upis važi dok kroz program ne prođe sljedeći račun.'}
                     </p>
                   </div>
                 </div>
