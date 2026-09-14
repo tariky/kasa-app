@@ -59,6 +59,9 @@ const s = StyleSheet.create({
 
   dividerThick: { borderBottom: '2pt solid #000', marginBottom: 20 },
 
+  /* ── Žiro računi: sporedan podatak uz firmu, ne zaslužuje vlastiti blok ── */
+  bankLine: { fontSize: 7.5, color: '#555', marginTop: 1 },
+
   /* ── Two-column info ── */
   infoRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 24 },
   infoBlock: { width: '48%' },
@@ -186,6 +189,9 @@ export function PrilogPdf({ order, firma, stavke }: PrilogPdfProps) {
             <View>
               <Text style={s.firmaNaziv}>{firma.naziv}</Text>
               <Text style={s.firmaLine}>{firma.adresa}, {firma.grad}</Text>
+              {firma.bankAccounts.map((b, i) => (
+                <Text key={i} style={s.bankLine}>{b.bankName}: {b.accountNumber}</Text>
+              ))}
             </View>
           </View>
           <View style={s.docLabel}>
@@ -222,6 +228,7 @@ export function PrilogPdf({ order, firma, stavke }: PrilogPdfProps) {
                   </Text>
                 )}
                 {order.kupacIdBroj && <Text style={s.infoBlockLine}>ID: {order.kupacIdBroj}</Text>}
+                {order.kupacPdvBroj && <Text style={s.infoBlockLine}>PDV: {order.kupacPdvBroj}</Text>}
               </>
             ) : (
               <Text style={s.infoBlockLine}>—</Text>

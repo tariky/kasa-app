@@ -80,6 +80,8 @@ export interface Order {
   korisnikIme?: string;
   kupacNaziv?: string;
   kupacIdBroj?: string;
+  /** Dovučen iz šifrarnika kupaca po ID broju — ne snima se uz račun. */
+  kupacPdvBroj?: string | null;
   kupacAdresa?: string;
   kupacGrad?: string;
   kupacPostanskiBroj?: string;

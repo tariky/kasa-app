@@ -592,9 +592,10 @@ export function registerIpcHandlers(): void {
   handle('order:getAll', () => {
     return db
       .prepare(`
-        SELECT o.*, u.ime AS korisnikIme
+        SELECT o.*, u.ime AS korisnikIme, k.pdvBroj AS kupacPdvBroj
         FROM orders o
         LEFT JOIN users u ON u.id = o.korisnikId
+        LEFT JOIN kupci k ON k.idBroj = o.kupacIdBroj
         ORDER BY o.createdAt DESC
       `)
       .all();
@@ -603,9 +604,10 @@ export function registerIpcHandlers(): void {
   handle('order:get', (id: number) => {
     const order = db
       .prepare(`
-        SELECT o.*, u.ime AS korisnikIme
+        SELECT o.*, u.ime AS korisnikIme, k.pdvBroj AS kupacPdvBroj
         FROM orders o
         LEFT JOIN users u ON u.id = o.korisnikId
+        LEFT JOIN kupci k ON k.idBroj = o.kupacIdBroj
         WHERE o.id = ?
       `)
       .get(id) as any;
