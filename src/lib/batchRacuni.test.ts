@@ -116,6 +116,17 @@ test('preskače usluge i artikle bez zalihe', () => {
   expect(prodaniIds.has(3)).toBe(true);
 });
 
+test('generator preskače materijal i usluge', () => {
+  const lista = [
+    proizvod({ id: 1, tip: 'artikal', stanje: 50 }),
+    proizvod({ id: 2, tip: 'materijal', stanje: 50 }),
+    proizvod({ id: 3, tip: 'usluga', stanje: 50 }),
+  ];
+  const res = generirajRacune(lista, { target: 200, rng: seededRng(1) });
+  const ids = new Set(res.racuni.flatMap(r => r.stavke.map(s => s.productId)));
+  expect(ids).toEqual(new Set([1]));
+});
+
 test('prazan katalog daje prazan rezultat', () => {
   const res = generirajRacune([], { target: 1000 });
   expect(res.racuni).toEqual([]);

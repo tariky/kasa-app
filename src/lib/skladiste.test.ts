@@ -67,6 +67,16 @@ test('ista cijena ne pravi nikakvu izmjenu', () => {
   expect(res.bezZaliha).toEqual([]);
 });
 
+test('materijal nikad ne ide u nivelaciju ni u promjenu cijene', () => {
+  const id = dodajArtikal('IV18', 0, 'materijal');
+  dodajZalihu(id, 5);
+  const { nivelacija, bezZaliha } = collectPriceChanges(db, [
+    { productId: id, cijena: 12, pdvStopa: 'E' },
+  ]);
+  expect(nivelacija).toEqual([]);
+  expect(bezZaliha).toEqual([]);
+});
+
 test('isti artikal na više stavki se broji jednom', () => {
   const id = dodajArtikal('004', 10);
   dodajZalihu(id, 2);

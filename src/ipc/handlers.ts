@@ -12,6 +12,7 @@ import {
   collectPriceChanges, applyPricesWithoutStock, revertNivelacijaPrices,
   isDobavljacUsed, type PriceChange,
 } from '../lib/skladiste';
+import { jeArtikalUProizvodnji } from '../lib/proizvodnja';
 import { refundOrderInTransaction, refundAndPrint } from '../lib/refund';
 import { postaviDatumValute } from '../lib/valuta';
 import {
@@ -161,8 +162,11 @@ export function registerIpcHandlers(): void {
 
   // ─── Products ────────────────────────────────────────────
 
+  const PRODUCT_TIPOVI = ['artikal', 'usluga', 'materijal'] as const;
+  const normalizujTip = (t?: string): string => (PRODUCT_TIPOVI as readonly string[]).includes(t ?? '') ? t! : 'artikal';
+
   handle('product:getAll', (tip?: string) => {
-    const where = tip ? `WHERE p.tip = '${tip === 'usluga' ? 'usluga' : 'artikal'}'` : '';
+    const where = tip ? 'WHERE p.tip = ?' : '';
     return db
       .prepare(`
         SELECT p.*,
@@ -175,7 +179,7 @@ export function registerIpcHandlers(): void {
         ${where}
         ORDER BY p.naziv
       `)
-      .all();
+      .all(...(tip ? [normalizujTip(tip)] : []));
   });
 
   handle('product:get', (id: number) => {
@@ -185,6 +189,7 @@ export function registerIpcHandlers(): void {
   handle('product:create', (data: {
     sifra: string; naziv: string; jm?: string; cijena: number;
     pdvStopa: string; plu?: number; barkod?: string; tip?: string;
+    plocaSirina?: number | null; plocaVisina?: number | null;
   }) => {
     if (!data.sifra?.trim()) throw new Error('Šifra artikla je obavezna');
     if (!data.naziv?.trim()) throw new Error('Naziv artikla je obavezan');
@@ -195,19 +200,21 @@ export function registerIpcHandlers(): void {
       const existingBarkod = db.prepare('SELECT id FROM products WHERE barkod = ?').get(data.barkod.trim());
       if (existingBarkod) throw new Error(`Artikal sa barkodom "${data.barkod}" već postoji`);
     }
-    const tip = data.tip === 'usluga' ? 'usluga' : 'artikal';
+    const tip = normalizujTip(data.tip);
     const result = db
       .prepare(`
-        INSERT INTO products (sifra, naziv, jm, cijena, pdvStopa, plu, barkod, tip)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO products (sifra, naziv, jm, cijena, pdvStopa, plu, barkod, tip, plocaSirina, plocaVisina)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
-      .run(data.sifra, data.naziv, data.jm ?? (tip === 'usluga' ? 'usl' : 'kom'), data.cijena, data.pdvStopa, data.plu ?? null, data.barkod ?? null, tip);
+      .run(data.sifra, data.naziv, data.jm ?? (tip === 'usluga' ? 'usl' : 'kom'), data.cijena, data.pdvStopa,
+        data.plu ?? null, data.barkod ?? null, tip, data.plocaSirina ?? null, data.plocaVisina ?? null);
     return { id: result.lastInsertRowid };
   });
 
   handle('product:update', (id: number, data: {
     sifra?: string; naziv?: string; jm?: string; cijena?: number;
     pdvStopa?: string; plu?: number; barkod?: string | null; tip?: string;
+    plocaSirina?: number | null; plocaVisina?: number | null;
   }) => {
     const fields: string[] = [];
     const values: any[] = [];
@@ -229,7 +236,9 @@ export function registerIpcHandlers(): void {
       }
       fields.push('barkod = ?'); values.push(data.barkod);
     }
-    if (data.tip !== undefined) { fields.push('tip = ?'); values.push(data.tip === 'usluga' ? 'usluga' : 'artikal'); }
+    if (data.tip !== undefined) { fields.push('tip = ?'); values.push(normalizujTip(data.tip)); }
+    if ('plocaSirina' in data) { fields.push('plocaSirina = ?'); values.push(data.plocaSirina ?? null); }
+    if ('plocaVisina' in data) { fields.push('plocaVisina = ?'); values.push(data.plocaVisina ?? null); }
 
     if (fields.length === 0) return { changes: 0 };
 
@@ -247,6 +256,7 @@ export function registerIpcHandlers(): void {
     if (inOrders) throw new Error('Artikal se koristi u računima i ne može biti obrisan');
     const inPrimke = db.prepare('SELECT id FROM primka_stavke WHERE productId = ? LIMIT 1').get(id);
     if (inPrimke) throw new Error('Artikal se koristi u primkama i ne može biti obrisan');
+    if (jeArtikalUProizvodnji(db, id)) throw new Error('Artikal se koristi u proizvodnji (normativ ili radni nalog) i ne može biti obrisan');
     const result = db.prepare('DELETE FROM products WHERE id = ?').run(id);
     return { changes: result.changes };
   });
@@ -284,10 +294,28 @@ export function registerIpcHandlers(): void {
             0
           ) AS stanje
         FROM products p
-        WHERE p.naziv LIKE ? OR p.sifra LIKE ? OR p.barkod LIKE ?
+        WHERE (p.naziv LIKE ? OR p.sifra LIKE ? OR p.barkod LIKE ?) AND p.tip != 'materijal'
         ORDER BY p.naziv
       `)
       .all(like, like, like);
+  });
+
+  handle('materijal:search', (query: string) => {
+    const like = `%${query}%`;
+    return db
+      .prepare(`
+        SELECT p.*,
+          COALESCE(
+            (SELECT SUM(CASE WHEN sm.tip = 'ulaz' THEN sm.kolicina ELSE -sm.kolicina END)
+             FROM stock_movements sm WHERE sm.productId = p.id),
+            0
+          ) AS stanje
+        FROM products p
+        WHERE p.tip = 'materijal' AND (p.naziv LIKE ? OR p.sifra LIKE ?)
+        ORDER BY p.naziv
+        LIMIT 30
+      `)
+      .all(like, like);
   });
 
   // ─── Dobavljači ─────────────────────────────────────────

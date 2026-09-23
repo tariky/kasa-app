@@ -43,9 +43,10 @@ export function collectPriceChanges(
     if (seen.has(stavka.productId)) continue;
     seen.add(stavka.productId);
 
-    const product = db.prepare('SELECT cijena FROM products WHERE id = ?')
-      .get(stavka.productId) as { cijena: number } | undefined;
-    if (!product || Math.abs(product.cijena - stavka.cijena) <= EPS) continue;
+    const product = db.prepare('SELECT cijena, tip FROM products WHERE id = ?')
+      .get(stavka.productId) as { cijena: number; tip: string } | undefined;
+    if (!product || product.tip === 'materijal') continue;
+    if (Math.abs(product.cijena - stavka.cijena) <= EPS) continue;
 
     const existingStock = getProductStock(db, stavka.productId);
     const change: PriceChange = {

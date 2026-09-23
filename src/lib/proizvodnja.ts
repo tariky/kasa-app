@@ -206,6 +206,17 @@ export function deleteNalog(db: SqlDb, id: number): void {
   db.prepare('DELETE FROM radni_nalozi WHERE id = ?').run(id);
 }
 
+/** Da li artikal figuriše u proizvodnji (normativ, stavka naloga, proizvod naloga) — tada se ne briše. */
+export function jeArtikalUProizvodnji(db: SqlDb, productId: number): boolean {
+  const row = db.prepare(`
+    SELECT 1 AS x FROM normativi WHERE materijalId = ? OR productId = ?
+    UNION ALL SELECT 1 FROM radni_nalog_stavke WHERE materijalId = ?
+    UNION ALL SELECT 1 FROM radni_nalozi WHERE productId = ?
+    LIMIT 1
+  `).get(productId, productId, productId, productId);
+  return !!row;
+}
+
 // ── čitanje ──────────────────────────────────────────────
 
 const NALOG_SELECT = `

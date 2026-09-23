@@ -68,7 +68,7 @@ export function generirajRacune(products: Product[], opts: GenerateOptions): Gen
 
   // Prihvatljivi artikli: roba sa pozitivnom zalihom i cijenom.
   const eligible = products.filter(
-    p => p.tip !== 'usluga' && (p.stanje ?? 0) >= 1 && p.cijena > 0
+    p => p.tip === 'artikal' && (p.stanje ?? 0) >= 1 && p.cijena > 0
   );
 
   // Ledger rezervacija: preostala (cjelobrojna) zaliha po artiklu.

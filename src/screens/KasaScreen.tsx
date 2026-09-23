@@ -130,7 +130,8 @@ export default function KasaScreen({ user }: KasaScreenProps) {
   // Svi artikli — prikazuju se kad je pretraga prazna.
   const loadAllProducts = useCallback(async () => {
     try {
-      setAllProducts(await window.api.getProducts());
+      const all: Product[] = await window.api.getProducts();
+      setAllProducts(all.filter(p => p.tip !== 'materijal'));
     } catch {
       setAllProducts([]);
     }

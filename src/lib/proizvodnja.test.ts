@@ -6,7 +6,7 @@ import {
   nextBrojNaloga, formatBrojNaloga, createNalog, createNalogIzPonude, updateNalog,
   replaceStavke, getNalog, listNalozi, deleteNalog, getNormativ, saveNormativ, nalogZaPonudu,
   getProsjecnaNabavna, kalkulacija, kalkulacijaNaloga, setStatusNaloga, zavrsiNalog, vratiUIzradu, fakturisiNalog,
-  izdajRacunZaNalog, osigurajProdajnuUslugu, PRODAJNA_USLUGA,
+  izdajRacunZaNalog, osigurajProdajnuUslugu, PRODAJNA_USLUGA, jeArtikalUProizvodnji,
 } from './proizvodnja';
 import { getProductStock } from './skladiste';
 
@@ -451,4 +451,20 @@ test('nalog iz ponude: račun ide kroz konverziju ponude, nalog pokupi racunId',
   const n = getNalog(db, r.id);
   expect(n.status).toBe('fakturisan');
   expect(n.racunId).toBe(p.racunId);
+});
+
+// ── jeArtikalUProizvodnji ─────────────────────────────────
+
+test('artikal u normativu ili na nalogu se ne smije obrisati', () => {
+  const art = dodajArtikal(db, 'LINA');
+  const iv = dodajMaterijal(db, 'IV');
+  const kant = dodajMaterijal(db, 'KANT', 'm');
+  const slobodan = dodajMaterijal(db, 'X');
+  saveNormativ(db, art, [{ materijalId: iv, kolicina: 1 }]);
+  const r = createNalog(db, { vrsta: 'zaliha', korisnikId: 1, productId: art, kolicina: 1 });
+  replaceStavke(db, r.id, [{ materijalId: kant, kolicina: 2 }]);
+  expect(jeArtikalUProizvodnji(db, iv)).toBe(true);     // normativ
+  expect(jeArtikalUProizvodnji(db, kant)).toBe(true);   // stavka naloga
+  expect(jeArtikalUProizvodnji(db, art)).toBe(true);    // proizvod naloga
+  expect(jeArtikalUProizvodnji(db, slobodan)).toBe(false);
 });
