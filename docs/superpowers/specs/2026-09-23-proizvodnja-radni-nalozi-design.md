@@ -184,6 +184,9 @@ Indeksi: `radni_nalog_stavke(radniNalogId)`, `radni_nalozi(status)`,
   (nema prodajnu cijenu; `collectPriceChanges` ga preskače).
 - **Kasa**: materijal se ne prikazuje u listi i ne može se dodati u korpu
   (`product:search` i lista filtriraju `tip != 'materijal'`).
+- **`product:*` handleri** trenutno svaki `tip` koji nije `usluga` svode na
+  `artikal` (getAll filter, create, update). Prošire se na tri vrijednosti;
+  `materijal` se prihvata samo kad je modul uključen.
 - **Ponude**: na ponudi u statusu `prihvacena` dugme **"Radni nalog"**; ako
   nalog već postoji, dugme vodi na njega (prebaci na ekran Proizvodnja s
   otvorenim nalogom).
@@ -231,13 +234,25 @@ kartice:
 - **Normativi**: pretraga standardnog proizvoda → tabela materijal + količina
   po komadu + napomena, spremanje zamjenjuje cijeli set.
 
-**"Izdaj račun"** na završenoj narudžbi: otvara postojeći tok naplate s jednom
-stavkom (naziv = opis naloga, količina 1, cijena = dogovorena cijena, PDV `E`)
-kroz **račun po prilogu** ili običan račun, ovisno o tome što je već
-implementirano za jednu zbirnu stavku; nakon fiskalizacije `fakturisiNalog`.
-Ako je nalog iz ponude, koristi se postojeća konverzija ponude u račun i nalog
-pokupi `racunId` iz `ponude.racunId`. Detalj toka se precizira u planu prema
-postojećem `PrilogRacunDialog`/`konvertujPonudu`.
+**"Izdaj račun"** na završenoj narudžbi. Kasa nema ni slobodnu stavku ni
+izmjenu cijene po stavci, a prelaz između ekrana s prenesenom korpom ne
+postoji, pa se račun fiskalizuje **direktno iz detalja naloga**, isto kao što
+`konvertujPonudu` fiskalizuje iz ponude:
+
+- Ako nalog ima `ponudaId`: poziva se postojeći `ponuda:konvertuj` (ponuda već
+  nosi stvarne stavke i cijene), a nalog upiše `racunId = ponuda.racunId`.
+- Ako je samostalan: dijalog s načinom plaćanja (gotovina/kartica) i pregledom
+  jedne stavke: usluga **"Namještaj po mjeri"** (šifra `NAMJ`, tip `usluga`,
+  PDV `E`, jm `kom`), količina 1, cijena = `dogovorenaCijena`, kupac iz
+  naloga. Usluga se **kreira pri uključivanju modula** ako ne postoji (usluga
+  ne dira stanje, pa je to ispravna vrsta artikla za prodaju rada po mjeri).
+  Zajednički dio `konvertujPonudu` (fiskalizacija preko Tringa + upis `orders`
+  i `order_items` + write-ahead snapshot) se **izdvoji** u
+  `fiskalizujIUpisi(db, transaction, print, {korisnikId, kupac, stavke,
+  nacinPlacanja})` u `racun.ts`, koju zovu i ponuda i nalog. Nakon uspjeha
+  `fakturisiNalog(db, id, orderId)`.
+- Storno takvog računa (postojeći `order:refund`) ne dira nalog; nalog ostaje
+  `fakturisan` s vezom na stornirani račun i prikazuje badge "stornirano".
 
 ### 6. Print — `RadniNalogPdf.tsx` (A4)
 
