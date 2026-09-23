@@ -93,3 +93,6 @@ out/
 
 # SDD progress scratch
 .superpowers/
+
+# Claude Code worktrees
+.claude/worktrees/
