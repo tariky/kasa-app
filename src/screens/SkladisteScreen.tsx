@@ -4,7 +4,7 @@ import { cn, formatKM, formatDate, parseDecimal } from '@/lib/utils';
 import { uBruto, uNetto, cijenaZaSpremanje } from '@/lib/pdvUnos';
 import { useUnosBezPdv } from '@/hooks/useUnosBezPdv';
 import { useProizvodnja } from '@/hooks/useProizvodnja';
-import { jePloca, komUM2, m2UKom, m2PoPloci } from '@/lib/ploca';
+import { jePloca, komUM2, m2UKom, uBazuPrimke, izBazePrimke } from '@/lib/ploca';
 import { pdf } from '@react-pdf/renderer';
 import { UlazPdf } from '@/components/UlazPdf';
 import { Button } from '@/components/ui/button';
@@ -360,23 +360,6 @@ interface StavkaRow {
   cijena: string;
 }
 
-/** Ploča se u primci kuca u komadima; baza vodi m² i nabavnu po m². */
-function uBazuPrimke(p: Product | undefined, kolicinaUnos: number, nabavnaUnos: number): { kolicina: number; nabavnaCijena: number } {
-  if (!p || !jePloca(p)) return { kolicina: kolicinaUnos, nabavnaCijena: nabavnaUnos };
-  const poPloci = m2PoPloci(p.plocaSirina!, p.plocaVisina!);
-  return {
-    kolicina: komUM2(kolicinaUnos, p.plocaSirina!, p.plocaVisina!),
-    nabavnaCijena: Math.round((nabavnaUnos / poPloci) * 10000) / 10000,
-  };
-}
-function izBazePrimke(p: Product | undefined, kolicina: number, nabavnaCijena: number): { kolicina: string; nabavnaCijena: string } {
-  if (!p || !jePloca(p)) return { kolicina: String(kolicina), nabavnaCijena: String(nabavnaCijena) };
-  const poPloci = m2PoPloci(p.plocaSirina!, p.plocaVisina!);
-  return {
-    kolicina: String(m2UKom(kolicina, p.plocaSirina!, p.plocaVisina!)),
-    nabavnaCijena: String(Math.round(nabavnaCijena * poPloci * 100) / 100),
-  };
-}
 
 function NovaPrimkaDialog({
   open,

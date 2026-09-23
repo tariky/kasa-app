@@ -61,3 +61,29 @@ export function napomenaUElemente(napomena: string): Element[] {
   }
   return out;
 }
+
+type PlocaLike = { jm: string; plocaSirina?: number | null; plocaVisina?: number | null };
+
+/** Ploča se u primci kuca u komadima; baza vodi m² i nabavnu po m². */
+export function uBazuPrimke(
+  p: PlocaLike | undefined, kolicinaUnos: number, nabavnaUnos: number
+): { kolicina: number; nabavnaCijena: number } {
+  if (!p || !jePloca(p)) return { kolicina: kolicinaUnos, nabavnaCijena: nabavnaUnos };
+  const poPloci = m2PoPloci(p.plocaSirina!, p.plocaVisina!);
+  return {
+    kolicina: komUM2(kolicinaUnos, p.plocaSirina!, p.plocaVisina!),
+    nabavnaCijena: round4(nabavnaUnos / poPloci),
+  };
+}
+
+/** Inverz od uBazuPrimke — za prikaz postojeće primke u formi (komadi, nabavna po komadu). */
+export function izBazePrimke(
+  p: PlocaLike | undefined, kolicina: number, nabavnaCijena: number
+): { kolicina: string; nabavnaCijena: string } {
+  if (!p || !jePloca(p)) return { kolicina: String(kolicina), nabavnaCijena: String(nabavnaCijena) };
+  const poPloci = m2PoPloci(p.plocaSirina!, p.plocaVisina!);
+  return {
+    kolicina: String(m2UKom(kolicina, p.plocaSirina!, p.plocaVisina!)),
+    nabavnaCijena: String(round2(nabavnaCijena * poPloci)),
+  };
+}

@@ -1,6 +1,7 @@
 import { test, expect } from 'bun:test';
 import {
   jePloca, m2PoPloci, komUM2, m2UKom, elementiUM2, elementiUNapomenu, napomenaUElemente, JM_PLOCA,
+  uBazuPrimke, izBazePrimke,
 } from './ploca';
 
 test('standardna ploča 2800×2070 ima 5.796 m²', () => {
@@ -43,4 +44,26 @@ test('jePloca: samo m² sa obje dimenzije', () => {
   expect(jePloca({ jm: JM_PLOCA, plocaSirina: null, plocaVisina: null })).toBe(false);
   expect(jePloca({ jm: JM_PLOCA, plocaSirina: 2800 })).toBe(false);
   expect(jePloca({ jm: 'kom', plocaSirina: 2800, plocaVisina: 2070 })).toBe(false);
+});
+
+// ── primka: kom ↔ m² preračun ──────────────────────────────
+const PLOCA = { jm: JM_PLOCA, plocaSirina: 2800, plocaVisina: 2070 };
+
+test('uBazuPrimke: kom i nabavna po komadu se preračunaju u m² i nabavnu po m²', () => {
+  expect(uBazuPrimke(PLOCA, 5, 120)).toEqual({ kolicina: 28.98, nabavnaCijena: 20.7039 });
+});
+
+test('izBazePrimke je inverz od uBazuPrimke', () => {
+  expect(izBazePrimke(PLOCA, 28.98, 20.7039)).toEqual({ kolicina: '5', nabavnaCijena: '120' });
+});
+
+test('uBazuPrimke/izBazePrimke: nije ploča (jm) prolazi nepromijenjeno', () => {
+  const materijal = { jm: 'm', plocaSirina: null, plocaVisina: null };
+  expect(uBazuPrimke(materijal, 5, 120)).toEqual({ kolicina: 5, nabavnaCijena: 120 });
+  expect(izBazePrimke(materijal, 5, 120)).toEqual({ kolicina: '5', nabavnaCijena: '120' });
+});
+
+test('uBazuPrimke/izBazePrimke: nedefinisan proizvod prolazi nepromijenjeno', () => {
+  expect(uBazuPrimke(undefined, 5, 120)).toEqual({ kolicina: 5, nabavnaCijena: 120 });
+  expect(izBazePrimke(undefined, 5, 120)).toEqual({ kolicina: '5', nabavnaCijena: '120' });
 });
