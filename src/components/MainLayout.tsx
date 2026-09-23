@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { User } from '@/types';
 import {
-  ScanBarcode, Warehouse, NotebookTabs, ReceiptText, FileSignature, BarChart3, Settings, LogOut, WandSparkles,
+  ScanBarcode, Warehouse, NotebookTabs, ReceiptText, FileSignature, BarChart3, Settings, LogOut, WandSparkles, Factory,
 } from 'lucide-react';
 import appIcon from '@/assets/icon.png';
 import KasaScreen from '@/screens/KasaScreen';
@@ -12,10 +12,12 @@ import PonudeScreen from '@/screens/PonudeScreen';
 import IzvjestajiScreen from '@/screens/IzvjestajiScreen';
 import PostavkeScreen from '@/screens/PostavkeScreen';
 import GeneratorScreen from '@/screens/GeneratorScreen';
+import ProizvodnjaScreen from '@/screens/ProizvodnjaScreen';
 import PendingRacuniDialog from '@/components/PendingRacuniDialog';
 import PologPrompt from '@/components/PologPrompt';
+import { useProizvodnja } from '@/hooks/useProizvodnja';
 
-type Screen = 'kasa' | 'skladiste' | 'sifarnik' | 'narudzbe' | 'ponude' | 'izvjestaji' | 'generator' | 'postavke';
+type Screen = 'kasa' | 'skladiste' | 'sifarnik' | 'narudzbe' | 'ponude' | 'proizvodnja' | 'izvjestaji' | 'generator' | 'postavke';
 
 const NAV_ITEMS: { id: Screen; label: string; icon: typeof ScanBarcode; adminOnly?: boolean }[] = [
   { id: 'kasa', label: 'Kasa', icon: ScanBarcode },
@@ -23,6 +25,7 @@ const NAV_ITEMS: { id: Screen; label: string; icon: typeof ScanBarcode; adminOnl
   { id: 'sifarnik', label: 'Šifarnik', icon: NotebookTabs },
   { id: 'narudzbe', label: 'Računi', icon: ReceiptText },
   { id: 'ponude', label: 'Ponude', icon: FileSignature },
+  { id: 'proizvodnja', label: 'Proizvodnja', icon: Factory },
   { id: 'izvjestaji', label: 'Izvještaji', icon: BarChart3 },
   { id: 'generator', label: 'Generator', icon: WandSparkles, adminOnly: true },
   { id: 'postavke', label: 'Postavke', icon: Settings, adminOnly: true },
@@ -36,6 +39,8 @@ interface Props {
 export default function MainLayout({ user, onLogout }: Props) {
   const [screen, setScreen] = useState<Screen>('kasa');
   const [showGenerator, setShowGenerator] = useState(false);
+  const proizvodnja = useProizvodnja();
+  const [openNalogId, setOpenNalogId] = useState<number | null>(null);
 
   useEffect(() => {
     window.api.getSetting('ui.showGenerator').then((v) => setShowGenerator(v === 'true'));
@@ -47,6 +52,20 @@ export default function MainLayout({ user, onLogout }: Props) {
     };
     window.addEventListener('ui:showGenerator', onToggle);
     return () => window.removeEventListener('ui:showGenerator', onToggle);
+  }, []);
+
+  useEffect(() => {
+    if (proizvodnja === false) setScreen(s => (s === 'proizvodnja' ? 'kasa' : s));
+  }, [proizvodnja]);
+
+  useEffect(() => {
+    // Ponude otvaraju nalog na ekranu Proizvodnja — ekrani se ne poznaju međusobno.
+    const onOpen = (e: Event) => {
+      setOpenNalogId(Number((e as CustomEvent).detail));
+      setScreen('proizvodnja');
+    };
+    window.addEventListener('ui:openNalog', onOpen);
+    return () => window.removeEventListener('ui:openNalog', onOpen);
   }, []);
 
   return (
@@ -69,6 +88,7 @@ export default function MainLayout({ user, onLogout }: Props) {
           {NAV_ITEMS.map(item => {
             if (item.adminOnly && user.uloga !== 'admin') return null;
             if (item.id === 'generator' && !showGenerator) return null;
+            if (item.id === 'proizvodnja' && !proizvodnja) return null;
             const Icon = item.icon;
             const active = screen === item.id;
             return (
@@ -113,6 +133,7 @@ export default function MainLayout({ user, onLogout }: Props) {
         {screen === 'sifarnik' && <SifarnikScreen />}
         {screen === 'narudzbe' && <NarudzbeScreen korisnikId={user.id} />}
         {screen === 'ponude' && <PonudeScreen korisnikId={user.id} />}
+        {screen === 'proizvodnja' && <ProizvodnjaScreen korisnikId={user.id} uloga={user.uloga} initialNalogId={openNalogId} />}
         {screen === 'izvjestaji' && <IzvjestajiScreen korisnikId={user.id} />}
         {screen === 'generator' && <GeneratorScreen korisnikId={user.id} />}
         {screen === 'postavke' && <PostavkeScreen />}

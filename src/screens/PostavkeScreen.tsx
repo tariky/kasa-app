@@ -69,6 +69,7 @@ export default function PostavkeScreen() {
   const [requirePinRefund, setRequirePinRefund] = useState(false);
   const [pologPrompt, setPologPrompt] = useState(true);
   const [generatorEnabled, setGeneratorEnabled] = useState(false);
+  const [proizvodnjaEnabled, setProizvodnjaEnabled] = useState(false);
   const [racunNapomena, setRacunNapomena] = useState('');
   // ── Fiskalni niz (posljednji BF broj) ──
   const [fiskalnaNumeracija, setFiskalnaNumeracija] = useState<
@@ -122,6 +123,7 @@ export default function PostavkeScreen() {
     // Prompt za polog je podrazumijevano uključen — isključen samo na eksplicitno 'false'.
     window.api.getSetting('kasa.pologPrompt').then((v) => setPologPrompt(v !== 'false'));
     window.api.getSetting('ui.showGenerator').then((v) => setGeneratorEnabled(v === 'true'));
+    window.api.getSetting('proizvodnja.enabled').then((v) => setProizvodnjaEnabled(v === 'true'));
     window.api.getSetting('racun.napomena').then((v) => setRacunNapomena(v || ''));
     loadFiskalnaNumeracija();
   }, []);
@@ -1099,6 +1101,23 @@ export default function PostavkeScreen() {
                           await window.api.setSetting('ui.showGenerator', String(checked));
                           // MainLayout drži navigaciju — obavijesti ga bez remounta
                           window.dispatchEvent(new CustomEvent('ui:showGenerator', { detail: checked }));
+                        }}
+                      />
+                    </div>
+                    <Separator />
+                    <div className="flex items-center justify-between">
+                      <div className="pr-4">
+                        <p className="text-[13px] font-medium text-slate-700">Proizvodnja</p>
+                        <p className="text-[12px] text-slate-400 mt-0.5">
+                          Radni nalozi, materijal i normativi. Uključuje ekran Proizvodnja i tip artikla „materijal“.
+                        </p>
+                      </div>
+                      <Switch
+                        checked={proizvodnjaEnabled}
+                        onCheckedChange={async (checked) => {
+                          setProizvodnjaEnabled(checked);
+                          await window.api.setProizvodnjaEnabled(checked);
+                          window.dispatchEvent(new CustomEvent('ui:proizvodnja', { detail: checked }));
                         }}
                       />
                     </div>
