@@ -14,7 +14,7 @@ import { DatePicker } from '@/components/ui/date-picker';
 import { ActionRow, Eyebrow, Key, LedgerHead, SegmentedFilter } from '@/components/ui/ledger';
 import {
   RefreshCw, FileText, AlertTriangle, Printer, Download, Plus, Trash2, Pencil,
-  Receipt, Search, X, Banknote, CreditCard, Building, FileCheck,
+  Receipt, Search, X, Banknote, CreditCard, Building, FileCheck, Hammer,
   Send, Check, Ban, CornerDownLeft, ChevronsUpDown, ChevronsLeftRight,
 } from 'lucide-react';
 import { pdf } from '@react-pdf/renderer';
@@ -23,6 +23,8 @@ import { formatBrojPonude, efektivniStatus, plusDana, danaIzmedju, DEFAULT_ROK_D
 import { izracunajTotale, pdvStavke } from '@/lib/racun';
 import { localDateStr } from '@/lib/novac';
 import { cn, formatKM, formatDate } from '@/lib/utils';
+import { useProizvodnja } from '@/hooks/useProizvodnja';
+import { formatBrojNaloga } from '@/lib/proizvodnja';
 
 /** "8 dana od datuma ponude" — bosanska množina: 1/21/31 dan, ostalo dana. */
 function opisRoka(dana: number): string {
@@ -150,10 +152,19 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
   const [brisiOpen, setBrisiOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
+  // Radni nalog — veza s modulom Proizvodnja
+  const proizvodnja = useProizvodnja();
+  const [nalogZaPonudu, setNalogZaPonudu] = useState<{ id: number; broj: number; godina: number } | null>(null);
+
   const rowRefs = useRef<(HTMLTableRowElement | null)[]>([]);
   const danas = localDateStr();
 
   useEffect(() => { loadPonude(); }, []);
+
+  useEffect(() => {
+    if (!selected || !proizvodnja) { setNalogZaPonudu(null); return; }
+    window.api.getNalogZaPonudu(selected.id).then(setNalogZaPonudu).catch(() => setNalogZaPonudu(null));
+  }, [selected, proizvodnja]);
 
   const loadPonude = async () => {
     setPonude(await window.api.getPonude());
@@ -405,6 +416,17 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
 
   const selStatus = selected ? efektivniStatus(selected, danas) : '';
   const selEditable = Boolean(selected && selected.status !== 'konvertovana');
+
+  const otvoriNalog = (id: number) => window.dispatchEvent(new CustomEvent('ui:openNalog', { detail: id }));
+
+  const napraviNalog = async () => {
+    if (!selected) return;
+    try {
+      const r = await window.api.createNalogIzPonude(selected.id, korisnikId);
+      setMsg({ type: 'success', text: `Radni nalog ${formatBrojNaloga(r)} otvoren po ponudi ${formatBrojPonude(selected)}` });
+      otvoriNalog(r.id);
+    } catch (err: any) { setMsg({ type: 'error', text: err?.message || 'Nepoznata greška' }); }
+  };
 
   // ── Tastatura ──────────────────────────────────────────────
 
@@ -763,6 +785,13 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
                   onClick={() => handlePrintPdf(selected)}
                   trailing={{ icon: Download, onClick: () => handleExportPdf(selected), title: 'Spremi ponudu kao PDF — S' }}
                 />
+
+                {proizvodnja && selStatus === 'prihvacena' && !nalogZaPonudu && (
+                  <ActionRow icon={Hammer} label="Radni nalog" onClick={napraviNalog} />
+                )}
+                {proizvodnja && nalogZaPonudu && (
+                  <ActionRow icon={Hammer} label={`Otvori nalog ${formatBrojNaloga(nalogZaPonudu)}`} onClick={() => otvoriNalog(nalogZaPonudu.id)} />
+                )}
 
                 {selEditable && (
                   <>

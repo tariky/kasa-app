@@ -10,10 +10,11 @@ import { ActionRow, Eyebrow, LedgerHead, SegmentedFilter } from '@/components/ui
 import { NalogDialog } from '@/components/proizvodnja/NalogDialog';
 import { StavkeUtroska } from '@/components/proizvodnja/StavkeUtroska';
 import { KalkulacijaPanel } from '@/components/proizvodnja/KalkulacijaPanel';
+import { IzdajRacunDialog } from '@/components/proizvodnja/IzdajRacunDialog';
 import type { Kalkulacija } from '@/lib/proizvodnja';
 import {
   RefreshCw, Plus, Pencil, Trash2, Hammer, ClipboardList, AlertTriangle, X, Factory, Play,
-  CheckCircle2, Undo2,
+  CheckCircle2, Undo2, Receipt,
 } from 'lucide-react';
 
 export const STATUS_META: Record<NalogStatus, { label: string; cls: string }> = {
@@ -58,6 +59,7 @@ export default function ProizvodnjaScreen({ korisnikId, uloga, initialNalogId }:
   const [kalk, setKalk] = useState<Kalkulacija | null>(null);
   const [zavrsiOpen, setZavrsiOpen] = useState(false);
   const [vratiOpen, setVratiOpen] = useState(false);
+  const [racunOpen, setRacunOpen] = useState(false);
 
   const load = useCallback(async () => {
     setNalozi(await window.api.getNalozi());
@@ -250,6 +252,9 @@ export default function ProizvodnjaScreen({ korisnikId, uloga, initialNalogId }:
                   {uredivo && (selected.stavke?.length ?? 0) > 0 && (
                     <ActionRow icon={CheckCircle2} label="Završi nalog" tone="primary" onClick={() => setZavrsiOpen(true)} />
                   )}
+                  {selected.status === 'zavrsen' && selected.vrsta === 'narudzba' && (
+                    <ActionRow icon={Receipt} label="Izdaj račun" tone="primary" onClick={() => setRacunOpen(true)} />
+                  )}
                   {selected.status === 'zavrsen' && uloga === 'admin' && (
                     <ActionRow icon={Undo2} label="Vrati u izradu" onClick={() => setVratiOpen(true)} />
                   )}
@@ -268,6 +273,11 @@ export default function ProizvodnjaScreen({ korisnikId, uloga, initialNalogId }:
 
       <NalogDialog open={formOpen} onOpenChange={setFormOpen} korisnikId={korisnikId} nalog={editNalog}
         onSaved={async (id) => { await load(); await select(id); setMsg({ type: 'success', text: editNalog ? 'Nalog izmijenjen' : 'Nalog otvoren' }); }} />
+
+      {selected && (
+        <IzdajRacunDialog open={racunOpen} onOpenChange={setRacunOpen} nalog={selected} korisnikId={korisnikId}
+          onIzdat={async (bf) => { await refreshSelected(); setMsg({ type: 'success', text: `Račun #${bf ?? ''} izdat po nalogu ${formatBrojNaloga(selected)}` }); }} />
+      )}
 
       <Dialog open={brisiOpen} onOpenChange={setBrisiOpen}>
         <DialogContent className="sm:max-w-[400px]">
