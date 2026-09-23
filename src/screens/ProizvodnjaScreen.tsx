@@ -1,5 +1,6 @@
 // src/screens/ProizvodnjaScreen.tsx
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { pdf } from '@react-pdf/renderer';
 import type { RadniNalog, NalogStatus } from '@/types';
 import { formatBrojNaloga } from '@/lib/proizvodnja';
 import { cn, formatKM, formatDate } from '@/lib/utils';
@@ -12,10 +13,11 @@ import { StavkeUtroska } from '@/components/proizvodnja/StavkeUtroska';
 import { KalkulacijaPanel } from '@/components/proizvodnja/KalkulacijaPanel';
 import { IzdajRacunDialog } from '@/components/proizvodnja/IzdajRacunDialog';
 import { NormativiTab } from '@/components/proizvodnja/NormativiTab';
+import { RadniNalogPdf } from '@/components/RadniNalogPdf';
 import type { Kalkulacija } from '@/lib/proizvodnja';
 import {
   RefreshCw, Plus, Pencil, Trash2, Hammer, ClipboardList, AlertTriangle, X, Factory, Play,
-  CheckCircle2, Undo2, Receipt,
+  CheckCircle2, Undo2, Receipt, Printer, Download,
 } from 'lucide-react';
 
 export const STATUS_META: Record<NalogStatus, { label: string; cls: string }> = {
@@ -109,6 +111,31 @@ export default function ProizvodnjaScreen({ korisnikId, uloga, initialNalogId }:
       setBrisiOpen(false); setSelected(null); await load();
       setMsg({ type: 'success', text: 'Nalog obrisan' });
     } catch (e: any) { setMsg({ type: 'error', text: e?.message || 'Greška' }); }
+  };
+
+  // ── PDF ────────────────────────────────────────────────────
+
+  const loadFirma = async () => {
+    try { return await window.api.getFirmaSettings(); }
+    catch { return { naziv: '', adresa: '', grad: '', idBroj: '', pdvBroj: '', skladiste: '', logo: '', bankAccounts: [] }; }
+  };
+
+  const buildPdfBlob = async (n: RadniNalog) => {
+    const full = n.stavke ? n : await window.api.getNalog(n.id);
+    return pdf(<RadniNalogPdf nalog={full} firma={await loadFirma()} />).toBlob();
+  };
+
+  const printPdf = async (n: RadniNalog) => {
+    const url = URL.createObjectURL(await buildPdfBlob(n));
+    const win = window.open(url, '_blank');
+    if (win) win.onafterprint = () => URL.revokeObjectURL(url);
+  };
+
+  const exportPdf = async (n: RadniNalog) => {
+    const blob = await buildPdfBlob(n);
+    const savePath = await window.api.showSaveDialog({ defaultName: `RadniNalog-${n.broj}-${n.godina}.pdf`, filters: [{ name: 'PDF', extensions: ['pdf'] }] });
+    if (!savePath) return;
+    await window.api.writeFile(savePath, Array.from(new Uint8Array(await blob.arrayBuffer())) as any);
   };
 
   return (
@@ -249,6 +276,8 @@ export default function ProizvodnjaScreen({ korisnikId, uloga, initialNalogId }:
                 />
 
                 <div className="flex-shrink-0 border-t border-slate-100 px-5 py-3.5 space-y-2">
+                  <ActionRow icon={Printer} label="Štampaj nalog" onClick={() => printPdf(selected)}
+                    trailing={{ icon: Download, onClick: () => exportPdf(selected), title: 'Sačuvaj PDF' }} />
                   {selected.status === 'otvoren' && <ActionRow icon={Play} label="U izradu" onClick={uIzradu} />}
                   {uredivo && (selected.stavke?.length ?? 0) > 0 && (
                     <ActionRow icon={CheckCircle2} label="Završi nalog" tone="primary" onClick={() => setZavrsiOpen(true)} />
