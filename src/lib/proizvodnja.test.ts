@@ -146,6 +146,30 @@ test('update i replaceStavke rade samo dok nalog nije završen', () => {
   expect(() => replaceStavke(db, r.id, [])).toThrow('završen');
 });
 
+test('završen nalog dozvoljava samo dogovorenuCijenu, rok i napomenu; fakturisan je potpuno zaključan', () => {
+  const k = dodajKupca(db);
+  const r = createNalog(db, { vrsta: 'narudzba', korisnikId: 1, kupacId: k, opis: 'Plakar' });
+  db.prepare("UPDATE radni_nalozi SET status = 'zavrsen' WHERE id = ?").run(r.id);
+
+  updateNalog(db, r.id, { dogovorenaCijena: 1800, rok: '2026-11-01', napomena: 'Dogovoreno telefonom' });
+  const n = getNalog(db, r.id);
+  expect(n.dogovorenaCijena).toBe(1800);
+  expect(n.rok).toBe('2026-11-01');
+  expect(n.napomena).toBe('Dogovoreno telefonom');
+
+  expect(() => updateNalog(db, r.id, { opis: 'X' })).toThrow('završen');
+  expect(() => updateNalog(db, r.id, { kupacId: k })).toThrow('završen');
+  expect(() => updateNalog(db, r.id, { datum: '2026-01-01' })).toThrow('završen');
+  expect(() => updateNalog(db, r.id, { trosakRada: 50 })).toThrow('završen');
+  // jedno nedozvoljeno polje uz dozvoljena i dalje odbija cijeli patch
+  expect(() => updateNalog(db, r.id, { dogovorenaCijena: 2000, opis: 'X' })).toThrow('završen');
+  expect(getNalog(db, r.id).dogovorenaCijena).toBe(1800); // patch nije djelimično primijenjen
+
+  db.prepare("UPDATE radni_nalozi SET status = 'fakturisan' WHERE id = ?").run(r.id);
+  expect(() => updateNalog(db, r.id, { dogovorenaCijena: 2500 })).toThrow('završen');
+  expect(() => updateNalog(db, r.id, { napomena: 'X' })).toThrow('završen');
+});
+
 test('stavka mora biti materijal sa količinom > 0', () => {
   const k = dodajKupca(db);
   const art = dodajArtikal(db, 'A');

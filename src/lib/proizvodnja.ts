@@ -162,12 +162,19 @@ export function nalogZaPonudu(db: SqlDb, ponudaId: number): { id: number; broj: 
   return row ?? null;
 }
 
+/** Polja koja se smiju mijenjati na završenom nalogu bez cijene — dogovor sa kupcem stigne i poslije. */
+const DOZVOLJENO_ZAVRSEN = new Set(['dogovorenaCijena', 'rok', 'napomena']);
+
 export function updateNalog(
   db: SqlDb, id: number,
   patch: Partial<Omit<NalogInput, 'vrsta' | 'korisnikId'>>
 ): void {
   const n = ucitajNalogIliBaci(db, id);
-  baciAkoZakljucan(n.status);
+  if (n.status === 'zavrsen') {
+    if (Object.keys(patch).some(k => !DOZVOLJENO_ZAVRSEN.has(k))) baciAkoZakljucan(n.status);
+  } else {
+    baciAkoZakljucan(n.status);
+  }
 
   const fields: string[] = [];
   const values: any[] = [];
