@@ -163,7 +163,7 @@ export function registerIpcHandlers(): void {
   // ─── Products ────────────────────────────────────────────
 
   const PRODUCT_TIPOVI = ['artikal', 'usluga', 'materijal'] as const;
-  const normalizujTip = (t?: string): string => (PRODUCT_TIPOVI as readonly string[]).includes(t ?? '') ? t! : 'artikal';
+  const normalizujTip = (t?: string): string => (t && (PRODUCT_TIPOVI as readonly string[]).includes(t)) ? t : 'artikal';
 
   handle('product:getAll', (tip?: string) => {
     const where = tip ? 'WHERE p.tip = ?' : '';

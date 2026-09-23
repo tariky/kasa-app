@@ -21,6 +21,9 @@ import type { User, Product, CartItem, Kupac } from '@/types';
 
 type PaymentType = 'Gotovina' | 'Kartica' | 'Virman' | 'Ček';
 
+// Kasa ne prodaje materijal — samo artikli i usluge idu u prikaz.
+const bezMaterijala = (list: Product[]): Product[] => list.filter(p => p.tip !== 'materijal');
+
 const paymentIcons: Record<PaymentType, React.ReactNode> = {
   Gotovina: <Banknote className="h-4 w-4" />,
   Kartica: <CreditCard className="h-4 w-4" />,
@@ -131,7 +134,7 @@ export default function KasaScreen({ user }: KasaScreenProps) {
   const loadAllProducts = useCallback(async () => {
     try {
       const all: Product[] = await window.api.getProducts();
-      setAllProducts(all.filter(p => p.tip !== 'materijal'));
+      setAllProducts(bezMaterijala(all));
     } catch {
       setAllProducts([]);
     }
@@ -350,7 +353,7 @@ export default function KasaScreen({ user }: KasaScreenProps) {
       setCart(restored);
       await window.api.deleteSavedCart(saved.id);
       loadSavedCarts();
-      setAllProducts(fresh);
+      setAllProducts(bezMaterijala(fresh));
       setSavedOpen(false);
       if (upozorenja.length > 0) {
         setMessage({ type: 'error', text: `Košarica vraćena uz upozorenja: ${upozorenja.join(' ')}` });
