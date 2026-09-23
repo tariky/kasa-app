@@ -1,7 +1,7 @@
 // src/components/proizvodnja/NalogDialog.tsx
 import { useEffect, useState } from 'react';
 import type { Kupac, Product, RadniNalog, NalogVrsta } from '@/types';
-import { formatKM, parseDecimal } from '@/lib/utils';
+import { cn, formatKM, parseDecimal } from '@/lib/utils';
 import { localDateStr } from '@/lib/novac';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -10,7 +10,6 @@ import { DecimalInput } from '@/components/ui/decimal-input';
 import { DatePicker } from '@/components/ui/date-picker';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { cn } from '@/lib/utils';
 import { User, Package } from 'lucide-react';
 
 export function NalogDialog({ open, onOpenChange, korisnikId, nalog, onSaved }: {
