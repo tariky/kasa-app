@@ -502,7 +502,7 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
           if (selEditable) { e.preventDefault(); openUredi(selected); }
           break;
         case 'k':
-          if (selEditable) {
+          if (selEditable && !nalogZaPonudu) {
             e.preventDefault();
             setKonvertujMsg(null);
             setPaymentType('Gotovina');
@@ -520,7 +520,7 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selected, selEditable, filter, anyDialogOpen, openNova, openUredi]);
+  }, [selected, selEditable, filter, anyDialogOpen, openNova, openUredi, nalogZaPonudu]);
 
   /** ⌘↵ potvrđuje dijalog s bilo kojeg polja. */
   const submitOnMeta = (fn: () => void) => (e: React.KeyboardEvent) => {
@@ -795,7 +795,10 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
                   <ActionRow icon={Hammer} label="Radni nalog" onClick={napraviNalog} />
                 )}
                 {proizvodnja && nalogZaPonudu && (
-                  <ActionRow icon={Hammer} label={`Otvori nalog ${formatBrojNaloga(nalogZaPonudu)}`} onClick={() => otvoriNalog(nalogZaPonudu.id)} />
+                  <>
+                    <ActionRow icon={Hammer} label={`Otvori nalog ${formatBrojNaloga(nalogZaPonudu)}`} onClick={() => otvoriNalog(nalogZaPonudu.id)} />
+                    <p className="text-[11px] text-slate-400 px-0.5">Račun se izdaje iz radnog naloga</p>
+                  </>
                 )}
 
                 {selEditable && (
@@ -842,15 +845,17 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
                       </div>
                     </div>
 
-                    <div className="pt-2 mt-1 border-t border-slate-100">
-                      <ActionRow
-                        icon={Receipt}
-                        label={selStatus === 'istekla' ? 'Konvertuj (istekla)' : 'Konvertuj u račun'}
-                        hint="K"
-                        tone="primary"
-                        onClick={() => { setKonvertujMsg(null); setPaymentType('Gotovina'); setKonvertujOpen(true); }}
-                      />
-                    </div>
+                    {!nalogZaPonudu && (
+                      <div className="pt-2 mt-1 border-t border-slate-100">
+                        <ActionRow
+                          icon={Receipt}
+                          label={selStatus === 'istekla' ? 'Konvertuj (istekla)' : 'Konvertuj u račun'}
+                          hint="K"
+                          tone="primary"
+                          onClick={() => { setKonvertujMsg(null); setPaymentType('Gotovina'); setKonvertujOpen(true); }}
+                        />
+                      </div>
+                    )}
                   </>
                 )}
 
