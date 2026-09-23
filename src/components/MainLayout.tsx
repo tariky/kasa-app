@@ -68,6 +68,14 @@ export default function MainLayout({ user, onLogout }: Props) {
     return () => window.removeEventListener('ui:openNalog', onOpen);
   }, []);
 
+  // Nalog se otvara samo jednom, na dolasku sa drugog ekrana — inače bi svaki
+  // ručni povratak na Proizvodnju ponovo selektovao stari nalog (ekran se
+  // odmontira/montira pri promjeni `screen`, pa initialNalogId mora biti
+  // "potrošen" čim korisnik ode sa ekrana).
+  useEffect(() => {
+    if (screen !== 'proizvodnja') setOpenNalogId(null);
+  }, [screen]);
+
   return (
     <div className="h-screen flex bg-slate-50">
       {/* Sidebar */}
