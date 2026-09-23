@@ -2,6 +2,7 @@ import { test, expect, beforeEach } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { schema } from '@/database/schema';
 import type { SqlDb } from './sqldb';
+import type { KonverzijaDeps } from './ponuda';
 import {
   nextBrojNaloga, formatBrojNaloga, createNalog, createNalogIzPonude, updateNalog,
   replaceStavke, getNalog, listNalozi, deleteNalog, getNormativ, saveNormativ, nalogZaPonudu,
@@ -360,8 +361,8 @@ function printOk(broj = '91') {
   return { print, calls };
 }
 const printFail = async () => ({ success: false, error: 'Štampač ne odgovara', odgovori: {} } as any);
-function deps(print: any) {
-  return { db, print, transaction: (fn: any) => db.transaction(fn) };
+function deps(print: KonverzijaDeps['print']): KonverzijaDeps {
+  return { db, print, transaction: (fn) => db.transaction(fn) };
 }
 
 test('osigurajProdajnuUslugu kreira uslugu NAMJ jednom', () => {
