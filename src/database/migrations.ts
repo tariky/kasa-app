@@ -122,4 +122,13 @@ export function runMigrations(database: Database.Database): void {
       FOREIGN KEY (korisnikId) REFERENCES users(id)
     )
   `);
+
+  // Proizvodnja: dimenzija ploče (mm) na materijalu u m² — kom ↔ m² preračun.
+  const productCols2 = database.prepare("PRAGMA table_info(products)").all() as { name: string }[];
+  if (!productCols2.find(c => c.name === 'plocaSirina')) {
+    database.exec("ALTER TABLE products ADD COLUMN plocaSirina INTEGER");
+  }
+  if (!productCols2.find(c => c.name === 'plocaVisina')) {
+    database.exec("ALTER TABLE products ADD COLUMN plocaVisina INTEGER");
+  }
 }

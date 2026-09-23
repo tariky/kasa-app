@@ -6,6 +6,8 @@ export interface User {
   createdAt: string;
 }
 
+export type ProductTip = 'artikal' | 'usluga' | 'materijal';
+
 export interface Product {
   id: number;
   sifra: string;
@@ -15,7 +17,10 @@ export interface Product {
   pdvStopa: 'E' | 'K';
   plu?: number;
   barkod?: string;
-  tip: 'artikal' | 'usluga';
+  tip: ProductTip;
+  /** Dimenzija ploče u mm — samo za materijal u m² koji se kupuje po komadu. */
+  plocaSirina?: number | null;
+  plocaVisina?: number | null;
   createdAt: string;
   updatedAt: string;
   stanje?: number;
@@ -166,4 +171,70 @@ export interface FirmaSettings {
   skladiste: string;
   logo: string;
   bankAccounts: BankAccount[];
+}
+
+export type NalogVrsta = 'narudzba' | 'zaliha';
+export type NalogStatus = 'otvoren' | 'u_izradi' | 'zavrsen' | 'fakturisan';
+
+export interface RadniNalogStavka {
+  id: number;
+  radniNalogId: number;
+  materijalId: number;
+  kolicina: number;
+  /** Zamrznuta pri završetku; NULL dok je nalog otvoren. */
+  nabavnaCijena: number | null;
+  napomena?: string | null;
+  materijalNaziv?: string;
+  materijalSifra?: string;
+  materijalJm?: string;
+  plocaSirina?: number | null;
+  plocaVisina?: number | null;
+  stanje?: number;
+}
+
+export interface RadniNalog {
+  id: number;
+  broj: number;
+  godina: number;
+  datum: string;
+  rok?: string | null;
+  vrsta: NalogVrsta;
+  kupacId?: number | null;
+  ponudaId?: number | null;
+  opis: string;
+  productId?: number | null;
+  kolicina: number;
+  dogovorenaCijena?: number | null;
+  trosakRada: number;
+  status: NalogStatus;
+  racunId?: number | null;
+  korisnikId: number;
+  napomena?: string | null;
+  zavrsenAt?: string | null;
+  createdAt: string;
+  // JOIN polja
+  kupacNaziv?: string | null;
+  kupacIdBroj?: string | null;
+  kupacAdresa?: string | null;
+  kupacGrad?: string | null;
+  kupacPostanskiBroj?: string | null;
+  productNaziv?: string | null;
+  productCijena?: number | null;
+  korisnikIme?: string;
+  racunBroj?: string | null;
+  racunStatus?: string | null;
+  ponudaBroj?: number | null;
+  ponudaGodina?: number | null;
+  stavke?: RadniNalogStavka[];
+}
+
+export interface NormativStavka {
+  id: number;
+  productId: number;
+  materijalId: number;
+  kolicina: number;
+  napomena?: string | null;
+  materijalNaziv?: string;
+  materijalSifra?: string;
+  materijalJm?: string;
 }

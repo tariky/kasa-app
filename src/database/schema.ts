@@ -17,6 +17,8 @@ export const schema = `
     plu INTEGER,
     barkod TEXT,
     tip TEXT NOT NULL DEFAULT 'artikal',
+    plocaSirina INTEGER,
+    plocaVisina INTEGER,
     createdAt TEXT DEFAULT (datetime('now','localtime')),
     updatedAt TEXT DEFAULT (datetime('now','localtime'))
   );
@@ -215,6 +217,57 @@ export const schema = `
     FOREIGN KEY (korisnikId) REFERENCES users(id)
   );
 
+  CREATE TABLE IF NOT EXISTS normativi (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    productId INTEGER NOT NULL,
+    materijalId INTEGER NOT NULL,
+    kolicina REAL NOT NULL,
+    napomena TEXT,
+    UNIQUE(productId, materijalId),
+    FOREIGN KEY (productId) REFERENCES products(id),
+    FOREIGN KEY (materijalId) REFERENCES products(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS radni_nalozi (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    broj INTEGER NOT NULL,
+    godina INTEGER NOT NULL,
+    datum TEXT NOT NULL,
+    rok TEXT,
+    vrsta TEXT NOT NULL CHECK(vrsta IN ('narudzba', 'zaliha')),
+    kupacId INTEGER,
+    ponudaId INTEGER,
+    opis TEXT NOT NULL,
+    productId INTEGER,
+    kolicina REAL NOT NULL DEFAULT 1,
+    dogovorenaCijena REAL,
+    trosakRada REAL NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'otvoren'
+      CHECK(status IN ('otvoren', 'u_izradi', 'zavrsen', 'fakturisan')),
+    racunId INTEGER,
+    korisnikId INTEGER NOT NULL,
+    napomena TEXT,
+    zavrsenAt TEXT,
+    createdAt TEXT DEFAULT (datetime('now','localtime')),
+    UNIQUE(broj, godina),
+    FOREIGN KEY (kupacId) REFERENCES kupci(id),
+    FOREIGN KEY (ponudaId) REFERENCES ponude(id),
+    FOREIGN KEY (productId) REFERENCES products(id),
+    FOREIGN KEY (racunId) REFERENCES orders(id),
+    FOREIGN KEY (korisnikId) REFERENCES users(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS radni_nalog_stavke (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    radniNalogId INTEGER NOT NULL,
+    materijalId INTEGER NOT NULL,
+    kolicina REAL NOT NULL,
+    nabavnaCijena REAL,
+    napomena TEXT,
+    FOREIGN KEY (radniNalogId) REFERENCES radni_nalozi(id),
+    FOREIGN KEY (materijalId) REFERENCES products(id)
+  );
+
   CREATE INDEX IF NOT EXISTS idx_cash_movements_createdAt ON cash_movements(createdAt);
   CREATE INDEX IF NOT EXISTS idx_products_sifra ON products(sifra);
   CREATE INDEX IF NOT EXISTS idx_ponuda_stavke_ponudaId ON ponuda_stavke(ponudaId);
@@ -226,4 +279,7 @@ export const schema = `
   CREATE INDEX IF NOT EXISTS idx_primka_stavke_productId ON primka_stavke(productId);
   CREATE INDEX IF NOT EXISTS idx_nivelacija_stavke_nivelacijaId ON nivelacija_stavke(nivelacijaId);
   CREATE INDEX IF NOT EXISTS idx_prilog_stavke_orderId ON prilog_stavke(orderId);
+  CREATE INDEX IF NOT EXISTS idx_radni_nalog_stavke_nalogId ON radni_nalog_stavke(radniNalogId);
+  CREATE INDEX IF NOT EXISTS idx_radni_nalozi_status ON radni_nalozi(status);
+  CREATE INDEX IF NOT EXISTS idx_normativi_productId ON normativi(productId);
 `;

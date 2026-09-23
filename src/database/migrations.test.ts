@@ -87,8 +87,13 @@ const ADDED_COLUMNS: Array<[string, string]> = [
   ['orders', 'refundedAt'],
   ['orders', 'prilogBroj'],
   ['orders', 'datumValute'],
+  ['products', 'plocaSirina'],
+  ['products', 'plocaVisina'],
 ];
-const ADDED_TABLES = ['dobavljaci', 'kupci', 'pending_receipts', 'prilog_stavke'];
+const ADDED_TABLES = [
+  'dobavljaci', 'kupci', 'pending_receipts', 'prilog_stavke',
+  'normativi', 'radni_nalozi', 'radni_nalog_stavke',
+];
 
 function columns(db: Db, table: string): Set<string> {
   const rows = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
