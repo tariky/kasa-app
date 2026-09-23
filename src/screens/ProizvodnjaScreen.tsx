@@ -8,8 +8,12 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ActionRow, Eyebrow, LedgerHead, SegmentedFilter } from '@/components/ui/ledger';
 import { NalogDialog } from '@/components/proizvodnja/NalogDialog';
+import { StavkeUtroska } from '@/components/proizvodnja/StavkeUtroska';
+import { KalkulacijaPanel } from '@/components/proizvodnja/KalkulacijaPanel';
+import type { Kalkulacija } from '@/lib/proizvodnja';
 import {
   RefreshCw, Plus, Pencil, Trash2, Hammer, ClipboardList, AlertTriangle, X, Factory, Play,
+  CheckCircle2, Undo2,
 } from 'lucide-react';
 
 export const STATUS_META: Record<NalogStatus, { label: string; cls: string }> = {
@@ -51,6 +55,9 @@ export default function ProizvodnjaScreen({ korisnikId, uloga, initialNalogId }:
   const [formOpen, setFormOpen] = useState(false);
   const [editNalog, setEditNalog] = useState<RadniNalog | null>(null);
   const [brisiOpen, setBrisiOpen] = useState(false);
+  const [kalk, setKalk] = useState<Kalkulacija | null>(null);
+  const [zavrsiOpen, setZavrsiOpen] = useState(false);
+  const [vratiOpen, setVratiOpen] = useState(false);
 
   const load = useCallback(async () => {
     setNalozi(await window.api.getNalozi());
@@ -58,8 +65,11 @@ export default function ProizvodnjaScreen({ korisnikId, uloga, initialNalogId }:
   useEffect(() => { load(); }, [load]);
 
   const select = useCallback(async (id: number) => {
-    try { setSelected(await window.api.getNalog(id)); }
-    catch (e: any) { setMsg({ type: 'error', text: e?.message || 'Greška' }); }
+    try {
+      const n = await window.api.getNalog(id);
+      setSelected(n);
+      setKalk(await window.api.getNalogKalkulacija(id));
+    } catch (e: any) { setMsg({ type: 'error', text: e?.message || 'Greška' }); }
   }, []);
 
   useEffect(() => { if (initialNalogId) { setTab('nalozi'); select(initialNalogId); } }, [initialNalogId, select]);
@@ -222,11 +232,26 @@ export default function ProizvodnjaScreen({ korisnikId, uloga, initialNalogId }:
                   </dl>
                 </div>
 
-                {/* Stavke + kalkulacija — Task 12 */}
-                <div className="flex-1 min-h-0 border-t border-slate-100" id="nalog-detalj-sredina" />
+                <div className="flex-1 min-h-0 border-t border-slate-100">
+                  <StavkeUtroska
+                    stavke={selected.stavke ?? []}
+                    uredivo={!!uredivo}
+                    onSave={async (stavke) => { await window.api.saveNalogStavke(selected.id, stavke); await select(selected.id); }}
+                  />
+                </div>
+                <KalkulacijaPanel
+                  nalog={selected} kalkulacija={kalk} uredivo={!!uredivo}
+                  onTrosakRada={async (iznos) => { await window.api.updateNalog(selected.id, { trosakRada: iznos }); await select(selected.id); }}
+                />
 
                 <div className="flex-shrink-0 border-t border-slate-100 px-5 py-3.5 space-y-2">
                   {selected.status === 'otvoren' && <ActionRow icon={Play} label="U izradu" onClick={uIzradu} />}
+                  {uredivo && (selected.stavke?.length ?? 0) > 0 && (
+                    <ActionRow icon={CheckCircle2} label="Završi nalog" tone="primary" onClick={() => setZavrsiOpen(true)} />
+                  )}
+                  {selected.status === 'zavrsen' && uloga === 'admin' && (
+                    <ActionRow icon={Undo2} label="Vrati u izradu" onClick={() => setVratiOpen(true)} />
+                  )}
                   {uredivo && <ActionRow icon={Pencil} label="Uredi zaglavlje" onClick={() => { setEditNalog(selected); setFormOpen(true); }} />}
                   {uredivo && <ActionRow icon={Trash2} label="Obriši nalog" tone="danger" onClick={() => setBrisiOpen(true)} />}
                 </div>
@@ -252,6 +277,54 @@ export default function ProizvodnjaScreen({ korisnikId, uloga, initialNalogId }:
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="ghost" onClick={() => setBrisiOpen(false)}>Otkaži</Button>
             <Button variant="destructive" onClick={obrisi}>Obriši</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={zavrsiOpen} onOpenChange={setZavrsiOpen}>
+        <DialogContent className="sm:max-w-[460px]">
+          <DialogHeader>
+            <DialogTitle>Završiti nalog {selected ? formatBrojNaloga(selected) : ''}?</DialogTitle>
+            <DialogDescription>
+              Materijal se skida sa skladišta po stavkama utroška i nabavne cijene se zamrzavaju.
+              {selected?.vrsta === 'zaliha' && ` Na stanje ulazi ${selected.kolicina} × ${selected.productNaziv}.`}
+            </DialogDescription>
+          </DialogHeader>
+          {kalk && kalk.upozorenja.length > 0 && (
+            <div className="rounded-lg bg-amber-50/70 border border-amber-100 px-3 py-2 space-y-0.5">
+              {kalk.upozorenja.map((u, i) => <p key={i} className="text-[11.5px] text-amber-700">{u}</p>)}
+              <p className="text-[11px] text-amber-600/80 pt-1">Završetak nije blokiran — stanje će ići u minus dok se ne unese primka.</p>
+            </div>
+          )}
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="ghost" onClick={() => setZavrsiOpen(false)}>Otkaži</Button>
+            <Button onClick={async () => {
+              if (!selected) return;
+              try {
+                await window.api.setNalogStatus({ id: selected.id, status: 'zavrsen', korisnikId });
+                setZavrsiOpen(false); await refreshSelected();
+                setMsg({ type: 'success', text: `Nalog ${formatBrojNaloga(selected)} završen, materijal razdužen` });
+              } catch (e: any) { setMsg({ type: 'error', text: e?.message || 'Greška' }); setZavrsiOpen(false); }
+            }}>Završi i razduži</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={vratiOpen} onOpenChange={setVratiOpen}>
+        <DialogContent className="sm:max-w-[420px]">
+          <DialogHeader>
+            <DialogTitle>Vratiti nalog u izradu?</DialogTitle>
+            <DialogDescription>Knjiženja završetka se brišu (materijal se vraća na stanje), stavke se otključavaju.</DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="ghost" onClick={() => setVratiOpen(false)}>Otkaži</Button>
+            <Button onClick={async () => {
+              if (!selected) return;
+              try {
+                await window.api.setNalogStatus({ id: selected.id, status: 'vrati', korisnikId });
+                setVratiOpen(false); await refreshSelected();
+              } catch (e: any) { setMsg({ type: 'error', text: e?.message || 'Greška' }); setVratiOpen(false); }
+            }}>Vrati u izradu</Button>
           </div>
         </DialogContent>
       </Dialog>
