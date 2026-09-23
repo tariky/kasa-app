@@ -3,6 +3,8 @@ import { Product, Primka, PrimkaStavka, Dobavljac } from '@/types';
 import { cn, formatKM, formatDate, parseDecimal } from '@/lib/utils';
 import { uBruto, uNetto, cijenaZaSpremanje } from '@/lib/pdvUnos';
 import { useUnosBezPdv } from '@/hooks/useUnosBezPdv';
+import { useProizvodnja } from '@/hooks/useProizvodnja';
+import { jePloca, komUM2, m2UKom, m2PoPloci } from '@/lib/ploca';
 import { pdf } from '@react-pdf/renderer';
 import { UlazPdf } from '@/components/UlazPdf';
 import { Button } from '@/components/ui/button';
@@ -358,6 +360,24 @@ interface StavkaRow {
   cijena: string;
 }
 
+/** Ploča se u primci kuca u komadima; baza vodi m² i nabavnu po m². */
+function uBazuPrimke(p: Product, kolicinaUnos: number, nabavnaUnos: number): { kolicina: number; nabavnaCijena: number } {
+  if (!jePloca(p)) return { kolicina: kolicinaUnos, nabavnaCijena: nabavnaUnos };
+  const poPloci = m2PoPloci(p.plocaSirina!, p.plocaVisina!);
+  return {
+    kolicina: komUM2(kolicinaUnos, p.plocaSirina!, p.plocaVisina!),
+    nabavnaCijena: Math.round((nabavnaUnos / poPloci) * 10000) / 10000,
+  };
+}
+function izBazePrimke(p: Product | undefined, kolicina: number, nabavnaCijena: number): { kolicina: string; nabavnaCijena: string } {
+  if (!p || !jePloca(p)) return { kolicina: String(kolicina), nabavnaCijena: String(nabavnaCijena) };
+  const poPloci = m2PoPloci(p.plocaSirina!, p.plocaVisina!);
+  return {
+    kolicina: String(m2UKom(kolicina, p.plocaSirina!, p.plocaVisina!)),
+    nabavnaCijena: String(Math.round(nabavnaCijena * poPloci * 100) / 100),
+  };
+}
+
 function NovaPrimkaDialog({
   open,
   onOpenChange,
@@ -407,13 +427,17 @@ function NovaPrimkaDialog({
         setDobavljacId(editPrimka.dobavljacId ?? '');
         setDobavljacAdresa(editPrimka.dobavljacAdresa ?? '');
         setStavke(
-          (editPrimka.stavke ?? []).map((s) => ({
-            productId: s.productId,
-            kolicina: String(s.kolicina),
-            nabavnaCijena: String(s.nabavnaCijena),
-            rabat: String(s.rabat || ''),
-            cijena: String(s.cijena),
-          }))
+          (editPrimka.stavke ?? []).map((s) => {
+            const p = products.find(pr => pr.id === s.productId);
+            const prikaz = izBazePrimke(p, s.kolicina, s.nabavnaCijena);
+            return {
+              productId: s.productId,
+              kolicina: prikaz.kolicina,
+              nabavnaCijena: prikaz.nabavnaCijena,
+              rabat: String(s.rabat || ''),
+              cijena: String(s.cijena),
+            };
+          })
         );
       setSaveError('');
       } else {
@@ -443,7 +467,7 @@ function NovaPrimkaDialog({
         const updated = { ...s, ...patch };
         if (patch.productId != null) {
           const p = products.find((pr) => pr.id === patch.productId);
-          if (p) updated.cijena = String(p.cijena);
+          if (p) updated.cijena = p.tip === 'materijal' ? '0' : String(p.cijena);
         }
         return updated;
       }),
@@ -477,7 +501,7 @@ function NovaPrimkaDialog({
     const diffs: typeof nivelacijaItems = [];
     for (const s of validStavke) {
       const product = products.find(p => p.id === s.productId);
-      if (product && Math.abs(product.cijena - parseDecimal(s.cijena)) > 0.001) {
+      if (product && product.tip !== 'materijal' && Math.abs(product.cijena - parseDecimal(s.cijena)) > 0.001) {
         const existingStock = product.stanje ?? 0;
         if (existingStock > 0) {
           const razlika = parseDecimal(s.cijena) - product.cijena;
@@ -516,14 +540,18 @@ function NovaPrimkaDialog({
         dobavljacAdresa: dobavljacAdresa || undefined,
         brojFakture: brojFakture || undefined,
         napomena: napomena || undefined,
-        stavke: validStavke.map((s) => ({
-          productId: s.productId,
-          kolicina: parseDecimal(s.kolicina),
-          nabavnaCijena: parseDecimal(s.nabavnaCijena),
-          rabat: parseDecimal(s.rabat) || 0,
-          cijena: parseDecimal(s.cijena),
-          pdvStopa: products.find(p => p.id === s.productId)?.pdvStopa ?? 'E',
-        })),
+        stavke: validStavke.map((s) => {
+          const p = products.find(pr => pr.id === s.productId)!;
+          const baza = uBazuPrimke(p, parseDecimal(s.kolicina), parseDecimal(s.nabavnaCijena));
+          return {
+            productId: s.productId,
+            kolicina: baza.kolicina,
+            nabavnaCijena: baza.nabavnaCijena,
+            rabat: parseDecimal(s.rabat) || 0,
+            cijena: p.tip === 'materijal' ? 0 : parseDecimal(s.cijena),
+            pdvStopa: p.pdvStopa ?? 'E',
+          };
+        }),
       };
 
       if (editPrimka) {
@@ -715,19 +743,37 @@ function NovaPrimkaDialog({
                           {products.map((p) => (
                             <SelectItem key={p.id} value={String(p.id)}>
                               <span className="font-mono text-muted-foreground text-xs mr-2">{p.sifra}</span>
+                              {p.tip === 'materijal' && <span className="text-[9px] text-violet-500 mr-1">MAT</span>}
                               {p.naziv}
                             </SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
                     </div>
-                    <DecimalInput
-                      maxDecimals={3}
-                      className="h-8 font-mono text-sm text-right border-0 shadow-none bg-transparent hover:bg-slate-100 rounded"
-                      placeholder="0"
-                      value={s.kolicina}
-                      onValueChange={(text) => updateStavka(idx, { kolicina: text })}
-                    />
+                    <div>
+                      <DecimalInput
+                        maxDecimals={3}
+                        className="h-8 font-mono text-sm text-right border-0 shadow-none bg-transparent hover:bg-slate-100 rounded"
+                        placeholder={(() => {
+                          const p = products.find(pr => pr.id === s.productId);
+                          if (p && jePloca(p)) return 'kom';
+                          if (p && p.tip === 'materijal') return p.jm;
+                          return '0';
+                        })()}
+                        value={s.kolicina}
+                        onValueChange={(text) => updateStavka(idx, { kolicina: text })}
+                      />
+                      {(() => {
+                        const p = products.find(pr => pr.id === s.productId);
+                        if (!p || !jePloca(p) || !s.kolicina) return null;
+                        const kom = parseDecimal(s.kolicina);
+                        return (
+                          <span className="block text-[9.5px] text-slate-400 font-mono text-right -mt-0.5">
+                            = {komUM2(kom, p.plocaSirina!, p.plocaVisina!)} m²
+                          </span>
+                        );
+                      })()}
+                    </div>
                     <DecimalInput
                       className="h-8 font-mono text-sm text-right border-0 shadow-none bg-transparent hover:bg-slate-100 rounded"
                       placeholder="0,00"
@@ -743,7 +789,8 @@ function NovaPrimkaDialog({
                     <DecimalInput
                       className="h-8 font-mono text-sm text-right border-0 shadow-none bg-transparent hover:bg-slate-100 rounded"
                       placeholder="0,00"
-                      value={s.cijena}
+                      value={products.find(pr => pr.id === s.productId)?.tip === 'materijal' ? '' : s.cijena}
+                      disabled={products.find(pr => pr.id === s.productId)?.tip === 'materijal'}
                       onValueChange={(text) => updateStavka(idx, { cijena: text })}
                     />
                     <button
@@ -1070,12 +1117,18 @@ function ArtikliTab({
                     return (
                       <tr
                         key={p.id}
-                        className="group border-t border-slate-50 transition-colors hover:bg-slate-50/50 cursor-pointer"
-                        onClick={() => handleEdit(p)}
+                        className={cn(
+                          'group border-t border-slate-50 transition-colors hover:bg-slate-50/50',
+                          p.tip === 'materijal' ? 'cursor-default' : 'cursor-pointer'
+                        )}
+                        onClick={() => { if (p.tip !== 'materijal') handleEdit(p); }}
                       >
                         <td className="pl-5 pr-2 py-2.5 text-[12px] font-mono text-slate-400">{p.sifra}</td>
                         <td className="px-2 py-2.5">
                           <span className="text-[12px] font-medium text-slate-700">{p.naziv}</span>
+                          {p.tip === 'materijal' && (
+                            <span className="ml-2 inline-flex items-center rounded px-1.5 py-px text-[9.5px] font-semibold bg-violet-50 text-violet-600 border border-violet-100">materijal</span>
+                          )}
                           {p.barkod && (
                             <span className="ml-2 font-mono text-[10px] text-slate-300">{p.barkod}</span>
                           )}
@@ -1103,29 +1156,37 @@ function ArtikliTab({
                                 ? 'bg-amber-50 text-amber-700'
                                 : 'bg-red-50 text-red-600'
                           )}>
-                            {stock}
+                            {jePloca(p)
+                              ? `${stock.toFixed(2)} m² · ≈ ${m2UKom(stock, p.plocaSirina!, p.plocaVisina!)} pl.`
+                              : stock}
                           </span>
                         </td>
                         <td className="pr-5 pl-2 py-2.5 text-right">
-                          <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-7 text-xs px-2"
-                              onClick={(e) => { e.stopPropagation(); handleEdit(p); }}
-                            >
-                              <Pencil className="h-3 w-3 mr-1" />
-                              Uredi
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-7 text-xs px-2 text-red-500 hover:text-red-600 hover:bg-red-50"
-                              onClick={(e) => { e.stopPropagation(); handleDelete(p); }}
-                            >
-                              <Trash2 className="h-3 w-3" />
-                            </Button>
-                          </div>
+                          {p.tip === 'materijal' ? (
+                            <span className="text-[10.5px] text-slate-400 italic opacity-0 group-hover:opacity-100 transition-opacity">
+                              uredi u Šifarniku → Materijal
+                            </span>
+                          ) : (
+                            <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 text-xs px-2"
+                                onClick={(e) => { e.stopPropagation(); handleEdit(p); }}
+                              >
+                                <Pencil className="h-3 w-3 mr-1" />
+                                Uredi
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 text-xs px-2 text-red-500 hover:text-red-600 hover:bg-red-50"
+                                onClick={(e) => { e.stopPropagation(); handleDelete(p); }}
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          )}
                         </td>
                       </tr>
                     );
@@ -1522,11 +1583,13 @@ export default function SkladisteScreen() {
   const [products, setProducts] = useState<Product[]>([]);
   const [dobavljaci, setDobavljaci] = useState<Dobavljac[]>([]);
   const [activeTab, setActiveTab] = useState<SkladisteTab>('artikli');
+  const proizvodnja = useProizvodnja();
 
   const loadProducts = useCallback(async () => {
-    const data = await window.api.getProducts('artikal');
-    setProducts(data);
-  }, []);
+    const artikli = await window.api.getProducts('artikal');
+    const materijal = proizvodnja ? await window.api.getProducts('materijal') : [];
+    setProducts([...artikli, ...materijal]);
+  }, [proizvodnja]);
 
   const loadDobavljaci = useCallback(async () => {
     const data = await window.api.getDobavljaci();
