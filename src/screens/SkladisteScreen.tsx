@@ -361,8 +361,8 @@ interface StavkaRow {
 }
 
 /** Ploča se u primci kuca u komadima; baza vodi m² i nabavnu po m². */
-function uBazuPrimke(p: Product, kolicinaUnos: number, nabavnaUnos: number): { kolicina: number; nabavnaCijena: number } {
-  if (!jePloca(p)) return { kolicina: kolicinaUnos, nabavnaCijena: nabavnaUnos };
+function uBazuPrimke(p: Product | undefined, kolicinaUnos: number, nabavnaUnos: number): { kolicina: number; nabavnaCijena: number } {
+  if (!p || !jePloca(p)) return { kolicina: kolicinaUnos, nabavnaCijena: nabavnaUnos };
   const poPloci = m2PoPloci(p.plocaSirina!, p.plocaVisina!);
   return {
     kolicina: komUM2(kolicinaUnos, p.plocaSirina!, p.plocaVisina!),
@@ -541,15 +541,15 @@ function NovaPrimkaDialog({
         brojFakture: brojFakture || undefined,
         napomena: napomena || undefined,
         stavke: validStavke.map((s) => {
-          const p = products.find(pr => pr.id === s.productId)!;
+          const p = products.find(pr => pr.id === s.productId);
           const baza = uBazuPrimke(p, parseDecimal(s.kolicina), parseDecimal(s.nabavnaCijena));
           return {
             productId: s.productId,
             kolicina: baza.kolicina,
             nabavnaCijena: baza.nabavnaCijena,
             rabat: parseDecimal(s.rabat) || 0,
-            cijena: p.tip === 'materijal' ? 0 : parseDecimal(s.cijena),
-            pdvStopa: p.pdvStopa ?? 'E',
+            cijena: p?.tip === 'materijal' ? 0 : parseDecimal(s.cijena),
+            pdvStopa: p?.pdvStopa ?? 'E',
           };
         }),
       };
