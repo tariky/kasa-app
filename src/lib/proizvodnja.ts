@@ -452,9 +452,30 @@ export function osigurajProdajnuUslugu(db: SqlDb): number {
 const izdavanjaUToku = new Set<number>();
 
 /**
+ * Upiše fakturisanje naloga (status → fakturisan, racunId) u transakciji.
+ * Račun je u tom trenutku već odštampan (ili je već postojao) — greška ovdje
+ * ne smije proći nezapaženo jer nalog i knjigovodstvo ispadnu iz sinhrona.
+ */
+function knjiziFakturisanjeNaloga(
+  db: SqlDb, transaction: KonverzijaDeps['transaction'],
+  nalogId: number, racunId: number, brojFiskalnogRacuna: string | null
+): void {
+  try {
+    transaction(() => fakturisiNalog(db, nalogId, racunId))();
+  } catch (err: any) {
+    throw new Error(
+      `Račun ${brojFiskalnogRacuna ?? '?'} JE odštampan, ali nalog nije zabilježen kao fakturisan u bazi: ` +
+      `${err?.message || 'nepoznata greška'}. Evidentirajte nalog ručno.`
+    );
+  }
+}
+
+/**
  * Fiskalni račun za završen nalog po narudžbi. Nalog iz ponude ide kroz
  * konverziju ponude (stvarne stavke); samostalan nalog ide kao jedna stavka
  * usluge "Namještaj po mjeri" po dogovorenoj cijeni. Upis tek nakon štampe.
+ * Ako je ponuda već konvertovana direktno (npr. sa ekrana Ponude), nalog se
+ * samo poveže sa postojećim računom — bez ponovne štampe.
  */
 export async function izdajRacunZaNalog(
   deps: KonverzijaDeps,
@@ -469,8 +490,21 @@ export async function izdajRacunZaNalog(
   izdavanjaUToku.add(nalog.id);
   try {
     if (nalog.ponudaId) {
+      const ponuda = db.prepare('SELECT status, racunId FROM ponude WHERE id = ?').get(nalog.ponudaId) as
+        { status: string; racunId: number | null } | undefined;
+
+      if (ponuda?.status === 'konvertovana' && ponuda.racunId) {
+        const order = db.prepare('SELECT brojFiskalnogRacuna FROM orders WHERE id = ?').get(ponuda.racunId) as
+          { brojFiskalnogRacuna: string | null } | undefined;
+        const brojFiskalnogRacuna = order?.brojFiskalnogRacuna ?? null;
+        knjiziFakturisanjeNaloga(db, transaction, nalog.id, ponuda.racunId, brojFiskalnogRacuna);
+        return { success: true, racunId: ponuda.racunId, brojFiskalnogRacuna, odgovori: {} };
+      }
+
       const res = await konvertujPonudu(deps, { id: nalog.ponudaId, korisnikId: data.korisnikId, nacinPlacanja: data.nacinPlacanja });
-      if (res.success && res.racunId) transaction(() => fakturisiNalog(db, nalog.id, res.racunId!))();
+      if (res.success && res.racunId) {
+        knjiziFakturisanjeNaloga(db, transaction, nalog.id, res.racunId, res.brojFiskalnogRacuna ?? null);
+      }
       return res;
     }
 

@@ -2,7 +2,7 @@ import { test, expect, beforeEach } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { schema } from '@/database/schema';
 import type { SqlDb } from './sqldb';
-import type { KonverzijaDeps } from './ponuda';
+import { konvertujPonudu, type KonverzijaDeps } from './ponuda';
 import {
   nextBrojNaloga, formatBrojNaloga, createNalog, createNalogIzPonude, updateNalog,
   replaceStavke, getNalog, listNalozi, deleteNalog, getNormativ, saveNormativ, nalogZaPonudu,
@@ -483,6 +483,36 @@ test('nalog iz ponude: račun ide kroz konverziju ponude, nalog pokupi racunId',
   const n = getNalog(db, r.id);
   expect(n.status).toBe('fakturisan');
   expect(n.racunId).toBe(p.racunId);
+});
+
+test('nalog iz ponude koja je već konvertovana (direktno na ekranu Ponude) se fakturiše bez ponovne štampe', async () => {
+  const k = dodajKupca(db);
+  const a1 = dodajArtikal(db, 'KUH', 1000);
+  db.prepare(`INSERT INTO ponude (id, broj, godina, kupacId, korisnikId, datum, vaziDo, status, ukupno, pdvIznos)
+    VALUES (7, 1, 2026, ?, 1, '2026-09-01', '2026-09-09', 'prihvacena', 1000, 145.30)`).run(k);
+  db.prepare("INSERT INTO ponuda_stavke (ponudaId, productId, kolicina, cijena, rabat, pdvStopa) VALUES (7, ?, 1, 1000, 0, 'E')").run(a1);
+  const iv = dodajMaterijal(db, 'IV');
+  const r = createNalogIzPonude(db, 7, 1);
+  replaceStavke(db, r.id, [{ materijalId: iv, kolicina: 1 }]);
+  zavrsiNalog(db, r.id);
+
+  // Ponuda se konvertuje direktno (npr. sa ekrana Ponude), mimo naloga.
+  const { print: printKonverzija } = printOk('50');
+  const konv = await konvertujPonudu(deps(printKonverzija), { id: 7, korisnikId: 1, nacinPlacanja: 'Gotovina' });
+  expect(konv.success).toBe(true);
+
+  const { print, calls } = printOk('99'); // ne smije se pozvati
+  const res = await izdajRacunZaNalog(deps(print), { id: r.id, korisnikId: 1, nacinPlacanja: 'Gotovina' });
+
+  expect(calls.length).toBe(0); // nema nove štampe
+  expect(res.success).toBe(true);
+  expect(res.racunId).toBe(konv.racunId);
+  expect(res.brojFiskalnogRacuna).toBe('50');
+  expect(res.odgovori).toEqual({});
+
+  const n = getNalog(db, r.id);
+  expect(n.status).toBe('fakturisan');
+  expect(n.racunId).toBe(konv.racunId);
 });
 
 // ── jeArtikalUProizvodnji ─────────────────────────────────
