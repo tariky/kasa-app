@@ -192,6 +192,10 @@ Indeksi: `radni_nalog_stavke(radniNalogId)`, `radni_nalozi(status)`,
   otvorenim nalogom).
 - **Brisanje materijala** iz šifarnika blokirano ako figuriše na normativu ili
   stavci naloga (isti obrazac kao `isDobavljacUsed`).
+- **Dopuna (implementacija):** materijal se uređuje u Šifarniku na kartici
+  „Materijal" (`MaterijalTab`), a ne kroz dijalog artikla u Skladištu — dijalog
+  artikla je vezan za prodajnu cijenu i PDV koje materijal nema. Skladište i
+  dalje prikazuje stanje materijala i prima ga primkom.
 
 ### 4. IPC (`handlers.ts`)
 
