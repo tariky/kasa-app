@@ -6,6 +6,7 @@ import {
   nextBrojNaloga, formatBrojNaloga, createNalog, createNalogIzPonude, updateNalog,
   replaceStavke, getNalog, listNalozi, deleteNalog, getNormativ, saveNormativ, nalogZaPonudu,
   getProsjecnaNabavna, kalkulacija, kalkulacijaNaloga, setStatusNaloga, zavrsiNalog, vratiUIzradu, fakturisiNalog,
+  izdajRacunZaNalog, osigurajProdajnuUslugu, PRODAJNA_USLUGA,
 } from './proizvodnja';
 import { getProductStock } from './skladiste';
 
@@ -346,4 +347,108 @@ test('fakturisan nalog se ne može vratiti u izradu; fakturisiNalog samo za zavr
   replaceStavke(db, z.id, [{ materijalId: iv, kolicina: 1 }]);
   zavrsiNalog(db, z.id);
   expect(() => fakturisiNalog(db, z.id, 55)).toThrow('narudžb');
+});
+
+// ── izdajRacunZaNalog ────────────────────────────────────
+
+function printOk(broj = '91') {
+  const calls: any[] = [];
+  const print = async (racun: any) => {
+    calls.push(racun);
+    return { success: true, odgovori: { BrojFiskalnogRacuna: broj } } as any;
+  };
+  return { print, calls };
+}
+const printFail = async () => ({ success: false, error: 'Štampač ne odgovara', odgovori: {} } as any);
+function deps(print: any) {
+  return { db, print, transaction: (fn: any) => db.transaction(fn) };
+}
+
+test('osigurajProdajnuUslugu kreira uslugu NAMJ jednom', () => {
+  const a = osigurajProdajnuUslugu(db);
+  const b = osigurajProdajnuUslugu(db);
+  expect(a).toBe(b);
+  const p = db.prepare('SELECT * FROM products WHERE id = ?').get(a) as any;
+  expect(p.sifra).toBe(PRODAJNA_USLUGA.sifra);
+  expect(p.tip).toBe('usluga');
+  expect(p.pdvStopa).toBe('E');
+});
+
+test('samostalni nalog: račun sa jednom stavkom po dogovorenoj cijeni, nalog fakturisan', async () => {
+  const k = dodajKupca(db, 'Mujić');
+  const iv = dodajMaterijal(db, 'IV');
+  primka(db, iv, 10, 10);
+  const r = createNalog(db, { vrsta: 'narudzba', korisnikId: 1, kupacId: k, opis: 'Kuhinja', dogovorenaCijena: 2340 });
+  replaceStavke(db, r.id, [{ materijalId: iv, kolicina: 2 }]);
+  zavrsiNalog(db, r.id);
+
+  const { print, calls } = printOk('91');
+  const res = await izdajRacunZaNalog(deps(print), { id: r.id, korisnikId: 1, nacinPlacanja: 'Kartica' });
+  expect(res.success).toBe(true);
+  expect(res.brojFiskalnogRacuna).toBe('91');
+
+  expect(calls[0].stavke.length).toBe(1);
+  expect(calls[0].stavke[0].artikal.naziv).toBe(PRODAJNA_USLUGA.naziv);
+  expect(calls[0].stavke[0].artikal.cijena).toBe(2340);
+  expect(calls[0].kupac.naziv).toBe('Mujić');
+
+  const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(res.racunId) as any;
+  expect(order.ukupno).toBe(2340);
+  expect(order.nacinPlacanja).toBe('Kartica');
+  expect(order.kupacNaziv).toBe('Mujić');
+  const items = db.prepare('SELECT * FROM order_items WHERE orderId = ?').all(res.racunId) as any[];
+  expect(items.length).toBe(1);
+  // usluga ne dira skladište
+  expect(db.prepare("SELECT COUNT(*) AS c FROM stock_movements WHERE referenceType = 'order'").get()).toEqual({ c: 0 });
+
+  const n = getNalog(db, r.id);
+  expect(n.status).toBe('fakturisan');
+  expect(n.racunId).toBe(res.racunId);
+  expect(n.racunBroj).toBe('91');
+});
+
+test('nalog bez dogovorene cijene ili nezavršen ne ide na štampu', async () => {
+  const k = dodajKupca(db);
+  const iv = dodajMaterijal(db, 'IV');
+  const r = createNalog(db, { vrsta: 'narudzba', korisnikId: 1, kupacId: k, opis: 'X' });
+  replaceStavke(db, r.id, [{ materijalId: iv, kolicina: 1 }]);
+  const { print, calls } = printOk();
+  await expect(izdajRacunZaNalog(deps(print), { id: r.id, korisnikId: 1, nacinPlacanja: 'Gotovina' })).rejects.toThrow('završen');
+  zavrsiNalog(db, r.id);
+  await expect(izdajRacunZaNalog(deps(print), { id: r.id, korisnikId: 1, nacinPlacanja: 'Gotovina' })).rejects.toThrow('Dogovorena cijena');
+  expect(calls.length).toBe(0);
+});
+
+test('neuspjela štampa ne mijenja nalog ni bazu', async () => {
+  const k = dodajKupca(db);
+  const iv = dodajMaterijal(db, 'IV');
+  const r = createNalog(db, { vrsta: 'narudzba', korisnikId: 1, kupacId: k, opis: 'X', dogovorenaCijena: 100 });
+  replaceStavke(db, r.id, [{ materijalId: iv, kolicina: 1 }]);
+  zavrsiNalog(db, r.id);
+  const res = await izdajRacunZaNalog(deps(printFail), { id: r.id, korisnikId: 1, nacinPlacanja: 'Gotovina' });
+  expect(res.success).toBe(false);
+  expect(db.prepare('SELECT COUNT(*) AS c FROM orders').get()).toEqual({ c: 0 });
+  expect(getNalog(db, r.id).status).toBe('zavrsen');
+});
+
+test('nalog iz ponude: račun ide kroz konverziju ponude, nalog pokupi racunId', async () => {
+  const k = dodajKupca(db);
+  const a1 = dodajArtikal(db, 'KUH', 1000);
+  db.prepare(`INSERT INTO ponude (id, broj, godina, kupacId, korisnikId, datum, vaziDo, status, ukupno, pdvIznos)
+    VALUES (7, 1, 2026, ?, 1, '2026-09-01', '2026-09-09', 'prihvacena', 1000, 145.30)`).run(k);
+  db.prepare("INSERT INTO ponuda_stavke (ponudaId, productId, kolicina, cijena, rabat, pdvStopa) VALUES (7, ?, 1, 1000, 0, 'E')").run(a1);
+  const iv = dodajMaterijal(db, 'IV');
+  const r = createNalogIzPonude(db, 7, 1);
+  replaceStavke(db, r.id, [{ materijalId: iv, kolicina: 1 }]);
+  zavrsiNalog(db, r.id);
+
+  const { print, calls } = printOk('92');
+  const res = await izdajRacunZaNalog(deps(print), { id: r.id, korisnikId: 1, nacinPlacanja: 'Gotovina' });
+  expect(res.success).toBe(true);
+  expect(calls[0].stavke[0].artikal.naziv).toBe('Proizvod KUH'); // stavke sa ponude, ne NAMJ
+  const p = db.prepare('SELECT status, racunId FROM ponude WHERE id = 7').get() as any;
+  expect(p.status).toBe('konvertovana');
+  const n = getNalog(db, r.id);
+  expect(n.status).toBe('fakturisan');
+  expect(n.racunId).toBe(p.racunId);
 });

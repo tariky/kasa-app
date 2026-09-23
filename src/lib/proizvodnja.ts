@@ -2,6 +2,9 @@ import type { SqlDb } from './sqldb';
 import { localDateStr, round2 } from './novac';
 import { uNetto } from './pdvUnos';
 import { getProductStock } from './skladiste';
+import { izracunajTotale, upisiRacun } from './racun';
+import { buildTringRacun } from './tringRacun';
+import { konvertujPonudu, type KonverzijaDeps, type KonverzijaResult } from './ponuda';
 import type {
   NalogStatus, NalogVrsta, NormativStavka, RadniNalog, RadniNalogStavka,
 } from '@/types';
@@ -408,4 +411,88 @@ export function fakturisiNalog(db: SqlDb, id: number, racunId: number): void {
   if (n.vrsta !== 'narudzba') throw new Error('Račun se izdaje samo za nalog po narudžbi');
   if (n.status !== 'zavrsen') throw new Error('Nalog mora biti završen prije izdavanja računa');
   db.prepare("UPDATE radni_nalozi SET status = 'fakturisan', racunId = ? WHERE id = ?").run(racunId, id);
+}
+
+// ── izdavanje računa ─────────────────────────────────────
+
+/** Usluga preko koje se prodaje rad po mjeri — kreira se pri uključivanju modula. */
+export const PRODAJNA_USLUGA = { sifra: 'NAMJ', naziv: 'Namještaj po mjeri' } as const;
+
+export function osigurajProdajnuUslugu(db: SqlDb): number {
+  const row = db.prepare('SELECT id FROM products WHERE sifra = ?').get(PRODAJNA_USLUGA.sifra) as { id: number } | undefined;
+  if (row) return row.id;
+  const r = db.prepare(
+    "INSERT INTO products (sifra, naziv, jm, cijena, pdvStopa, tip) VALUES (?, ?, 'kom', 0, 'E', 'usluga')"
+  ).run(PRODAJNA_USLUGA.sifra, PRODAJNA_USLUGA.naziv);
+  return Number(r.lastInsertRowid);
+}
+
+const izdavanjaUToku = new Set<number>();
+
+/**
+ * Fiskalni račun za završen nalog po narudžbi. Nalog iz ponude ide kroz
+ * konverziju ponude (stvarne stavke); samostalan nalog ide kao jedna stavka
+ * usluge "Namještaj po mjeri" po dogovorenoj cijeni. Upis tek nakon štampe.
+ */
+export async function izdajRacunZaNalog(
+  deps: KonverzijaDeps,
+  data: { id: number; korisnikId: number; nacinPlacanja: string }
+): Promise<KonverzijaResult> {
+  const { db, print, transaction } = deps;
+  const nalog = getNalog(db, data.id);
+  if (nalog.vrsta !== 'narudzba') throw new Error('Račun se izdaje samo za nalog po narudžbi');
+  if (nalog.status !== 'zavrsen') throw new Error('Nalog mora biti završen prije izdavanja računa');
+  if (izdavanjaUToku.has(nalog.id)) throw new Error('Izdavanje računa za ovaj nalog je već u toku');
+
+  izdavanjaUToku.add(nalog.id);
+  try {
+    if (nalog.ponudaId) {
+      const res = await konvertujPonudu(deps, { id: nalog.ponudaId, korisnikId: data.korisnikId, nacinPlacanja: data.nacinPlacanja });
+      if (res.success && res.racunId) transaction(() => fakturisiNalog(db, nalog.id, res.racunId!))();
+      return res;
+    }
+
+    if (!(nalog.dogovorenaCijena! > 0)) throw new Error('Dogovorena cijena mora biti upisana prije izdavanja računa');
+    const uslugaId = osigurajProdajnuUslugu(db);
+    const stavke = [{
+      productId: uslugaId, kolicina: 1, cijena: nalog.dogovorenaCijena!, rabat: 0, pdvStopa: 'E',
+      productSifra: PRODAJNA_USLUGA.sifra, productNaziv: PRODAJNA_USLUGA.naziv, productJm: 'kom', productTip: 'usluga',
+    }];
+    const { ukupno, pdvIznos } = izracunajTotale(stavke);
+    const kupac = nalog.kupacId
+      ? db.prepare('SELECT * FROM kupci WHERE id = ?').get(nalog.kupacId) as any
+      : null;
+
+    const racun = buildTringRacun({
+      stavke, ukupno, nacinPlacanja: data.nacinPlacanja,
+      kupac: kupac ? {
+        idBroj: kupac.idBroj, naziv: kupac.naziv, adresa: kupac.adresa || '',
+        postanskiBroj: kupac.postanskiBroj || '', grad: kupac.grad || '',
+      } : undefined,
+    });
+    const result = await print(racun);
+    if (!result || !result.success) {
+      return { success: false, error: result?.error || result?.vrstaOdgovora || 'Nepoznata greška', odgovori: result?.odgovori ?? {} };
+    }
+    const brojFiskalnogRacuna = result.odgovori?.BrojFiskalnogRacuna || null;
+
+    try {
+      const racunId = transaction(() => {
+        const orderId = upisiRacun(db, {
+          korisnikId: data.korisnikId, ukupno, pdvIznos, nacinPlacanja: data.nacinPlacanja,
+          brojFiskalnogRacuna, kupac, stavke,
+        });
+        fakturisiNalog(db, nalog.id, orderId);
+        return orderId;
+      })();
+      return { success: true, racunId, brojFiskalnogRacuna, odgovori: result.odgovori };
+    } catch (err: any) {
+      throw new Error(
+        `Račun ${brojFiskalnogRacuna ?? '?'} JE odštampan, ali nije zabilježen u bazi: ` +
+        `${err?.message || 'nepoznata greška'}. Evidentirajte račun ručno.`
+      );
+    }
+  } finally {
+    izdavanjaUToku.delete(nalog.id);
+  }
 }

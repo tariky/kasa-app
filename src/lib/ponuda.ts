@@ -1,6 +1,6 @@
 import type * as Tring from '@/services/tring';
 import type { SqlDb } from './sqldb';
-import { izracunajTotale } from './racun';
+import { izracunajTotale, upisiRacun } from './racun';
 import { localDateStr } from './novac';
 import { buildTringRacun } from './tringRacun';
 
@@ -235,31 +235,13 @@ export async function konvertujPonudu(
 
     try {
       const racunId = transaction(() => {
-        const orderRes = db.prepare(`
-          INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, status,
-            kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj)
-          VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?)
-        `).run(
-          data.korisnikId, ponuda.ukupno, ponuda.pdvIznos, data.nacinPlacanja, brojFiskalnogRacuna,
-          kupac?.naziv ?? null, kupac?.idBroj ?? null, kupac?.adresa ?? null,
-          kupac?.grad ?? null, kupac?.postanskiBroj ?? null
-        );
-        const orderId = Number(orderRes.lastInsertRowid);
-
-        const insertItem = db.prepare(
-          'INSERT INTO order_items (orderId, productId, kolicina, cijena, rabat, pdvStopa) VALUES (?, ?, ?, ?, ?, ?)'
-        );
-        const insertStock = db.prepare(
-          "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'izlaz', ?, 'order', ?)"
-        );
-        for (const s of stavke) {
-          insertItem.run(orderId, s.productId, s.kolicina, s.cijena, s.rabat, s.pdvStopa);
-          if (s.productTip !== 'usluga') insertStock.run(s.productId, s.kolicina, orderId);
-        }
-
+        const orderId = upisiRacun(db, {
+          korisnikId: data.korisnikId, ukupno: ponuda.ukupno, pdvIznos: ponuda.pdvIznos,
+          nacinPlacanja: data.nacinPlacanja, brojFiskalnogRacuna,
+          kupac: kupac ?? null, stavke,
+        });
         db.prepare("UPDATE ponude SET status = 'konvertovana', racunId = ? WHERE id = ?")
           .run(orderId, id);
-
         return orderId;
       })();
 
