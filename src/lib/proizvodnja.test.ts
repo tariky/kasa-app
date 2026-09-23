@@ -5,7 +5,9 @@ import type { SqlDb } from './sqldb';
 import {
   nextBrojNaloga, formatBrojNaloga, createNalog, createNalogIzPonude, updateNalog,
   replaceStavke, getNalog, listNalozi, deleteNalog, getNormativ, saveNormativ, nalogZaPonudu,
+  getProsjecnaNabavna, kalkulacija, kalkulacijaNaloga, setStatusNaloga, zavrsiNalog, vratiUIzradu, fakturisiNalog,
 } from './proizvodnja';
+import { getProductStock } from './skladiste';
 
 let db: SqlDb & Database;
 
@@ -189,4 +191,159 @@ test('saveNormativ zamjenjuje cijeli set i vraća JOIN polja', () => {
   expect(n[0].materijalNaziv).toBe('Materijal KANT');
   expect(n[0].materijalJm).toBe('m');
   expect(() => saveNormativ(db, iv, [])).toThrow('artikal');
+});
+
+// ── prosječna nabavna ────────────────────────────────────
+test('prosječna nabavna je ponderisana po količini; bez primki 0', () => {
+  const iv = dodajMaterijal(db, 'IV18', 'm²', [2800, 2070]);
+  expect(getProsjecnaNabavna(db, iv)).toBe(0);
+  primka(db, iv, 10, 10);   // 100
+  primka(db, iv, 30, 14);   // 420 → 520 / 40 = 13
+  expect(getProsjecnaNabavna(db, iv)).toBe(13);
+});
+
+// ── kalkulacija ──────────────────────────────────────────
+test('kalkulacija za narudžbu: marža prema neto dogovorene cijene', () => {
+  const k = kalkulacija(
+    { vrsta: 'narudzba', kolicina: 1, dogovorenaCijena: 1170, trosakRada: 100, status: 'otvoren' },
+    [
+      { id: 1, radniNalogId: 1, materijalId: 1, kolicina: 10, nabavnaCijena: null, naziv: 'IV', trenutnaCijena: 13, stanje: 20 } as any,
+      { id: 2, radniNalogId: 1, materijalId: 2, kolicina: 4, nabavnaCijena: null, naziv: 'Kant', trenutnaCijena: 0.5, stanje: 1 } as any,
+    ]
+  );
+  expect(k.materijal).toBe(132);
+  expect(k.rad).toBe(100);
+  expect(k.ukupno).toBe(232);
+  expect(k.neto).toBe(1000);
+  expect(k.marza).toBe(768);
+  expect(k.marzaPct).toBe(76.8);
+  expect(k.upozorenja).toEqual(['Kant: utrošak 4 prelazi stanje 1']);
+  expect(k.stavke[0].zamrznuto).toBe(false);
+});
+
+test('kalkulacija: materijal bez primke daje upozorenje', () => {
+  const k = kalkulacija(
+    { vrsta: 'narudzba', kolicina: 1, dogovorenaCijena: 117, trosakRada: 0, status: 'otvoren' },
+    [{ id: 1, radniNalogId: 1, materijalId: 1, kolicina: 2, nabavnaCijena: null, naziv: 'Staklo', trenutnaCijena: 0, stanje: 5 } as any]
+  );
+  expect(k.materijal).toBe(0);
+  expect(k.upozorenja).toEqual(['Staklo: nema nabavne cijene (nema primke)']);
+});
+
+test('kalkulacija za zalihu: trošak po komadu; zamrznuta cijena ima prednost', () => {
+  const k = kalkulacija(
+    { vrsta: 'zaliha', kolicina: 4, dogovorenaCijena: null, trosakRada: 40, status: 'zavrsen' },
+    [{ id: 1, radniNalogId: 1, materijalId: 1, kolicina: 8, nabavnaCijena: 12, naziv: 'IV', trenutnaCijena: 99, stanje: 0 } as any]
+  );
+  expect(k.materijal).toBe(96);
+  expect(k.ukupno).toBe(136);
+  expect(k.poKomadu).toBe(34);
+  expect(k.neto).toBeUndefined();
+  expect(k.stavke[0].zamrznuto).toBe(true);
+  expect(k.upozorenja).toEqual([]); // završen nalog ne upozorava na stanje
+});
+
+// ── statusi i knjiženje ──────────────────────────────────
+test('prelazi statusa: otvoren → u_izradi, ostalo odbijeno', () => {
+  const k = dodajKupca(db);
+  const r = createNalog(db, { vrsta: 'narudzba', korisnikId: 1, kupacId: k, opis: 'X' });
+  setStatusNaloga(db, r.id, 'u_izradi');
+  expect(getNalog(db, r.id).status).toBe('u_izradi');
+  expect(() => setStatusNaloga(db, r.id, 'u_izradi')).toThrow();
+  expect(() => zavrsiNalog(db, r.id)).toThrow('stavk'); // nema stavki
+});
+
+test('završetak knjiži izlaz materijala i zamrzava prosječnu cijenu', () => {
+  const k = dodajKupca(db);
+  const iv = dodajMaterijal(db, 'IV18', 'm²', [2800, 2070]);
+  const kant = dodajMaterijal(db, 'KANT', 'm');
+  primka(db, iv, 40, 13);
+  primka(db, kant, 100, 0.5);
+  const r = createNalog(db, { vrsta: 'narudzba', korisnikId: 1, kupacId: k, opis: 'Kuhinja', dogovorenaCijena: 2340 });
+  replaceStavke(db, r.id, [{ materijalId: iv, kolicina: 10 }, { materijalId: kant, kolicina: 20 }]);
+
+  zavrsiNalog(db, r.id);
+
+  const n = getNalog(db, r.id);
+  expect(n.status).toBe('zavrsen');
+  expect(n.zavrsenAt).toBeTruthy();
+  expect(n.stavke!.map(s => s.nabavnaCijena)).toEqual([13, 0.5]);
+  expect(getProductStock(db, iv)).toBe(30);
+  expect(getProductStock(db, kant)).toBe(80);
+  const mv = db.prepare("SELECT * FROM stock_movements WHERE referenceType = 'radni_nalog' AND referenceId = ?").all(r.id) as any[];
+  expect(mv.length).toBe(2);
+  expect(mv.every(m => m.tip === 'izlaz')).toBe(true);
+
+  // kasnija primka po drugoj cijeni ne mijenja završenu kalkulaciju
+  primka(db, iv, 40, 20);
+  expect(kalkulacijaNaloga(db, r.id).materijal).toBe(140);
+  expect(() => replaceStavke(db, r.id, [])).toThrow('završen');
+});
+
+test('završetak naloga za zalihu knjiži i ulaz gotovog proizvoda', () => {
+  const art = dodajArtikal(db, 'LINA');
+  const iv = dodajMaterijal(db, 'IV18', 'm²', [2800, 2070]);
+  primka(db, iv, 40, 13);
+  const r = createNalog(db, { vrsta: 'zaliha', korisnikId: 1, productId: art, kolicina: 3 });
+  replaceStavke(db, r.id, [{ materijalId: iv, kolicina: 6 }]);
+  zavrsiNalog(db, r.id);
+  expect(getProductStock(db, art)).toBe(3);
+  expect(getProductStock(db, iv)).toBe(34);
+  const ulaz = db.prepare("SELECT * FROM stock_movements WHERE productId = ? AND tip = 'ulaz'").get(art) as any;
+  expect(ulaz.referenceType).toBe('radni_nalog');
+  expect(ulaz.referenceId).toBe(r.id);
+});
+
+test('završetak ne blokira kad stanja nema, ali kalkulacija upozorava', () => {
+  const k = dodajKupca(db);
+  const iv = dodajMaterijal(db, 'IV18', 'm²', [2800, 2070]);
+  primka(db, iv, 2, 13);
+  const r = createNalog(db, { vrsta: 'narudzba', korisnikId: 1, kupacId: k, opis: 'X', dogovorenaCijena: 100 });
+  replaceStavke(db, r.id, [{ materijalId: iv, kolicina: 5 }]);
+  expect(kalkulacijaNaloga(db, r.id).upozorenja).toEqual(['Materijal IV18: utrošak 5 prelazi stanje 2']);
+  zavrsiNalog(db, r.id);
+  expect(getProductStock(db, iv)).toBe(-3);
+});
+
+test('vraćanje u izradu briše knjiženja; ponovni završetak uzima novu prosječnu cijenu', () => {
+  const art = dodajArtikal(db, 'LINA');
+  const iv = dodajMaterijal(db, 'IV18', 'm²', [2800, 2070]);
+  primka(db, iv, 10, 10);
+  const r = createNalog(db, { vrsta: 'zaliha', korisnikId: 1, productId: art, kolicina: 1 });
+  replaceStavke(db, r.id, [{ materijalId: iv, kolicina: 2 }]);
+  zavrsiNalog(db, r.id);
+
+  vratiUIzradu(db, r.id);
+  const n = getNalog(db, r.id);
+  expect(n.status).toBe('u_izradi');
+  expect(n.zavrsenAt).toBeNull();
+  expect(n.stavke![0].nabavnaCijena).toBeNull();
+  expect(getProductStock(db, iv)).toBe(10);
+  expect(getProductStock(db, art)).toBe(0);
+
+  primka(db, iv, 10, 20); // prosjek sad 15
+  zavrsiNalog(db, r.id);
+  expect(getNalog(db, r.id).stavke![0].nabavnaCijena).toBe(15);
+  expect(getProductStock(db, iv)).toBe(18);
+});
+
+test('fakturisan nalog se ne može vratiti u izradu; fakturisiNalog samo za završenu narudžbu', () => {
+  const k = dodajKupca(db);
+  const iv = dodajMaterijal(db, 'IV');
+  const r = createNalog(db, { vrsta: 'narudzba', korisnikId: 1, kupacId: k, opis: 'X', dogovorenaCijena: 100 });
+  replaceStavke(db, r.id, [{ materijalId: iv, kolicina: 1 }]);
+  expect(() => fakturisiNalog(db, r.id, 1)).toThrow('završen');
+  zavrsiNalog(db, r.id);
+  db.prepare("INSERT INTO orders (id, korisnikId, ukupno, pdvIznos, nacinPlacanja, status) VALUES (55, 1, 100, 14.53, 'Gotovina', 'completed')").run();
+  fakturisiNalog(db, r.id, 55);
+  const n = getNalog(db, r.id);
+  expect(n.status).toBe('fakturisan');
+  expect(n.racunId).toBe(55);
+  expect(() => vratiUIzradu(db, r.id)).toThrow('fakturisan');
+
+  const art = dodajArtikal(db, 'A');
+  const z = createNalog(db, { vrsta: 'zaliha', korisnikId: 1, productId: art, kolicina: 1 });
+  replaceStavke(db, z.id, [{ materijalId: iv, kolicina: 1 }]);
+  zavrsiNalog(db, z.id);
+  expect(() => fakturisiNalog(db, z.id, 55)).toThrow('narudžb');
 });

@@ -1,5 +1,6 @@
 import type { SqlDb } from './sqldb';
-import { localDateStr } from './novac';
+import { localDateStr, round2 } from './novac';
+import { uNetto } from './pdvUnos';
 import { getProductStock } from './skladiste';
 import type {
   NalogStatus, NalogVrsta, NormativStavka, RadniNalog, RadniNalogStavka,
@@ -266,4 +267,145 @@ export function saveNormativ(db: SqlDb, productId: number, stavke: NalogStavkaIn
   db.prepare('DELETE FROM normativi WHERE productId = ?').run(productId);
   const ins = db.prepare('INSERT INTO normativi (productId, materijalId, kolicina, napomena) VALUES (?, ?, ?, ?)');
   for (const s of stavke) ins.run(productId, s.materijalId, round4(s.kolicina), s.napomena ?? null);
+}
+
+// ── nabavna cijena ───────────────────────────────────────
+
+/** Prosječna ponderisana nabavna cijena iz svih primki materijala; 0 bez primki. */
+export function getProsjecnaNabavna(db: SqlDb, materijalId: number): number {
+  const row = db.prepare(`
+    SELECT SUM(kolicina * nabavnaCijena) AS vrijednost, SUM(kolicina) AS kolicina
+    FROM primka_stavke WHERE productId = ?
+  `).get(materijalId) as { vrijednost: number | null; kolicina: number | null };
+  if (!row.kolicina || row.kolicina <= 0) return 0;
+  return round4((row.vrijednost ?? 0) / row.kolicina);
+}
+
+// ── kalkulacija ──────────────────────────────────────────
+
+export interface KalkulacijaStavka {
+  materijalId: number;
+  naziv: string;
+  jm: string;
+  kolicina: number;
+  cijena: number;
+  iznos: number;
+  stanje: number;
+  /** true = cijena zamrznuta pri završetku, false = trenutna prosječna. */
+  zamrznuto: boolean;
+}
+
+export interface Kalkulacija {
+  stavke: KalkulacijaStavka[];
+  materijal: number;
+  rad: number;
+  ukupno: number;
+  /** Narudžba: neto dogovorene cijene, marža KM i %. */
+  neto?: number;
+  marza?: number;
+  marzaPct?: number;
+  /** Zaliha: trošak po komadu. */
+  poKomadu?: number;
+  upozorenja: string[];
+}
+
+type NalogZaKalkulaciju = Pick<RadniNalog, 'vrsta' | 'kolicina' | 'dogovorenaCijena' | 'trosakRada' | 'status'>;
+type StavkaZaKalkulaciju = RadniNalogStavka & { trenutnaCijena: number; naziv?: string };
+
+/** Čista kalkulacija — bez baze, testabilna. */
+export function kalkulacija(nalog: NalogZaKalkulaciju, stavke: StavkaZaKalkulaciju[]): Kalkulacija {
+  const upozorenja: string[] = [];
+  const otvoren = nalog.status === 'otvoren' || nalog.status === 'u_izradi';
+
+  const ks: KalkulacijaStavka[] = stavke.map(s => {
+    const naziv = s.naziv ?? s.materijalNaziv ?? `#${s.materijalId}`;
+    const zamrznuto = s.nabavnaCijena != null;
+    const cijena = zamrznuto ? s.nabavnaCijena! : s.trenutnaCijena;
+    const stanje = s.stanje ?? 0;
+    if (cijena <= 0) upozorenja.push(`${naziv}: nema nabavne cijene (nema primke)`);
+    if (otvoren && s.kolicina > stanje) upozorenja.push(`${naziv}: utrošak ${s.kolicina} prelazi stanje ${stanje}`);
+    return {
+      materijalId: s.materijalId, naziv, jm: s.materijalJm ?? '', kolicina: s.kolicina,
+      cijena, iznos: round2(s.kolicina * cijena), stanje, zamrznuto,
+    };
+  });
+
+  const materijal = round2(ks.reduce((sum, s) => sum + s.iznos, 0));
+  const rad = round2(nalog.trosakRada ?? 0);
+  const ukupno = round2(materijal + rad);
+  const out: Kalkulacija = { stavke: ks, materijal, rad, ukupno, upozorenja };
+
+  if (nalog.vrsta === 'narudzba') {
+    const bruto = nalog.dogovorenaCijena ?? 0;
+    const neto = round2(uNetto(bruto, 'E'));
+    const marza = round2(neto - ukupno);
+    out.neto = neto;
+    out.marza = marza;
+    out.marzaPct = neto > 0 ? round2((marza / neto) * 100) : 0;
+  } else {
+    out.poKomadu = nalog.kolicina > 0 ? round2(ukupno / nalog.kolicina) : 0;
+  }
+  return out;
+}
+
+export function kalkulacijaNaloga(db: SqlDb, id: number): Kalkulacija {
+  const n = getNalog(db, id);
+  const stavke = (n.stavke ?? []).map(s => ({ ...s, trenutnaCijena: getProsjecnaNabavna(db, s.materijalId) }));
+  return kalkulacija(n, stavke);
+}
+
+// ── statusi i knjiženje ──────────────────────────────────
+
+export function setStatusNaloga(db: SqlDb, id: number, status: 'u_izradi'): void {
+  const n = ucitajNalogIliBaci(db, id);
+  if (status === 'u_izradi' && n.status === 'otvoren') {
+    db.prepare("UPDATE radni_nalozi SET status = 'u_izradi' WHERE id = ?").run(id);
+    return;
+  }
+  throw new Error(`Prelaz ${n.status} → ${status} nije dozvoljen`);
+}
+
+/**
+ * Završetak: izlaz materijala po stavkama (zamrzne prosječnu nabavnu), a za
+ * zalihu i ulaz gotovog proizvoda. Negativno stanje ne blokira — ploča se
+ * često potroši prije nego što se primka unese. U transakciji.
+ */
+export function zavrsiNalog(db: SqlDb, id: number): void {
+  const n = ucitajNalogIliBaci(db, id);
+  if (n.status !== 'otvoren' && n.status !== 'u_izradi') throw new Error('Nalog je već završen');
+  const stavke = db.prepare('SELECT id, materijalId, kolicina FROM radni_nalog_stavke WHERE radniNalogId = ?')
+    .all(id) as Array<{ id: number; materijalId: number; kolicina: number }>;
+  if (stavke.length === 0) throw new Error('Nalog nema stavki utroška');
+
+  const izlaz = db.prepare(
+    "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'izlaz', ?, 'radni_nalog', ?)"
+  );
+  const zamrzni = db.prepare('UPDATE radni_nalog_stavke SET nabavnaCijena = ? WHERE id = ?');
+  for (const s of stavke) {
+    zamrzni.run(getProsjecnaNabavna(db, s.materijalId), s.id);
+    izlaz.run(s.materijalId, s.kolicina, id);
+  }
+  if (n.vrsta === 'zaliha' && n.productId) {
+    db.prepare(
+      "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'ulaz', ?, 'radni_nalog', ?)"
+    ).run(n.productId, n.kolicina, id);
+  }
+  db.prepare("UPDATE radni_nalozi SET status = 'zavrsen', zavrsenAt = datetime('now','localtime') WHERE id = ?").run(id);
+}
+
+/** Poništi knjiženja završetka i otključaj nalog. Fakturisan nalog se ne vraća. U transakciji. */
+export function vratiUIzradu(db: SqlDb, id: number): void {
+  const n = ucitajNalogIliBaci(db, id);
+  if (n.status === 'fakturisan') throw new Error('Nalog je fakturisan i ne može se vratiti u izradu');
+  if (n.status !== 'zavrsen') throw new Error('Samo završen nalog se vraća u izradu');
+  db.prepare("DELETE FROM stock_movements WHERE referenceType = 'radni_nalog' AND referenceId = ?").run(id);
+  db.prepare('UPDATE radni_nalog_stavke SET nabavnaCijena = NULL WHERE radniNalogId = ?').run(id);
+  db.prepare("UPDATE radni_nalozi SET status = 'u_izradi', zavrsenAt = NULL WHERE id = ?").run(id);
+}
+
+export function fakturisiNalog(db: SqlDb, id: number, racunId: number): void {
+  const n = ucitajNalogIliBaci(db, id);
+  if (n.vrsta !== 'narudzba') throw new Error('Račun se izdaje samo za nalog po narudžbi');
+  if (n.status !== 'zavrsen') throw new Error('Nalog mora biti završen prije izdavanja računa');
+  db.prepare("UPDATE radni_nalozi SET status = 'fakturisan', racunId = ? WHERE id = ?").run(racunId, id);
 }
