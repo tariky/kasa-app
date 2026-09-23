@@ -11,6 +11,7 @@ import { NalogDialog } from '@/components/proizvodnja/NalogDialog';
 import { StavkeUtroska } from '@/components/proizvodnja/StavkeUtroska';
 import { KalkulacijaPanel } from '@/components/proizvodnja/KalkulacijaPanel';
 import { IzdajRacunDialog } from '@/components/proizvodnja/IzdajRacunDialog';
+import { NormativiTab } from '@/components/proizvodnja/NormativiTab';
 import type { Kalkulacija } from '@/lib/proizvodnja';
 import {
   RefreshCw, Plus, Pencil, Trash2, Hammer, ClipboardList, AlertTriangle, X, Factory, Play,
@@ -145,7 +146,7 @@ export default function ProizvodnjaScreen({ korisnikId, uloga, initialNalogId }:
       )}
 
       {tab === 'normativi' ? (
-        <div className="p-6 text-slate-400 text-[13px]">Normativi — uskoro</div>
+        <NormativiTab />
       ) : (
         <div className="flex-1 min-h-0 flex gap-4 p-5 overflow-hidden">
           {/* Lista */}
