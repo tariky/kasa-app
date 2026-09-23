@@ -162,8 +162,13 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
   useEffect(() => { loadPonude(); }, []);
 
   useEffect(() => {
-    if (!selected || !proizvodnja) { setNalogZaPonudu(null); return; }
-    window.api.getNalogZaPonudu(selected.id).then(setNalogZaPonudu).catch(() => setNalogZaPonudu(null));
+    setNalogZaPonudu(null);
+    if (!selected || !proizvodnja) return;
+    let cancelled = false;
+    window.api.getNalogZaPonudu(selected.id)
+      .then(r => { if (!cancelled) setNalogZaPonudu(r); })
+      .catch(() => { if (!cancelled) setNalogZaPonudu(null); });
+    return () => { cancelled = true; };
   }, [selected, proizvodnja]);
 
   const loadPonude = async () => {

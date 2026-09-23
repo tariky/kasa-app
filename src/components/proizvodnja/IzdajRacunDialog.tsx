@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { RadniNalog } from '@/types';
 import { formatBrojNaloga, PRODAJNA_USLUGA } from '@/lib/proizvodnja';
 import { cn, formatKM } from '@/lib/utils';
@@ -24,6 +24,10 @@ export function IzdajRacunDialog({ open, onOpenChange, nalog, korisnikId, onIzda
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const izPonude = !!nalog.ponudaId;
+
+  useEffect(() => {
+    if (open) { setErr(null); setPaymentType('Gotovina'); setBusy(false); }
+  }, [open, nalog.id]);
 
   const izdaj = async () => {
     if (busy) return;
@@ -89,7 +93,7 @@ export function IzdajRacunDialog({ open, onOpenChange, nalog, korisnikId, onIzda
         <div className="border-t bg-slate-50/50 px-6 py-4 flex items-center justify-between gap-3">
           <span className="flex items-center gap-1.5 text-[10.5px] text-slate-400"><Key className="ml-0">⌘↵</Key> izdaj</span>
           <div className="flex items-center gap-3">
-            <Button variant="ghost" onClick={() => onOpenChange(false)}>Otkaži</Button>
+            <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>Otkaži</Button>
             <Button onClick={izdaj} disabled={busy || !(nalog.dogovorenaCijena! > 0)} className="min-w-[160px]">{busy ? 'Štampam…' : 'Izdaj fiskalni račun'}</Button>
           </div>
         </div>
