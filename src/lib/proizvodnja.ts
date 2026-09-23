@@ -101,7 +101,7 @@ export function createNalog(db: SqlDb, input: NalogInput): { id: number; broj: n
     if (!input.productId) throw new Error('Proizvod je obavezan za nalog za zalihu');
     const p = productTip(db, input.productId);
     if (!p || p.tip !== 'artikal') throw new Error('Nalog za zalihu može biti samo za artikal');
-    kolicina = input.kolicina ?? 0;
+    kolicina = round4(input.kolicina ?? 0);
     if (!(kolicina > 0)) throw new Error('Količina mora biti veća od nule');
     if (!opis) opis = p.naziv;
   } else {
@@ -179,8 +179,9 @@ export function updateNalog(
     set('kupacId', patch.kupacId);
   }
   if (patch.kolicina !== undefined && n.vrsta === 'zaliha') {
-    if (!(patch.kolicina > 0)) throw new Error('Količina mora biti veća od nule');
-    set('kolicina', patch.kolicina);
+    const kolicina = round4(patch.kolicina);
+    if (!(kolicina > 0)) throw new Error('Količina mora biti veća od nule');
+    set('kolicina', kolicina);
   }
   if (patch.datum !== undefined) set('datum', patch.datum);
   if (patch.rok !== undefined) set('rok', patch.rok || null);

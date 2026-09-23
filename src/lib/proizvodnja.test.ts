@@ -69,6 +69,14 @@ test('zaliha traži proizvod tipa artikal i količinu > 0', () => {
   expect(n.kolicina).toBe(3);
 });
 
+test('kolicina naloga se zaokružuje na 4 decimale', () => {
+  const art = dodajArtikal(db, 'LINA');
+  const r = createNalog(db, { vrsta: 'zaliha', korisnikId: 1, productId: art, kolicina: 2.00004 });
+  expect(getNalog(db, r.id).kolicina).toBe(2);
+  updateNalog(db, r.id, { kolicina: 3.000049 });
+  expect(getNalog(db, r.id).kolicina).toBe(3);
+});
+
 test('zaliha sa normativom popuni stavke normativ × količina', () => {
   const art = dodajArtikal(db, 'LINA');
   const iv = dodajMaterijal(db, 'IV18', 'm²', [2800, 2070]);
