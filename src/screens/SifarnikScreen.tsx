@@ -4,15 +4,19 @@ import { cn } from '@/lib/utils';
 import { KupciTab } from '@/components/sifarnik/KupciTab';
 import { DobavljaciTab } from '@/components/sifarnik/DobavljaciTab';
 import { UslugeTab } from '@/components/sifarnik/UslugeTab';
-import { Users, Building2, Wrench } from 'lucide-react';
+import { MaterijalTab } from '@/components/sifarnik/MaterijalTab';
+import { useProizvodnja } from '@/hooks/useProizvodnja';
+import { Users, Building2, Wrench, Layers } from 'lucide-react';
 
-type SifarnikTab = 'kupci' | 'dobavljaci' | 'usluge';
+type SifarnikTab = 'kupci' | 'dobavljaci' | 'usluge' | 'materijal';
 
 export default function SifarnikScreen() {
   const [kupci, setKupci] = useState<Kupac[]>([]);
   const [dobavljaci, setDobavljaci] = useState<Dobavljac[]>([]);
   const [usluge, setUsluge] = useState<Product[]>([]);
+  const [materijali, setMaterijali] = useState<Product[]>([]);
   const [activeTab, setActiveTab] = useState<SifarnikTab>('kupci');
+  const proizvodnja = useProizvodnja();
 
   const loadKupci = useCallback(async () => {
     const data = await window.api.getKupci();
@@ -29,16 +33,29 @@ export default function SifarnikScreen() {
     setUsluge(data);
   }, []);
 
+  const loadMaterijali = useCallback(async () => {
+    setMaterijali(await window.api.getProducts('materijal'));
+  }, []);
+
   useEffect(() => {
     loadKupci();
     loadDobavljaci();
     loadUsluge();
   }, [loadKupci, loadDobavljaci, loadUsluge]);
 
+  useEffect(() => {
+    if (proizvodnja) loadMaterijali();
+  }, [proizvodnja, loadMaterijali]);
+
+  useEffect(() => {
+    if (proizvodnja === false && activeTab === 'materijal') setActiveTab('kupci');
+  }, [proizvodnja, activeTab]);
+
   const tabs: { id: SifarnikTab; label: string; icon: typeof Users }[] = [
     { id: 'kupci', label: 'Kupci', icon: Users },
     { id: 'dobavljaci', label: 'Dobavljači', icon: Building2 },
     { id: 'usluge', label: 'Usluge', icon: Wrench },
+    ...(proizvodnja ? [{ id: 'materijal' as const, label: 'Materijal', icon: Layers }] : []),
   ];
 
   return (
@@ -73,6 +90,7 @@ export default function SifarnikScreen() {
         {activeTab === 'kupci' && <KupciTab kupci={kupci} onReload={loadKupci} />}
         {activeTab === 'dobavljaci' && <DobavljaciTab dobavljaci={dobavljaci} onReload={loadDobavljaci} />}
         {activeTab === 'usluge' && <UslugeTab usluge={usluge} onReload={loadUsluge} />}
+        {activeTab === 'materijal' && <MaterijalTab materijali={materijali} onReload={loadMaterijali} />}
       </div>
     </div>
   );
