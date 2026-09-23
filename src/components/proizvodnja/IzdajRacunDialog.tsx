@@ -88,6 +88,9 @@ export function IzdajRacunDialog({ open, onOpenChange, nalog, korisnikId, onIzda
             <span className="text-[12px] text-slate-500">Za naplatu</span>
             <span className="text-[18px] font-bold font-mono tabular-nums text-slate-900">{formatKM(nalog.dogovorenaCijena ?? 0)}</span>
           </div>
+          {!(nalog.dogovorenaCijena! > 0) && (
+            <p className="text-[11px] text-amber-600">Upišite dogovorenu cijenu (Uredi zaglavlje)</p>
+          )}
           {err && <div className="flex items-center gap-2 rounded-lg bg-rose-50 border border-rose-100 px-3 py-2 text-[12px] font-medium text-rose-600"><AlertTriangle size={13} /> {err}</div>}
         </div>
         <div className="border-t bg-slate-50/50 px-6 py-4 flex items-center justify-between gap-3">

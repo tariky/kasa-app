@@ -52,6 +52,7 @@ export function NalogDialog({ open, onOpenChange, korisnikId, nalog, onSaved }: 
   }, [open, nalog]);
 
   const isEdit = !!nalog;
+  const zavrsen = nalog?.status === 'zavrsen';
   const valid = vrsta === 'narudzba'
     ? !!kupacId && opis.trim().length > 0
     : !!productId && parseDecimal(kolicina) > 0;
@@ -59,12 +60,17 @@ export function NalogDialog({ open, onOpenChange, korisnikId, nalog, onSaved }: 
   const spremi = async () => {
     setSaving(true); setError('');
     try {
-      const payload: any = {
-        opis: opis.trim(), datum, rok: rok || null, napomena: napomena || null,
-        dogovorenaCijena: cijena ? parseDecimal(cijena) : null,
-      };
-      if (vrsta === 'narudzba') payload.kupacId = Number(kupacId);
-      else { payload.productId = Number(productId); payload.kolicina = parseDecimal(kolicina); }
+      let payload: any;
+      if (zavrsen) {
+        payload = { dogovorenaCijena: cijena ? parseDecimal(cijena) : null, rok: rok || null, napomena: napomena || null };
+      } else {
+        payload = {
+          opis: opis.trim(), datum, rok: rok || null, napomena: napomena || null,
+          dogovorenaCijena: cijena ? parseDecimal(cijena) : null,
+        };
+        if (vrsta === 'narudzba') payload.kupacId = Number(kupacId);
+        else { payload.productId = Number(productId); payload.kolicina = parseDecimal(kolicina); }
+      }
       let id: number;
       if (isEdit) { await window.api.updateNalog(nalog!.id, payload); id = nalog!.id; }
       else { const r = await window.api.createNalog({ ...payload, vrsta, korisnikId }); id = r.id; }
@@ -85,6 +91,11 @@ export function NalogDialog({ open, onOpenChange, korisnikId, nalog, onSaved }: 
         </DialogHeader>
 
         <div className="space-y-4 py-1">
+          {zavrsen && (
+            <p className="text-[11.5px] text-amber-700 bg-amber-50/70 border border-amber-100 rounded-lg px-3 py-2">
+              Nalog je završen — može se mijenjati samo cijena, rok i napomena.
+            </p>
+          )}
           {!isEdit && (
             <div className="grid grid-cols-2 gap-2">
               {([['narudzba', 'Po narudžbi', User], ['zaliha', 'Za zalihu', Package]] as const).map(([v, label, Icon]) => (
@@ -100,7 +111,7 @@ export function NalogDialog({ open, onOpenChange, korisnikId, nalog, onSaved }: 
           {vrsta === 'narudzba' ? (
             <div className="space-y-2">
               <Label>Kupac</Label>
-              <Select value={kupacId} onValueChange={setKupacId}>
+              <Select value={kupacId} onValueChange={setKupacId} disabled={zavrsen}>
                 <SelectTrigger><SelectValue placeholder="Odaberi kupca…" /></SelectTrigger>
                 <SelectContent>
                   {kupci.map(k => <SelectItem key={k.id} value={String(k.id)}>{k.naziv}</SelectItem>)}
@@ -111,7 +122,7 @@ export function NalogDialog({ open, onOpenChange, korisnikId, nalog, onSaved }: 
             <div className="grid grid-cols-[1fr_100px] gap-3">
               <div className="space-y-2">
                 <Label>Proizvod</Label>
-                <Select value={productId} onValueChange={setProductId} disabled={isEdit}>
+                <Select value={productId} onValueChange={setProductId} disabled={isEdit || zavrsen}>
                   <SelectTrigger><SelectValue placeholder="Odaberi proizvod…" /></SelectTrigger>
                   <SelectContent>
                     {artikli.map(p => <SelectItem key={p.id} value={String(p.id)}><span className="font-mono text-xs text-slate-400 mr-2">{p.sifra}</span>{p.naziv}</SelectItem>)}
@@ -120,18 +131,18 @@ export function NalogDialog({ open, onOpenChange, korisnikId, nalog, onSaved }: 
               </div>
               <div className="space-y-2">
                 <Label>Komada</Label>
-                <DecimalInput maxDecimals={0} value={kolicina} onValueChange={t => setKolicina(t)} className="font-mono" />
+                <DecimalInput maxDecimals={0} value={kolicina} onValueChange={t => setKolicina(t)} className="font-mono" disabled={zavrsen} />
               </div>
             </div>
           )}
 
           <div className="space-y-2">
             <Label>Opis {vrsta === 'zaliha' && <span className="text-slate-400 font-normal">— opciono</span>}</Label>
-            <Input value={opis} onChange={e => setOpis(e.target.value)} placeholder="Kuhinja 3,2 m, bijela mat, radna ploča hrast" />
+            <Input value={opis} onChange={e => setOpis(e.target.value)} placeholder="Kuhinja 3,2 m, bijela mat, radna ploča hrast" disabled={zavrsen} />
           </div>
 
           <div className="grid grid-cols-3 gap-3">
-            <div className="space-y-2"><Label>Datum</Label><DatePicker value={datum} onChange={setDatum} /></div>
+            <div className="space-y-2"><Label>Datum</Label><DatePicker value={datum} onChange={setDatum} disabled={zavrsen} /></div>
             <div className="space-y-2"><Label>Rok isporuke</Label><DatePicker value={rok} onChange={setRok} /></div>
             {vrsta === 'narudzba' && (
               <div className="space-y-2">

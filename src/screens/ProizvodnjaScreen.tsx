@@ -297,7 +297,9 @@ export default function ProizvodnjaScreen({ korisnikId, uloga, initialNalogId }:
                   {selected.status === 'zavrsen' && uloga === 'admin' && (
                     <ActionRow icon={Undo2} label="Vrati u izradu" onClick={() => setVratiOpen(true)} />
                   )}
-                  {uredivo && <ActionRow icon={Pencil} label="Uredi zaglavlje" onClick={() => { setEditNalog(selected); setFormOpen(true); }} />}
+                  {(uredivo || selected.status === 'zavrsen') && (
+                    <ActionRow icon={Pencil} label="Uredi zaglavlje" onClick={() => { setEditNalog(selected); setFormOpen(true); }} />
+                  )}
                   {uredivo && <ActionRow icon={Trash2} label="Obriši nalog" tone="danger" onClick={() => setBrisiOpen(true)} />}
                 </div>
               </div>
