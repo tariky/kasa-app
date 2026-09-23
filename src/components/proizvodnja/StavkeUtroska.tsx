@@ -1,5 +1,5 @@
 // src/components/proizvodnja/StavkeUtroska.tsx
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { RadniNalogStavka } from '@/types';
 import type { NalogStavkaInput } from '@/lib/proizvodnja';
 import { jePloca, napomenaUElemente } from '@/lib/ploca';
@@ -26,8 +26,8 @@ function izStavke(s: RadniNalogStavka): StavkaDraft {
   };
 }
 
-export function StavkeUtroska({ stavke, uredivo, onSave }: {
-  stavke: RadniNalogStavka[]; uredivo: boolean; onSave: (stavke: NalogStavkaInput[]) => Promise<void>;
+export function StavkeUtroska({ nalogId, stavke, uredivo, onSave }: {
+  nalogId: number; stavke: RadniNalogStavka[]; uredivo: boolean; onSave: (stavke: NalogStavkaInput[]) => Promise<void>;
 }) {
   const [draft, setDraft] = useState<StavkaDraft[]>(stavke.map(izStavke));
   const [dirty, setDirty] = useState(false);
@@ -38,7 +38,13 @@ export function StavkeUtroska({ stavke, uredivo, onSave }: {
   const [error, setError] = useState('');
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => { setDraft(stavke.map(izStavke)); setDirty(false); }, [stavke]);
+  // Nalog se promijenio (druga stavka je izabrana u listi) — odbaci draft bez obzira na dirty.
+  useEffect(() => { setDraft(stavke.map(izStavke)); setDirty(false); }, [nalogId]);
+
+  // Osvježenje istog naloga (npr. nakon promjene troška rada) ne smije obrisati neusnimljene
+  // izmjene korisnika; kad se spremanje završi, dirty pređe na false i ovaj efekat tad povuče
+  // svježe stanje sa servera.
+  useEffect(() => { if (!dirty) setDraft(stavke.map(izStavke)); }, [stavke, dirty]);
 
   useEffect(() => {
     if (debounce.current) clearTimeout(debounce.current);
@@ -55,6 +61,15 @@ export function StavkeUtroska({ stavke, uredivo, onSave }: {
   };
   const set = (i: number, patch: Partial<StavkaDraft>) => { setDraft(d => d.map((s, j) => (j === i ? { ...s, ...patch } : s))); setDirty(true); };
   const ukloni = (i: number) => { setDraft(d => d.filter((_, j) => j !== i)); setDirty(true); };
+
+  // Stabilna referenca dok je dijalog otvoren — inače bi svaki re-render StavkeUtroska (npr.
+  // izmjena druge stavke) rekreirao niz, ponovo pokrenuo ElementiDialog-ov [open, initial]
+  // efekat i pregazio redove koje korisnik trenutno kuca.
+  const elementiNapomena = elementiZa != null ? draft[elementiZa]?.napomena ?? '' : '';
+  const elementiInitial = useMemo(
+    () => (elementiZa != null ? napomenaUElemente(elementiNapomena) : []),
+    [elementiZa, elementiNapomena]
+  );
 
   const spremi = async () => {
     setSaving(true); setError('');
@@ -138,7 +153,7 @@ export function StavkeUtroska({ stavke, uredivo, onSave }: {
       <ElementiDialog
         open={elementiZa != null}
         onOpenChange={v => { if (!v) setElementiZa(null); }}
-        initial={elementiZa != null ? napomenaUElemente(draft[elementiZa]?.napomena ?? '') : []}
+        initial={elementiInitial}
         onConfirm={(m2, nap) => { if (elementiZa != null) set(elementiZa, { kolicina: String(m2), napomena: nap }); }}
       />
     </div>

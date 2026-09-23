@@ -234,6 +234,7 @@ export default function ProizvodnjaScreen({ korisnikId, uloga, initialNalogId }:
 
                 <div className="flex-1 min-h-0 border-t border-slate-100">
                   <StavkeUtroska
+                    nalogId={selected.id}
                     stavke={selected.stavke ?? []}
                     uredivo={!!uredivo}
                     onSave={async (stavke) => { await window.api.saveNalogStavke(selected.id, stavke); await select(selected.id); }}
