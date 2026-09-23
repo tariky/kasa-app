@@ -82,6 +82,22 @@ interface Window {
     konvertujPonudu: (data: { id: number; korisnikId: number; nacinPlacanja: string }) => Promise<{
       success: boolean; racunId?: number; brojFiskalnogRacuna?: string | null; error?: string; odgovori?: Record<string, string>;
     }>;
+    getNalozi: (filter?: string) => Promise<import('@/types').RadniNalog[]>;
+    getNalog: (id: number) => Promise<import('@/types').RadniNalog>;
+    getNextBrojNaloga: () => Promise<{ broj: number; godina: number }>;
+    createNalog: (data: any) => Promise<{ id: number; broj: number; godina: number }>;
+    createNalogIzPonude: (ponudaId: number, korisnikId: number) => Promise<{ id: number; broj: number; godina: number }>;
+    getNalogZaPonudu: (ponudaId: number) => Promise<{ id: number; broj: number; godina: number } | null>;
+    updateNalog: (id: number, data: any) => Promise<{ success: boolean }>;
+    saveNalogStavke: (id: number, stavke: Array<{ materijalId: number; kolicina: number; napomena?: string | null }>) => Promise<{ success: boolean }>;
+    setNalogStatus: (data: { id: number; status: 'u_izradi' | 'zavrsen' | 'vrati'; korisnikId: number }) => Promise<{ success: boolean }>;
+    deleteNalog: (id: number) => Promise<{ success: boolean }>;
+    getNalogKalkulacija: (id: number) => Promise<any>;
+    izdajRacunZaNalog: (data: { id: number; korisnikId: number; nacinPlacanja: string }) => Promise<any>;
+    getNormativ: (productId: number) => Promise<import('@/types').NormativStavka[]>;
+    saveNormativ: (productId: number, stavke: Array<{ materijalId: number; kolicina: number; napomena?: string | null }>) => Promise<{ success: boolean }>;
+    searchMaterijal: (query: string) => Promise<any[]>;
+    setProizvodnjaEnabled: (enabled: boolean) => Promise<{ success: boolean }>;
     tringInit: () => Promise<any>;
     tringPrintReceipt: (data: any) => Promise<any>;
     tringPrintRefund: (data: any) => Promise<any>;

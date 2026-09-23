@@ -74,6 +74,24 @@ contextBridge.exposeInMainWorld('api', {
   deletePonuda: (id: number) => ipcRenderer.invoke('ponuda:delete', id),
   konvertujPonudu: (data: { id: number; korisnikId: number; nacinPlacanja: string }) => ipcRenderer.invoke('ponuda:konvertuj', data),
 
+  // Proizvodnja
+  getNalozi: (filter?: string) => ipcRenderer.invoke('nalog:getAll', filter),
+  getNalog: (id: number) => ipcRenderer.invoke('nalog:get', id),
+  getNextBrojNaloga: () => ipcRenderer.invoke('nalog:nextBroj'),
+  createNalog: (data: any) => ipcRenderer.invoke('nalog:create', data),
+  createNalogIzPonude: (ponudaId: number, korisnikId: number) => ipcRenderer.invoke('nalog:createIzPonude', ponudaId, korisnikId),
+  getNalogZaPonudu: (ponudaId: number) => ipcRenderer.invoke('nalog:zaPonudu', ponudaId),
+  updateNalog: (id: number, data: any) => ipcRenderer.invoke('nalog:update', id, data),
+  saveNalogStavke: (id: number, stavke: any[]) => ipcRenderer.invoke('nalog:replaceStavke', id, stavke),
+  setNalogStatus: (data: { id: number; status: string; korisnikId: number }) => ipcRenderer.invoke('nalog:setStatus', data),
+  deleteNalog: (id: number) => ipcRenderer.invoke('nalog:delete', id),
+  getNalogKalkulacija: (id: number) => ipcRenderer.invoke('nalog:kalkulacija', id),
+  izdajRacunZaNalog: (data: { id: number; korisnikId: number; nacinPlacanja: string }) => ipcRenderer.invoke('nalog:izdajRacun', data),
+  getNormativ: (productId: number) => ipcRenderer.invoke('normativ:get', productId),
+  saveNormativ: (productId: number, stavke: any[]) => ipcRenderer.invoke('normativ:save', productId, stavke),
+  searchMaterijal: (query: string) => ipcRenderer.invoke('materijal:search', query),
+  setProizvodnjaEnabled: (enabled: boolean) => ipcRenderer.invoke('proizvodnja:setEnabled', enabled),
+
   // Tring
   tringInit: () => ipcRenderer.invoke('tring:init'),
   tringPrintReceipt: (data: any) => ipcRenderer.invoke('tring:printReceipt', data),

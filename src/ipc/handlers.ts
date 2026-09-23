@@ -12,7 +12,11 @@ import {
   collectPriceChanges, applyPricesWithoutStock, revertNivelacijaPrices,
   isDobavljacUsed, type PriceChange,
 } from '../lib/skladiste';
-import { jeArtikalUProizvodnji } from '../lib/proizvodnja';
+import {
+  jeArtikalUProizvodnji, nextBrojNaloga, createNalog, createNalogIzPonude, nalogZaPonudu, updateNalog, replaceStavke,
+  getNalog, listNalozi, deleteNalog, kalkulacijaNaloga, setStatusNaloga, zavrsiNalog, vratiUIzradu,
+  izdajRacunZaNalog, getNormativ, saveNormativ, osigurajProdajnuUslugu,
+} from '../lib/proizvodnja';
 import { refundOrderInTransaction, refundAndPrint } from '../lib/refund';
 import { postaviDatumValute } from '../lib/valuta';
 import {
@@ -1070,6 +1074,86 @@ export function registerIpcHandlers(): void {
         return result;
       },
     }, data);
+  });
+
+  // ─── Proizvodnja ─────────────────────────────────────────
+
+  handle('nalog:getAll', (filter?: string) =>
+    listNalozi(db, filter ? { status: filter as any } : undefined));
+
+  handle('nalog:get', (id: number) => getNalog(db, id));
+
+  handle('nalog:nextBroj', () => {
+    const godina = new Date().getFullYear();
+    return { broj: nextBrojNaloga(db, godina), godina };
+  });
+
+  handle('nalog:create', (data: any) => {
+    if (!data?.korisnikId) throw new Error('Korisnik nije prijavljen');
+    return db.transaction(() => createNalog(db, data))();
+  });
+
+  handle('nalog:createIzPonude', (ponudaId: number, korisnikId: number) => {
+    if (!korisnikId) throw new Error('Korisnik nije prijavljen');
+    return db.transaction(() => createNalogIzPonude(db, ponudaId, korisnikId))();
+  });
+
+  handle('nalog:zaPonudu', (ponudaId: number) => nalogZaPonudu(db, ponudaId));
+
+  handle('nalog:update', (id: number, data: any) => {
+    updateNalog(db, id, data);
+    return { success: true };
+  });
+
+  handle('nalog:replaceStavke', (id: number, stavke: any[]) => {
+    db.transaction(() => replaceStavke(db, id, stavke))();
+    return { success: true };
+  });
+
+  handle('nalog:setStatus', (data: { id: number; status: 'u_izradi' | 'zavrsen' | 'vrati'; korisnikId: number }) => {
+    if (data.status === 'u_izradi') setStatusNaloga(db, data.id, 'u_izradi');
+    else if (data.status === 'zavrsen') db.transaction(() => zavrsiNalog(db, data.id))();
+    else if (data.status === 'vrati') {
+      const u = db.prepare('SELECT uloga FROM users WHERE id = ?').get(data.korisnikId) as { uloga: string } | undefined;
+      if (u?.uloga !== 'admin') throw new Error('Vraćanje naloga u izradu može samo administrator');
+      db.transaction(() => vratiUIzradu(db, data.id))();
+    } else throw new Error('Nepoznat status');
+    return { success: true };
+  });
+
+  handle('nalog:delete', (id: number) => {
+    db.transaction(() => deleteNalog(db, id))();
+    return { success: true };
+  });
+
+  handle('nalog:kalkulacija', (id: number) => kalkulacijaNaloga(db, id));
+
+  handle('nalog:izdajRacun', async (data: { id: number; korisnikId: number; nacinPlacanja: string }) => {
+    loadTringConfig();
+    return izdajRacunZaNalog({
+      db,
+      transaction: (fn) => db.transaction(fn),
+      print: async (racun) => {
+        if (Tring.isLoggingEnabled()) console.log('[Tring] nalog:izdajRacun request:', JSON.stringify(racun));
+        const result = await Tring.stampatiFiskalniRacun(racun);
+        if (Tring.isLoggingEnabled()) console.log('[Tring] nalog:izdajRacun response:', JSON.stringify(result));
+        return result;
+      },
+    }, data);
+  });
+
+  handle('normativ:get', (productId: number) => getNormativ(db, productId));
+
+  handle('normativ:save', (productId: number, stavke: any[]) => {
+    db.transaction(() => saveNormativ(db, productId, stavke))();
+    return { success: true };
+  });
+
+  handle('proizvodnja:setEnabled', (enabled: boolean) => {
+    db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+      .run('proizvodnja.enabled', String(enabled));
+    if (enabled) osigurajProdajnuUslugu(db);
+    return { success: true };
   });
 
   // ─── Settings ────────────────────────────────────────────
