@@ -1,5 +1,5 @@
 // src/screens/ProizvodnjaScreen.tsx
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { pdf } from '@react-pdf/renderer';
 import type { RadniNalog, NalogStatus } from '@/types';
 import { formatBrojNaloga } from '@/lib/proizvodnja';
@@ -63,6 +63,9 @@ export default function ProizvodnjaScreen({ korisnikId, uloga, initialNalogId }:
   const [zavrsiOpen, setZavrsiOpen] = useState(false);
   const [vratiOpen, setVratiOpen] = useState(false);
   const [racunOpen, setRacunOpen] = useState(false);
+  const [stavkeDirty, setStavkeDirty] = useState(false);
+  const selectedIdRef = useRef<number | null>(null);
+  useEffect(() => { selectedIdRef.current = selected?.id ?? null; }, [selected]);
 
   const load = useCallback(async () => {
     setNalozi(await window.api.getNalozi());
@@ -72,6 +75,7 @@ export default function ProizvodnjaScreen({ korisnikId, uloga, initialNalogId }:
   const select = useCallback(async (id: number) => {
     try {
       const n = await window.api.getNalog(id);
+      if (selectedIdRef.current !== id) setStavkeDirty(false);
       setSelected(n);
       setKalk(await window.api.getNalogKalkulacija(id));
     } catch (e: any) { setMsg({ type: 'error', text: e?.message || 'Greška' }); }
@@ -95,6 +99,8 @@ export default function ProizvodnjaScreen({ korisnikId, uloga, initialNalogId }:
   }, [nalozi]);
 
   const uredivo = selected && (selected.status === 'otvoren' || selected.status === 'u_izradi');
+
+  useEffect(() => { if (!uredivo) setStavkeDirty(false); }, [uredivo]);
 
   const uIzradu = async () => {
     if (!selected) return;
@@ -267,6 +273,7 @@ export default function ProizvodnjaScreen({ korisnikId, uloga, initialNalogId }:
                     nalogId={selected.id}
                     stavke={selected.stavke ?? []}
                     uredivo={!!uredivo}
+                    onDirtyChange={setStavkeDirty}
                     onSave={async (stavke) => { await window.api.saveNalogStavke(selected.id, stavke); await select(selected.id); }}
                   />
                 </div>
@@ -277,10 +284,12 @@ export default function ProizvodnjaScreen({ korisnikId, uloga, initialNalogId }:
 
                 <div className="flex-shrink-0 border-t border-slate-100 px-5 py-3.5 space-y-2">
                   <ActionRow icon={Printer} label="Štampaj nalog" onClick={() => printPdf(selected)}
-                    trailing={{ icon: Download, onClick: () => exportPdf(selected), title: 'Sačuvaj PDF' }} />
+                    disabled={stavkeDirty} hint={stavkeDirty ? 'spremi stavke' : undefined}
+                    trailing={{ icon: Download, onClick: () => exportPdf(selected), title: 'Sačuvaj PDF', disabled: stavkeDirty }} />
                   {selected.status === 'otvoren' && <ActionRow icon={Play} label="U izradu" onClick={uIzradu} />}
                   {uredivo && (selected.stavke?.length ?? 0) > 0 && (
-                    <ActionRow icon={CheckCircle2} label="Završi nalog" tone="primary" onClick={() => setZavrsiOpen(true)} />
+                    <ActionRow icon={CheckCircle2} label="Završi nalog" tone="primary" onClick={() => setZavrsiOpen(true)}
+                      disabled={stavkeDirty} hint={stavkeDirty ? 'spremi stavke' : undefined} />
                   )}
                   {selected.status === 'zavrsen' && selected.vrsta === 'narudzba' && (
                     <ActionRow icon={Receipt} label="Izdaj račun" tone="primary" onClick={() => setRacunOpen(true)} />

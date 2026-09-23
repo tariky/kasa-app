@@ -38,7 +38,7 @@ export function ActionRow({
   tone?: 'primary' | 'default' | 'danger';
   disabled?: boolean;
   onClick: () => void;
-  trailing?: { icon: React.ComponentType<{ size?: number; className?: string }>; onClick: () => void; title: string };
+  trailing?: { icon: React.ComponentType<{ size?: number; className?: string }>; onClick: () => void; title: string; disabled?: boolean };
 }) {
   const keyTone = tone === 'primary' ? 'dark' : tone === 'danger' ? 'danger' : 'light';
   return (
@@ -62,12 +62,14 @@ export function ActionRow({
       {trailing && (
         <button
           onClick={trailing.onClick}
+          disabled={trailing.disabled}
           title={trailing.title}
           aria-label={trailing.title}
           className={cn(
             'w-9 h-9 flex items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-400',
             'hover:bg-slate-50 hover:text-slate-600 hover:border-slate-300 transition-colors duration-150',
             'focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50',
+            'disabled:opacity-40 disabled:pointer-events-none',
           )}
         >
           <trailing.icon size={14} />

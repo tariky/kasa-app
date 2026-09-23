@@ -26,8 +26,9 @@ function izStavke(s: RadniNalogStavka): StavkaDraft {
   };
 }
 
-export function StavkeUtroska({ nalogId, stavke, uredivo, onSave }: {
+export function StavkeUtroska({ nalogId, stavke, uredivo, onSave, onDirtyChange }: {
   nalogId: number; stavke: RadniNalogStavka[]; uredivo: boolean; onSave: (stavke: NalogStavkaInput[]) => Promise<void>;
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const [draft, setDraft] = useState<StavkaDraft[]>(stavke.map(izStavke));
   const [dirty, setDirty] = useState(false);
@@ -38,6 +39,8 @@ export function StavkeUtroska({ nalogId, stavke, uredivo, onSave }: {
   const [error, setError] = useState('');
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
+
   // Nalog se promijenio (druga stavka je izabrana u listi) — odbaci draft bez obzira na dirty.
   useEffect(() => { setDraft(stavke.map(izStavke)); setDirty(false); }, [nalogId]);
 
@@ -45,6 +48,10 @@ export function StavkeUtroska({ nalogId, stavke, uredivo, onSave }: {
   // izmjene korisnika; kad se spremanje završi, dirty pređe na false i ovaj efekat tad povuče
   // svježe stanje sa servera.
   useEffect(() => { if (!dirty) setDraft(stavke.map(izStavke)); }, [stavke, dirty]);
+
+  // Nalog je izgubio uređivost (npr. završen ispod ruku) — odbaci draft i otključaj dirty
+  // da se disabled dugmad koja zavise o njemu ne zaglave uklj.
+  useEffect(() => { if (!uredivo) { setDirty(false); setDraft(stavke.map(izStavke)); } }, [uredivo]);
 
   useEffect(() => {
     if (debounce.current) clearTimeout(debounce.current);
