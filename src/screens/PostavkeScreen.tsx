@@ -17,13 +17,14 @@ import { ZaglavljePrikaz } from '@/components/ZaglavljePrikaz';
 import LicencaKartica from '@/components/licenca/LicencaKartica';
 import { LOGO_VELICINA, kontaktFirme } from '@/lib/firma';
 import { cn, porukaGreske } from '@/lib/utils';
+import { SKALA_KLJUC, SKALE, procitajSkalu, primijeniSkalu, skalaPodrzana } from '@/lib/skala';
 import { User, TringSettings, BankAccount } from '@/types';
 import {
   UserPlus, Wifi, WifiOff, Save, Trash2, Pencil,
   Users, Printer, Building2, Shield, Hash, KeyRound,
   MapPin, FileText, Image, CheckCircle2, AlertTriangle,
   HardDrive, Download, Upload, Bug, RefreshCw, X, ChevronDown, ChevronUp, Settings, Landmark, Percent,
-  Paperclip, Globe, Mail,
+  Paperclip, Globe, Mail, Monitor,
 } from 'lucide-react';
 
 type SettingsTab = 'korisnici' | 'fiskalni' | 'firma' | 'sistem';
@@ -71,6 +72,7 @@ export default function PostavkeScreen() {
   const [devLogging, setDevLogging] = useState(false);
   const [allowZeroStock, setAllowZeroStock] = useState(false);
   const [unosBezPdv, setUnosBezPdv] = useState(false);
+  const [skala, setSkala] = useState(1);
   // Inline potvrda nakon promjene režima; sama se sakrije nakon 5 s.
   const [pdvPotvrda, setPdvPotvrda] = useState('');
   const [kusurKalkulacija, setKusurKalkulacija] = useState(true);
@@ -125,6 +127,7 @@ export default function PostavkeScreen() {
     window.api.getSetting('dev.logging').then((v) => setDevLogging(v === 'true'));
     window.api.getSetting('kasa.allowZeroStock').then((v) => setAllowZeroStock(v === 'true'));
     window.api.getSetting('cijene.unosBezPdv').then((v) => setUnosBezPdv(v === 'true'));
+    window.api.getSetting(SKALA_KLJUC).then((v) => setSkala(procitajSkalu(v)));
     // Kalkulacija kusura je podrazumijevano uključena — isključena samo na eksplicitno 'false'.
     window.api.getSetting('kasa.kusurKalkulacija').then((v) => setKusurKalkulacija(v !== 'false'));
     window.api.getSetting('kasa.requirePinRefund').then((v) => setRequirePinRefund(v === 'true'));
@@ -1095,6 +1098,49 @@ export default function PostavkeScreen() {
               <div className="max-w-xl space-y-4">
 
                 <LicencaKartica />
+
+                {skalaPodrzana() && (
+                  <div className="bg-white rounded-2xl border border-slate-100 shadow-sm shadow-slate-200/50 overflow-hidden">
+                    <div className="px-6 py-4 border-b border-slate-100">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center">
+                          <Monitor size={20} className="text-blue-500" />
+                        </div>
+                        <div>
+                          <h3 className="text-[15px] font-semibold text-slate-800">Prikaz</h3>
+                          <p className="text-[12px] text-slate-400 mt-0.5">Važi samo za ovaj uređaj</p>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="px-6 py-5">
+                      <p className="text-[13px] font-medium text-slate-700">Veličina prikaza</p>
+                      <p className="text-[12px] text-slate-400 mt-0.5">
+                        Povećava ili smanjuje cijeli interfejs — tekst, dugmad i razmake.
+                      </p>
+                      <div className="mt-3 inline-flex rounded-lg bg-slate-100 p-0.5" role="radiogroup" aria-label="Veličina prikaza">
+                        {SKALE.map((s) => (
+                          <button
+                            key={s}
+                            type="button"
+                            role="radio"
+                            aria-checked={skala === s}
+                            onClick={async () => {
+                              setSkala(s);
+                              await primijeniSkalu(s);
+                              await window.api.setSetting(SKALA_KLJUC, String(s));
+                            }}
+                            className={cn(
+                              'px-3.5 py-1.5 rounded-md text-[12.5px] font-medium font-tabular transition-colors',
+                              skala === s ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700',
+                            )}
+                          >
+                            {Math.round(s * 100)} %
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* Kasa settings card */}
                 <div className="bg-white rounded-2xl border border-slate-100 shadow-sm shadow-slate-200/50 overflow-hidden">

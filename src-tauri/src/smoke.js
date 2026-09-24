@@ -83,6 +83,15 @@
     ok('window.open(blob:) vraća prozor', !!win);
     await new Promise(r => setTimeout(r, 1000));
 
+    // Veličina prikaza (Postavke → Prikaz): zoom mora imati dozvolu u capabilities
+    // i stvarno smanjiti CSS viewport.
+    const zoom = (value) => window.__TAURI_INTERNALS__.invoke('plugin:webview|set_webview_zoom', { label: 'main', value });
+    const sirina = window.innerWidth;
+    await zoom(1.25);
+    const uzoomirano = await cekaj(() => window.innerWidth < sirina * 0.85);
+    ok('webview zoom 125 %', uzoomirano, `${sirina} → ${window.innerWidth}`);
+    await zoom(1);
+
     await kraj();
   } catch (e) {
     await kraj(`${e?.message ?? e}\n${e?.stack ?? ''}`);

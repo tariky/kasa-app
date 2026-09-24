@@ -4,6 +4,11 @@ import './index.css';
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
+import { primijeniSacuvanuSkalu } from './lib/skala';
+
+// Prvi poziv u backend: pozivi idu redom, pa je zoom primijenjen prije nego
+// ekrani dobiju podatke.
+primijeniSacuvanuSkalu().catch(() => undefined);
 
 const root = createRoot(document.getElementById('root')!);
 root.render(

@@ -1,13 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Glavni prozor: komanda api, događaj licenca:blokirano i dijalozi potvrde/obavijesti.",
+  "description": "Glavni prozor: komanda api, događaj licenca:blokirano, dijalozi potvrde/obavijesti i zoom (veličina prikaza).",
   "windows": [
     "main"
   ],
   "permissions": [
     "core:default",
     "dialog:allow-ask",
-    "dialog:allow-message"
+    "dialog:allow-message",
+    "core:webview:allow-set-webview-zoom"
   ]
 }
