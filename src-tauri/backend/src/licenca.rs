@@ -4,6 +4,7 @@
 //! `PAZAR1.<payload>`. Zapis (token, zadnji viđeni datum) je u
 //! `userData/licenca.json`, van baze. ID uređaja se računa isto kao u
 //! Electronu, pa licence izdane za Electron verziju važe i ovdje.
+//! Moduli i kanal → moduli: `src/lib/moduliKatalog.json`.
 
 use std::sync::OnceLock;
 
@@ -48,6 +49,18 @@ fn javni_kljuc() -> &'static VerifyingKey {
     })
 }
 
+/// Katalog modula iz `src/lib/moduliKatalog.json` (jedan izvor za oba backenda).
+fn katalog() -> &'static Value {
+    static K: OnceLock<Value> = OnceLock::new();
+    K.get_or_init(|| serde_json::from_str(include_str!("../../../src/lib/moduliKatalog.json")).expect("ispravan moduliKatalog.json"))
+}
+
+/// `normalizujModule`: poznati moduli redom iz kataloga; `None` kad nije niz stringova.
+fn normalizuj_module(m: &Value) -> Option<Value> {
+    let niz = m.as_array().filter(|n| n.iter().all(Value::is_string))?;
+    Some(Value::Array(katalog()["moduli"].as_array().unwrap().iter().filter(|x| niz.contains(x)).cloned().collect()))
+}
+
 /// Node `Buffer.from(x, 'base64url')`: prihvata i s paddingom i bez.
 fn base64url(s: &str) -> Option<Vec<u8>> {
     const E: GeneralPurpose = GeneralPurpose::new(
@@ -83,6 +96,9 @@ pub fn procitaj_licencu(token: &str) -> Option<Value> {
     l.insert("izdana".into(), json!(i));
     if let Some(u) = p["u"].as_str().filter(|u| !u.is_empty()) {
         l.insert("uredjaj".into(), json!(u));
+    }
+    if let Some(m) = p.get("m") {
+        l.insert("moduli".into(), normalizuj_module(m)?);
     }
     Some(Value::Object(l))
 }
@@ -267,16 +283,37 @@ pub fn aktiviraj_licencu(b: &Backend, token: &str) -> R<Value> {
     Ok(sa_uredjajem(s))
 }
 
-/// Baca grešku ako je kanal blokiran a licenca ne dozvoljava rad.
+/// `kanalPodLicencom`: kanal koji pravi dokumente ili pripada modulu.
+fn pod_licencom(kanal: &str) -> bool {
+    BLOKIRANI_KANALI.contains(&kanal) || katalog()["kanali"].get(kanal).is_some()
+}
+
+/// `razlogBlokade`: `Some((istekla, poruka))` kad licenca ne dozvoljava kanal.
+pub fn razlog_blokade(s: &Value, kanal: &str) -> Option<(bool, String)> {
+    if BLOKIRANI_KANALI.contains(&kanal) && !smije_raditi(s) {
+        return Some((true, "Licenca je istekla — program radi samo za pregled. Unesite novi kod licence.".into()));
+    }
+    let trazi = katalog()["kanali"].get(kanal)?.as_array()?;
+    // Stari token (bez "moduli") i stanje bez licence dozvoljavaju sve.
+    let lista = s["licenca"].get("moduli").and_then(Value::as_array)?;
+    let fali = trazi.iter().find(|m| !lista.contains(m))?.as_str()?;
+    Some((false, format!("Modul {} nije uključen u licencu.", katalog()["nazivi"][fali].as_str().unwrap_or(fali))))
+}
+
+/// Baca grešku ako licenca ne dozvoljava kanal (istekla ili modul nije licenciran).
 pub fn provjeri_kanal(b: &Backend, kanal: &str) -> R<()> {
-    if !b.provjera_licence || !BLOKIRANI_KANALI.contains(&kanal) {
+    if !b.provjera_licence || !pod_licencom(kanal) {
         return Ok(());
     }
-    if smije_raditi(&stanje_licence(b)?) {
-        return Ok(());
+    match razlog_blokade(&stanje_licence(b)?, kanal) {
+        None => Ok(()),
+        Some((istekla, poruka)) => {
+            if istekla {
+                b.licenca_blokirana();
+            }
+            Err(Greska(poruka))
+        }
     }
-    b.licenca_blokirana();
-    Err(Greska::nova("Licenca je istekla — program radi samo za pregled. Unesite novi kod licence."))
 }
 
 pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
@@ -323,5 +360,31 @@ mod tests {
         assert_eq!(izracunaj_stanje(Some("PAZAR1.x.y"), &v, "2026-09-01", "X")["razlog"], "format");
         assert_eq!(razlika_dana("2024-02-28", "2024-03-01"), 2);
         let _ = javni_kljuc();
+    }
+
+    #[test]
+    fn moduli_u_licenci() {
+        let k = SigningKey::from_bytes(&[7u8; 32]);
+        let v = k.verifying_key();
+        let stari = izdaj(&k, r#"{"k":"F","d":"2026-10-10","i":"2026-01-01"}"#);
+        assert!(procitaj_licencu(&stari).unwrap().get("moduli").is_none());
+        let sa = izdaj(&k, r#"{"k":"F","d":"2026-10-10","i":"2026-01-01","m":["proizvodnja","ponude","buducnost"]}"#);
+        assert_eq!(procitaj_licencu(&sa).unwrap()["moduli"], json!(["ponude", "proizvodnja"]));
+        for los in [r#""m":"ponude""#, r#""m":null"#, r#""m":[1]"#] {
+            let t = izdaj(&k, &format!(r#"{{"k":"F","d":"2026-10-10","i":"2026-01-01",{los}}}"#));
+            assert!(procitaj_licencu(&t).is_none(), "{los}");
+        }
+
+        let samo_proizvodnja = izdaj(&k, r#"{"k":"F","d":"2026-10-10","i":"2026-01-01","m":["proizvodnja"]}"#);
+        let s = izracunaj_stanje(Some(&samo_proizvodnja), &v, "2026-09-01", "X");
+        assert_eq!(razlog_blokade(&s, "ponuda:create"), Some((false, "Modul Ponude nije uključen u licencu.".to_string())));
+        assert_eq!(razlog_blokade(&s, "nalog:createIzPonude"), Some((false, "Modul Ponude nije uključen u licencu.".to_string())));
+        assert_eq!(razlog_blokade(&s, "nalog:create"), None);
+        assert_eq!(razlog_blokade(&s, "order:create"), None);
+        let s_stari = izracunaj_stanje(Some(&stari), &v, "2026-09-01", "X");
+        assert_eq!(razlog_blokade(&s_stari, "nalog:createIzPonude"), None);
+        let zakljucana = izracunaj_stanje(Some(&samo_proizvodnja), &v, "2026-12-01", "X");
+        assert!(razlog_blokade(&zakljucana, "ponuda:create").unwrap().0);
+        assert!(pod_licencom("normativ:save") && pod_licencom("order:create") && !pod_licencom("product:getAll"));
     }
 }
