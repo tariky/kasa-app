@@ -68,7 +68,7 @@ const odbijeno = (r: unknown): r is PromijenjenoOdPregleda => !!r && typeof r ==
 /** Koliko forma miruje prije nego se backend pita šta bi spremanje uradilo s cijenama. */
 const PREGLED_DEBOUNCE_MS = 350;
 
-const TH = 'text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400 pb-2 border-b border-slate-200/80 whitespace-nowrap';
+const TH = 'align-bottom text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400 pb-2 border-b border-slate-200/80 whitespace-nowrap';
 const TD = 'py-2.5 border-b border-slate-100 align-top';
 
 function Red({ label, value, strong, tone }: { label: string; value: string; strong?: boolean; tone?: 'plus' }) {
@@ -439,9 +439,9 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
                               <th className={cn(TH, 'text-right w-6 pr-2')}>#</th>
                               <th className={cn(TH, 'text-left px-2')}>Artikal</th>
                               <th className={cn(TH, 'text-right px-2 w-[110px]')}>Količina</th>
-                              <th className={cn(TH, 'text-right px-2 w-[100px]')} title="Fakturna cijena bez PDV-a, prije rabata">Fakturna</th>
+                              <th className={cn(TH, 'text-right px-2 w-[100px]')} title="Fakturna cijena bez PDV-a, prije rabata">Fakturna<span className="block normal-case tracking-normal font-medium text-[10.5px] text-slate-400 mt-0.5">bez PDV-a</span></th>
                               <th className={cn(TH, 'text-right px-2 w-[70px]')}>Rabat</th>
-                              <th className={cn(TH, 'text-right px-2 w-[100px]')}>Prodajna</th>
+                              <th className={cn(TH, 'text-right px-2 w-[100px]')}>Prodajna<span className="block normal-case tracking-normal font-medium text-[10.5px] text-slate-400 mt-0.5">sa PDV-om</span></th>
                               <th className={cn(TH, 'text-right pl-2 w-[110px]')} title="Fakturna − rabat + zavisni troškovi">Nabavna</th>
                             </tr>
                           </thead>

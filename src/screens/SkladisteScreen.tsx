@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Product, Primka, Dobavljac } from '@/types';
 import { cn, formatKM, formatDate, parseDecimal, porukaGreske } from '@/lib/utils';
-import { uBruto, uNetto, cijenaZaSpremanje } from '@/lib/pdvUnos';
-import { useUnosBezPdv } from '@/hooks/useUnosBezPdv';
+import { useCijenaUnos } from '@/hooks/useCijenaUnos';
+import { CijenaPdvPolje } from '@/components/CijenaPdvPolje';
 import { useProizvodnja } from '@/hooks/useProizvodnja';
 import { jePloca, m2UKom } from '@/lib/ploca';
 import { Button } from '@/components/ui/button';
@@ -36,7 +36,6 @@ interface ArtikalFormData {
   barkod: string;
   naziv: string;
   jm: string;
-  cijena: string;
   pdvStopa: 'E' | 'K';
   stanje: string;
 }
@@ -46,7 +45,6 @@ const emptyArtikalForm: ArtikalFormData = {
   barkod: '',
   naziv: '',
   jm: 'kom',
-  cijena: '',
   pdvStopa: 'E',
   stanje: '',
 };
@@ -65,68 +63,38 @@ function ArtikalDialog({
   const [form, setForm] = useState<ArtikalFormData>(emptyArtikalForm);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const bezPdv = useUnosBezPdv(open);
-  // Tekst koji je pri otvaranju stavljen u polje cijene — služi da prepoznamo
-  // da korisnik cijenu uopšte nije dirao.
-  const [cijenaInit, setCijenaInit] = useState('');
+  const cijena = useCijenaUnos(open, product, form.pdvStopa);
 
   useEffect(() => {
-    // Dok se postavka učitava ne diramo formu — inače bismo cijenu prikazali
-    // u pogrešnoj jedinici pa je pregazili kad postavka stigne.
     if (!open) return;
     setError('');
-    if (bezPdv === null) return;
     if (product) {
-      const prikaz = String(bezPdv ? uNetto(product.cijena, product.pdvStopa) : product.cijena);
-      setCijenaInit(prikaz);
       setForm({
         sifra: product.sifra,
         barkod: product.barkod ?? '',
         naziv: product.naziv,
         jm: product.jm,
-        cijena: prikaz,
         pdvStopa: product.pdvStopa,
         stanje: String(product.stanje ?? 0),
       });
     } else {
-      setCijenaInit('');
       setForm(emptyArtikalForm);
     }
-  }, [open, product, bezPdv]);
+  }, [open, product]);
 
-  // Režim "bez PDV-a" vrijedi samo za stopu E — kod K (0 %) bi oznaka
-  // "bez PDV-a" bila obmanjujuća.
-  const nettoRezim = bezPdv === true && form.pdvStopa === 'E';
-  const cijenaBroj = parseDecimal(form.cijena);
-  // Rule 2: dok je polje cijene nedirano (isti tekst i ista stopa kao pri
-  // otvaranju), pregled mora prikazati STVARNU spremljenu (bruto) cijenu, a
-  // ne preračunatu — inače korisnik vidi fening razlike i "ispravi" ga, čime
-  // cijena stvarno postane pogrešna (vidi cijenaZaSpremanje).
-  const nedirano = !!product && form.cijena === cijenaInit && form.pdvStopa === product.pdvStopa;
-  const previewBruto = nettoRezim && !isNaN(cijenaBroj) && form.cijena !== ''
-    ? (nedirano ? product!.cijena : uBruto(cijenaBroj, form.pdvStopa))
-    : null;
+  const cijenaOk = cijena.spremno && cijena.unos !== '' && !isNaN(cijena.bruto);
 
   const handleSave = async () => {
-    if (bezPdv === null) return;
-    if (!form.sifra || !form.naziv || !form.cijena || isNaN(parseDecimal(form.cijena))) return;
+    if (!form.sifra || !form.naziv || !cijenaOk) return;
     setSaving(true);
     setError('');
     try {
-      const cijenaZaBazu = cijenaZaSpremanje({
-        unos: form.cijena,
-        unosInit: cijenaInit,
-        stopa: form.pdvStopa,
-        original: product,
-        bezPdv,
-      });
-
       const payload = {
         sifra: form.sifra,
         barkod: form.barkod || null,
         naziv: form.naziv,
         jm: form.jm,
-        cijena: cijenaZaBazu,
+        cijena: cijena.bruto,
         pdvStopa: form.pdvStopa,
       };
       if (product) {
@@ -171,11 +139,6 @@ function ArtikalDialog({
               <div>
                 <div className="flex items-center gap-2">
                   <DialogTitle className="text-lg">{isEdit ? 'Uredi artikal' : 'Novi artikal'}</DialogTitle>
-                  {nettoRezim && (
-                    <Badge variant="secondary" className="bg-amber-50 text-amber-700 border-amber-200 text-[10px] font-semibold">
-                      bez PDV-a
-                    </Badge>
-                  )}
                 </div>
                 <DialogDescription className="text-xs mt-0.5">
                   {isEdit ? `Šifra: ${product.sifra}` : 'Unesite podatke o novom artiklu'}
@@ -241,20 +204,18 @@ function ArtikalDialog({
             <div className="space-y-1.5">
               <Label htmlFor="cijena" className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
                 <DollarSign className="h-3 w-3" />
-                {nettoRezim ? 'Cijena bez PDV-a (KM)' : 'Cijena (KM)'}
+                Cijena (KM)
               </Label>
-              <DecimalInput
+              <CijenaPdvPolje
                 id="cijena"
-                className="font-mono text-base h-11"
-                value={form.cijena}
-                onValueChange={(text) => setForm({ ...form, cijena: text })}
-                placeholder="0,00"
+                unos={cijena.unos}
+                onUnos={cijena.setUnos}
+                bezPdv={cijena.bezPdv}
+                onRezim={cijena.setRezim}
+                stopa={form.pdvStopa}
+                bruto={cijena.bruto}
+                inputClassName="font-mono text-base h-11"
               />
-              {previewBruto !== null && (
-                <p className="text-[11px] text-slate-400 font-mono">
-                  Sa PDV-om: {formatKM(previewBruto)}
-                </p>
-              )}
             </div>
             <div className="space-y-1.5">
               <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
@@ -332,7 +293,7 @@ function ArtikalDialog({
             <Button variant="ghost" onClick={() => onOpenChange(false)}>
               Otkaži
             </Button>
-            <Button onClick={handleSave} disabled={saving || bezPdv === null || !form.sifra || !form.naziv || !form.cijena} className="min-w-[120px]">
+            <Button onClick={handleSave} disabled={saving || !form.sifra || !form.naziv || !cijenaOk} className="min-w-[120px]">
               {saving ? 'Spremam...' : isEdit ? 'Spremi izmjene' : 'Dodaj artikal'}
             </Button>
           </div>

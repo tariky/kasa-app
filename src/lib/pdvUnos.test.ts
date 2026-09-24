@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test';
-import { uBruto, uNetto, cijenaZaSpremanje } from './pdvUnos';
+import { uBruto, uNetto, brutoIzUnosa, promijeniRezim } from './pdvUnos';
 
 test('uBruto dodaje 17% na stopu E', () => {
   expect(uBruto(100, 'E')).toBe(117);
@@ -43,87 +43,66 @@ test('NaN unos ostaje NaN', () => {
   expect(uBruto(NaN, 'E')).toBeNaN();
 });
 
-// --- cijenaZaSpremanje --------------------------------------------------
-// Rule 2 (money safety): ako korisnik nije dirao polje cijene, u bazu ide
-// NEPROMIJENJENA originalna bruto vrijednost — jer bruto→netto→bruto nije
-// povratno za svaku vrijednost (100,00 → 85,47 → 99,99).
+// --- brutoIzUnosa -------------------------------------------------------
+// Rule 2 (money safety): ako polje prikazuje tačno ono što je izvedeno iz
+// sidra, u bazu ide NEPROMIJENJENA bruto vrijednost sidra — jer
+// bruto→netto→bruto nije povratno za svaku vrijednost (100,00 → 85,47 → 99,99).
 
-test('cijenaZaSpremanje: nedirana cijena artikla vraca originalnu bruto vrijednost', () => {
-  const original = { cijena: 100, pdvStopa: 'E' as const };
-  const rezultat = cijenaZaSpremanje({
-    unos: '85.47',
-    unosInit: '85.47',
-    stopa: 'E',
-    original,
-    bezPdv: true,
-  });
-  expect(rezultat).toBe(100);
+const E100 = { cijena: 100, pdvStopa: 'E' as const };
+
+test('brutoIzUnosa: nedirana cijena artikla vraca originalnu bruto vrijednost', () => {
+  expect(brutoIzUnosa({ unos: '85.47', stopa: 'E', bezPdv: true, sidro: E100 })).toBe(100);
+  expect(brutoIzUnosa({ unos: '100', stopa: 'E', bezPdv: false, sidro: E100 })).toBe(100);
 });
 
-test('cijenaZaSpremanje: dirana cijena se konvertuje iz netta', () => {
-  const original = { cijena: 100, pdvStopa: 'E' as const };
-  const rezultat = cijenaZaSpremanje({
-    unos: '90',
-    unosInit: '85.47',
-    stopa: 'E',
-    original,
-    bezPdv: true,
-  });
-  expect(rezultat).toBe(uBruto(90, 'E'));
+test('brutoIzUnosa: dirana cijena se konvertuje iz netta', () => {
+  expect(brutoIzUnosa({ unos: '90', stopa: 'E', bezPdv: true, sidro: E100 })).toBe(uBruto(90, 'E'));
 });
 
-test('cijenaZaSpremanje: promjena stope uz nepromijenjen tekst polja se ipak konvertuje', () => {
-  const original = { cijena: 100, pdvStopa: 'K' as const };
-  const rezultat = cijenaZaSpremanje({
-    unos: '100',
-    unosInit: '100',
-    stopa: 'E',
-    original,
-    bezPdv: true,
-  });
-  expect(rezultat).toBe(uBruto(100, 'E'));
+test('brutoIzUnosa: promjena stope uz nepromijenjen tekst polja se ipak konvertuje', () => {
+  const sidro = { cijena: 100, pdvStopa: 'K' as const };
+  expect(brutoIzUnosa({ unos: '100', stopa: 'E', bezPdv: true, sidro })).toBe(uBruto(100, 'E'));
 });
 
-test('cijenaZaSpremanje: kad je postavka iskljucena, unos se uzima kao bruto direktno (ako je diran)', () => {
-  const original = { cijena: 100, pdvStopa: 'E' as const };
-  const rezultat = cijenaZaSpremanje({
-    unos: '150',
-    unosInit: '100',
-    stopa: 'E',
-    original,
-    bezPdv: false,
-  });
-  expect(rezultat).toBe(150);
+test('brutoIzUnosa: sa PDV-om se unos uzima kao bruto direktno', () => {
+  expect(brutoIzUnosa({ unos: '150', stopa: 'E', bezPdv: false, sidro: E100 })).toBe(150);
 });
 
-test('cijenaZaSpremanje: novi proizvod (original null) uvijek racuna iz unosa', () => {
-  const rezultatBezPdv = cijenaZaSpremanje({
-    unos: '85.47',
-    unosInit: '85.47',
-    stopa: 'E',
-    original: null,
-    bezPdv: true,
-  });
-  expect(rezultatBezPdv).toBe(uBruto(85.47, 'E'));
-
-  const rezultatSaPdv = cijenaZaSpremanje({
-    unos: '100',
-    unosInit: '100',
-    stopa: 'E',
-    original: null,
-    bezPdv: false,
-  });
-  expect(rezultatSaPdv).toBe(100);
+test('brutoIzUnosa: bez sidra uvijek racuna iz unosa', () => {
+  expect(brutoIzUnosa({ unos: '85.47', stopa: 'E', bezPdv: true, sidro: null })).toBe(uBruto(85.47, 'E'));
+  expect(brutoIzUnosa({ unos: '100', stopa: 'E', bezPdv: false, sidro: null })).toBe(100);
 });
 
-test('cijenaZaSpremanje: stopa K se nikad ne konvertuje, cak i kad je dirana', () => {
-  const original = { cijena: 50, pdvStopa: 'K' as const };
-  const rezultat = cijenaZaSpremanje({
-    unos: '60',
-    unosInit: '50',
-    stopa: 'K',
-    original,
-    bezPdv: true,
-  });
-  expect(rezultat).toBe(60);
+test('brutoIzUnosa: stopa K se nikad ne konvertuje', () => {
+  const sidro = { cijena: 50, pdvStopa: 'K' as const };
+  expect(brutoIzUnosa({ unos: '60', stopa: 'K', bezPdv: true, sidro })).toBe(60);
+});
+
+test('brutoIzUnosa: prazan unos daje NaN', () => {
+  expect(brutoIzUnosa({ unos: '', stopa: 'E', bezPdv: true, sidro: null })).toBeNaN();
+});
+
+// --- promijeniRezim ------------------------------------------------------
+
+test('promijeniRezim: cuva cijenu, ne tekst — 117 sa PDV-om postaje 100 bez', () => {
+  const r = promijeniRezim({ unos: '117', stopa: 'E', bezPdv: false, sidro: null }, true);
+  expect(r.unos).toBe('100');
+  expect(brutoIzUnosa({ unos: r.unos, stopa: 'E', bezPdv: true, sidro: r.sidro })).toBe(117);
+});
+
+test('promijeniRezim: tamo-nazad vraca isti broj, bez fening pomaka', () => {
+  const tamo = promijeniRezim({ unos: '100', stopa: 'E', bezPdv: false, sidro: null }, true);
+  expect(tamo.unos).toBe('85.47');
+  expect(brutoIzUnosa({ unos: tamo.unos, stopa: 'E', bezPdv: true, sidro: tamo.sidro })).toBe(100);
+  const nazad = promijeniRezim({ unos: tamo.unos, stopa: 'E', bezPdv: true, sidro: tamo.sidro }, false);
+  expect(nazad.unos).toBe('100');
+});
+
+test('promijeniRezim: na spremljenom artiklu ne pomjera cijenu', () => {
+  const r = promijeniRezim({ unos: '100', stopa: 'E', bezPdv: false, sidro: E100 }, true);
+  expect(brutoIzUnosa({ unos: r.unos, stopa: 'E', bezPdv: true, sidro: r.sidro })).toBe(100);
+});
+
+test('promijeniRezim: prazno polje ostaje prazno', () => {
+  expect(promijeniRezim({ unos: '', stopa: 'E', bezPdv: false, sidro: null }, true)).toEqual({ unos: '', sidro: null });
 });

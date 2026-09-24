@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test';
-import { redStatus, praznaStavka, ulazTotali, nedostajeOpis, uPayload, redNabavnaPoJed, type UlazRed } from './ulaz';
+import { redStatus, praznaStavka, ulazTotali, nedostajeOpis, uPayload, redNabavnaPoJed, prodajnaPrikaz, prodajnaIzUnosa, redRucPosto, type UlazRed } from './ulaz';
 
 const artikal = { id: 1, sifra: 'A-1', naziv: 'Artikal', jm: 'kom', cijena: 10, pdvStopa: 'E', tip: 'artikal', stanje: 3 } as any;
 const ploca = { id: 11, sifra: 'IV', naziv: 'Iverica', jm: 'm²', cijena: 0, pdvStopa: 'E', tip: 'materijal', plocaSirina: 2000, plocaVisina: 1000, stanje: 0 } as any;
@@ -79,4 +79,43 @@ test('nabavna po jedinici reda: nakon rabata, u jedinici u kojoj se kuca', () =>
   expect(redNabavnaPoJed(red({ productId: 12, kolicina: '10', nabavnaCijena: '10', rabat: '20' }))).toBe(8);
   expect(redNabavnaPoJed(red({ productId: 12, kolicina: '10', nabavnaCijena: '10' }))).toBe(10);
   expect(redNabavnaPoJed(red({ productId: 12, kolicina: '', nabavnaCijena: '10' }))).toBe(10);
+});
+
+// --- prodajna sa / bez PDV-a --------------------------------------------
+
+const oslobodjen = { ...artikal, id: 2, pdvStopa: 'K' } as any;
+
+test('prodajna upisana bez PDV-a se u redu cuva kao bruto', () => {
+  expect(prodajnaIzUnosa('100', artikal, true)).toEqual({ cijena: '117', cijenaUnos: '100' });
+  expect(prodajnaIzUnosa('117', artikal, false)).toEqual({ cijena: '117', cijenaUnos: '117' });
+  expect(prodajnaIzUnosa('100,', artikal, true).cijena).toBe('117');
+  expect(prodajnaIzUnosa('', artikal, true)).toEqual({ cijena: '', cijenaUnos: '' });
+});
+
+test('stopa K se ne preracunava ni u rezimu bez PDV-a', () => {
+  expect(prodajnaIzUnosa('50', oslobodjen, true)).toEqual({ cijena: '50', cijenaUnos: '50' });
+  expect(prodajnaPrikaz(red({ cijena: '50' }), oslobodjen, true)).toBe('50');
+});
+
+test('prikaz prodajne: ukucani tekst ima prednost, inace se bruto preracuna za rezim', () => {
+  expect(prodajnaPrikaz(red({ cijena: '117' }), artikal, true)).toBe('100');
+  expect(prodajnaPrikaz(red({ cijena: '117' }), artikal, false)).toBe('117');
+  expect(prodajnaPrikaz(red({ cijena: '117', cijenaUnos: '100,0' }), artikal, true)).toBe('100,0');
+});
+
+test('prebacivanje rezima (brisanje cijenaUnos) ne pomjera cijenu ni za fening', () => {
+  // 100,00 sa PDV-om → 85,47 bez → nazad mora biti opet 100, a u redu cijelo vrijeme 100.
+  const r = red({ productId: 1, cijena: '100' });
+  expect(prodajnaPrikaz(r, artikal, true)).toBe('85.47');
+  expect(prodajnaPrikaz(r, artikal, false)).toBe('100');
+  expect(uPayload([{ ...r, kolicina: '1', nabavnaCijena: '50' }], products, '')[0].cijena).toBe(100);
+});
+
+test('RUC reda: na nabavnu nakon rabata, iz prodajne bez PDV-a', () => {
+  // prodajna 117 sa PDV → 100 bez; nabavna 80 → RUC 25 %
+  expect(redRucPosto(red({ productId: 1, kolicina: '1', nabavnaCijena: '80', cijena: '117' }), artikal)).toBe(25);
+  // rabat 20 % na 100 → nabavna 80 → isto 25 %
+  expect(redRucPosto(red({ productId: 1, kolicina: '1', nabavnaCijena: '100', rabat: '20', cijena: '117' }), artikal)).toBe(25);
+  expect(redRucPosto(red({ productId: 1, kolicina: '1', nabavnaCijena: '', cijena: '117' }), artikal)).toBeNull();
+  expect(redRucPosto(red({ productId: 12, kolicina: '1', nabavnaCijena: '2', cijena: '' }), kant)).toBeNull();
 });

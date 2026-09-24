@@ -1,11 +1,10 @@
 import { useState, useEffect } from 'react';
 import { Product } from '@/types';
-import { cn, formatKM, parseDecimal, porukaGreske } from '@/lib/utils';
-import { uBruto, uNetto, cijenaZaSpremanje } from '@/lib/pdvUnos';
-import { useUnosBezPdv } from '@/hooks/useUnosBezPdv';
+import { cn, formatKM, porukaGreske } from '@/lib/utils';
+import { useCijenaUnos } from '@/hooks/useCijenaUnos';
+import { CijenaPdvPolje } from '@/components/CijenaPdvPolje';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { DecimalInput } from '@/components/ui/decimal-input';
 import { Label } from '@/components/ui/label';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
@@ -37,57 +36,28 @@ function UslugaDialog({
 }) {
   const [sifra, setSifra] = useState('');
   const [naziv, setNaziv] = useState('');
-  const [cijena, setCijena] = useState('');
   const [pdvStopa, setPdvStopa] = useState<'E' | 'K'>('E');
-  const bezPdv = useUnosBezPdv(open);
-  // Tekst koji je pri otvaranju stavljen u polje — prepoznaje da cijena nije dirana.
-  const [cijenaInit, setCijenaInit] = useState('');
+  const cijena = useCijenaUnos(open, product, pdvStopa);
 
   useEffect(() => {
-    // Dok se postavka učitava ne diramo formu — inače bismo cijenu prikazali
-    // u pogrešnoj jedinici pa je pregazili kad postavka stigne.
     if (!open) return;
-    if (bezPdv === null) return;
     if (product) {
-      const prikaz = String(bezPdv ? uNetto(product.cijena, product.pdvStopa) : product.cijena);
       setSifra(product.sifra);
       setNaziv(product.naziv);
-      setCijena(prikaz);
-      setCijenaInit(prikaz);
       setPdvStopa(product.pdvStopa);
     } else {
       setSifra('');
       setNaziv('');
-      setCijena('');
-      setCijenaInit('');
       setPdvStopa('E');
     }
-  }, [open, product, bezPdv]);
+  }, [open, product]);
 
   const isEdit = !!product;
-  // Režim "bez PDV-a" vrijedi samo za stopu E — kod K (0 %) bi oznaka
-  // "bez PDV-a" bila obmanjujuća.
-  const nettoRezim = bezPdv === true && pdvStopa === 'E';
-  const cijenaBroj = parseDecimal(cijena);
-  // Rule 2: dok je polje cijene nedirano (isti tekst i ista stopa kao pri
-  // otvaranju), pregled mora prikazati STVARNU spremljenu (bruto) cijenu, a
-  // ne preračunatu — inače korisnik vidi fening razlike i "ispravi" ga, čime
-  // cijena stvarno postane pogrešna (vidi cijenaZaSpremanje).
-  const nedirano = !!product && cijena === cijenaInit && pdvStopa === product.pdvStopa;
-  const previewBruto = nettoRezim && !isNaN(cijenaBroj) && cijena !== ''
-    ? (nedirano ? product!.cijena : uBruto(cijenaBroj, pdvStopa))
-    : null;
+  const cijenaOk = cijena.spremno && cijena.unos !== '' && !isNaN(cijena.bruto);
 
   const handleSpremi = () => {
-    if (bezPdv === null) return;
-    const cijenaZaBazu = cijenaZaSpremanje({
-      unos: cijena,
-      unosInit: cijenaInit,
-      stopa: pdvStopa,
-      original: product,
-      bezPdv,
-    });
-    onSave({ sifra, naziv, cijena: cijenaZaBazu, pdvStopa });
+    if (!cijenaOk) return;
+    onSave({ sifra, naziv, cijena: cijena.bruto, pdvStopa });
   };
 
   return (
@@ -96,11 +66,6 @@ function UslugaDialog({
         <DialogHeader>
           <div className="flex items-center gap-2">
             <DialogTitle>{isEdit ? 'Uredi uslugu' : 'Nova usluga'}</DialogTitle>
-            {nettoRezim && (
-              <Badge variant="secondary" className="bg-amber-50 text-amber-700 border-amber-200 text-[10px] font-semibold">
-                bez PDV-a
-              </Badge>
-            )}
           </div>
           <DialogDescription>
             {isEdit ? 'Izmjenite podatke o usluzi' : 'Dodajte novu uslugu'}
@@ -117,13 +82,16 @@ function UslugaDialog({
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>{nettoRezim ? 'Cijena bez PDV-a' : 'Cijena'}</Label>
-              <DecimalInput value={cijena} onValueChange={text => setCijena(text)} placeholder="0,00" className="font-mono" />
-              {previewBruto !== null && (
-                <p className="text-[11px] text-slate-400 font-mono">
-                  Sa PDV-om: {formatKM(previewBruto)}
-                </p>
-              )}
+              <Label>Cijena</Label>
+              <CijenaPdvPolje
+                unos={cijena.unos}
+                onUnos={cijena.setUnos}
+                bezPdv={cijena.bezPdv}
+                onRezim={cijena.setRezim}
+                stopa={pdvStopa}
+                bruto={cijena.bruto}
+                inputClassName="font-mono"
+              />
             </div>
             <div className="space-y-2">
               <Label>PDV stopa</Label>
@@ -143,7 +111,7 @@ function UslugaDialog({
           <Button variant="ghost" onClick={() => onOpenChange(false)}>Otkaži</Button>
           <Button
             onClick={handleSpremi}
-            disabled={bezPdv === null || !sifra || !naziv || !cijena || isNaN(parseDecimal(cijena))}
+            disabled={!sifra || !naziv || !cijenaOk}
           >
             {isEdit ? 'Spremi' : 'Dodaj'}
           </Button>

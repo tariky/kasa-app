@@ -7,6 +7,8 @@ import {
 } from '@/components/ui/dialog';
 import { cn, parseDecimal } from '@/lib/utils';
 import type { Product } from '@/types';
+import { useCijenaUnos } from '@/hooks/useCijenaUnos';
+import { CijenaPdvPolje } from '@/components/CijenaPdvPolje';
 
 /** Tring: naziv zajedno s JM ima 32–36 znakova, zavisno od uređaja (isto provjerava product:slobodan). */
 const NAZIV_MAX = 32;
@@ -29,9 +31,10 @@ interface Props {
  */
 export default function SlobodnaStavkaDialog({ open, onClose, onDodaj }: Props) {
   const [naziv, setNaziv] = useState('');
-  const [cijena, setCijena] = useState('');
   const [kolicina, setKolicina] = useState('1');
   const [stopa, setStopa] = useState<'E' | 'K'>('E');
+  // Režim "sa/bez PDV-a" svako otvaranje kreće od postavke cijene.unosBezPdv.
+  const cijena = useCijenaUnos(open, null, stopa);
   const [jm, setJm] = useState('kom');
   const [greska, setGreska] = useState<string | null>(null);
   const [radi, setRadi] = useState(false);
@@ -40,13 +43,13 @@ export default function SlobodnaStavkaDialog({ open, onClose, onDodaj }: Props) 
   // Svako otvaranje kreće od praznog obrasca; stopa ostaje kakva je bila zadnji put.
   useEffect(() => {
     if (!open) return;
-    setNaziv(''); setCijena(''); setKolicina('1'); setJm('kom'); setGreska(null); setRadi(false);
+    setNaziv(''); setKolicina('1'); setJm('kom'); setGreska(null); setRadi(false);
     setTimeout(() => nazivRef.current?.focus(), 50);
   }, [open]);
 
   const potvrdi = async () => {
-    if (radi) return;
-    const c = parseDecimal(cijena);
+    if (radi || !cijena.spremno) return;
+    const c = cijena.bruto;
     const k = parseDecimal(kolicina);
     if (!naziv.trim()) { setGreska('Upišite naziv stavke.'); return; }
     if (!(c > 0)) { setGreska('Upišite cijenu.'); return; }
@@ -98,17 +101,20 @@ export default function SlobodnaStavkaDialog({ open, onClose, onDodaj }: Props) 
               />
             </label>
 
-            <div className="grid grid-cols-[1fr_6rem_5rem] gap-3">
-              <label className="block">
+            <div className="grid grid-cols-[1fr_6rem_5rem] gap-3 items-start">
+              <div>
                 <span className="block text-[12px] font-medium text-slate-600 mb-1.5">Cijena (KM)</span>
-                <DecimalInput
-                  value={cijena}
-                  onValueChange={text => setCijena(text)}
+                <CijenaPdvPolje
+                  unos={cijena.unos}
+                  onUnos={cijena.setUnos}
+                  bezPdv={cijena.bezPdv}
+                  onRezim={cijena.setRezim}
+                  stopa={stopa}
+                  bruto={cijena.bruto}
                   onKeyDown={naEnter}
-                  placeholder="0,00"
-                  className="h-11 rounded-xl font-mono text-right"
+                  inputClassName="h-11 rounded-xl font-mono text-right"
                 />
-              </label>
+              </div>
               <label className="block">
                 <span className="block text-[12px] font-medium text-slate-600 mb-1.5">Količina</span>
                 <DecimalInput
@@ -165,7 +171,7 @@ export default function SlobodnaStavkaDialog({ open, onClose, onDodaj }: Props) 
           <Button variant="ghost" size="sm" className="rounded-lg" onClick={onClose}>
             Otkaži
           </Button>
-          <Button size="sm" className="rounded-lg px-5" onClick={potvrdi} disabled={radi}>
+          <Button size="sm" className="rounded-lg px-5" onClick={potvrdi} disabled={radi || !cijena.spremno}>
             Dodaj
           </Button>
         </div>

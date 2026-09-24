@@ -1238,16 +1238,16 @@ export default function PostavkeScreen() {
                       </div>
                       <div>
                         <h3 className="text-[15px] font-semibold text-slate-800">Cijene</h3>
-                        <p className="text-[12px] text-slate-400 mt-0.5">Način unosa cijena u šifarniku</p>
+                        <p className="text-[12px] text-slate-400 mt-0.5">Kako se upisuje cijena artikla, usluge i slobodne stavke</p>
                       </div>
                     </div>
                   </div>
                   <div className="px-6 py-5 space-y-4">
                     <div className="flex items-center justify-between">
                       <div className="pr-4">
-                        <p className="text-[13px] font-medium text-slate-700">Cijene se unose bez PDV-a</p>
+                        <p className="text-[13px] font-medium text-slate-700">Cijenu upisujem bez PDV-a</p>
                         <p className="text-[12px] text-slate-400 mt-0.5">
-                          Kod unosa artikla ili usluge upisuješ cijenu bez PDV-a; aplikacija sama dodaje 17 %
+                          Polje za cijenu po zadanom kreće na „bez PDV-a“ i aplikacija dodaje 17 % (stopa E). Uz svako polje se može prebaciti na „sa PDV-om“.
                         </p>
                       </div>
                       <Switch
@@ -1257,8 +1257,8 @@ export default function PostavkeScreen() {
                           await window.api.setSetting('cijene.unosBezPdv', String(checked));
                           setPdvPotvrda(
                             checked
-                              ? 'Cijene se od sada unose bez PDV-a. Postojeći artikli nisu promijenjeni.'
-                              : 'Cijene se od sada unose sa PDV-om. Postojeći artikli nisu promijenjeni.'
+                              ? 'Polje za cijenu od sada kreće na „bez PDV-a“. Postojeći artikli nisu promijenjeni.'
+                              : 'Polje za cijenu od sada kreće na „sa PDV-om“. Postojeći artikli nisu promijenjeni.'
                           );
                         }}
                       />
