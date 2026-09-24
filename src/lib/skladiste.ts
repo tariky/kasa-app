@@ -63,8 +63,11 @@ export function collectPriceChanges(
   return { nivelacija, bezZaliha };
 }
 
-/** Upiše novu prodajnu cijenu za artikle bez zalihe (nema nivelacije). */
-export function applyPricesWithoutStock(db: SqlDb, changes: PriceChange[]): void {
+/**
+ * Upiše nove prodajne cijene u šifarnik. Dokument (nivelaciju) za artikle sa
+ * zalihom pravi pozivalac — vidi `promjeneUProdaji`.
+ */
+export function upisiCijene(db: SqlDb, changes: PriceChange[]): void {
   if (changes.length === 0) return;
   const updatePrice = db.prepare(
     "UPDATE products SET cijena = ?, updatedAt = datetime('now','localtime') WHERE id = ?"
@@ -125,14 +128,22 @@ function vratiCijeneAkoNepromijenjene(
  * `preskoci` su već vraćeni iz historije. Vraća broj vraćenih artikala.
  */
 export function revertNivelacijaPrices(db: SqlDb, primkaId: number, preskoci: Set<number> = new Set(), samo?: Set<number>): number {
+  // Nivelacije se ne brišu, pa promjena artikla koji je izmjenom već uklonjen
+  // s primke ostaje u njenoj nivelaciji — ta je poništena pri uklanjanju i ne
+  // smije se vraćati ponovo (samo artikli koji su još na primci). Isto tako se
+  // ne gazi cijena koju je poslije primke postavila druga primka ili ručna
+  // izmjena. Protunivelacije nemaju primkaId, pa se ovdje nikad ne čitaju.
   const oldNivStavke = db.prepare(`
     SELECT ns.productId, ns.staraCijena, ns.novaCijena
     FROM nivelacija_stavke ns
     JOIN nivelacije n ON n.id = ns.nivelacijaId
     WHERE n.primkaId = ?
-  `).all(primkaId) as Array<{ productId: number; staraCijena: number; novaCijena: number }>;
+      AND ns.productId IN (SELECT productId FROM primka_stavke WHERE primkaId = ?)
+    ORDER BY ns.id
+  `).all(primkaId, primkaId) as Array<{ productId: number; staraCijena: number; novaCijena: number }>;
 
-  return vratiCijeneAkoNepromijenjene(db, oldNivStavke.filter(p => !preskoci.has(p.productId) && (!samo || samo.has(p.productId))));
+  return vratiCijeneAkoNepromijenjene(db, oldNivStavke.filter(p =>
+    !preskoci.has(p.productId) && (!samo || samo.has(p.productId)) && !cijenaKasnijeMijenjana(db, primkaId, p.productId)));
 }
 
 /**
@@ -215,6 +226,71 @@ export function revertPrimkaPrices(db: SqlDb, primkaId: number, samo?: Set<numbe
     + revertPricesWithoutStock(db, primkaId, pokriveni, samo);
 }
 
+// ── Nivelacija kao dokument promjene cijene u prodaji ──────────────────
+//
+// Nivelacija se nikad ne briše: roba se prodavala po cijeni iz nje. Kad
+// brisanje ili izmjena primke promijeni cijenu u prodaji, razlika se
+// dokumentuje novom nivelacijom (protunivelacija) — od cijene koja je bila u
+// prodaji do nove, na zalihi koja ostaje bez robe iz te primke.
+
+/** Artikli čiju prodajnu cijenu primka određuje ili je mijenjala (stavke + historija). */
+export function artikliPrimke(db: SqlDb, primkaId: number): number[] {
+  return (db.prepare(`
+    SELECT productId FROM primka_stavke WHERE primkaId = ?
+    UNION
+    SELECT productId FROM cijena_historija WHERE izvor = 'primka' AND izvorId = ?
+  `).all(primkaId, primkaId) as Array<{ productId: number }>).map(r => r.productId);
+}
+
+/** Snimak trenutnih prodajnih cijena (prije poništavanja/izmjene primke), redom artikala. */
+export function cijeneArtikala(db: SqlDb, productIds: Iterable<number>): Map<number, number> {
+  const get = db.prepare('SELECT cijena FROM products WHERE id = ?');
+  const m = new Map<number, number>();
+  for (const id of productIds) {
+    if (m.has(id)) continue;
+    const r = get.get(id) as { cijena: number } | undefined;
+    if (r) m.set(id, r.cijena);
+  }
+  return m;
+}
+
+/**
+ * Stavke nivelacije za promjene cijene u prodaji od snimka `prije` do sada:
+ * stara = cijena koja je bila u prodaji, nova = trenutna, količina = trenutna
+ * zaliha. Samo artikli sa zalihom (bez zalihe nema šta nivelisati); materijal
+ * nema prodajnu cijenu. Poziva se dok ulaz primke NIJE na zalihi — cijena se
+ * mijenja na robi koja ostaje u prodavnici.
+ */
+export function promjeneUProdaji(db: SqlDb, prije: Map<number, number>): PriceChange[] {
+  const get = db.prepare('SELECT cijena, pdvStopa, tip FROM products WHERE id = ?');
+  const out: PriceChange[] = [];
+  for (const [productId, staraCijena] of prije) {
+    const p = get.get(productId) as { cijena: number; pdvStopa: string; tip: string } | undefined;
+    if (!p || p.tip === 'materijal' || Math.abs(p.cijena - staraCijena) <= EPS) continue;
+    const kolicina = getProductStock(db, productId);
+    if (kolicina > 0) out.push({ productId, kolicina, staraCijena, novaCijena: p.cijena, pdvStopa: p.pdvStopa });
+  }
+  return out;
+}
+
+/** Brojevi nivelacija primke koje sadrže neki od artikala — za napomenu protunivelacije. */
+export function brojeviNivelacijaPrimke(db: SqlDb, primkaId: number, productIds: Iterable<number>): string[] {
+  const ids = [...productIds];
+  if (ids.length === 0) return [];
+  return (db.prepare(`
+    SELECT n.brojNivelacije FROM nivelacije n
+    WHERE n.primkaId = ? AND EXISTS (
+      SELECT 1 FROM nivelacija_stavke ns WHERE ns.nivelacijaId = n.id AND ns.productId IN (${ids.map(() => '?').join(', ')})
+    )
+    ORDER BY n.id
+  `).all(primkaId, ...ids) as Array<{ brojNivelacije: string }>).map(r => r.brojNivelacije);
+}
+
+/** Napomena protunivelacije: razlog i nivelacije primke čije se cijene poništavaju. */
+export function napomenaProtunivelacije(razlog: string, brojevi: string[]): string {
+  return brojevi.length > 0 ? `${razlog} (${brojevi.join(', ')})` : razlog;
+}
+
 // ── Izmjena primke ─────────────────────────────────────────────────────
 
 /** Promjena cijene artikla koju je primka upisala u historiju (najviše jedna po artiklu). */
@@ -261,7 +337,7 @@ function prveCijene<T extends { productId: number; cijena: number }>(stavke: T[]
 export interface IzmjenaPrimke {
   /** Artikli za koje se cijena računa kao kod nove primke (dodani, ili promijenjena cijena u zadnjoj promjeni). */
   kreiraj: Set<number>;
-  /** Artikli čije su promjene cijena ove primke poništene — njihove nivelacije treba obrisati. */
+  /** Artikli čije su promjene cijena ove primke poništene (nivelacije ostaju; razliku nosi protunivelacija). */
   ponisteni: Set<number>;
   /** Zapamćena stara cijena (`primka_stavke.staraCijena`) artikala čije se promjene zadržavaju. */
   zadrzaneStareCijene: Map<number, number | null>;
@@ -276,7 +352,8 @@ export interface IzmjenaPrimke {
  *  - uklonjen artikal: promjena se poništava kao pri brisanju primke;
  *  - dodan artikal: kao kod nove primke;
  *  - promijenjena cijena, a primka je zadnja promjena cijene artikla:
- *    poništi pa upiši kao novu (nova cijena + nivelacija, kao do sada);
+ *    poništi pa upiši kao novu (nova cijena + historija); nivelacija ide od
+ *    cijene koja je bila u prodaji (npr. 12 → 15, ne 10 → 15) — vidi primka:update;
  *  - promijenjena cijena, a poslije je cijenu mijenjalo nešto drugo: trenutna
  *    cijena ostaje (kasnija promjena je važnija), nema nove nivelacije — samo
  *    se u lancu ispravi nova cijena ove primke i stara cijena sljedeće

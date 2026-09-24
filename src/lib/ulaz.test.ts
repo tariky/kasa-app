@@ -115,3 +115,16 @@ test('izmjena ulaza: promjena cijene zadnjeg ulaza nivelira zalihu bez robe iz t
     { productId: 1, productNaziv: 'Artikal', kolicina: 2, staraCijena: 10, novaCijena: 12, razlika: 2, ukupnaRazlika: 4 },
   ]);
 });
+
+test('izmjena zadnjeg ulaza koji je postavio 12: nivelacija ide od cijene u prodaji (12 → 15), kao u bazi', () => {
+  // Artikal 10 → ulaz postavio 12 (u prodaji je 12, zaliha 5 + 3 iz ulaza).
+  const art = { ...artikal, cijena: 12, stanje: 8 };
+  const izvorne = [{ productId: 1, cijena: 12, kolicina: 3 }];
+  expect(nivelacijaRazlike([red({ productId: 1, kolicina: '3', nabavnaCijena: '5', cijena: '15' })], [art], izvorne)).toEqual([
+    { productId: 1, productNaziv: 'Artikal', kolicina: 5, staraCijena: 12, novaCijena: 15, razlika: 3, ukupnaRazlika: 15 },
+  ]);
+  // Vraćanje na cijenu prije ulaza: u bazi protunivelacija 12 → 10 na istoj zalihi.
+  expect(nivelacijaRazlike([red({ productId: 1, kolicina: '3', nabavnaCijena: '5', cijena: '10' })], [art], izvorne)).toEqual([
+    { productId: 1, productNaziv: 'Artikal', kolicina: 5, staraCijena: 12, novaCijena: 10, razlika: -2, ukupnaRazlika: -10 },
+  ]);
+});

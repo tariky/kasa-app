@@ -496,7 +496,7 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
           <DialogContent className="sm:max-w-[420px]" onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); obrisi(); } }}>
             <DialogHeader>
               <DialogTitle>Obrisati ulaz {primka.brojPrimke}?</DialogTitle>
-              <DialogDescription>Stanje robe sa ovog ulaza se skida sa skladišta, a nivelacija uz njega se poništava. Brisanje se ne može poništiti.</DialogDescription>
+              <DialogDescription>Stanje robe sa ovog ulaza se skida sa skladišta, a prodajna cijena koju je ulaz postavio se vraća. Nivelacija uz ulaz ostaje; ako se cijena robe na stanju mijenja, nastaje nova nivelacija s današnjim datumom. Brisanje se ne može poništiti.</DialogDescription>
             </DialogHeader>
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="ghost" onClick={() => setBrisiOpen(false)}>Otkaži</Button>

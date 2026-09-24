@@ -762,7 +762,10 @@ export default function IzvjestajiScreen({ korisnikId }: { korisnikId: number })
                                 {formatDate(niv.datum)}
                               </td>
                               <td className="px-2 py-2.5 text-[12px] font-mono text-slate-500">
-                                {niv.primkaBroj || '—'}
+                                {niv.primkaBroj || (niv.napomena ? '' : '—')}
+                                {niv.napomena && (
+                                  <div className="font-sans text-[11px] text-slate-400">{niv.napomena}</div>
+                                )}
                               </td>
                               <td className="px-2 py-2.5 text-[12px] font-mono text-right tabular-nums text-slate-500">
                                 {niv.stavkiCount ?? 0}

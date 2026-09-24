@@ -240,6 +240,12 @@ export function NivelacijaPdf({ nivelacija, firma }: NivelacijaPdfProps) {
                 <Text style={s.fieldValue}>{nivelacija.primkaBroj}</Text>
               </View>
             ) : null}
+            {nivelacija.napomena ? (
+              <View style={s.fieldRow}>
+                <Text style={s.fieldLabel}>Napomena:</Text>
+                <Text style={s.fieldValue}>{nivelacija.napomena}</Text>
+              </View>
+            ) : null}
           </View>
         </View>
 
