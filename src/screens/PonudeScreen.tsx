@@ -23,7 +23,7 @@ import { formatBrojPonude, efektivniStatus, plusDana, danaIzmedju, DEFAULT_ROK_D
 import { izracunajTotale, pdvStavke } from '@/lib/racun';
 import { localDateStr } from '@/lib/novac';
 import { cn, formatKM, formatDate } from '@/lib/utils';
-import { useProizvodnja } from '@/hooks/useProizvodnja';
+import { useModuli } from '@/hooks/useModuli';
 import { formatBrojNaloga } from '@/lib/proizvodnja';
 import { LOGO_VELICINA } from '@/lib/firma';
 
@@ -153,8 +153,10 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
   const [brisiOpen, setBrisiOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
-  // Radni nalog — veza s modulom Proizvodnja
-  const proizvodnja = useProizvodnja();
+  // Radni nalog iz ponude — samo kad su uključene i Ponude i Proizvodnja.
+  // Bez veze nalog se ne dohvata, pa "Konvertuj u račun" ostaje dostupno i za
+  // ponudu koja već ima nalog (proizvodnja.ts povezuje račun ako se modul vrati).
+  const veza = useModuli()?.vezaPonudaNalog ?? false;
   const [nalogZaPonudu, setNalogZaPonudu] = useState<{ id: number; broj: number; godina: number } | null>(null);
 
   const rowRefs = useRef<(HTMLTableRowElement | null)[]>([]);
@@ -164,13 +166,13 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
 
   useEffect(() => {
     setNalogZaPonudu(null);
-    if (!selected || !proizvodnja) return;
+    if (!selected || !veza) return;
     let cancelled = false;
     window.api.getNalogZaPonudu(selected.id)
       .then(r => { if (!cancelled) setNalogZaPonudu(r); })
       .catch(() => { if (!cancelled) setNalogZaPonudu(null); });
     return () => { cancelled = true; };
-  }, [selected, proizvodnja]);
+  }, [selected, veza]);
 
   const loadPonude = async () => {
     setPonude(await window.api.getPonude());
@@ -794,10 +796,10 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
                   trailing={{ icon: Download, onClick: () => handleExportPdf(selected), title: 'Spremi ponudu kao PDF — S' }}
                 />
 
-                {proizvodnja && selStatus === 'prihvacena' && !nalogZaPonudu && (
+                {veza && selStatus === 'prihvacena' && !nalogZaPonudu && (
                   <ActionRow icon={Hammer} label="Radni nalog" onClick={napraviNalog} />
                 )}
-                {proizvodnja && nalogZaPonudu && (
+                {veza && nalogZaPonudu && (
                   <>
                     <ActionRow icon={Hammer} label={`Otvori nalog ${formatBrojNaloga(nalogZaPonudu)}`} onClick={() => otvoriNalog(nalogZaPonudu.id)} />
                     <p className="text-[11px] text-slate-400 px-0.5">Račun se izdaje iz radnog naloga</p>

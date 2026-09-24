@@ -12,6 +12,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
+import { useModuli } from '@/hooks/useModuli';
 import { Slider } from '@/components/ui/slider';
 import { ZaglavljePrikaz } from '@/components/ZaglavljePrikaz';
 import LicencaKartica from '@/components/licenca/LicencaKartica';
@@ -81,6 +82,7 @@ export default function PostavkeScreen() {
   const [pologPrompt, setPologPrompt] = useState(true);
   const [generatorEnabled, setGeneratorEnabled] = useState(false);
   const [proizvodnjaEnabled, setProizvodnjaEnabled] = useState(false);
+  const moduli = useModuli();
   const [racunNapomena, setRacunNapomena] = useState('');
   // ── Fiskalni niz (posljednji BF broj) ──
   const [fiskalnaNumeracija, setFiskalnaNumeracija] = useState<
@@ -1244,10 +1246,13 @@ export default function PostavkeScreen() {
                     <div className="flex items-center justify-between">
                       <div>
                         <p className="text-[13px] font-medium text-slate-700">Generator opcija</p>
-                        <p className="text-[12px] text-slate-400 mt-0.5">Prikazuje Generator ekran u navigaciji (samo admin)</p>
+                        <p className="text-[12px] text-slate-400 mt-0.5">
+                          {moduli && !moduli.licencirani.generator ? 'Nije uključeno u licencu.' : 'Prikazuje Generator ekran u navigaciji (samo admin)'}
+                        </p>
                       </div>
                       <Switch
-                        checked={generatorEnabled}
+                        disabled={!moduli?.licencirani.generator}
+                        checked={generatorEnabled && !!moduli?.licencirani.generator}
                         onCheckedChange={async (checked) => {
                           setGeneratorEnabled(checked);
                           await window.api.setSetting('ui.showGenerator', String(checked));
@@ -1262,10 +1267,12 @@ export default function PostavkeScreen() {
                         <p className="text-[13px] font-medium text-slate-700">Proizvodnja</p>
                         <p className="text-[12px] text-slate-400 mt-0.5">
                           Radni nalozi, materijal i normativi. Uključuje ekran Proizvodnja i tip artikla „materijal“.
+                          {moduli && !moduli.licencirani.proizvodnja && <span className="block text-amber-600 mt-0.5">Nije uključeno u licencu.</span>}
                         </p>
                       </div>
                       <Switch
-                        checked={proizvodnjaEnabled}
+                        disabled={!moduli?.licencirani.proizvodnja}
+                        checked={proizvodnjaEnabled && !!moduli?.licencirani.proizvodnja}
                         onCheckedChange={async (checked) => {
                           setProizvodnjaEnabled(checked);
                           await window.api.setProizvodnjaEnabled(checked);

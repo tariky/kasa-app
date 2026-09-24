@@ -6,7 +6,8 @@ import { User } from '@/types';
 import appIcon from '@/assets/icon.png';
 import { PROGRAM } from '@/lib/brend';
 import { opisLicence, type LicencaInfo, type TonLicence } from '@/lib/licencaTipovi';
-import { useProizvodnja } from '@/hooks/useProizvodnja';
+import { useModuli } from '@/hooks/useModuli';
+import type { Modul } from '@/lib/moduli';
 import { cn } from '@/lib/utils';
 
 interface LoginScreenProps {
@@ -18,13 +19,13 @@ const MIN_PIN = 4;
 const MAX_PIN = 6;
 
 // Isti redoslijed i ikone kao u sidebaru, da korisnik odmah prepozna ekrane.
-const MODULI = [
+const MODULI: { naziv: string; icon: typeof ScanBarcode; modul?: Modul }[] = [
   { naziv: 'Kasa', icon: ScanBarcode },
-  { naziv: 'Skladište', icon: Warehouse },
+  { naziv: 'Skladište', icon: Warehouse, modul: 'skladiste' },
   { naziv: 'Šifarnik', icon: NotebookTabs },
   { naziv: 'Računi', icon: ReceiptText },
-  { naziv: 'Ponude', icon: FileSignature },
-  { naziv: 'Proizvodnja', icon: Factory, opcioni: true },
+  { naziv: 'Ponude', icon: FileSignature, modul: 'ponude' },
+  { naziv: 'Proizvodnja', icon: Factory, modul: 'proizvodnja' },
   { naziv: 'Izvještaji', icon: BarChart3 },
 ];
 
@@ -59,7 +60,7 @@ export default function LoginScreen({ licenca, onLogin }: LoginScreenProps) {
   const [error, setError] = useState('');
   const [shaking, setShaking] = useState(false);
   const [firma, setFirma] = useState('');
-  const proizvodnja = useProizvodnja();
+  const moduli = useModuli();
 
   useEffect(() => {
     window.api.getFirmaSettings().then(f => setFirma(f.naziv?.trim() ?? '')).catch(() => {});
@@ -140,13 +141,14 @@ export default function LoginScreen({ licenca, onLogin }: LoginScreenProps) {
           <div>
             <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-slate-500">Moduli</p>
             <ul className="mt-3 grid grid-cols-2 gap-x-6 gap-y-2.5">
-              {MODULI.map(({ naziv, icon: Icon, opcioni }) => {
-                const ukljucen = !opcioni || proizvodnja === true;
+              {MODULI.map(({ naziv, icon: Icon, modul }) => {
+                const ukljucen = !modul || moduli?.ukljuceni[modul] === true;
+                const napomena = ukljucen || !modul || !moduli ? null : moduli.licencirani[modul] ? 'isključen' : 'nije u licenci';
                 return (
                   <li key={naziv} className={cn('flex items-center gap-2.5 text-sm', ukljucen ? 'text-slate-200' : 'text-slate-600')}>
                     <Icon className={cn('w-4 h-4 shrink-0', ukljucen ? 'text-blue-400' : 'text-slate-600')} strokeWidth={1.75} />
                     <span>{naziv}</span>
-                    {!ukljucen && <span className="text-[11px] text-slate-600">· isključen</span>}
+                    {napomena && <span className="text-[11px] text-slate-600">· {napomena}</span>}
                   </li>
                 );
               })}
