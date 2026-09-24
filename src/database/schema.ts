@@ -19,6 +19,7 @@ export const schema = `
     tip TEXT NOT NULL DEFAULT 'artikal',
     plocaSirina INTEGER,
     plocaVisina INTEGER,
+    slobodan INTEGER NOT NULL DEFAULT 0,
     createdAt TEXT DEFAULT (datetime('now','localtime')),
     updatedAt TEXT DEFAULT (datetime('now','localtime'))
   );

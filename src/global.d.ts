@@ -19,6 +19,7 @@ interface Window {
     deleteUser: (id: number) => Promise<any>;
     getProducts: (tip?: string) => Promise<any[]>;
     getProduct: (id: number) => Promise<any>;
+    createSlobodanProduct: (data: { naziv: string; cijena: number; pdvStopa: string; jm?: string }) => Promise<any>;
     createProduct: (data: any) => Promise<any>;
     updateProduct: (id: number, data: any) => Promise<any>;
     deleteProduct: (id: number) => Promise<any>;

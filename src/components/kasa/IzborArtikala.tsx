@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
-import { Search, X, ScanBarcode } from 'lucide-react';
+import { Search, X, ScanBarcode, PencilLine } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Key } from '@/components/ui/ledger';
@@ -19,6 +19,8 @@ interface Props {
   /** Brzi sken: artikal ide u košaricu odmah s količinom 1, bez dijaloga. */
   brziSken: boolean;
   onBrziSkenChange: (on: boolean) => void;
+  /** Otvara unos stavke bez šifre (F3). */
+  onSlobodnaStavka: () => void;
   allowZeroStock: boolean;
   /** Globalne prečice (F2, Esc, kucanje bilo gdje) rade samo dok je picker aktivan — bez otvorenog dijaloga. */
   aktivan: boolean;
@@ -49,7 +51,7 @@ function uPoljuZaUnos(t: EventTarget | null): boolean {
  */
 export default function IzborArtikala({
   artikli, query, onQueryChange, tipFilter, onTipFilterChange,
-  brziSken, onBrziSkenChange, allowZeroStock, aktivan, onOdaberi, searchRef,
+  brziSken, onBrziSkenChange, onSlobodnaStavka, allowZeroStock, aktivan, onOdaberi, searchRef,
 }: Props) {
   const [kursor, setKursor] = useState(-1);
   const [napomena, setNapomena] = useState<string | null>(null);
@@ -93,6 +95,7 @@ export default function IzborArtikala({
     if (!aktivan) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'F2') { e.preventDefault(); onBrziSkenChange(!brziSken); return; }
+      if (e.key === 'F3') { e.preventDefault(); onSlobodnaStavka(); return; }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (uPoljuZaUnos(e.target)) return;
       if (e.key === 'Escape') { e.preventDefault(); ocisti(); return; }
@@ -101,7 +104,7 @@ export default function IzborArtikala({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [aktivan, brziSken, onBrziSkenChange, ocisti, searchRef]);
+  }, [aktivan, brziSken, onBrziSkenChange, onSlobodnaStavka, ocisti, searchRef]);
 
   const onSearchKeyDown = useCallback(async (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -182,23 +185,39 @@ export default function IzborArtikala({
           })}
         </div>
 
-        <button
-          type="button"
-          aria-pressed={brziSken}
-          onClick={() => onBrziSkenChange(!brziSken)}
-          title="Brzi sken: artikal odmah ide u račun s količinom 1, bez pitanja za količinu. Ponovni sken dodaje još 1."
-          className={cn(
-            'inline-flex items-center gap-2 h-9 pl-3 pr-2.5 rounded-xl border text-[12.5px] font-medium transition-colors',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40',
-            brziSken
-              ? 'border-blue-200 bg-blue-50 text-blue-700'
-              : 'border-slate-200 bg-white text-slate-500 hover:text-slate-800 hover:border-slate-300',
-          )}
-        >
-          <ScanBarcode className={cn('h-4 w-4', brziSken ? 'text-blue-600' : 'text-slate-400')} />
-          Brzi sken
-          <Key className="ml-1" tone="light">F2</Key>
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onSlobodnaStavka}
+            title="Slobodna stavka: upišite naziv, cijenu i PDV stopu za stavku koja nema šifru."
+            className={cn(
+              'inline-flex items-center gap-2 h-9 pl-3 pr-2.5 rounded-xl border text-[12.5px] font-medium transition-colors',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40',
+              'border-slate-200 bg-white text-slate-500 hover:text-slate-800 hover:border-slate-300',
+            )}
+          >
+            <PencilLine className="h-4 w-4 text-slate-400" />
+            Slobodna stavka
+            <Key className="ml-1" tone="light">F3</Key>
+          </button>
+          <button
+            type="button"
+            aria-pressed={brziSken}
+            onClick={() => onBrziSkenChange(!brziSken)}
+            title="Brzi sken: artikal odmah ide u račun s količinom 1, bez pitanja za količinu. Ponovni sken dodaje još 1."
+            className={cn(
+              'inline-flex items-center gap-2 h-9 pl-3 pr-2.5 rounded-xl border text-[12.5px] font-medium transition-colors',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40',
+              brziSken
+                ? 'border-blue-200 bg-blue-50 text-blue-700'
+                : 'border-slate-200 bg-white text-slate-500 hover:text-slate-800 hover:border-slate-300',
+            )}
+          >
+            <ScanBarcode className={cn('h-4 w-4', brziSken ? 'text-blue-600' : 'text-slate-400')} />
+            Brzi sken
+            <Key className="ml-1" tone="light">F2</Key>
+          </button>
+        </div>
       </div>
 
       {/* Lista */}
@@ -302,6 +321,7 @@ export default function IzborArtikala({
         <span className="flex items-center gap-1.5"><Key className="ml-0">↵</Key> {brziSken ? 'dodaj 1 kom' : 'dodaj'}</span>
         <span className="flex items-center gap-1.5"><Key className="ml-0">Esc</Key> očisti pretragu</span>
         <span className="flex items-center gap-1.5"><Key className="ml-0">F2</Key> brzi sken</span>
+        <span className="flex items-center gap-1.5"><Key className="ml-0">F3</Key> slobodna stavka</span>
         <span className="flex items-center gap-1.5"><Key className="ml-0">F5</Key> naplati</span>
       </div>
     </div>

@@ -201,7 +201,7 @@ export function registerIpcHandlers(): void {
   const normalizujTip = (t?: string): string => (t && (PRODUCT_TIPOVI as readonly string[]).includes(t)) ? t : 'artikal';
 
   handle('product:getAll', (tip?: string) => {
-    const where = tip ? 'WHERE p.tip = ?' : '';
+    const where = tip ? 'WHERE p.slobodan = 0 AND p.tip = ?' : 'WHERE p.slobodan = 0';
     return db
       .prepare(`
         SELECT p.*,
@@ -222,6 +222,8 @@ export function registerIpcHandlers(): void {
   });
 
   const PDV_STOPE = ['E', 'K'];
+  // Tring: naziv zajedno s JM ima 32–36 znakova, zavisno od uređaja.
+  const SLOBODAN_NAZIV_MAX = 32;
 
   type ArtikalUnos = { sifra?: string; naziv?: string; cijena?: number; pdvStopa?: string; barkod?: string | null };
 
@@ -368,10 +370,53 @@ export function registerIpcHandlers(): void {
             0
           ) AS stanje
         FROM products p
-        WHERE (p.naziv LIKE ? OR p.sifra LIKE ? OR p.barkod LIKE ?) AND p.tip != 'materijal'
+        WHERE (p.naziv LIKE ? OR p.sifra LIKE ? OR p.barkod LIKE ?) AND p.tip != 'materijal' AND p.slobodan = 0
         ORDER BY p.naziv
       `)
       .all(like, like, like);
+  });
+
+  // Slobodna stavka na kasi: kasir upiše naziv, cijenu i stopu, a stavka dobije
+  // skriveni artikal (slobodan = 1, bez zalihe, van šifarnika) s automatskom šifrom.
+  // Tring pamti naziv, JM i stopu po artiklu i u toku dana ih ne smije mijenjati,
+  // a svaki novi artikal trajno zauzme mjesto (PLU) u memoriji uređaja — zato se
+  // isti naziv (bez obzira na velika slova), stopa i JM uvijek vraćaju na isti
+  // artikal, kome se mijenja samo cijena.
+  handle('product:slobodan', (data: { naziv?: string; cijena?: number; pdvStopa?: string; jm?: string }) => {
+    const naziv = data.naziv?.trim() ?? '';
+    if (!naziv) throw new Error('Naziv stavke je obavezan');
+    if (naziv.length > SLOBODAN_NAZIV_MAX) throw new Error(`Naziv stavke može imati najviše ${SLOBODAN_NAZIV_MAX} znaka`);
+    if (data.cijena == null || !(data.cijena >= 0.01 && data.cijena <= 9_999_999.99)) {
+      throw new Error('Cijena mora biti između 0,01 i 9.999.999,99');
+    }
+    if (!PDV_STOPE.includes(data.pdvStopa as string)) throw new Error('PDV stopa mora biti E ili K');
+    const jm = data.jm?.trim() || 'kom';
+
+    return db.transaction(() => {
+      // SQLite-ov lower() zna samo ASCII (Š ≠ š), pa se naziv poredi ovdje.
+      const kandidati = db.prepare(
+        'SELECT id, naziv FROM products WHERE slobodan = 1 AND pdvStopa = ? AND jm = ?'
+      ).all(data.pdvStopa, jm) as { id: number; naziv: string }[];
+      const postojeci = kandidati.find(k => k.naziv.toLowerCase() === naziv.toLowerCase());
+      let id: number;
+      if (postojeci) {
+        id = postojeci.id;
+        db.prepare("UPDATE products SET cijena = ?, updatedAt = datetime('now','localtime') WHERE id = ?").run(data.cijena, id);
+      } else {
+        const zadnji = db.prepare(
+          "SELECT MAX(CAST(substr(sifra, 2) AS INTEGER)) AS n FROM products WHERE slobodan = 1"
+        ).get() as { n: number | null };
+        let broj = (zadnji.n ?? 0) + 1;
+        const sifraZa = (n: number) => 'S' + String(n).padStart(6, '0');
+        while (db.prepare('SELECT 1 FROM products WHERE sifra = ?').get(sifraZa(broj))) broj++;
+        const r = db.prepare(`
+          INSERT INTO products (sifra, naziv, jm, cijena, pdvStopa, tip, slobodan)
+          VALUES (?, ?, ?, ?, ?, 'usluga', 1)
+        `).run(sifraZa(broj), naziv, jm, data.cijena, data.pdvStopa);
+        id = Number(r.lastInsertRowid);
+      }
+      return db.prepare('SELECT p.*, 0 AS stanje FROM products p WHERE p.id = ?').get(id);
+    })();
   });
 
   handle('materijal:search', (query: string) => {

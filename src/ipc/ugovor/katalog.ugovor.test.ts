@@ -449,6 +449,82 @@ describe('product:search', () => {
   });
 });
 
+// ─── product:slobodan ───────────────────────────────────────
+
+describe('product:slobodan', () => {
+  const slobodna = (extra: Record<string, unknown> = {}) =>
+    ({ naziv: 'Popravak rajsferšlusa', cijena: 7.5, pdvStopa: 'E', ...extra });
+
+  test('pravi skriveni artikal bez zalihe s automatskom šifrom i vraća ga sa stanjem', async () => {
+    const p = await b.call('product:slobodan', slobodna({ naziv: '  Popravak rajsferšlusa ' }));
+
+    expect(p).toMatchObject({
+      sifra: 'S000001', naziv: 'Popravak rajsferšlusa', jm: 'kom', cijena: 7.5, pdvStopa: 'E',
+      plu: null, barkod: null, tip: 'usluga', slobodan: 1, stanje: 0,
+    });
+    expect(red('SELECT id FROM products WHERE sifra = ?', 'S000001').id).toBe(p.id);
+    // Artikal se upisuje u uređaj tek s računom; kanal ne dira fiskalni uređaj.
+    expect(b.tring.zahtjevi).toHaveLength(0);
+    expect(broj('SELECT COUNT(*) AS n FROM stock_movements')).toBe(0);
+  });
+
+  test('isti naziv, stopa i JM koriste postojeći artikal — samo se cijena mijenja, bez historije cijena', async () => {
+    const prvi = await b.call('product:slobodan', slobodna());
+    const drugi = await b.call('product:slobodan', slobodna({ naziv: 'popravak RAJSFERŠLUSA', cijena: 9 }));
+
+    expect(drugi.id).toBe(prvi.id);
+    // Naziv ostaje kako je prvi put upisan: uređaj ne smije dobiti drugi naziv na istom artiklu.
+    expect(drugi).toMatchObject({ sifra: 'S000001', naziv: 'Popravak rajsferšlusa', cijena: 9 });
+    expect(broj('SELECT COUNT(*) AS n FROM products')).toBe(1);
+    expect(broj('SELECT COUNT(*) AS n FROM cijena_historija')).toBe(0);
+  });
+
+  test('druga stopa ili JM daju novi artikal', async () => {
+    const e = await b.call('product:slobodan', slobodna());
+    const k = await b.call('product:slobodan', slobodna({ pdvStopa: 'K' }));
+    const m = await b.call('product:slobodan', slobodna({ jm: 'm' }));
+
+    expect(new Set([e.id, k.id, m.id]).size).toBe(3);
+    expect([e.sifra, k.sifra, m.sifra]).toEqual(['S000001', 'S000002', 'S000003']);
+    expect(m.jm).toBe('m');
+  });
+
+  test('ne dira obične artikle istog naziva', async () => {
+    const obican = dodajArtikal('A1', { naziv: 'Popravak rajsferšlusa', tip: 'usluga' });
+    const p = await b.call('product:slobodan', slobodna());
+    expect(p.id).not.toBe(obican);
+    expect(red('SELECT cijena FROM products WHERE id = ?', obican).cijena).toBe(10);
+  });
+
+  test('preskače šifru koju već ima obični artikal', async () => {
+    dodajArtikal('S000001');
+    const p = await b.call('product:slobodan', slobodna());
+    expect(p.sifra).toBe('S000002');
+    const q = await b.call('product:slobodan', slobodna({ naziv: 'Drugo' }));
+    expect(q.sifra).toBe('S000003');
+  });
+
+  test('validira naziv, cijenu i stopu prije upisa', async () => {
+    await expect(b.call('product:slobodan', slobodna({ naziv: '   ' }))).rejects.toThrow('Naziv stavke je obavezan');
+    await expect(b.call('product:slobodan', slobodna({ naziv: 'x'.repeat(33) }))).rejects.toThrow('Naziv stavke može imati najviše 32 znaka');
+    await expect(b.call('product:slobodan', slobodna({ cijena: 0 }))).rejects.toThrow('Cijena mora biti između 0,01 i 9.999.999,99');
+    await expect(b.call('product:slobodan', slobodna({ cijena: 10_000_000 }))).rejects.toThrow('Cijena mora biti između 0,01 i 9.999.999,99');
+    await expect(b.call('product:slobodan', slobodna({ cijena: null }))).rejects.toThrow('Cijena mora biti između 0,01 i 9.999.999,99');
+    await expect(b.call('product:slobodan', slobodna({ pdvStopa: 'A' }))).rejects.toThrow('PDV stopa mora biti E ili K');
+    expect(broj('SELECT COUNT(*) AS n FROM products')).toBe(0);
+  });
+
+  test('slobodni artikli se ne vide u šifarniku ni pretrazi, ali product:get ih vraća', async () => {
+    dodajArtikal('U1', { naziv: 'Popravak jakne', tip: 'usluga' });
+    const p = await b.call('product:slobodan', slobodna());
+
+    expect(sifre(await b.call('product:getAll'))).toEqual(['U1']);
+    expect(sifre(await b.call('product:getAll', 'usluga'))).toEqual(['U1']);
+    expect(sifre(await b.call('product:search', 'popravak'))).toEqual(['U1']);
+    expect((await b.call('product:get', p.id)).naziv).toBe('Popravak rajsferšlusa');
+  });
+});
+
 // ─── materijal:search ───────────────────────────────────────
 
 describe('materijal:search', () => {

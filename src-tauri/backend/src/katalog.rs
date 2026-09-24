@@ -25,6 +25,8 @@ fn normalizuj_tip(t: &Value) -> &str {
 }
 
 const PDV_STOPE: [&str; 2] = ["E", "K"];
+/// Tring: naziv zajedno s JM ima 32–36 znakova, zavisno od uređaja.
+const SLOBODAN_NAZIV_MAX: usize = 32;
 
 /// Stanje artikla iz kretanja zaliha (podupit u product:getAll/search).
 const SELECT_SA_STANJEM: &str = "
@@ -39,10 +41,10 @@ const SELECT_SA_STANJEM: &str = "
 fn product_get_all(db: &Db, tip: &Value) -> R<Value> {
     if js::truthy(tip) {
         return db
-            .all(&format!("{SELECT_SA_STANJEM}\n        WHERE p.tip = ?\n        ORDER BY p.naziv\n      "), p![normalizuj_tip(tip)])
+            .all(&format!("{SELECT_SA_STANJEM}\n        WHERE p.slobodan = 0 AND p.tip = ?\n        ORDER BY p.naziv\n      "), p![normalizuj_tip(tip)])
             .map(Value::from);
     }
-    db.all(&format!("{SELECT_SA_STANJEM}\n        \n        ORDER BY p.naziv\n      "), p![]).map(Value::from)
+    db.all(&format!("{SELECT_SA_STANJEM}\n        WHERE p.slobodan = 0\n        ORDER BY p.naziv\n      "), p![]).map(Value::from)
 }
 
 /// Trimovane šifra, naziv i barkod (prazan barkod = null) spremni za upis;
@@ -228,10 +230,64 @@ fn product_adjust_stock(db: &Db, product_id: &Value, new_stanje: &Value) -> R<Va
 fn product_search(db: &Db, query: &Value) -> R<Value> {
     let like = format!("%{}%", js::to_string(query));
     db.all(
-        &format!("{SELECT_SA_STANJEM}\n        WHERE (p.naziv LIKE ? OR p.sifra LIKE ? OR p.barkod LIKE ?) AND p.tip != 'materijal'\n        ORDER BY p.naziv\n      "),
+        &format!("{SELECT_SA_STANJEM}\n        WHERE (p.naziv LIKE ? OR p.sifra LIKE ? OR p.barkod LIKE ?) AND p.tip != 'materijal' AND p.slobodan = 0\n        ORDER BY p.naziv\n      "),
         p![like, like, like],
     )
     .map(Value::from)
+}
+
+// Slobodna stavka na kasi: kasir upiše naziv, cijenu i stopu, a stavka dobije
+// skriveni artikal (slobodan = 1, bez zalihe, van šifarnika) s automatskom šifrom.
+// Tring pamti naziv, JM i stopu po artiklu i u toku dana ih ne smije mijenjati,
+// a svaki novi artikal trajno zauzme mjesto (PLU) u memoriji uređaja — zato se
+// isti naziv (bez obzira na velika slova), stopa i JM uvijek vraćaju na isti
+// artikal, kome se mijenja samo cijena.
+fn product_slobodan(db: &Db, data: &Value) -> R<Value> {
+    let naziv = js::trim(&data["naziv"]).unwrap_or("").to_string();
+    if naziv.is_empty() {
+        baci!("Naziv stavke je obavezan");
+    }
+    if naziv.encode_utf16().count() > SLOBODAN_NAZIV_MAX {
+        baci!("Naziv stavke može imati najviše {SLOBODAN_NAZIV_MAX} znaka");
+    }
+    let cijena = js::to_number(&data["cijena"]);
+    if data["cijena"].is_null() || !(0.01..=9_999_999.99).contains(&cijena) {
+        baci!("Cijena mora biti između 0,01 i 9.999.999,99");
+    }
+    let Some(stopa) = data["pdvStopa"].as_str().filter(|s| PDV_STOPE.contains(s)) else {
+        baci!("PDV stopa mora biti E ili K");
+    };
+    let jm = js::trim(&data["jm"]).filter(|s| !s.is_empty()).unwrap_or("kom").to_string();
+
+    db.tx(|| {
+        // SQLite-ov lower() zna samo ASCII (Š ≠ š), pa se naziv poredi ovdje.
+        let kandidati = db.all("SELECT id, naziv FROM products WHERE slobodan = 1 AND pdvStopa = ? AND jm = ?", p![stopa, jm])?;
+        let mali = naziv.to_lowercase();
+        let postojeci = kandidati.iter().find(|k| k["naziv"].as_str().is_some_and(|n| n.to_lowercase() == mali));
+        let id = match postojeci {
+            Some(k) => {
+                db.run("UPDATE products SET cijena = ?, updatedAt = datetime('now','localtime') WHERE id = ?", p![data["cijena"], k["id"]])?;
+                k["id"].clone()
+            }
+            None => {
+                let zadnji = db.val("SELECT MAX(CAST(substr(sifra, 2) AS INTEGER)) AS n FROM products WHERE slobodan = 1", p![])?;
+                let mut broj = zadnji.as_i64().unwrap_or(0) + 1;
+                let sifra_za = |n: i64| format!("S{}", js::pad(n, 6));
+                while db.ima("SELECT 1 FROM products WHERE sifra = ?", p![sifra_za(broj)])? {
+                    broj += 1;
+                }
+                let r = db.run(
+                    "
+          INSERT INTO products (sifra, naziv, jm, cijena, pdvStopa, tip, slobodan)
+          VALUES (?, ?, ?, ?, ?, 'usluga', 1)
+        ",
+                    p![sifra_za(broj), naziv, jm, data["cijena"], stopa],
+                )?;
+                json!(r.last_insert_rowid)
+            }
+        };
+        db.get("SELECT p.*, 0 AS stanje FROM products p WHERE p.id = ?", p![id]).map(|r| r.unwrap_or(Value::Null))
+    })
 }
 
 fn materijal_search(db: &Db, query: &Value) -> R<Value> {
@@ -381,6 +437,7 @@ pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
         "product:delete" => product_delete(db, &a[0]),
         "product:adjustStock" => product_adjust_stock(db, &a[0], &a[1]),
         "product:search" => product_search(db, &a[0]),
+        "product:slobodan" => product_slobodan(db, &a[0]),
         "materijal:search" => materijal_search(db, &a[0]),
         "dobavljac:getAll" => db.all("SELECT * FROM dobavljaci ORDER BY naziv", p![]).map(Value::from),
         "dobavljac:create" => dobavljac_create(db, &a[0]),

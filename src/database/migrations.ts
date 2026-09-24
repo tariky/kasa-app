@@ -139,4 +139,8 @@ export function runMigrations(database: Database.Database): void {
   if (!productCols2.find(c => c.name === 'plocaVisina')) {
     database.exec("ALTER TABLE products ADD COLUMN plocaVisina INTEGER");
   }
+  // Slobodna stavka na kasi: skriveni artikal bez šifarnika (product:slobodan).
+  if (!productCols2.find(c => c.name === 'slobodan')) {
+    database.exec("ALTER TABLE products ADD COLUMN slobodan INTEGER NOT NULL DEFAULT 0");
+  }
 }

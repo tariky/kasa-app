@@ -21,6 +21,8 @@ export interface Product {
   /** Dimenzija ploče u mm — samo za materijal u m² koji se kupuje po komadu. */
   plocaSirina?: number | null;
   plocaVisina?: number | null;
+  /** 1 = slobodna stavka s kase: skriveni artikal van šifarnika (product:slobodan). */
+  slobodan?: number;
   createdAt: string;
   updatedAt: string;
   stanje?: number;

@@ -1,4 +1,5 @@
 import type { Product, CartItem } from '@/types';
+import { formatKM } from './utils';
 
 /** Stavka spremljene košarice kako se čuva u saved_carts.items (JSON). */
 export interface SavedCartItem {
@@ -31,6 +32,27 @@ export function dodajUKosaricu(
     );
   }
   return [...cart, { product, kolicina: addQty, rabat: 0 }];
+}
+
+/**
+ * Dodaje slobodnu stavku (usluga, bez zalihe). Isti naziv, stopa i JM uvijek
+ * daju isti artikal, pa ponovni unos po istoj cijeni samo uvećava količinu.
+ * Po drugoj cijeni se odbija: red koji je već na računu ne smije tiho
+ * promijeniti cijenu, a isti artikal ne može na račun po dvije cijene.
+ */
+export function dodajSlobodnuStavku(
+  cart: CartItem[],
+  product: Product,
+  qty: number
+): { cart: CartItem[]; greska?: string } {
+  const postojeca = cart.find(item => item.product.id === product.id);
+  if (postojeca && postojeca.product.cijena !== product.cijena) {
+    return {
+      cart,
+      greska: `„${postojeca.product.naziv}“ je već na računu po cijeni ${formatKM(postojeca.product.cijena)}. Promijenite naziv ili uklonite postojeću stavku.`,
+    };
+  }
+  return { cart: dodajUKosaricu(cart, product, qty, true) };
 }
 
 /** Rabat je postotak — sve van 0–100 se steže na granice. */

@@ -22,6 +22,7 @@ export function napraviApi(pozovi: Pozovi, naLicencaBlokirano: (cb: () => void) 
     // Products
     getProducts: (tip?: string) => pozovi('product:getAll', tip),
     getProduct: (id: number) => pozovi('product:get', id),
+    createSlobodanProduct: (data: { naziv: string; cijena: number; pdvStopa: string; jm?: string }) => pozovi('product:slobodan', data),
     createProduct: (data: any) => pozovi('product:create', data),
     updateProduct: (id: number, data: any) => pozovi('product:update', id, data),
     deleteProduct: (id: number) => pozovi('product:delete', id),

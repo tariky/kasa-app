@@ -11,12 +11,13 @@ import {
 import { cn, formatKM, parseDecimal } from '@/lib/utils';
 import { localDateStr, prijedloziApoena, round2 } from '@/lib/novac';
 import { izracunajTotale, iznosStavke } from '@/lib/racun';
-import { dodajUKosaricu, restoreCart, postaviRabat, postaviRabatNaSve, type SavedCartItem } from '@/lib/kosarica';
+import { dodajUKosaricu, dodajSlobodnuStavku, restoreCart, postaviRabat, postaviRabatNaSve, type SavedCartItem } from '@/lib/kosarica';
 import { pdf } from '@react-pdf/renderer';
 import { OtpremnicaPdf } from '@/components/OtpremnicaPdf';
 import { PrilogPdf } from '@/components/PrilogPdf';
 import PrilogRacunDialog from '@/components/PrilogRacunDialog';
 import IzborArtikala, { type TipFilter } from '@/components/kasa/IzborArtikala';
+import SlobodnaStavkaDialog from '@/components/kasa/SlobodnaStavkaDialog';
 import type { User, Product, CartItem, Kupac } from '@/types';
 import { potvrdi } from '@/lib/dijalog';
 
@@ -71,6 +72,7 @@ export default function KasaScreen({ user }: KasaScreenProps) {
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [lastOrderId, setLastOrderId] = useState<number | null>(null);
   const [qtyProduct, setQtyProduct] = useState<Product | null>(null);
+  const [slobodnaOpen, setSlobodnaOpen] = useState(false);
   const [qtyValue, setQtyValue] = useState('1');
   const [kupacOpen, setKupacOpen] = useState(false);
   const [kupacNaziv, setKupacNaziv] = useState('');
@@ -198,7 +200,7 @@ export default function KasaScreen({ user }: KasaScreenProps) {
   }, [query, products, allProducts, tipFilter]);
 
   // Dok je bilo koji dijalog otvoren, prečice kase (F2, F5, Esc, kucanje u pretragu) miruju.
-  const anyDialogOpen = !!qtyProduct || kupacOpen || savedOpen || prilogOpen || rabatTarget !== null || kusurTotal !== null;
+  const anyDialogOpen = !!qtyProduct || slobodnaOpen || kupacOpen || savedOpen || prilogOpen || rabatTarget !== null || kusurTotal !== null;
 
   const closeKusur = useCallback(() => {
     setKusurTotal(null);
@@ -239,6 +241,20 @@ export default function KasaScreen({ user }: KasaScreenProps) {
     setQtyValue('1');
     setTimeout(() => qtyInputRef.current?.select(), 50);
   }, [scanMode, addToCart]);
+
+  const zatvoriSlobodnu = useCallback(() => {
+    setSlobodnaOpen(false);
+    setTimeout(() => searchInputRef.current?.focus(), 50);
+  }, []);
+
+  // Vraća poruku greške koju dijalog prikaže; bez greške se dijalog zatvara.
+  const dodajSlobodnu = useCallback((product: Product, qty: number): string | undefined => {
+    const r = dodajSlobodnuStavku(cart, product, qty);
+    if (r.greska) return r.greska;
+    setCart(r.cart);
+    setMessage(null);
+    zatvoriSlobodnu();
+  }, [cart, zatvoriSlobodnu]);
 
   const confirmAddToCart = useCallback(() => {
     if (!qtyProduct) return;
@@ -289,8 +305,15 @@ export default function KasaScreen({ user }: KasaScreenProps) {
       // Svježi podaci iz šifarnika — cijene i stanje se provjeravaju sada.
       const fresh: Product[] = await window.api.getProducts();
       const items: SavedCartItem[] = JSON.parse(saved.items);
+      // Slobodne stavke nisu u šifarniku — dohvate se pojedinačno.
+      const slobodne: Product[] = [];
+      for (const item of items) {
+        if (fresh.some(p => p.id === item.productId)) continue;
+        const p: Product | null = await window.api.getProduct(item.productId);
+        if (p?.slobodan) slobodne.push({ ...p, stanje: 0 });
+      }
       const { cart: restored, upozorenja } = restoreCart(
-        items, (id) => fresh.find(p => p.id === id), allowZeroStock
+        items, (id) => fresh.find(p => p.id === id) ?? slobodne.find(p => p.id === id), allowZeroStock
       );
       setCart(restored);
       await window.api.deleteSavedCart(saved.id);
@@ -458,6 +481,7 @@ export default function KasaScreen({ user }: KasaScreenProps) {
         onTipFilterChange={setTipFilter}
         brziSken={scanMode}
         onBrziSkenChange={toggleScanMode}
+        onSlobodnaStavka={() => setSlobodnaOpen(true)}
         allowZeroStock={allowZeroStock}
         aktivan={!anyDialogOpen && !loading}
         onOdaberi={promptAddToCart}
@@ -831,6 +855,8 @@ export default function KasaScreen({ user }: KasaScreenProps) {
           </div>
         </div>
       )}
+
+      <SlobodnaStavkaDialog open={slobodnaOpen} onClose={zatvoriSlobodnu} onDodaj={dodajSlobodnu} />
 
       {/* Quantity dialog */}
       <Dialog open={!!qtyProduct} onOpenChange={(open) => { if (!open) { setQtyProduct(null); setTimeout(() => searchInputRef.current?.focus(), 50); } }}>

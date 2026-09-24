@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test';
-import { dodajUKosaricu, restoreCart, postaviRabat, postaviRabatNaSve } from './kosarica';
+import { dodajUKosaricu, dodajSlobodnuStavku, restoreCart, postaviRabat, postaviRabatNaSve } from './kosarica';
 import type { Product, CartItem } from '@/types';
 
 function artikal(overrides: Partial<Product> = {}): Product {
@@ -144,4 +144,26 @@ test('rabat se ograničava na 0–100', () => {
   let cart = dodajUKosaricu([], a, 1, false);
   expect(postaviRabat(cart, 1, 150)[0].rabat).toBe(100);
   expect(postaviRabat(cart, 1, -5)[0].rabat).toBe(0);
+});
+
+// --- dodajSlobodnuStavku ---
+
+test('slobodna stavka ide u košaricu bez obzira na zalihu', () => {
+  const p = artikal({ id: 7, tip: 'usluga', slobodan: 1, stanje: 0 });
+  const r = dodajSlobodnuStavku([], p, 2);
+  expect(r).toEqual({ cart: [{ product: p, kolicina: 2, rabat: 0 }] });
+});
+
+test('ista slobodna stavka po istoj cijeni uvećava količinu', () => {
+  const p = artikal({ id: 7, tip: 'usluga', slobodan: 1 });
+  const { cart } = dodajSlobodnuStavku([], p, 1);
+  expect(dodajSlobodnuStavku(cart, { ...p }, 2).cart).toEqual([{ product: p, kolicina: 3, rabat: 0 }]);
+});
+
+test('ista slobodna stavka po drugoj cijeni se odbija — red na računu ostaje kakav jeste', () => {
+  const p = artikal({ id: 7, naziv: 'Popravak', tip: 'usluga', slobodan: 1, cijena: 10 });
+  const { cart } = dodajSlobodnuStavku([], p, 1);
+  const r = dodajSlobodnuStavku(cart, { ...p, cijena: 12 }, 1);
+  expect(r.cart).toBe(cart);
+  expect(r.greska).toBe('„Popravak“ je već na računu po cijeni 10,00 KM. Promijenite naziv ili uklonite postojeću stavku.');
 });

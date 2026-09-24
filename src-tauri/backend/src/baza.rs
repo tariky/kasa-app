@@ -159,6 +159,10 @@ pub fn run_migrations(db: &Db) -> R<()> {
     if !ima(&products2, "plocaVisina") {
         db.exec("ALTER TABLE products ADD COLUMN plocaVisina INTEGER")?;
     }
+    // Slobodna stavka na kasi: skriveni artikal bez šifarnika (product:slobodan).
+    if !ima(&products2, "slobodan") {
+        db.exec("ALTER TABLE products ADD COLUMN slobodan INTEGER NOT NULL DEFAULT 0")?;
+    }
     Ok(())
 }
 
