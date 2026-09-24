@@ -3,6 +3,7 @@
 // Viberom. Potpis je Ed25519 nad `PAZAR1.<payload>` — aplikacija ima samo
 // javni ključ, pa token ne može napraviti niko ko nema privatni.
 import { createPrivateKey, createPublicKey, sign, verify, KeyObject } from 'node:crypto';
+import { LICENCIRANI_MODULI, normalizujModule, type Modul } from './moduli';
 
 const PREFIKS = 'PAZAR1';
 
@@ -14,6 +15,8 @@ export interface Licenca {
   izdana: string;
   /** Ako je postavljen, licenca važi samo na tom uređaju. */
   uredjaj?: string;
+  /** Licencirani moduli. Nema polja = stari token = svi moduli; [] = samo jezgro. */
+  moduli?: Modul[];
 }
 
 interface Payload {
@@ -21,6 +24,7 @@ interface Payload {
   d: string;
   i: string;
   u?: string;
+  m?: string[];
 }
 
 export type Provjera =
@@ -46,6 +50,11 @@ export function izdajLicencu(licenca: Licenca, privatniKljuc: string | KeyObject
 
   const payload: Payload = { k: licenca.klijent, d: licenca.vrijediDo, i: licenca.izdana };
   if (licenca.uredjaj) payload.u = licenca.uredjaj;
+  if (licenca.moduli) {
+    const nepoznati = licenca.moduli.filter(m => !LICENCIRANI_MODULI.includes(m));
+    if (nepoznati.length) throw new Error(`Nepoznat modul: ${nepoznati.join(', ')}`);
+    payload.m = normalizujModule(licenca.moduli)!;
+  }
 
   const tijelo = `${PREFIKS}.${Buffer.from(JSON.stringify(payload)).toString('base64url')}`;
   const potpis = sign(null, Buffer.from(tijelo), kljuc(privatniKljuc, 'privatni'));
@@ -59,7 +68,13 @@ export function procitajLicencu(token: string): Licenca | null {
   try {
     const p = JSON.parse(Buffer.from(dijelovi[1], 'base64url').toString('utf8')) as Payload;
     if (typeof p.k !== 'string' || !DATUM.test(p.d) || !DATUM.test(p.i)) return null;
-    return { klijent: p.k, vrijediDo: p.d, izdana: p.i, ...(p.u ? { uredjaj: p.u } : {}) };
+    let moduli: Modul[] | undefined;
+    if ('m' in p) {
+      const n = normalizujModule(p.m);
+      if (!n) return null;
+      moduli = n;
+    }
+    return { klijent: p.k, vrijediDo: p.d, izdana: p.i, ...(p.u ? { uredjaj: p.u } : {}), ...(moduli ? { moduli } : {}) };
   } catch {
     return null;
   }

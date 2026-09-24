@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test';
-import { generateKeyPairSync } from 'node:crypto';
+import { generateKeyPairSync, sign } from 'node:crypto';
 import { izdajLicencu, provjeriLicencu, procitajLicencu } from './licenca';
 
 const { privateKey, publicKey } = generateKeyPairSync('ed25519');
@@ -46,4 +46,45 @@ test('smeće i razmaci oko tokena', () => {
   expect(provjeriLicencu('nije token', publicKey)).toEqual({ ok: false, razlog: 'format' });
   const token = izdajLicencu(osnovna, privateKey);
   expect(procitajLicencu(`  ${token}\n`)).toEqual(osnovna);
+});
+
+/** Token s proizvoljnim payloadom (i onim koji izdajLicencu ne dozvoljava). */
+function potpisi(payload: object): string {
+  const tijelo = `PAZAR1.${Buffer.from(JSON.stringify(payload)).toString('base64url')}`;
+  return `${tijelo}.${sign(null, Buffer.from(tijelo), privateKey).toString('base64url')}`;
+}
+const sada = new Date(2026, 9, 5);
+
+test('moduli se čuvaju u tokenu, redom iz kataloga i bez duplikata', () => {
+  const token = izdajLicencu({ ...osnovna, moduli: ['proizvodnja', 'ponude', 'ponude'] }, privateKey);
+  expect(provjeriLicencu(token, publicKey, { sada })).toEqual({ ok: true, licenca: { ...osnovna, moduli: ['ponude', 'proizvodnja'] } });
+});
+
+test('prazna lista modula znači samo jezgro i ostaje prazna', () => {
+  const token = izdajLicencu({ ...osnovna, moduli: [] }, privateKey);
+  expect(procitajLicencu(token)).toEqual({ ...osnovna, moduli: [] });
+});
+
+test('stari token bez m nema polje moduli', () => {
+  const token = potpisi({ k: osnovna.klijent, d: osnovna.vrijediDo, i: osnovna.izdana });
+  expect(procitajLicencu(token)).toEqual(osnovna);
+  expect('moduli' in procitajLicencu(token)!).toBe(false);
+});
+
+test('dopisan modul u payload ruši potpis', () => {
+  const token = izdajLicencu({ ...osnovna, moduli: ['ponude'] }, privateKey);
+  const [pre, , potpis] = token.split('.');
+  const lazni = Buffer.from(JSON.stringify({ k: osnovna.klijent, d: osnovna.vrijediDo, i: osnovna.izdana, m: ['ponude', 'proizvodnja'] })).toString('base64url');
+  expect(provjeriLicencu(`${pre}.${lazni}.${potpis}`, publicKey, { sada })).toEqual({ ok: false, razlog: 'potpis' });
+});
+
+test('izdavanje s nepoznatim modulom baca grešku', () => {
+  expect(() => izdajLicencu({ ...osnovna, moduli: ['racunovodstvo' as never] }, privateKey)).toThrow('Nepoznat modul: racunovodstvo');
+});
+
+test('nepoznat modul u tokenu se ignoriše, m koji nije niz je greška formata', () => {
+  expect(procitajLicencu(potpisi({ k: 'F', d: '2026-10-31', i: '2026-10-01', m: ['ponude', 'buducnost'] }))?.moduli).toEqual(['ponude']);
+  expect(procitajLicencu(potpisi({ k: 'F', d: '2026-10-31', i: '2026-10-01', m: 'ponude' }))).toBeNull();
+  expect(procitajLicencu(potpisi({ k: 'F', d: '2026-10-31', i: '2026-10-01', m: null }))).toBeNull();
+  expect(procitajLicencu(potpisi({ k: 'F', d: '2026-10-31', i: '2026-10-01', m: [1] }))).toBeNull();
 });

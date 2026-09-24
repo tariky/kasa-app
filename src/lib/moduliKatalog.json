@@ -1,0 +1,29 @@
+{
+  "moduli": ["skladiste", "ponude", "proizvodnja", "generator"],
+  "nazivi": {
+    "skladiste": "Skladište",
+    "ponude": "Ponude",
+    "proizvodnja": "Proizvodnja",
+    "generator": "Generator"
+  },
+  "kanali": {
+    "primka:create": ["skladiste"],
+    "primka:update": ["skladiste"],
+    "primka:delete": ["skladiste"],
+    "product:adjustStock": ["skladiste"],
+    "ponuda:create": ["ponude"],
+    "ponuda:update": ["ponude"],
+    "ponuda:setStatus": ["ponude"],
+    "ponuda:delete": ["ponude"],
+    "ponuda:konvertuj": ["ponude"],
+    "nalog:create": ["proizvodnja"],
+    "nalog:createIzPonude": ["ponude", "proizvodnja"],
+    "nalog:update": ["proizvodnja"],
+    "nalog:replaceStavke": ["proizvodnja"],
+    "nalog:setStatus": ["proizvodnja"],
+    "nalog:delete": ["proizvodnja"],
+    "nalog:izdajRacun": ["proizvodnja"],
+    "normativ:save": ["proizvodnja"],
+    "proizvodnja:setEnabled": ["proizvodnja"]
+  }
+}
