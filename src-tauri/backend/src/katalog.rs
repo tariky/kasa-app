@@ -38,13 +38,26 @@ const SELECT_SA_STANJEM: &str = "
           ) AS stanje
         FROM products p";
 
+/// Kao `SELECT_SA_STANJEM`, plus šifre dobavljača artikla u jednom stringu —
+/// za pretragu u šifarniku, primci i kasi.
+const SELECT_SA_SIFRAMA: &str = "
+        SELECT p.*,
+          COALESCE(
+            (SELECT SUM(CASE WHEN sm.tip = 'ulaz' THEN sm.kolicina ELSE -sm.kolicina END)
+             FROM stock_movements sm WHERE sm.productId = p.id),
+            0
+          ) AS stanje,
+          (SELECT GROUP_CONCAT(ds.sifra, ' ') FROM artikal_dobavljac_sifre ds
+            WHERE ds.productId = p.id AND ds.sifra IS NOT NULL) AS sifreDobavljaca
+        FROM products p";
+
 fn product_get_all(db: &Db, tip: &Value) -> R<Value> {
     if js::truthy(tip) {
         return db
-            .all(&format!("{SELECT_SA_STANJEM}\n        WHERE p.slobodan = 0 AND p.tip = ?\n        ORDER BY p.naziv\n      "), p![normalizuj_tip(tip)])
+            .all(&format!("{SELECT_SA_SIFRAMA}\n        WHERE p.slobodan = 0 AND p.tip = ?\n        ORDER BY p.naziv\n      "), p![normalizuj_tip(tip)])
             .map(Value::from);
     }
-    db.all(&format!("{SELECT_SA_STANJEM}\n        WHERE p.slobodan = 0\n        ORDER BY p.naziv\n      "), p![]).map(Value::from)
+    db.all(&format!("{SELECT_SA_SIFRAMA}\n        WHERE p.slobodan = 0\n        ORDER BY p.naziv\n      "), p![]).map(Value::from)
 }
 
 /// Trimovane šifra, naziv i barkod (prazan barkod = null) spremni za upis;
@@ -188,9 +201,11 @@ fn product_delete(db: &Db, id: &Value) -> R<Value> {
             baci!("{poruka}");
         }
     }
-    // Historija cijena artikla bez primki ima samo ručne izmjene — ide s artiklom.
+    // Historija cijena artikla bez primki ima samo ručne izmjene, a šifre dobavljača su
+    // samo šifarnik — obje idu s artiklom.
     db.tx(|| {
         db.run("DELETE FROM cijena_historija WHERE productId = ?", p![id])?;
+        db.run("DELETE FROM artikal_dobavljac_sifre WHERE productId = ?", p![id])?;
         let result = db.run("DELETE FROM products WHERE id = ?", p![id])?;
         Ok(json!({ "changes": result.changes }))
     })
@@ -230,10 +245,93 @@ fn product_adjust_stock(db: &Db, product_id: &Value, new_stanje: &Value) -> R<Va
 fn product_search(db: &Db, query: &Value) -> R<Value> {
     let like = format!("%{}%", js::to_string(query));
     db.all(
-        &format!("{SELECT_SA_STANJEM}\n        WHERE (p.naziv LIKE ? OR p.sifra LIKE ? OR p.barkod LIKE ?) AND p.tip != 'materijal' AND p.slobodan = 0\n        ORDER BY p.naziv\n      "),
-        p![like, like, like],
+        &format!("{SELECT_SA_SIFRAMA}\n        WHERE (p.naziv LIKE ? OR p.sifra LIKE ? OR p.barkod LIKE ?\n          OR EXISTS (SELECT 1 FROM artikal_dobavljac_sifre ds WHERE ds.productId = p.id AND ds.sifra LIKE ?))\n          AND p.tip != 'materijal' AND p.slobodan = 0\n        ORDER BY p.naziv\n      "),
+        p![like, like, like, like],
     )
     .map(Value::from)
+}
+
+// ─── Šifre dobavljača ───────────────────────────────────
+
+fn product_get_dobavljac_sifre(db: &Db, product_id: &Value) -> R<Value> {
+    db.all(
+        "
+      SELECT ds.dobavljacId, d.naziv AS dobavljacNaziv, ds.sifra
+      FROM artikal_dobavljac_sifre ds JOIN dobavljaci d ON d.id = ds.dobavljacId
+      WHERE ds.productId = ?
+      ORDER BY d.naziv, ds.dobavljacId
+    ",
+        p![product_id],
+    )
+    .map(Value::from)
+}
+
+// Zamjenjuje sve šifre dobavljača artikla. Prazna šifra = artikal je vezan za
+// dobavljača bez šifre. Sve se provjeri prije upisa, pa greška ništa ne mijenja.
+fn product_set_dobavljac_sifre(db: &Db, product_id: &Value, lista: &Value) -> R<Value> {
+    if !db.ima("SELECT 1 FROM products WHERE id = ?", p![product_id])? {
+        baci!("Artikal ne postoji");
+    }
+    let mut upis: Vec<(Value, Value)> = Vec::new();
+    for s in lista.as_array().map(Vec::as_slice).unwrap_or_default() {
+        let dobavljac_id = &s["dobavljacId"];
+        let Some(dobavljac) = db.get("SELECT naziv FROM dobavljaci WHERE id = ?", p![dobavljac_id])? else {
+            baci!("Dobavljač ne postoji");
+        };
+        let naziv = js::to_string(&dobavljac["naziv"]);
+        if upis.iter().any(|(d, _)| d == dobavljac_id) {
+            baci!("Dobavljač \"{naziv}\" je naveden više puta");
+        }
+        let sifra = js::trim(&s["sifra"]).filter(|t| !t.is_empty()).map(str::to_string);
+        if let Some(sifra) = &sifra {
+            let zauzeo = db.get(
+                "
+          SELECT p.sifra, p.naziv FROM artikal_dobavljac_sifre ds JOIN products p ON p.id = ds.productId
+          WHERE ds.dobavljacId = ? AND ds.sifra = ? AND ds.productId != ?
+        ",
+                p![dobavljac_id, sifra, product_id],
+            )?;
+            if let Some(z) = zauzeo {
+                baci!(
+                    "Dobavljač \"{naziv}\" već ima šifru \"{sifra}\" na artiklu \"{}\" ({})",
+                    js::to_string(&z["naziv"]),
+                    js::to_string(&z["sifra"])
+                );
+            }
+        }
+        upis.push((dobavljac_id.clone(), sifra.map(Value::from).unwrap_or(Value::Null)));
+    }
+    db.tx(|| {
+        db.run("DELETE FROM artikal_dobavljac_sifre WHERE productId = ?", p![product_id])?;
+        for (dobavljac_id, sifra) in &upis {
+            db.run(
+                "INSERT INTO artikal_dobavljac_sifre (productId, dobavljacId, sifra) VALUES (?, ?, ?)",
+                p![product_id, dobavljac_id, sifra],
+            )?;
+        }
+        Ok(json!({ "changes": upis.len() }))
+    })
+}
+
+// Temelj automatskog unosa robe: artikal po tačnoj šifri s dobavljačeve fakture.
+fn product_find_by_dobavljac_sifra(db: &Db, dobavljac_id: &Value, sifra: &Value) -> R<Value> {
+    let Some(s) = js::trim(sifra).filter(|t| !t.is_empty()) else {
+        return Ok(Value::Null);
+    };
+    db.get(
+        "
+      SELECT p.*,
+        COALESCE(
+          (SELECT SUM(CASE WHEN sm.tip = 'ulaz' THEN sm.kolicina ELSE -sm.kolicina END)
+           FROM stock_movements sm WHERE sm.productId = p.id),
+          0
+        ) AS stanje
+      FROM artikal_dobavljac_sifre ds JOIN products p ON p.id = ds.productId
+      WHERE ds.dobavljacId = ? AND ds.sifra = ?
+    ",
+        p![dobavljac_id, s],
+    )
+    .map(|r| r.unwrap_or(Value::Null))
 }
 
 // Slobodna stavka na kasi: kasir upiše naziv, cijenu i stopu, a stavka dobije
@@ -358,6 +456,9 @@ fn dobavljac_delete(db: &Db, id: &Value) -> R<Value> {
     if is_dobavljac_used(db, &dobavljac["naziv"], &dobavljac["idBroj"], &dobavljac["pdvBroj"])? {
         baci!("Dobavljač se koristi u primkama i ne može biti obrisan");
     }
+    if db.ima("SELECT 1 FROM artikal_dobavljac_sifre WHERE dobavljacId = ? LIMIT 1", p![id])? {
+        baci!("Dobavljač je vezan za artikle i ne može biti obrisan");
+    }
     let result = db.run("DELETE FROM dobavljaci WHERE id = ?", p![id])?;
     Ok(json!({ "changes": result.changes }))
 }
@@ -438,11 +539,20 @@ pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
         "product:adjustStock" => product_adjust_stock(db, &a[0], &a[1]),
         "product:search" => product_search(db, &a[0]),
         "product:slobodan" => product_slobodan(db, &a[0]),
+        "product:getDobavljacSifre" => product_get_dobavljac_sifre(db, &a[0]),
+        "product:setDobavljacSifre" => product_set_dobavljac_sifre(db, &a[0], &a[1]),
+        "product:findByDobavljacSifra" => product_find_by_dobavljac_sifra(db, &a[0], &a[1]),
         "materijal:search" => materijal_search(db, &a[0]),
         "dobavljac:getAll" => db.all("SELECT * FROM dobavljaci ORDER BY naziv", p![]).map(Value::from),
         "dobavljac:create" => dobavljac_create(db, &a[0]),
         "dobavljac:update" => dobavljac_update(db, &a[0], &a[1]),
         "dobavljac:delete" => dobavljac_delete(db, &a[0]),
+        "dobavljac:getSifre" => db
+            .all(
+                "SELECT productId, sifra FROM artikal_dobavljac_sifre WHERE dobavljacId = ? AND sifra IS NOT NULL ORDER BY sifra",
+                p![a[0]],
+            )
+            .map(Value::from),
         "kupac:getAll" => db.all("SELECT * FROM kupci ORDER BY naziv", p![]).map(Value::from),
         "kupac:search" => kupac_search(db, &a[0]),
         "kupac:create" => kupac_create(db, &a[0]),

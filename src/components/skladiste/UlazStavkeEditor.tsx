@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { DecimalInput } from '@/components/ui/decimal-input';
 import { Key } from '@/components/ui/ledger';
 import { Search, X, Plus } from 'lucide-react';
+import { pretraziZaUlaz } from '@/lib/dobavljacSifre';
 
 export interface UlazStavkeHandle {
   /** Doda prazan red (ako zadnji nije već prazan) i stavi fokus na njegovu pretragu. */
@@ -23,15 +24,6 @@ const MISSING = 'border-amber-300 bg-amber-50/40 focus-visible:ring-amber-400/40
 
 type Polje = 'artikal' | 'kolicina' | 'nabavna' | 'rabat' | 'prodajna';
 
-function pretrazi(products: Product[], q: string): Product[] {
-  const s = q.trim().toLowerCase();
-  if (!s) return [];
-  const rijeci = s.split(/\s+/);
-  return products
-    .filter(p => rijeci.every(r => p.naziv.toLowerCase().includes(r) || p.sifra.toLowerCase().includes(r) || (p.barkod ?? '').toLowerCase().includes(r)))
-    .slice(0, 12);
-}
-
 /**
  * Redovi ulaza kao tabela u kojoj se kuca: artikal se traži po nazivu/šifri (↑↓ ↵), ↵ vodi
  * na sljedeće polje, a ↵ na zadnjem polju zadnjeg reda otvara novi red. Polja koja fale
@@ -39,7 +31,9 @@ function pretrazi(products: Product[], q: string): Product[] {
  */
 export const UlazStavkeEditor = forwardRef<UlazStavkeHandle, {
   rows: UlazRed[]; onChange: (rows: UlazRed[]) => void; products: Product[];
-}>(function UlazStavkeEditor({ rows, onChange, products }, ref) {
+  /** Šifre izabranog dobavljača ulaza (productId → šifra): tačan pogodak ide prvi u pretrazi. */
+  sifreDobavljaca?: Map<number, string>;
+}>(function UlazStavkeEditor({ rows, onChange, products, sifreDobavljaca }, ref) {
   const [query, setQuery] = useState<Record<number, string>>({});
   const [active, setActive] = useState(0);
   const [openRow, setOpenRow] = useState<number | null>(null);
@@ -101,7 +95,7 @@ export const UlazStavkeEditor = forwardRef<UlazStavkeHandle, {
     noviRed();
   };
 
-  const rezultati = useMemo(() => (openRow != null ? pretrazi(products, query[openRow] ?? '') : []), [openRow, query, products]);
+  const rezultati = useMemo(() => (openRow != null ? pretraziZaUlaz(products, query[openRow] ?? '', sifreDobavljaca) : []), [openRow, query, products, sifreDobavljaca]);
 
   const onSearchKey = (i: number, e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Escape') { if (query[i]) { setQuery(q => ({ ...q, [i]: '' })); } return; }
@@ -172,7 +166,7 @@ export const UlazStavkeEditor = forwardRef<UlazStavkeHandle, {
                         onChange={e => { setQuery(q => ({ ...q, [i]: e.target.value })); setOpenRow(i); setActive(0); }}
                         onFocus={() => setOpenRow(i)} onBlur={() => setTimeout(() => setOpenRow(o => (o === i ? null : o)), 120)}
                         onKeyDown={e => onSearchKey(i, e)}
-                        placeholder="Naziv, šifra ili barkod…"
+                        placeholder="Naziv, šifra, barkod ili šifra dobavljača…"
                         className={cn('pl-8 h-8 text-[12.5px] bg-slate-50 focus-visible:bg-white', fali(i, 'artikal') && MISSING)} />
                       {openRow === i && rezultati.length > 0 && (
                         <ul role="listbox" className="absolute left-0 z-20 mt-1 w-[min(520px,90vw)] rounded-lg border border-slate-200 bg-white shadow-lg shadow-slate-900/10 max-h-64 overflow-auto py-1">

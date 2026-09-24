@@ -25,11 +25,15 @@ interface Window {
     deleteProduct: (id: number) => Promise<any>;
     searchProducts: (query: string) => Promise<any[]>;
     adjustStock: (productId: number, newStanje: number) => Promise<any>;
+    getDobavljacSifre: (productId: number) => Promise<import('./types').DobavljacSifra[]>;
+    setDobavljacSifre: (productId: number, lista: { dobavljacId: number; sifra: string | null }[]) => Promise<{ changes: number }>;
+    findByDobavljacSifra: (dobavljacId: number, sifra: string) => Promise<any | null>;
     getStock: (productId: number) => Promise<number>;
     getDobavljaci: () => Promise<any[]>;
     createDobavljac: (data: any) => Promise<any>;
     updateDobavljac: (id: number, data: any) => Promise<any>;
     deleteDobavljac: (id: number) => Promise<any>;
+    getSifreDobavljaca: (dobavljacId: number) => Promise<{ productId: number; sifra: string }[]>;
     getKupci: () => Promise<any[]>;
     searchKupci: (query: string) => Promise<any[]>;
     createKupac: (data: any) => Promise<any>;

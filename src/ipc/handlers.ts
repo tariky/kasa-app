@@ -200,6 +200,10 @@ export function registerIpcHandlers(): void {
   const PRODUCT_TIPOVI = ['artikal', 'usluga', 'materijal'] as const;
   const normalizujTip = (t?: string): string => (t && (PRODUCT_TIPOVI as readonly string[]).includes(t)) ? t : 'artikal';
 
+  // Šifre dobavljača artikla u jednom stringu — za pretragu u šifarniku, primci i kasi.
+  const SIFRE_DOBAVLJACA = `(SELECT GROUP_CONCAT(ds.sifra, ' ') FROM artikal_dobavljac_sifre ds
+            WHERE ds.productId = p.id AND ds.sifra IS NOT NULL) AS sifreDobavljaca`;
+
   handle('product:getAll', (tip?: string) => {
     const where = tip ? 'WHERE p.slobodan = 0 AND p.tip = ?' : 'WHERE p.slobodan = 0';
     return db
@@ -209,7 +213,8 @@ export function registerIpcHandlers(): void {
             (SELECT SUM(CASE WHEN sm.tip = 'ulaz' THEN sm.kolicina ELSE -sm.kolicina END)
              FROM stock_movements sm WHERE sm.productId = p.id),
             0
-          ) AS stanje
+          ) AS stanje,
+          ${SIFRE_DOBAVLJACA}
         FROM products p
         ${where}
         ORDER BY p.naziv
@@ -328,9 +333,11 @@ export function registerIpcHandlers(): void {
     for (const [tabela, poruka] of ostaleVeze) {
       if (db.prepare(`SELECT 1 FROM ${tabela} WHERE productId = ? LIMIT 1`).get(id)) throw new Error(poruka);
     }
-    // Historija cijena artikla bez primki ima samo ručne izmjene — ide s artiklom.
+    // Historija cijena artikla bez primki ima samo ručne izmjene, a šifre dobavljača su
+    // samo šifarnik — obje idu s artiklom.
     return db.transaction(() => {
       db.prepare('DELETE FROM cijena_historija WHERE productId = ?').run(id);
+      db.prepare('DELETE FROM artikal_dobavljac_sifre WHERE productId = ?').run(id);
       const result = db.prepare('DELETE FROM products WHERE id = ?').run(id);
       return { changes: result.changes };
     })();
@@ -368,12 +375,75 @@ export function registerIpcHandlers(): void {
             (SELECT SUM(CASE WHEN sm.tip = 'ulaz' THEN sm.kolicina ELSE -sm.kolicina END)
              FROM stock_movements sm WHERE sm.productId = p.id),
             0
-          ) AS stanje
+          ) AS stanje,
+          ${SIFRE_DOBAVLJACA}
         FROM products p
-        WHERE (p.naziv LIKE ? OR p.sifra LIKE ? OR p.barkod LIKE ?) AND p.tip != 'materijal' AND p.slobodan = 0
+        WHERE (p.naziv LIKE ? OR p.sifra LIKE ? OR p.barkod LIKE ?
+          OR EXISTS (SELECT 1 FROM artikal_dobavljac_sifre ds WHERE ds.productId = p.id AND ds.sifra LIKE ?))
+          AND p.tip != 'materijal' AND p.slobodan = 0
         ORDER BY p.naziv
       `)
-      .all(like, like, like);
+      .all(like, like, like, like);
+  });
+
+  // ─── Šifre dobavljača ───────────────────────────────────
+
+  handle('product:getDobavljacSifre', (productId: number) => {
+    return db.prepare(`
+      SELECT ds.dobavljacId, d.naziv AS dobavljacNaziv, ds.sifra
+      FROM artikal_dobavljac_sifre ds JOIN dobavljaci d ON d.id = ds.dobavljacId
+      WHERE ds.productId = ?
+      ORDER BY d.naziv, ds.dobavljacId
+    `).all(productId);
+  });
+
+  // Zamjenjuje sve šifre dobavljača artikla. Prazna šifra = artikal je vezan za
+  // dobavljača bez šifre. Sve se provjeri prije upisa, pa greška ništa ne mijenja.
+  handle('product:setDobavljacSifre', (productId: number, lista: Array<{ dobavljacId: number; sifra?: string | null }>) => {
+    if (!db.prepare('SELECT 1 FROM products WHERE id = ?').get(productId)) throw new Error('Artikal ne postoji');
+    const upis: Array<{ dobavljacId: number; sifra: string | null }> = [];
+    for (const s of lista ?? []) {
+      const dobavljac = db.prepare('SELECT naziv FROM dobavljaci WHERE id = ?').get(s.dobavljacId) as { naziv: string } | undefined;
+      if (!dobavljac) throw new Error('Dobavljač ne postoji');
+      if (upis.some(u => u.dobavljacId === s.dobavljacId)) throw new Error(`Dobavljač "${dobavljac.naziv}" je naveden više puta`);
+      const sifra = s.sifra?.trim() || null;
+      if (sifra) {
+        const zauzeo = db.prepare(`
+          SELECT p.sifra, p.naziv FROM artikal_dobavljac_sifre ds JOIN products p ON p.id = ds.productId
+          WHERE ds.dobavljacId = ? AND ds.sifra = ? AND ds.productId != ?
+        `).get(s.dobavljacId, sifra, productId) as { sifra: string; naziv: string } | undefined;
+        if (zauzeo) throw new Error(`Dobavljač "${dobavljac.naziv}" već ima šifru "${sifra}" na artiklu "${zauzeo.naziv}" (${zauzeo.sifra})`);
+      }
+      upis.push({ dobavljacId: s.dobavljacId, sifra });
+    }
+    return db.transaction(() => {
+      db.prepare('DELETE FROM artikal_dobavljac_sifre WHERE productId = ?').run(productId);
+      const ins = db.prepare('INSERT INTO artikal_dobavljac_sifre (productId, dobavljacId, sifra) VALUES (?, ?, ?)');
+      for (const u of upis) ins.run(productId, u.dobavljacId, u.sifra);
+      return { changes: upis.length };
+    })();
+  });
+
+  // Temelj automatskog unosa robe: artikal po tačnoj šifri s dobavljačeve fakture.
+  handle('product:findByDobavljacSifra', (dobavljacId: number, sifra: string) => {
+    const s = sifra?.trim();
+    if (!s) return null;
+    return db.prepare(`
+      SELECT p.*,
+        COALESCE(
+          (SELECT SUM(CASE WHEN sm.tip = 'ulaz' THEN sm.kolicina ELSE -sm.kolicina END)
+           FROM stock_movements sm WHERE sm.productId = p.id),
+          0
+        ) AS stanje
+      FROM artikal_dobavljac_sifre ds JOIN products p ON p.id = ds.productId
+      WHERE ds.dobavljacId = ? AND ds.sifra = ?
+    `).get(dobavljacId, s) ?? null;
+  });
+
+  handle('dobavljac:getSifre', (dobavljacId: number) => {
+    return db.prepare(
+      'SELECT productId, sifra FROM artikal_dobavljac_sifre WHERE dobavljacId = ? AND sifra IS NOT NULL ORDER BY sifra'
+    ).all(dobavljacId);
   });
 
   // Slobodna stavka na kasi: kasir upiše naziv, cijenu i stopu, a stavka dobije
@@ -491,6 +561,9 @@ export function registerIpcHandlers(): void {
 
     if (isDobavljacUsed(db, dobavljac)) {
       throw new Error('Dobavljač se koristi u primkama i ne može biti obrisan');
+    }
+    if (db.prepare('SELECT 1 FROM artikal_dobavljac_sifre WHERE dobavljacId = ? LIMIT 1').get(id)) {
+      throw new Error('Dobavljač je vezan za artikle i ne može biti obrisan');
     }
     const result = db.prepare('DELETE FROM dobavljaci WHERE id = ?').run(id);
     return { changes: result.changes };

@@ -26,6 +26,15 @@ export interface Product {
   createdAt: string;
   updatedAt: string;
   stanje?: number;
+  /** Šifre dobavljača artikla razdvojene razmakom (samo za pretragu); null = nema ih. */
+  sifreDobavljaca?: string | null;
+}
+
+/** Šifra pod kojom dobavljač vodi artikal; sifra null = artikal vezan za dobavljača bez šifre. */
+export interface DobavljacSifra {
+  dobavljacId: number;
+  dobavljacNaziv?: string;
+  sifra: string | null;
 }
 
 export interface Dobavljac {

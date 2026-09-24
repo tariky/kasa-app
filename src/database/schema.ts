@@ -34,6 +34,21 @@ export const schema = `
     createdAt TEXT DEFAULT (datetime('now','localtime'))
   );
 
+  -- Šifra pod kojom dobavljač vodi artikal (za automatski unos robe s fakture).
+  -- Artikal može biti vezan za dobavljača i bez šifre (sifra NULL); jedan
+  -- dobavljač ne može istu šifru dati za dva artikla.
+  CREATE TABLE IF NOT EXISTS artikal_dobavljac_sifre (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    productId INTEGER NOT NULL,
+    dobavljacId INTEGER NOT NULL,
+    sifra TEXT,
+    createdAt TEXT DEFAULT (datetime('now','localtime')),
+    UNIQUE (productId, dobavljacId),
+    UNIQUE (dobavljacId, sifra),
+    FOREIGN KEY (productId) REFERENCES products(id),
+    FOREIGN KEY (dobavljacId) REFERENCES dobavljaci(id)
+  );
+
   CREATE TABLE IF NOT EXISTS primke (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     brojPrimke TEXT NOT NULL UNIQUE,

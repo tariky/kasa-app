@@ -28,12 +28,17 @@ export function napraviApi(pozovi: Pozovi, naLicencaBlokirano: (cb: () => void) 
     deleteProduct: (id: number) => pozovi('product:delete', id),
     searchProducts: (query: string) => pozovi('product:search', query),
     adjustStock: (productId: number, newStanje: number) => pozovi('product:adjustStock', productId, newStanje),
+    getDobavljacSifre: (productId: number) => pozovi('product:getDobavljacSifre', productId),
+    setDobavljacSifre: (productId: number, lista: { dobavljacId: number; sifra: string | null }[]) =>
+      pozovi('product:setDobavljacSifre', productId, lista),
+    findByDobavljacSifra: (dobavljacId: number, sifra: string) => pozovi('product:findByDobavljacSifra', dobavljacId, sifra),
 
     // Dobavljači
     getDobavljaci: () => pozovi('dobavljac:getAll'),
     createDobavljac: (data: any) => pozovi('dobavljac:create', data),
     updateDobavljac: (id: number, data: any) => pozovi('dobavljac:update', id, data),
     deleteDobavljac: (id: number) => pozovi('dobavljac:delete', id),
+    getSifreDobavljaca: (dobavljacId: number) => pozovi('dobavljac:getSifre', dobavljacId),
 
     // Kupci
     getKupci: () => pozovi('kupac:getAll'),

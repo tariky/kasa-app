@@ -17,6 +17,8 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Key, LedgerHead } from '@/components/ui/ledger';
 import { UlazDialog, type UlazStanje } from '@/components/skladiste/UlazDialog';
+import { DobavljacSifreEditor } from '@/components/skladiste/DobavljacSifreEditor';
+import { uPayload, uRedove, uSiframaDobavljaca, type SifraRed } from '@/lib/dobavljacSifre';
 import {
   Plus, Trash2, FileText, Package, Search, Pencil, X,
   PackagePlus, Hash, Barcode,
@@ -64,6 +66,25 @@ function ArtikalDialog({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const cijena = useCijenaUnos(open, product, form.pdvStopa);
+  const [dobavljaci, setDobavljaci] = useState<Dobavljac[]>([]);
+  const [sifreRedovi, setSifreRedovi] = useState<SifraRed[]>([]);
+  // Artikal kreiran u ovom otvaranju dijaloga: ako padnu šifre dobavljača, ponovno
+  // spremanje ga ažurira umjesto da pravi duplikat.
+  const kreiranId = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    kreiranId.current = null;
+    setSifreRedovi([]);
+    let aktivno = true;
+    window.api.getDobavljaci().then(d => { if (aktivno) setDobavljaci(d); }).catch(() => {});
+    if (product) {
+      window.api.getDobavljacSifre(product.id)
+        .then(l => { if (aktivno) setSifreRedovi(uRedove(l)); })
+        .catch(err => { if (aktivno) setError(porukaGreske(err)); });
+    }
+    return () => { aktivno = false; };
+  }, [open, product]);
 
   useEffect(() => {
     if (!open) return;
@@ -103,17 +124,25 @@ function ArtikalDialog({
         if (!isNaN(newStanje) && newStanje !== (product.stanje ?? 0)) {
           await window.api.adjustStock(product.id, newStanje);
         }
+        await window.api.setDobavljacSifre(product.id, uPayload(sifreRedovi));
+      } else if (kreiranId.current !== null) {
+        await window.api.updateProduct(kreiranId.current, payload);
+        await window.api.setDobavljacSifre(kreiranId.current, uPayload(sifreRedovi));
       } else {
         const result = await window.api.createProduct(payload);
+        kreiranId.current = Number(result.id);
         const initialStock = parseDecimal(form.stanje);
         if (!isNaN(initialStock) && initialStock > 0 && result?.id) {
           await window.api.adjustStock(Number(result.id), initialStock);
         }
+        await window.api.setDobavljacSifre(kreiranId.current, uPayload(sifreRedovi));
       }
       onSave();
       onOpenChange(false);
     } catch (err: any) {
       setError(err?.message || 'Greška pri spremanju');
+      // Novi artikal je upisan i kad padnu šifre dobavljača — neka se vidi u listi.
+      if (!product && kreiranId.current !== null) onSave();
     } finally {
       setSaving(false);
     }
@@ -151,7 +180,7 @@ function ArtikalDialog({
         <Separator />
 
         {/* Form body */}
-        <div className="px-6 py-5 space-y-5">
+        <div className="px-6 py-5 space-y-5 max-h-[70vh] overflow-y-auto">
           {/* Naziv — hero field */}
           <div className="space-y-1.5">
             <Label htmlFor="naziv" className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
@@ -278,6 +307,18 @@ function ArtikalDialog({
               />
             </div>
           </div>
+
+          <Separator className="opacity-50" />
+
+          {/* Šifre dobavljača — za automatski unos robe s fakture */}
+          <div className="space-y-2">
+            <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+              <Building2 className="h-3 w-3" />
+              Šifre dobavljača
+              <span className="normal-case tracking-normal text-slate-400 font-normal">· opciono</span>
+            </Label>
+            <DobavljacSifreEditor redovi={sifreRedovi} onChange={setSifreRedovi} dobavljaci={dobavljaci} />
+          </div>
         </div>
 
         {/* Error + Footer */}
@@ -346,7 +387,8 @@ function ArtikliTab({
       return (
         p.naziv.toLowerCase().includes(q) ||
         p.sifra.toLowerCase().includes(q) ||
-        (p.barkod?.toLowerCase().includes(q) ?? false)
+        (p.barkod?.toLowerCase().includes(q) ?? false) ||
+        uSiframaDobavljaca(p, q)
       );
     })
     .sort((a, b) => {
@@ -415,7 +457,7 @@ function ArtikliTab({
               <Input
                 value={search}
                 onChange={e => setSearch(e.target.value)}
-                placeholder="Pretraži po nazivu, šifri ili barkodu..."
+                placeholder="Pretraži po nazivu, šifri, barkodu ili šifri dobavljača..."
                 className="pl-9 h-8 text-[13px] bg-slate-50 border-slate-200"
               />
               {search && (

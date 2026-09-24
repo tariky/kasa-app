@@ -525,6 +525,158 @@ describe('product:slobodan', () => {
   });
 });
 
+// ─── Šifre dobavljača ───────────────────────────────────────
+
+function dodajSifru(productId: number, dobavljacId: number, sifra: string | null): void {
+  b.db.prepare('INSERT INTO artikal_dobavljac_sifre (productId, dobavljacId, sifra) VALUES (?, ?, ?)')
+    .run(productId, dobavljacId, sifra);
+}
+
+function sifreArtikla(productId: number): any[] {
+  return b.db.prepare('SELECT dobavljacId, sifra FROM artikal_dobavljac_sifre WHERE productId = ? ORDER BY dobavljacId')
+    .all(productId);
+}
+
+describe('product:getDobavljacSifre', () => {
+  test('vraća šifre artikla s nazivom dobavljača, sortirano po dobavljaču', async () => {
+    const a = dodajArtikal('A1');
+    const drugi = dodajArtikal('A2');
+    const zeta = dodajDobavljaca('Zeta');
+    const alfa = dodajDobavljaca('Alfa');
+    dodajSifru(a, zeta, 'Z-100');
+    dodajSifru(a, alfa, null);
+    dodajSifru(drugi, alfa, 'A-7');
+
+    expect(await b.call('product:getDobavljacSifre', a)).toEqual([
+      { dobavljacId: alfa, dobavljacNaziv: 'Alfa', sifra: null },
+      { dobavljacId: zeta, dobavljacNaziv: 'Zeta', sifra: 'Z-100' },
+    ]);
+    expect(await b.call('product:getDobavljacSifre', 999)).toEqual([]);
+  });
+});
+
+describe('product:setDobavljacSifre', () => {
+  test('zamjenjuje cijelu listu; šifra se trimuje, prazna postaje null', async () => {
+    const a = dodajArtikal('A1');
+    const alfa = dodajDobavljaca('Alfa');
+    const beta = dodajDobavljaca('Beta');
+    const gama = dodajDobavljaca('Gama');
+    dodajSifru(a, gama, 'STARO');
+
+    expect(await b.call('product:setDobavljacSifre', a, [
+      { dobavljacId: alfa, sifra: '  A-1 ' },
+      { dobavljacId: beta, sifra: '   ' },
+    ])).toEqual({ changes: 2 });
+    expect(sifreArtikla(a)).toEqual([
+      { dobavljacId: alfa, sifra: 'A-1' },
+      { dobavljacId: beta, sifra: null },
+    ]);
+
+    expect(await b.call('product:setDobavljacSifre', a, [])).toEqual({ changes: 0 });
+    expect(sifreArtikla(a)).toEqual([]);
+  });
+
+  test('ne dira šifre drugih artikala', async () => {
+    const a = dodajArtikal('A1');
+    const drugi = dodajArtikal('A2');
+    const alfa = dodajDobavljaca('Alfa');
+    dodajSifru(drugi, alfa, 'X-1');
+    await b.call('product:setDobavljacSifre', a, [{ dobavljacId: alfa, sifra: 'X-2' }]);
+    expect(sifreArtikla(drugi)).toEqual([{ dobavljacId: alfa, sifra: 'X-1' }]);
+  });
+
+  test('isti dobavljač ne može istu šifru dati za dva artikla', async () => {
+    const a = dodajArtikal('A1', { naziv: 'Kafa' });
+    const drugi = dodajArtikal('A2');
+    const alfa = dodajDobavljaca('Alfa');
+    const beta = dodajDobavljaca('Beta');
+    dodajSifru(a, alfa, 'K-1');
+
+    await expect(b.call('product:setDobavljacSifre', drugi, [{ dobavljacId: alfa, sifra: ' K-1 ' }]))
+      .rejects.toThrow('Dobavljač "Alfa" već ima šifru "K-1" na artiklu "Kafa" (A1)');
+    // Isti kod kod drugog dobavljača je u redu, kao i više artikala bez šifre.
+    await b.call('product:setDobavljacSifre', drugi, [{ dobavljacId: beta, sifra: 'K-1' }]);
+    await b.call('product:setDobavljacSifre', a, [{ dobavljacId: alfa, sifra: 'K-1' }, { dobavljacId: beta, sifra: null }]);
+    const treci = dodajArtikal('A3');
+    await b.call('product:setDobavljacSifre', treci, [{ dobavljacId: alfa }]);
+    expect(sifreArtikla(treci)).toEqual([{ dobavljacId: alfa, sifra: null }]);
+  });
+
+  test('odbija nepostojeći artikal, nepostojećeg i ponovljenog dobavljača bez ikakvog upisa', async () => {
+    const a = dodajArtikal('A1');
+    const alfa = dodajDobavljaca('Alfa');
+    dodajSifru(a, alfa, 'OSTAJE');
+
+    await expect(b.call('product:setDobavljacSifre', 999, [])).rejects.toThrow('Artikal ne postoji');
+    await expect(b.call('product:setDobavljacSifre', a, [{ dobavljacId: 999, sifra: 'X' }]))
+      .rejects.toThrow('Dobavljač ne postoji');
+    await expect(b.call('product:setDobavljacSifre', a, [{ dobavljacId: alfa, sifra: 'X' }, { dobavljacId: alfa, sifra: 'Y' }]))
+      .rejects.toThrow('Dobavljač "Alfa" je naveden više puta');
+    expect(sifreArtikla(a)).toEqual([{ dobavljacId: alfa, sifra: 'OSTAJE' }]);
+  });
+});
+
+describe('product:findByDobavljacSifra', () => {
+  test('nalazi artikal po tačnoj šifri dobavljača, sa stanjem', async () => {
+    const a = dodajArtikal('A1', { naziv: 'Kafa', stanje: 4 });
+    const alfa = dodajDobavljaca('Alfa');
+    const beta = dodajDobavljaca('Beta');
+    dodajSifru(a, alfa, 'K-1');
+
+    expect(await b.call('product:findByDobavljacSifra', alfa, ' K-1 ')).toMatchObject({ id: a, sifra: 'A1', stanje: 4 });
+    expect(await b.call('product:findByDobavljacSifra', beta, 'K-1')).toBeNull();
+    expect(await b.call('product:findByDobavljacSifra', alfa, 'K-')).toBeNull();
+    expect(await b.call('product:findByDobavljacSifra', alfa, '')).toBeNull();
+  });
+});
+
+describe('dobavljac:getSifre', () => {
+  test('vraća artikle i šifre dobavljača, bez veza koje nemaju šifru', async () => {
+    const a = dodajArtikal('A1');
+    const c = dodajArtikal('A2');
+    const alfa = dodajDobavljaca('Alfa');
+    const beta = dodajDobavljaca('Beta');
+    dodajSifru(a, alfa, 'K-2');
+    dodajSifru(c, alfa, null);
+    dodajSifru(c, beta, 'B-1');
+
+    expect(await b.call('dobavljac:getSifre', alfa)).toEqual([{ productId: a, sifra: 'K-2' }]);
+    expect(await b.call('dobavljac:getSifre', 999)).toEqual([]);
+  });
+});
+
+describe('šifre dobavljača u pretrazi i šifarniku', () => {
+  test('product:getAll i product:search nose šifre dobavljača; pretraga ih pretražuje', async () => {
+    const a = dodajArtikal('A1', { naziv: 'Kafa' });
+    dodajArtikal('A2', { naziv: 'Čaj' });
+    const alfa = dodajDobavljaca('Alfa');
+    const beta = dodajDobavljaca('Beta');
+    dodajSifru(a, alfa, 'XK-100');
+    dodajSifru(a, beta, null);
+
+    const lista = await b.call('product:getAll');
+    expect(lista.map((p: any) => [p.sifra, p.sifreDobavljaca])).toEqual([['A1', 'XK-100'], ['A2', null]]);
+    expect(sifre(await b.call('product:search', 'xk-1'))).toEqual(['A1']);
+    expect((await b.call('product:search', 'xk-1'))[0].sifreDobavljaca).toBe('XK-100');
+  });
+
+  test('product:delete briše i šifre dobavljača artikla', async () => {
+    const a = dodajArtikal('A1');
+    const alfa = dodajDobavljaca('Alfa');
+    dodajSifru(a, alfa, 'K-1');
+    expect(await b.call('product:delete', a)).toEqual({ changes: 1 });
+    expect(broj('SELECT COUNT(*) AS n FROM artikal_dobavljac_sifre')).toBe(0);
+  });
+
+  test('dobavljac:delete ne briše dobavljača vezanog za artikle', async () => {
+    const a = dodajArtikal('A1');
+    const alfa = dodajDobavljaca('Alfa');
+    dodajSifru(a, alfa, null);
+    await expect(b.call('dobavljac:delete', alfa)).rejects.toThrow('Dobavljač je vezan za artikle i ne može biti obrisan');
+    expect(broj('SELECT COUNT(*) AS n FROM dobavljaci')).toBe(1);
+  });
+});
+
 // ─── materijal:search ───────────────────────────────────────
 
 describe('materijal:search', () => {

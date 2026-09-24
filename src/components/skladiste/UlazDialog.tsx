@@ -132,6 +132,18 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
   const [pending, setPending] = useState<Pending | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<UlazStavkeHandle>(null);
+  // Šifre izabranog dobavljača (productId → šifra) za pretragu stavki po njegovoj fakturi.
+  const izabraniDobavljacId = dobavljaci.find(d => d.naziv === forma.dobavljacNaziv)?.id ?? null;
+  const [sifreDobavljaca, setSifreDobavljaca] = useState<Map<number, string> | undefined>(undefined);
+  useEffect(() => {
+    setSifreDobavljaca(undefined);
+    if (!edit || izabraniDobavljacId === null) return;
+    let aktivno = true;
+    window.api.getSifreDobavljaca(izabraniDobavljacId)
+      .then(l => { if (aktivno) setSifreDobavljaca(new Map(l.map(s => [s.productId, s.sifra]))); })
+      .catch(() => { /* pretraga radi i bez prioriteta dobavljača */ });
+    return () => { aktivno = false; };
+  }, [edit, izabraniDobavljacId]);
   // Nakon spremanja roditelj prebaci dijalog na pregled istog dokumenta — poruka o uspjehu mora preživjeti tu promjenu.
   const zadrziPoruku = useRef(false);
 
@@ -428,7 +440,7 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
                       <span className="font-mono text-[10.5px] tabular-nums text-slate-400">{edit ? forma.rows.filter(r => redStatus(r, products).stanje !== 'prazan').length : stavke.length}</span>
                     </div>
                     {edit ? (
-                      <UlazStavkeEditor ref={editorRef} rows={forma.rows} onChange={rows => setForma(f => ({ ...f, rows }))} products={products} />
+                      <UlazStavkeEditor ref={editorRef} rows={forma.rows} onChange={rows => setForma(f => ({ ...f, rows }))} products={products} sifreDobavljaca={sifreDobavljaca} />
                     ) : stavke.length === 0 ? (
                       <p className="rounded-xl border border-dashed border-slate-200 px-5 py-8 text-center text-[12.5px] text-slate-500">Ulaz nema stavki.</p>
                     ) : (
