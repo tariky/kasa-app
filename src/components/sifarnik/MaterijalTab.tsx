@@ -56,7 +56,7 @@ function MaterijalDialog({ open, onOpenChange, product, onSave }: {
       <DialogContent className="sm:max-w-[440px]">
         <DialogHeader>
           <DialogTitle>{product ? 'Uredi materijal' : 'Novi materijal'}</DialogTitle>
-          <DialogDescription>Materijal se nabavlja primkom i troši na radnim nalozima; ne prodaje se na kasi.</DialogDescription>
+          <DialogDescription>Materijal se nabavlja ulazom robe i troši na radnim nalozima; ne prodaje se na kasi.</DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-2">
           <div className="grid grid-cols-[120px_1fr] gap-4">

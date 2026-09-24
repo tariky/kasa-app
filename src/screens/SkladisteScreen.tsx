@@ -1,34 +1,27 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Product, Primka, PrimkaStavka, Dobavljac } from '@/types';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { Product, Primka, Dobavljac } from '@/types';
 import { cn, formatKM, formatDate, parseDecimal } from '@/lib/utils';
 import { uBruto, uNetto, cijenaZaSpremanje } from '@/lib/pdvUnos';
 import { useUnosBezPdv } from '@/hooks/useUnosBezPdv';
 import { useProizvodnja } from '@/hooks/useProizvodnja';
-import { jePloca, komUM2, m2UKom, uBazuPrimke, izBazePrimke } from '@/lib/ploca';
-import { pdf } from '@react-pdf/renderer';
-import { UlazPdf } from '@/components/UlazPdf';
+import { jePloca, m2UKom } from '@/lib/ploca';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { DecimalInput } from '@/components/ui/decimal-input';
-import { DatePicker } from '@/components/ui/date-picker';
 import { Label } from '@/components/ui/label';
 import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
-} from '@/components/ui/table';
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
 } from '@/components/ui/dialog';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
+import { Key, LedgerHead } from '@/components/ui/ledger';
+import { UlazDialog, type UlazStanje } from '@/components/skladiste/UlazDialog';
 import {
   Plus, Trash2, FileText, Package, Search, Pencil, X,
-  ClipboardList, PackagePlus, Hash, Barcode,
-  DollarSign, Layers, Ruler, ChevronRight, Printer, Building2, Download,
-  ArrowUpRight, ArrowDownRight, AlertTriangle, Lock,
+  PackagePlus, Hash, Barcode,
+  DollarSign, Layers, Ruler, ChevronRight, Building2,
+  ArrowUpRight, ArrowDownRight, Lock, RefreshCw,
 } from 'lucide-react';
 
 type SkladisteTab = 'artikli' | 'primke';
@@ -349,575 +342,6 @@ function ArtikalDialog({
 }
 
 // ---------------------------------------------------------------------------
-// Nova Primka Dialog — cleaner table-like rows
-// ---------------------------------------------------------------------------
-
-interface StavkaRow {
-  productId: number | null;
-  kolicina: string;
-  nabavnaCijena: string;
-  rabat: string;
-  cijena: string;
-}
-
-
-function NovaPrimkaDialog({
-  open,
-  onOpenChange,
-  products,
-  dobavljaci,
-  onSave,
-  editPrimka,
-}: {
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-  products: Product[];
-  dobavljaci: Dobavljac[];
-  onSave: () => void;
-  editPrimka?: Primka | null;
-}) {
-  const [brojPrimke, setBrojPrimke] = useState('');
-  const [brojFakture, setBrojFakture] = useState('');
-  const [napomena, setNapomena] = useState('');
-  const [datum, setDatum] = useState('');
-  const [dobavljacNaziv, setDobavljacNaziv] = useState('');
-  const [dobavljacId, setDobavljacId] = useState('');
-  const [dobavljacAdresa, setDobavljacAdresa] = useState('');
-  const [stavke, setStavke] = useState<StavkaRow[]>([
-    { productId: null, kolicina: '', nabavnaCijena: '', rabat: '', cijena: '' },
-  ]);
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState('');
-  const [nivelacijaItems, setNivelacijaItems] = useState<Array<{
-    productId: number;
-    productNaziv: string;
-    kolicina: number;
-    staraCijena: number;
-    novaCijena: number;
-    razlika: number;
-    ukupnaRazlika: number;
-  }>>([]);
-  const [showNivelacija, setShowNivelacija] = useState(false);
-
-  useEffect(() => {
-    if (open) {
-      if (editPrimka) {
-        setBrojPrimke(editPrimka.brojPrimke);
-        setBrojFakture(editPrimka.brojFakture ?? '');
-        setNapomena(editPrimka.napomena ?? '');
-        setDatum(editPrimka.datum);
-        setDobavljacNaziv(editPrimka.dobavljacNaziv ?? '');
-        setDobavljacId(editPrimka.dobavljacId ?? '');
-        setDobavljacAdresa(editPrimka.dobavljacAdresa ?? '');
-        setStavke(
-          (editPrimka.stavke ?? []).map((s) => {
-            const p = products.find(pr => pr.id === s.productId);
-            const prikaz = izBazePrimke(p, s.kolicina, s.nabavnaCijena);
-            return {
-              productId: s.productId,
-              kolicina: prikaz.kolicina,
-              nabavnaCijena: prikaz.nabavnaCijena,
-              rabat: String(s.rabat || ''),
-              cijena: String(s.cijena),
-            };
-          })
-        );
-      setSaveError('');
-      } else {
-        setNapomena('');
-        setBrojFakture('');
-        setDobavljacNaziv('');
-        setDobavljacId('');
-        setDobavljacAdresa('');
-        const d = new Date();
-        setDatum(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
-        setStavke([{ productId: null, kolicina: '', nabavnaCijena: '', rabat: '', cijena: '' }]);
-        window.api.getNextBrojUlaza().then(setBrojPrimke).catch(() => setBrojPrimke(''));
-      }
-    }
-  }, [open, editPrimka]);
-
-  const addStavka = () =>
-    setStavke((prev) => [...prev, { productId: null, kolicina: '', nabavnaCijena: '', rabat: '', cijena: '' }]);
-
-  const removeStavka = (idx: number) =>
-    setStavke((prev) => prev.filter((_, i) => i !== idx));
-
-  const updateStavka = (idx: number, patch: Partial<StavkaRow>) => {
-    setStavke((prev) =>
-      prev.map((s, i) => {
-        if (i !== idx) return s;
-        const updated = { ...s, ...patch };
-        if (patch.productId != null) {
-          const p = products.find((pr) => pr.id === patch.productId);
-          if (p) updated.cijena = p.tip === 'materijal' ? '0' : String(p.cijena);
-        }
-        return updated;
-      }),
-    );
-  };
-
-  const stavkeNabavnaTotal = stavke.reduce((sum, s) => {
-    if (!s.kolicina || !s.nabavnaCijena) return sum;
-    return sum + (parseDecimal(s.kolicina) * parseDecimal(s.nabavnaCijena) || 0);
-  }, 0);
-
-  const stavkeProdajnaTotal = stavke.reduce((sum, s) => {
-    if (!s.kolicina || !s.cijena) return sum;
-    return sum + (parseDecimal(s.kolicina) * parseDecimal(s.cijena) || 0);
-  }, 0);
-
-  const isValidStavka = (s: StavkaRow) =>
-    s.productId != null &&
-    parseDecimal(s.kolicina) > 0 &&
-    !isNaN(parseDecimal(s.nabavnaCijena)) &&
-    !isNaN(parseDecimal(s.cijena));
-
-  const validCount = stavke.filter(isValidStavka).length;
-
-  const handleSave = async () => {
-    if (!brojPrimke) return;
-    const validStavke = stavke.filter(isValidStavka);
-    if (validStavke.length === 0) return;
-
-    // Check for price differences
-    const diffs: typeof nivelacijaItems = [];
-    for (const s of validStavke) {
-      const product = products.find(p => p.id === s.productId);
-      if (product && product.tip !== 'materijal' && Math.abs(product.cijena - parseDecimal(s.cijena)) > 0.001) {
-        const existingStock = product.stanje ?? 0;
-        if (existingStock > 0) {
-          const razlika = parseDecimal(s.cijena) - product.cijena;
-          diffs.push({
-            productId: product.id,
-            productNaziv: product.naziv,
-            kolicina: existingStock,
-            staraCijena: product.cijena,
-            novaCijena: parseDecimal(s.cijena),
-            razlika,
-            ukupnaRazlika: razlika * existingStock,
-          });
-        }
-      }
-    }
-
-    if (diffs.length > 0) {
-      setNivelacijaItems(diffs);
-      setShowNivelacija(true);
-      return;
-    }
-
-    await doSave();
-  };
-
-  const doSave = async () => {
-    const validStavke = stavke.filter(isValidStavka);
-    setSaving(true);
-    try {
-      const payload = {
-        ...(editPrimka ? { id: editPrimka.id } : {}),
-        brojPrimke,
-        datum: datum || undefined,
-        dobavljacNaziv: dobavljacNaziv || undefined,
-        dobavljacId: dobavljacId || undefined,
-        dobavljacAdresa: dobavljacAdresa || undefined,
-        brojFakture: brojFakture || undefined,
-        napomena: napomena || undefined,
-        stavke: validStavke.map((s) => {
-          const p = products.find(pr => pr.id === s.productId);
-          const baza = uBazuPrimke(p, parseDecimal(s.kolicina), parseDecimal(s.nabavnaCijena));
-          return {
-            productId: s.productId,
-            kolicina: baza.kolicina,
-            nabavnaCijena: baza.nabavnaCijena,
-            rabat: parseDecimal(s.rabat) || 0,
-            cijena: p?.tip === 'materijal' ? 0 : parseDecimal(s.cijena),
-            pdvStopa: p?.pdvStopa ?? 'E',
-          };
-        }),
-      };
-
-      if (editPrimka) {
-        await window.api.updatePrimka(payload);
-      } else {
-        await window.api.createPrimka(payload);
-      }
-      onOpenChange(false);
-      onSave();
-    } catch (err: any) {
-      setSaveError(err?.message || 'Greška pri spremanju primke');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <>
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-3xl p-0 gap-0 overflow-hidden">
-        {/* Header */}
-        <div className="px-6 pt-6 pb-4">
-          <DialogHeader>
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center">
-                <ClipboardList className="h-5 w-5" />
-              </div>
-              <div>
-                <DialogTitle className="text-lg">{editPrimka ? 'Uredi ulaz robe' : 'Novi ulaz robe'}</DialogTitle>
-                <DialogDescription className="text-xs mt-0.5">
-                  Prijemnica — popunite podatke o dobavljaču i stavkama
-                </DialogDescription>
-              </div>
-            </div>
-          </DialogHeader>
-        </div>
-
-        <Separator />
-
-        <div className="px-6 py-5 space-y-5 max-h-[70vh] overflow-y-auto">
-          {/* Primka info */}
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="brojPrimke" className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                Broj ulaza
-              </Label>
-              <Input
-                id="brojPrimke"
-                className={cn("font-mono", !editPrimka && "bg-muted")}
-                value={brojPrimke}
-                onChange={(e) => editPrimka && setBrojPrimke(e.target.value)}
-                readOnly={!editPrimka}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="datum" className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                Datum prijema
-              </Label>
-              <DatePicker
-                id="datum"
-                value={datum}
-                onChange={setDatum}
-              />
-            </div>
-          </div>
-
-          {/* Dobavljač section */}
-          <div className="rounded-lg border bg-slate-50/50 p-4 space-y-3">
-            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Dobavljač</span>
-            <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">Odaberi dobavljača</Label>
-              <Select
-                value={dobavljacNaziv ? dobavljaci.find(d => d.naziv === dobavljacNaziv)?.id?.toString() ?? '' : ''}
-                onValueChange={(v) => {
-                  const d = dobavljaci.find(d => d.id === parseInt(v, 10));
-                  if (d) {
-                    setDobavljacNaziv(d.naziv);
-                    setDobavljacId(d.idBroj || d.pdvBroj || '');
-                    setDobavljacAdresa(d.adresa || '');
-                  }
-                }}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Odaberi dobavljača..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {dobavljaci.map((d) => (
-                    <SelectItem key={d.id} value={String(d.id)}>
-                      <span className="font-medium">{d.naziv}</span>
-                      {d.idBroj && <span className="text-muted-foreground text-xs ml-2 font-mono">{d.idBroj}</span>}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            {dobavljacNaziv && (
-              <div className="grid grid-cols-2 gap-3 text-xs">
-                <div>
-                  <span className="text-muted-foreground">Naziv:</span>
-                  <span className="ml-1.5 font-medium">{dobavljacNaziv}</span>
-                </div>
-                {dobavljacId && (
-                  <div>
-                    <span className="text-muted-foreground">ID/PDV:</span>
-                    <span className="ml-1.5 font-mono">{dobavljacId}</span>
-                  </div>
-                )}
-                {dobavljacAdresa && (
-                  <div className="col-span-2">
-                    <span className="text-muted-foreground">Adresa:</span>
-                    <span className="ml-1.5">{dobavljacAdresa}</span>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Broj fakture + Napomena */}
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="brojFakture" className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                Broj fakture dobavljača
-              </Label>
-              <Input
-                id="brojFakture"
-                value={brojFakture}
-                onChange={(e) => setBrojFakture(e.target.value)}
-                placeholder="Npr. 208/26"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="napomena" className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                Napomena
-              </Label>
-              <Input
-                id="napomena"
-                value={napomena}
-                onChange={(e) => setNapomena(e.target.value)}
-                placeholder="Opcionalno"
-              />
-            </div>
-          </div>
-
-          <Separator className="opacity-50" />
-
-          {/* Stavke header */}
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                Stavke
-              </Label>
-              {validCount > 0 && (
-                <Badge variant="secondary" className="font-mono text-[10px] px-1.5 py-0">
-                  {validCount}
-                </Badge>
-              )}
-            </div>
-            <Button variant="outline" size="sm" onClick={addStavka} className="h-7 text-xs">
-              <Plus className="h-3.5 w-3.5 mr-1" />
-              Stavka
-            </Button>
-          </div>
-
-          {/* Stavke table-style */}
-          <div className="rounded-lg border overflow-hidden">
-            {/* Column headers */}
-            <div className="grid grid-cols-[1fr_70px_90px_60px_90px_36px] gap-0 bg-slate-50 border-b px-3 py-2">
-              <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Artikal</span>
-              <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider text-right">Kol.</span>
-              <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider text-right">Nabavna</span>
-              <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider text-right">Rabat%</span>
-              <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider text-right">Prodajna</span>
-              <span />
-            </div>
-
-            <ScrollArea className="max-h-52">
-              <div className="divide-y">
-                {stavke.map((s, idx) => (
-                  <div key={idx} className="grid grid-cols-[1fr_70px_90px_60px_90px_36px] gap-0 items-center px-3 py-1.5 hover:bg-slate-50/50 transition-colors">
-                    <div className="pr-2">
-                      <Select
-                        value={s.productId != null ? String(s.productId) : ''}
-                        onValueChange={(v) => updateStavka(idx, { productId: parseInt(v, 10) })}
-                      >
-                        <SelectTrigger className="h-8 text-sm border-0 shadow-none bg-transparent px-0 hover:bg-slate-100 rounded">
-                          <SelectValue placeholder="Odaberi artikal..." />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {products.map((p) => (
-                            <SelectItem key={p.id} value={String(p.id)}>
-                              <span className="font-mono text-muted-foreground text-xs mr-2">{p.sifra}</span>
-                              {p.tip === 'materijal' && <span className="text-[9px] text-violet-500 mr-1">MAT</span>}
-                              {p.naziv}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div>
-                      <DecimalInput
-                        maxDecimals={3}
-                        className="h-8 font-mono text-sm text-right border-0 shadow-none bg-transparent hover:bg-slate-100 rounded"
-                        placeholder={(() => {
-                          const p = products.find(pr => pr.id === s.productId);
-                          if (p && jePloca(p)) return 'kom';
-                          if (p && p.tip === 'materijal') return p.jm;
-                          return '0';
-                        })()}
-                        value={s.kolicina}
-                        onValueChange={(text) => updateStavka(idx, { kolicina: text })}
-                      />
-                      {(() => {
-                        const p = products.find(pr => pr.id === s.productId);
-                        if (!p || !jePloca(p) || !s.kolicina) return null;
-                        const kom = parseDecimal(s.kolicina);
-                        return (
-                          <span className="block text-[9.5px] text-slate-400 font-mono text-right -mt-0.5">
-                            = {komUM2(kom, p.plocaSirina!, p.plocaVisina!)} m²
-                          </span>
-                        );
-                      })()}
-                    </div>
-                    <DecimalInput
-                      className="h-8 font-mono text-sm text-right border-0 shadow-none bg-transparent hover:bg-slate-100 rounded"
-                      placeholder="0,00"
-                      value={s.nabavnaCijena}
-                      onValueChange={(text) => updateStavka(idx, { nabavnaCijena: text })}
-                    />
-                    <DecimalInput
-                      className="h-8 font-mono text-sm text-right border-0 shadow-none bg-transparent hover:bg-slate-100 rounded"
-                      placeholder="0"
-                      value={s.rabat}
-                      onValueChange={(text) => updateStavka(idx, { rabat: text })}
-                    />
-                    <DecimalInput
-                      className="h-8 font-mono text-sm text-right border-0 shadow-none bg-transparent hover:bg-slate-100 rounded"
-                      placeholder="0,00"
-                      value={products.find(pr => pr.id === s.productId)?.tip === 'materijal' ? '' : s.cijena}
-                      disabled={products.find(pr => pr.id === s.productId)?.tip === 'materijal'}
-                      onValueChange={(text) => updateStavka(idx, { cijena: text })}
-                    />
-                    <button
-                      onClick={() => removeStavka(idx)}
-                      disabled={stavke.length === 1}
-                      className={cn(
-                        'h-8 w-8 flex items-center justify-center rounded transition-colors',
-                        stavke.length === 1
-                          ? 'text-slate-200 cursor-not-allowed'
-                          : 'text-slate-400 hover:text-red-500 hover:bg-red-50'
-                      )}
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </ScrollArea>
-
-            {/* Total bar */}
-            {(stavkeNabavnaTotal > 0 || stavkeProdajnaTotal > 0) && (
-              <div className="border-t bg-slate-50 px-3 py-2.5 flex items-center justify-between">
-                <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Ukupno</span>
-                <div className="flex items-center gap-4">
-                  <div className="text-right">
-                    <span className="text-[10px] text-muted-foreground uppercase tracking-wider block">Nabavna</span>
-                    <span className="font-mono font-semibold text-sm">{formatKM(stavkeNabavnaTotal)}</span>
-                  </div>
-                  <div className="text-right">
-                    <span className="text-[10px] text-muted-foreground uppercase tracking-wider block">Prodajna</span>
-                    <span className="font-mono font-semibold text-sm">{formatKM(stavkeProdajnaTotal)}</span>
-                  </div>
-                  {stavkeNabavnaTotal > 0 && stavkeProdajnaTotal > 0 && (
-                    <>
-                      <div className="text-right">
-                        <span className="text-[10px] text-muted-foreground uppercase tracking-wider block">RUC</span>
-                        <span className="font-mono font-semibold text-sm">
-                          {formatKM(stavkeProdajnaTotal - stavkeNabavnaTotal)}
-                        </span>
-                      </div>
-                      <div className="text-right">
-                        <span className="text-[10px] text-muted-foreground uppercase tracking-wider block">RUC %</span>
-                        <span className="font-mono font-semibold text-sm text-emerald-600">
-                          {(((stavkeProdajnaTotal - stavkeNabavnaTotal) / stavkeNabavnaTotal) * 100).toFixed(1)}%
-                        </span>
-                      </div>
-                    </>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Footer */}
-        {saveError && (
-          <div className="mx-6 flex items-center gap-2 rounded-xl px-4 py-3 text-[12px] font-medium bg-red-50/60 border border-red-100 text-red-600">
-            {saveError}
-          </div>
-        )}
-        <div className="border-t bg-slate-50/50 px-6 py-4 flex items-center justify-end gap-3">
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            Otkaži
-          </Button>
-          <Button onClick={handleSave} disabled={saving || !brojPrimke || validCount === 0} className="min-w-[120px]">
-            {saving ? 'Spremam...' : 'Spremi ulaz'}
-          </Button>
-        </div>
-      </DialogContent>
-    </Dialog>
-
-    <Dialog open={showNivelacija} onOpenChange={setShowNivelacija}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <AlertTriangle className="h-5 w-5 text-amber-500" />
-            Nivelacija cijena
-          </DialogTitle>
-          <DialogDescription>
-            Sljedeći artikli imaju različitu prodajnu cijenu od trenutne. Sačuvanje primke će automatski kreirati nivelaciju i ažurirati cijene.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="max-h-[300px] overflow-y-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-xs text-muted-foreground border-b">
-                <th className="text-left py-2">Artikal</th>
-                <th className="text-right py-2">Kol.</th>
-                <th className="text-right py-2">Stara</th>
-                <th className="text-right py-2">Nova</th>
-                <th className="text-right py-2">Razlika</th>
-              </tr>
-            </thead>
-            <tbody>
-              {nivelacijaItems.map((item) => (
-                <tr key={item.productId} className="border-b border-slate-50">
-                  <td className="py-2 text-sm">{item.productNaziv}</td>
-                  <td className="py-2 text-right font-mono text-sm">{item.kolicina}</td>
-                  <td className="py-2 text-right font-mono text-sm">{formatKM(item.staraCijena)}</td>
-                  <td className="py-2 text-right font-mono text-sm">{formatKM(item.novaCijena)}</td>
-                  <td className={cn(
-                    "py-2 text-right font-mono text-sm font-medium",
-                    item.ukupnaRazlika > 0 ? "text-emerald-600" : "text-red-500"
-                  )}>
-                    {item.ukupnaRazlika > 0 ? '+' : ''}{formatKM(item.ukupnaRazlika)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr className="border-t-2">
-                <td colSpan={4} className="py-2 text-sm font-semibold">Ukupna razlika</td>
-                <td className={cn(
-                  "py-2 text-right font-mono text-sm font-bold",
-                  nivelacijaItems.reduce((s, i) => s + i.ukupnaRazlika, 0) > 0 ? "text-emerald-600" : "text-red-500"
-                )}>
-                  {formatKM(nivelacijaItems.reduce((s, i) => s + i.ukupnaRazlika, 0))}
-                </td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-
-        <DialogFooter>
-          <Button variant="outline" onClick={() => setShowNivelacija(false)}>
-            Otkaži
-          </Button>
-          <Button
-            onClick={() => {
-              setShowNivelacija(false);
-              doSave();
-            }}
-          >
-            Sačuvaj sa nivelacijom
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-    </>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Artikli Tab — refined data table with search & summary
 // ---------------------------------------------------------------------------
 
@@ -1197,366 +621,190 @@ function ArtikliTab({
 }
 
 // ---------------------------------------------------------------------------
-// Ulaz robe Tab — master-detail with polished cards
+// Ulaz robe Tab — lista preko cijele širine, dokument u dijalogu preko svega
 // ---------------------------------------------------------------------------
 
 function PrimkeTab({ products, dobavljaci, onReloadProducts }: { products: Product[]; dobavljaci: Dobavljac[]; onReloadProducts: () => void }) {
   const [primke, setPrimke] = useState<Primka[]>([]);
-  const [selectedPrimka, setSelectedPrimka] = useState<Primka | null>(null);
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [editPrimka, setEditPrimka] = useState<Primka | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [stanje, setStanje] = useState<UlazStanje>({ kind: 'zatvoren' });
+  const [search, setSearch] = useState('');
+  const [msg, setMsg] = useState<string | null>(null);
+  const rowRefs = useRef<(HTMLTableRowElement | null)[]>([]);
+  const searchRef = useRef<HTMLInputElement>(null);
 
-  const loadPrimke = useCallback(async () => {
-    const data = await window.api.getPrimke();
-    setPrimke(data);
-  }, []);
+  const loadPrimke = useCallback(async () => { setPrimke(await window.api.getPrimke()); }, []);
+  useEffect(() => { loadPrimke(); }, [loadPrimke]);
 
-  useEffect(() => {
-    loadPrimke();
-  }, [loadPrimke]);
+  const visible = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return primke;
+    return primke.filter(p => p.brojPrimke.toLowerCase().includes(q) || (p.dobavljacNaziv?.toLowerCase().includes(q) ?? false)
+      || (p.brojFakture?.toLowerCase().includes(q) ?? false) || (p.napomena?.toLowerCase().includes(q) ?? false));
+  }, [primke, search]);
+  const visibleIds = useMemo(() => visible.map(p => p.id), [visible]);
+  const selIndex = visible.findIndex(p => p.id === selectedId);
 
-  const handleSelect = async (p: Primka) => {
-    const detail = await window.api.getPrimka(p.id);
-    setSelectedPrimka(detail);
-  };
+  const focusRow = useCallback((index: number) => {
+    const p = visible[index];
+    if (!p) return;
+    setSelectedId(p.id);
+    const el = rowRefs.current[index];
+    el?.focus(); el?.scrollIntoView({ block: 'nearest' });
+  }, [visible]);
 
-  const handleEditPrimka = (primka: Primka) => {
-    setEditPrimka(primka);
-    setDialogOpen(true);
-  };
+  const otvori = (id: number) => { setSelectedId(id); setStanje({ kind: 'pregled', id }); };
+  const novi = () => setStanje({ kind: 'novi' });
 
-  const handleDeletePrimka = async (primka: Primka) => {
-    if (!confirm(`Obrisati ulaz ${primka.brojPrimke}?`)) return;
-    await window.api.deletePrimka(primka.id);
-    setSelectedPrimka(null);
-    loadPrimke();
-    onReloadProducts();
-  };
-
-  const handleSavePrimka = () => {
-    loadPrimke();
-    onReloadProducts();
-    setEditPrimka(null);
-    if (selectedPrimka) {
-      window.api.getPrimka(selectedPrimka.id).then(setSelectedPrimka).catch(() => setSelectedPrimka(null));
+  const handleListKeyDown = (e: React.KeyboardEvent<HTMLTableSectionElement>) => {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const current = selIndex < 0 ? -1 : selIndex;
+    const last = visible.length - 1;
+    const go = (i: number) => { e.preventDefault(); focusRow(Math.max(0, Math.min(last, i))); };
+    switch (e.key) {
+      case 'ArrowDown': return go(current + 1);
+      case 'ArrowUp': return go(current < 0 ? 0 : current - 1);
+      case 'PageDown': return go(current + 10);
+      case 'PageUp': return go(current < 0 ? 0 : current - 10);
+      case 'Home': return go(0);
+      case 'End': return go(last);
+      case 'Enter': case ' ':
+        if (selectedId != null) { e.preventDefault(); otvori(selectedId); }
+        return;
+      default:
     }
   };
 
-  const handlePrintPdf = async (primka: Primka) => {
-    const firma = await window.api.getFirmaSettings();
-    const blob = await pdf(<UlazPdf primka={primka} firma={firma} />).toBlob();
-    const url = URL.createObjectURL(blob);
-    window.open(url, '_blank');
+  const dialogOpen = stanje.kind !== 'zatvoren';
+  useEffect(() => {
+    if (dialogOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      const uPolju = !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+      if (uPolju) {
+        // Iz pretrage ↓ vodi na listu, esc briše upit.
+        if (t === searchRef.current && e.key === 'ArrowDown') { e.preventDefault(); focusRow(selIndex < 0 ? 0 : selIndex); }
+        if (t === searchRef.current && e.key === 'Escape') { setSearch(''); (t as HTMLInputElement).blur(); }
+        return;
+      }
+      if (e.key === '/') { e.preventDefault(); searchRef.current?.focus(); return; }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { if (!t?.closest('tbody')) { e.preventDefault(); focusRow(selIndex < 0 ? 0 : selIndex); } return; }
+      if (e.key.toLowerCase() === 'n') { e.preventDefault(); novi(); return; }
+      if (e.key.toLowerCase() === 'r') { e.preventDefault(); loadPrimke(); return; }
+      if (e.key === 'Enter' && selectedId != null) { e.preventDefault(); otvori(selectedId); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [dialogOpen, selectedId, selIndex, focusRow, loadPrimke]);
+
+  const zatvori = () => {
+    setStanje({ kind: 'zatvoren' });
+    requestAnimationFrame(() => { const i = visible.findIndex(p => p.id === selectedId); if (i >= 0) rowRefs.current[i]?.focus(); });
   };
-
-  const handleExportPdf = async (primka: Primka) => {
-    const firma = await window.api.getFirmaSettings();
-    const blob = await pdf(<UlazPdf primka={primka} firma={firma} />).toBlob();
-    const filePath = await window.api.showSaveDialog({
-      defaultName: `${primka.brojPrimke}.pdf`,
-      filters: [{ name: 'PDF', extensions: ['pdf'] }],
-    });
-    if (!filePath) return;
-
-    const buffer = await blob.arrayBuffer();
-    await window.api.writeFile(filePath, Array.from(new Uint8Array(buffer)) as any);
-  };
-
-  const totalNabavna = (stavke: PrimkaStavka[]) =>
-    stavke.reduce((sum, s) => sum + s.kolicina * (s.nabavnaCijena || 0), 0);
-
-  const totalProdajna = (stavke: PrimkaStavka[]) =>
-    stavke.reduce((sum, s) => sum + s.kolicina * s.cijena, 0);
-
-  const totalPdv = (stavke: PrimkaStavka[]) =>
-    stavke.reduce((sum, s) => {
-      if (s.pdvStopa !== 'E') return sum;
-      const lineTotal = s.kolicina * s.cijena;
-      return sum + (lineTotal - lineTotal / 1.17);
-    }, 0);
-
-  const [search, setSearch] = useState('');
-
-  const filteredPrimke = primke.filter(p => {
-    if (!search) return true;
-    const q = search.toLowerCase();
-    return (
-      p.brojPrimke.toLowerCase().includes(q) ||
-      (p.dobavljacNaziv?.toLowerCase().includes(q) ?? false) ||
-      (p.napomena?.toLowerCase().includes(q) ?? false)
-    );
-  });
 
   return (
     <div className="flex flex-col h-full">
-      {/* Table card with master-detail */}
+      {msg && (
+        <div className="mx-6 mt-4 flex items-center gap-2 rounded-xl border px-4 py-2.5 text-[12px] font-medium bg-emerald-50/70 border-emerald-200 text-emerald-700">
+          <PackagePlus size={14} /> {msg}
+          <button className="ml-auto text-slate-400 hover:text-slate-600" onClick={() => setMsg(null)} aria-label="Sakrij poruku"><X size={13} /></button>
+        </div>
+      )}
       <div className="flex-1 min-h-0 px-6 py-5">
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm shadow-slate-200/50 h-full flex flex-col overflow-hidden">
-          {/* Header bar */}
+        <div className="bg-white rounded-2xl border border-slate-200/70 shadow-sm shadow-slate-200/40 h-full flex flex-col overflow-hidden">
           <div className="flex items-center gap-3 px-5 py-3 border-b border-slate-100">
             <div className="relative flex-1 max-w-sm">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-              <Input
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                placeholder="Pretraži po broju, dobavljaču..."
-                className="pl-9 h-8 text-[13px] bg-slate-50 border-slate-200"
-              />
-              {search && (
-                <button
-                  onClick={() => setSearch('')}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              )}
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+              <Input ref={searchRef} value={search} onChange={e => setSearch(e.target.value)} placeholder="Pretraži po broju, dobavljaču, fakturi…"
+                className="pl-9 pr-9 h-8 text-[12.5px] bg-slate-50 border-slate-200" aria-label="Pretraga ulaza" />
+              {search
+                ? <button onClick={() => setSearch('')} aria-label="Obriši pretragu" className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"><X className="h-3.5 w-3.5" /></button>
+                : <Key className="absolute right-2.5 top-1/2 -translate-y-1/2 ml-0">/</Key>}
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-[13px] font-semibold text-slate-700">Ulaz robe</span>
-              {primke.length > 0 && (
-                <Badge variant="secondary" className="text-[10px] font-mono px-1.5 py-0 h-5">
-                  {primke.length}
-                </Badge>
-              )}
+            <span className="text-[13px] font-semibold text-slate-700">Ulaz robe</span>
+            <span className="font-mono text-[10.5px] tabular-nums text-slate-400">{primke.length}</span>
+            <div className="ml-auto flex items-center gap-2">
+              <Button variant="outline" size="sm" onClick={loadPrimke} className="h-8 gap-1.5 text-[12px]"><RefreshCw className="h-3.5 w-3.5" /> Osvježi</Button>
+              <Button size="sm" onClick={novi} className="h-8 gap-1.5 pl-3 pr-2 text-[12px]"><Plus className="h-3.5 w-3.5" /> Novi ulaz <Key tone="dark">N</Key></Button>
             </div>
-            <Button size="sm" onClick={() => { setEditPrimka(null); setDialogOpen(true); }} className="ml-auto h-8 gap-1.5 text-[12px]">
-              <Plus className="h-3.5 w-3.5" />
-              Novi ulaz
-            </Button>
           </div>
 
-          <div className="flex flex-1 min-h-0">
-            {/* Left: primke list */}
-            <div className="w-[280px] min-w-[240px] flex-shrink-0 border-r border-slate-100">
-              <ScrollArea className="h-full">
-                {filteredPrimke.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-20 text-slate-400 select-none">
-                    <div className="w-14 h-14 rounded-2xl bg-slate-50 flex items-center justify-center mb-3">
-                      <FileText size={24} className="text-slate-300" />
-                    </div>
-                    <p className="text-[13px] font-medium text-slate-500">{search ? 'Nema rezultata' : 'Nema ulaza robe'}</p>
-                  </div>
-                ) : (
-                  <div className="divide-y divide-slate-50">
-                    {filteredPrimke.map((p) => (
-                      <button
-                        key={p.id}
-                        onClick={() => handleSelect(p)}
-                        className={cn(
-                          'w-full text-left px-4 py-3 flex items-center gap-3 transition-all duration-100',
-                          'hover:bg-slate-50/80',
-                          selectedPrimka?.id === p.id
-                            ? 'bg-slate-900 text-white hover:bg-slate-900'
-                            : ''
-                        )}
-                      >
-                        <div className={cn(
-                          'w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0',
-                          selectedPrimka?.id === p.id
-                            ? 'bg-white/10 text-white'
-                            : 'bg-slate-50 text-slate-400'
-                        )}>
-                          <FileText className="h-3.5 w-3.5" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <span className="font-mono font-semibold text-[13px] block leading-tight">{p.brojPrimke}</span>
-                          <div className="flex items-center gap-1.5 mt-0.5">
-                            <span className={cn(
-                              'text-[11px] tabular-nums',
-                              selectedPrimka?.id === p.id ? 'text-white/50' : 'text-slate-400'
-                            )}>
-                              {(() => { const d = new Date(p.datum); const pad = (n: number) => String(n).padStart(2, '0'); return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`; })()}
+          {visible.length === 0 ? (
+            <div className="flex-1 flex flex-col items-center justify-center text-slate-400 select-none">
+              <div className="w-12 h-12 rounded-2xl bg-slate-50 flex items-center justify-center mb-3"><FileText size={20} className="text-slate-300" /></div>
+              <p className="text-[13px] font-medium text-slate-500">{search ? 'Nema rezultata' : 'Nema ulaza robe'}</p>
+              {!search && <p className="text-[12px] text-slate-400 mt-0.5">Prvi ulaz otvarate tipkom <Key className="ml-0 mx-0.5">N</Key>.</p>}
+            </div>
+          ) : (
+            <>
+              <ScrollArea className="flex-1">
+                <table className="w-full border-separate border-spacing-0">
+                  <LedgerHead columns={[
+                    { label: 'Broj', className: 'text-left pl-5 pr-2 w-[130px]' },
+                    { label: 'Datum', className: 'text-left px-2 w-[100px]' },
+                    { label: 'Dobavljač', className: 'text-left px-2 w-[34%]' },
+                    { label: 'Faktura', className: 'text-left px-2 w-[130px] hidden lg:table-cell' },
+                    { label: 'Napomena', className: 'text-left px-2 hidden xl:table-cell' },
+                    { label: '', className: 'w-[60px] pr-5' },
+                  ]} />
+                  <tbody onKeyDown={handleListKeyDown}>
+                    {visible.map((p, i) => {
+                      const isSel = selectedId === p.id;
+                      return (
+                        <tr key={p.id}
+                          ref={el => { rowRefs.current[i] = el; }}
+                          tabIndex={isSel || (selIndex < 0 && i === 0) ? 0 : -1}
+                          aria-selected={isSel}
+                          onClick={() => otvori(p.id)}
+                          onFocus={() => setSelectedId(p.id)}
+                          className={cn('cursor-pointer transition-colors duration-100 group',
+                            'focus:outline focus:outline-2 focus:-outline-offset-2 focus:outline-blue-500',
+                            isSel ? 'bg-blue-50/70' : 'hover:bg-slate-50')}>
+                          <td className={cn('pl-5 pr-2 py-3 border-b border-slate-100 font-mono text-[12px] font-semibold tabular-nums whitespace-nowrap',
+                            isSel ? 'text-blue-600 shadow-[inset_3px_0_0_0_#2563eb]' : 'text-slate-500')}>{p.brojPrimke}</td>
+                          <td className="px-2 py-3 border-b border-slate-100 text-[12px] text-slate-500 tabular-nums whitespace-nowrap">{formatDate(p.datum)}</td>
+                          <td className="px-2 py-3 border-b border-slate-100 text-[12.5px] text-slate-800 max-w-0">
+                            <span className="flex items-center gap-2 min-w-0">
+                              <Building2 size={13} className="text-slate-300 flex-shrink-0" />
+                              <span className="truncate font-medium">{p.dobavljacNaziv || <span className="text-slate-300 font-normal">bez dobavljača</span>}</span>
                             </span>
-                            {p.dobavljacNaziv && (
-                              <>
-                                <span className={cn(
-                                  'text-[11px]',
-                                  selectedPrimka?.id === p.id ? 'text-white/30' : 'text-slate-300'
-                                )}>·</span>
-                                <span className={cn(
-                                  'text-[11px] truncate',
-                                  selectedPrimka?.id === p.id ? 'text-white/50' : 'text-slate-400'
-                                )}>{p.dobavljacNaziv}</span>
-                              </>
-                            )}
-                          </div>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </ScrollArea>
-            </div>
-
-            {/* Right: detail panel */}
-            <div className="flex-1 min-w-0 flex flex-col">
-              {selectedPrimka && selectedPrimka.stavke ? (
-                <>
-                  {/* Compact toolbar */}
-                  <div className="flex items-center gap-1.5 px-4 py-2.5 border-b border-slate-100 bg-slate-50/40">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-baseline gap-2">
-                        <h3 className="font-mono font-bold text-[15px] tracking-tight text-slate-800">{selectedPrimka.brojPrimke}</h3>
-                        <span className="text-[11px] text-slate-400 tabular-nums">
-                          {(() => { const d = new Date(selectedPrimka.datum); const pad = (n: number) => String(n).padStart(2, '0'); return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`; })()}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-0.5">
-                      <Button variant="ghost" size="sm" className="h-7 w-7 p-0" title="Štampaj" onClick={() => handlePrintPdf(selectedPrimka)}>
-                        <Printer className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button variant="ghost" size="sm" className="h-7 w-7 p-0" title="Izvezi PDF" onClick={() => handleExportPdf(selectedPrimka)}>
-                        <Download className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button variant="ghost" size="sm" className="h-7 w-7 p-0" title="Uredi" onClick={() => handleEditPrimka(selectedPrimka)}>
-                        <Pencil className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-red-500 hover:text-red-600 hover:bg-red-50" title="Obriši" onClick={() => handleDeletePrimka(selectedPrimka)}>
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  </div>
-
-                  {/* Document meta */}
-                  {(selectedPrimka.dobavljacNaziv || selectedPrimka.brojFakture || selectedPrimka.napomena) && (
-                    <div className="px-4 py-2.5 border-b border-slate-100 space-y-1.5">
-                      {selectedPrimka.dobavljacNaziv && (
-                        <div className="flex items-start gap-2">
-                          <Building2 className="h-3.5 w-3.5 text-slate-400 mt-0.5 flex-shrink-0" />
-                          <div className="min-w-0">
-                            <span className="text-[13px] font-medium text-slate-700">{selectedPrimka.dobavljacNaziv}</span>
-                            {(selectedPrimka.dobavljacId || selectedPrimka.dobavljacAdresa) && (
-                              <p className="text-[11px] text-slate-400 leading-tight mt-0.5">
-                                {[selectedPrimka.dobavljacId && `ID: ${selectedPrimka.dobavljacId}`, selectedPrimka.dobavljacAdresa].filter(Boolean).join(' · ')}
-                              </p>
-                            )}
-                          </div>
-                        </div>
-                      )}
-                      {selectedPrimka.brojFakture && (
-                        <div className="flex items-center gap-2 pl-5">
-                          <span className="text-[11px] text-slate-400">Faktura:</span>
-                          <span className="text-[12px] font-mono font-medium text-slate-600">{selectedPrimka.brojFakture}</span>
-                        </div>
-                      )}
-                      {selectedPrimka.napomena && (
-                        <p className="text-[11px] text-slate-400 italic pl-5">
-                          {selectedPrimka.napomena}
-                        </p>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Stavke list */}
-                  <ScrollArea className="flex-1">
-                    <table className="w-full">
-                      <thead className="sticky top-0 bg-slate-50/80 backdrop-blur-sm">
-                        <tr className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
-                          <th className="text-left pl-4 pr-2 py-2">Artikal</th>
-                          <th className="text-right px-2 py-2 w-[60px]">Kol.</th>
-                          <th className="text-right px-2 py-2 w-[80px]">Nabavna</th>
-                          <th className="text-right px-2 py-2 w-[80px]">Prodajna</th>
-                          <th className="text-right pr-4 pl-2 py-2 w-[80px]">Ukupno</th>
+                          </td>
+                          <td className="hidden lg:table-cell px-2 py-3 border-b border-slate-100 font-mono text-[12px] text-slate-500 truncate max-w-0">{p.brojFakture || <span className="text-slate-300">—</span>}</td>
+                          <td className="hidden xl:table-cell px-2 py-3 border-b border-slate-100 text-[12px] text-slate-500 truncate max-w-0 w-full">{p.napomena}</td>
+                          <td className="pr-5 py-3 border-b border-slate-100 text-right">
+                            <ChevronRight size={14} className="inline text-slate-300 group-hover:text-slate-500" />
+                          </td>
                         </tr>
-                      </thead>
-                      <tbody>
-                        {selectedPrimka.stavke.map((s, i) => (
-                          <tr key={s.id} className="border-t border-slate-50 transition-colors hover:bg-slate-50/50">
-                            <td className="pl-4 pr-2 py-2">
-                              <div className="min-w-0 flex items-center gap-2">
-                                <span className="text-[10px] text-slate-300 font-mono tabular-nums w-4 text-right flex-shrink-0">{i + 1}</span>
-                                <span className="text-[12px] font-medium text-slate-700 truncate">{s.productNaziv ?? `#${s.productId}`}</span>
-                                <div className="flex items-center gap-1 flex-shrink-0">
-                                  {s.rabat > 0 && (
-                                    <span className="text-[9px] font-bold px-1 py-px rounded bg-blue-500/10 text-blue-600">-{s.rabat}%</span>
-                                  )}
-                                  <span className={cn(
-                                    'text-[9px] font-bold px-1 py-px rounded',
-                                    s.pdvStopa === 'E' ? 'bg-amber-500/10 text-amber-600' : 'bg-slate-100 text-slate-400'
-                                  )}>
-                                    {s.pdvStopa === 'E' ? 'E' : 'K'}
-                                  </span>
-                                </div>
-                              </div>
-                            </td>
-                            <td className="px-2 py-2 text-[12px] font-mono tabular-nums text-right text-slate-500">
-                              {s.kolicina} <span className="text-[10px]">{s.productJm || 'kom'}</span>
-                            </td>
-                            <td className="px-2 py-2 text-[12px] font-mono tabular-nums text-right text-slate-500">{formatKM(s.nabavnaCijena || 0)}</td>
-                            <td className="px-2 py-2 text-[12px] font-mono tabular-nums text-right text-slate-600">{formatKM(s.cijena)}</td>
-                            <td className="pr-4 pl-2 py-2 text-[13px] font-mono tabular-nums text-right font-semibold text-slate-800">{formatKM(s.kolicina * s.cijena)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </ScrollArea>
-
-                  {/* Totals */}
-                  {(() => {
-                    const nabavna = totalNabavna(selectedPrimka.stavke);
-                    const prodajna = totalProdajna(selectedPrimka.stavke);
-                    const pdv = totalPdv(selectedPrimka.stavke);
-                    const ruc = prodajna - nabavna;
-                    const marza = ruc - pdv;
-                    return (
-                      <div className="border-t border-slate-100 bg-slate-50/40">
-                        <div className="grid grid-cols-2 divide-x divide-slate-100">
-                          <div className="px-4 py-2.5">
-                            <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Nabavna</span>
-                            <span className="font-mono text-sm tabular-nums font-semibold text-slate-800">{formatKM(nabavna)}</span>
-                          </div>
-                          <div className="px-4 py-2.5">
-                            <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Prodajna</span>
-                            <span className="font-mono text-sm tabular-nums font-semibold text-slate-800">{formatKM(prodajna)}</span>
-                          </div>
-                        </div>
-
-                        {nabavna > 0 && (
-                          <div className="border-t border-slate-100 px-4 py-2 flex items-center gap-4 text-xs">
-                            <div className="flex items-center gap-1.5">
-                              <span className="text-slate-400">RUC</span>
-                              <span className="font-mono tabular-nums font-bold text-slate-700">{formatKM(ruc)}</span>
-                              <span className="text-[10px] text-slate-400 font-mono">({((ruc / nabavna) * 100).toFixed(1)}%)</span>
-                            </div>
-                            <div className="w-px h-3 bg-slate-200" />
-                            <div className="flex items-center gap-1.5">
-                              <span className="text-slate-400">PDV</span>
-                              <span className="font-mono tabular-nums text-slate-600">{formatKM(pdv)}</span>
-                            </div>
-                            <div className="w-px h-3 bg-slate-200" />
-                            <div className="flex items-center gap-1.5">
-                              <span className="text-slate-400">Marža</span>
-                              <span className="font-mono tabular-nums font-bold text-emerald-600">{formatKM(marza)}</span>
-                              <span className="text-[10px] text-emerald-600 font-mono">({((marza / nabavna) * 100).toFixed(1)}%)</span>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })()}
-                </>
-              ) : (
-                <div className="h-full flex flex-col items-center justify-center text-slate-400 select-none">
-                  <div className="w-14 h-14 rounded-2xl bg-slate-50 flex items-center justify-center mb-3">
-                    <ChevronRight size={24} className="text-slate-300" />
-                  </div>
-                  <p className="text-[13px] font-medium text-slate-500">Odaberite dokument</p>
-                  <p className="text-[12px] text-slate-400 mt-0.5">iz liste za prikaz detalja</p>
-                </div>
-              )}
-            </div>
-          </div>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </ScrollArea>
+              <div className="flex-shrink-0 border-t border-slate-100 px-5 h-9 flex items-center gap-3 text-[10.5px] text-slate-400 select-none">
+                <span className="font-mono tabular-nums">{selIndex >= 0 ? `${selIndex + 1} / ${visible.length}` : `${visible.length}`}</span>
+                <span className="text-slate-300">·</span>
+                <span className="hidden sm:flex items-center gap-3">
+                  <span className="flex items-center gap-1"><Key className="ml-0">↑↓</Key> odaberi</span>
+                  <span className="flex items-center gap-1"><Key className="ml-0">↵</Key> otvori</span>
+                  <span className="flex items-center gap-1"><Key className="ml-0">/</Key> pretraga</span>
+                  <span className="flex items-center gap-1"><Key className="ml-0">N</Key> novi</span>
+                </span>
+              </div>
+            </>
+          )}
         </div>
       </div>
 
-      <NovaPrimkaDialog
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
+      <UlazDialog
+        stanje={stanje}
         products={products}
         dobavljaci={dobavljaci}
-        onSave={handleSavePrimka}
-        editPrimka={editPrimka}
+        redoslijed={visibleIds}
+        onClose={zatvori}
+        onNavigate={otvori}
+        onSaved={async (id) => { await loadPrimke(); onReloadProducts(); if (id) { setSelectedId(id); setStanje({ kind: 'pregled', id }); } else setStanje({ kind: 'zatvoren' }); }}
+        onDeleted={async (p) => { setStanje({ kind: 'zatvoren' }); setSelectedId(null); await loadPrimke(); onReloadProducts(); setMsg(`Ulaz ${p.brojPrimke} obrisan`); }}
       />
     </div>
   );
