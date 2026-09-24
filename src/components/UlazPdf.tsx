@@ -1,6 +1,7 @@
 import React from 'react';
 import { Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
 import { Primka, PrimkaStavka } from '@/types';
+import { kalkulacijaStavke } from '@/lib/kalkulacija';
 import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
 import { POTPIS_AUTORA } from '@/lib/brend';
 import { kontaktFirme } from '@/lib/firma';
@@ -25,31 +26,7 @@ const F = PDF_FONT_FAMILY;
 const FB = PDF_FONT_FAMILY_BOLD;
 const fmt = (n: number) => n.toFixed(2).replace('.', ',');
 
-/* ── Per-item calculations ── */
-function calcRow(s: PrimkaStavka) {
-  const fakCijenaPoJed = s.nabavnaCijena;
-  const fakVrijednostBezPdv = s.kolicina * fakCijenaPoJed;
-  const rabatIznos = fakVrijednostBezPdv * (s.rabat / 100);
-  const zavisni = 0;
-  const nabCijenaPoJed = fakCijenaPoJed * (1 - s.rabat / 100) + zavisni / (s.kolicina || 1);
-  const nabVrijednostBezPdv = fakVrijednostBezPdv - rabatIznos + zavisni;
-  const prodCijenaSaPdv = s.cijena;
-  const pdvRate = s.pdvStopa === 'E' ? 17 : 0;
-  const prodCijenaBezPdv = pdvRate > 0 ? prodCijenaSaPdv / (1 + pdvRate / 100) : prodCijenaSaPdv;
-  const prodVrijednostBezPdv = prodCijenaBezPdv * s.kolicina;
-  const stopaRuc = nabVrijednostBezPdv > 0 ? ((prodVrijednostBezPdv - nabVrijednostBezPdv) / nabVrijednostBezPdv) * 100 : 0;
-  const iznosRuc = prodVrijednostBezPdv - nabVrijednostBezPdv;
-  const iznosPdv = prodVrijednostBezPdv * (pdvRate / 100);
-  const mpVrijednostSaPdv = prodVrijednostBezPdv + iznosPdv;
-
-  return {
-    fakCijenaPoJed, fakVrijednostBezPdv, rabatIznos, zavisni,
-    nabCijenaPoJed, nabVrijednostBezPdv,
-    stopaRuc, iznosRuc,
-    prodVrijednostBezPdv, pdvRate, iznosPdv,
-    mpVrijednostSaPdv, prodCijenaSaPdv,
-  };
-}
+const calcRow = (st: PrimkaStavka) => kalkulacijaStavke(st);
 
 const s = StyleSheet.create({
   page: {
@@ -272,13 +249,13 @@ export function UlazPdf({ primka, firma }: UlazPdfProps) {
   const rows = stavke.map(st => ({ st, c: calcRow(st) }));
 
   /* ── Column totals ── */
-  const totFakVr = rows.reduce((a, r) => a + r.c.fakVrijednostBezPdv, 0);
+  const totFakVr = rows.reduce((a, r) => a + r.c.fakturnaVrijednost, 0);
   const totZav = rows.reduce((a, r) => a + r.c.zavisni, 0);
-  const totNabVr = rows.reduce((a, r) => a + r.c.nabVrijednostBezPdv, 0);
-  const totIzRuc = rows.reduce((a, r) => a + r.c.iznosRuc, 0);
-  const totPrVr = rows.reduce((a, r) => a + r.c.prodVrijednostBezPdv, 0);
-  const totIzPdv = rows.reduce((a, r) => a + r.c.iznosPdv, 0);
-  const totMpVr = rows.reduce((a, r) => a + r.c.mpVrijednostSaPdv, 0);
+  const totNabVr = rows.reduce((a, r) => a + r.c.nabavnaVrijednost, 0);
+  const totIzRuc = rows.reduce((a, r) => a + r.c.rucIznos, 0);
+  const totPrVr = rows.reduce((a, r) => a + r.c.prodajnaVrijednostBezPdv, 0);
+  const totIzPdv = rows.reduce((a, r) => a + r.c.pdvIznos, 0);
+  const totMpVr = rows.reduce((a, r) => a + r.c.mpVrijednost, 0);
   const totRabat = rows.reduce((a, r) => a + r.c.rabatIznos, 0);
   const totMarza = totIzRuc;
 
@@ -369,18 +346,18 @@ export function UlazPdf({ primka, firma }: UlazPdfProps) {
               <Text style={[s.tCellLeft, s.cNaziv]}>{st.productNaziv ?? ''}</Text>
               <Text style={[s.tCell, s.cJm, { textAlign: 'center' }]}>{st.productJm ?? ''}</Text>
               <Text style={[s.tCell, s.cKol]}>{fmt(st.kolicina)}</Text>
-              <Text style={[s.tCell, s.cFakCij]}>{fmt(c.fakCijenaPoJed)}</Text>
-              <Text style={[s.tCell, s.cFakVr]}>{fmt(c.fakVrijednostBezPdv)}</Text>
+              <Text style={[s.tCell, s.cFakCij]}>{fmt(c.fakturnaPoJed)}</Text>
+              <Text style={[s.tCell, s.cFakVr]}>{fmt(c.fakturnaVrijednost)}</Text>
               <Text style={[s.tCell, s.cZav]}>{fmt(c.zavisni)}</Text>
-              <Text style={[s.tCell, s.cNabCij]}>{fmt(c.nabCijenaPoJed)}</Text>
-              <Text style={[s.tCell, s.cNabVr]}>{fmt(c.nabVrijednostBezPdv)}</Text>
-              <Text style={[s.tCell, s.cStRuc]}>{fmt(c.stopaRuc)}</Text>
-              <Text style={[s.tCell, s.cIzRuc]}>{fmt(c.iznosRuc)}</Text>
-              <Text style={[s.tCell, s.cPrVr]}>{fmt(c.prodVrijednostBezPdv)}</Text>
-              <Text style={[s.tCell, s.cStPdv, { textAlign: 'center' }]}>{fmt(c.pdvRate)}</Text>
-              <Text style={[s.tCell, s.cIzPdv]}>{fmt(c.iznosPdv)}</Text>
-              <Text style={[s.tCell, s.cMpVr]}>{fmt(c.mpVrijednostSaPdv)}</Text>
-              <Text style={[s.tCell, s.cMpCij, { borderRight: 'none' }]}>{fmt(c.prodCijenaSaPdv)}</Text>
+              <Text style={[s.tCell, s.cNabCij]}>{fmt(c.nabavnaPoJed)}</Text>
+              <Text style={[s.tCell, s.cNabVr]}>{fmt(c.nabavnaVrijednost)}</Text>
+              <Text style={[s.tCell, s.cStRuc]}>{fmt(c.rucStopa)}</Text>
+              <Text style={[s.tCell, s.cIzRuc]}>{fmt(c.rucIznos)}</Text>
+              <Text style={[s.tCell, s.cPrVr]}>{fmt(c.prodajnaVrijednostBezPdv)}</Text>
+              <Text style={[s.tCell, s.cStPdv, { textAlign: 'center' }]}>{fmt(c.pdvStopa)}</Text>
+              <Text style={[s.tCell, s.cIzPdv]}>{fmt(c.pdvIznos)}</Text>
+              <Text style={[s.tCell, s.cMpVr]}>{fmt(c.mpVrijednost)}</Text>
+              <Text style={[s.tCell, s.cMpCij, { borderRight: 'none' }]}>{fmt(c.prodajnaSaPdv)}</Text>
             </View>
           ))}
 

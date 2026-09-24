@@ -74,6 +74,7 @@ const ADDED_COLUMNS: Array<[string, string]> = [
   ['products', 'tip'],
   ['primka_stavke', 'nabavnaCijena'],
   ['primka_stavke', 'rabat'],
+  ['primka_stavke', 'zavisniTroskovi'],
   ['primke', 'dobavljacNaziv'],
   ['primke', 'dobavljacId'],
   ['primke', 'dobavljacAdresa'],

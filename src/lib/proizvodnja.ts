@@ -293,13 +293,12 @@ export function saveNormativ(db: SqlDb, productId: number, stavke: NalogStavkaIn
 // ── nabavna cijena ───────────────────────────────────────
 
 /**
- * Prosječna ponderisana nabavna cijena iz svih primki materijala, sa
- * uračunatim rabatom primke (rabat snižava stvarnu nabavnu vrijednost);
- * 0 bez primki.
+ * Prosječna ponderisana nabavna cijena iz svih primki materijala, po kalkulaciji
+ * ulaza: fakturna − rabat + zavisni troškovi (prevoz i sl.). 0 bez primki.
  */
 export function getProsjecnaNabavna(db: SqlDb, materijalId: number): number {
   const row = db.prepare(`
-    SELECT SUM(kolicina * nabavnaCijena * (1 - COALESCE(rabat, 0) / 100.0)) AS vrijednost, SUM(kolicina) AS kolicina
+    SELECT SUM(kolicina * nabavnaCijena * (1 - COALESCE(rabat, 0) / 100.0) + COALESCE(zavisniTroskovi, 0)) AS vrijednost, SUM(kolicina) AS kolicina
     FROM primka_stavke WHERE productId = ?
   `).get(materijalId) as { vrijednost: number | null; kolicina: number | null };
   if (!row.kolicina || row.kolicina <= 0) return 0;

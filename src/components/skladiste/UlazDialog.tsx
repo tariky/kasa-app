@@ -5,9 +5,11 @@ import type { Dobavljac, Primka, PrimkaStavka, Product } from '@/types';
 import { izBazePrimke, jePloca, m2UKom } from '@/lib/ploca';
 import { localDateStr } from '@/lib/novac';
 import { nedostajeOpis, nivelacijaRazlike, praznaStavka, redStatus, ulazTotali, uPayload, type UlazRed, type NivelacijaRazlika } from '@/lib/ulaz';
+import { kalkulacijaPrimke, nabavnaVrijednost, type KalkulacijaPrimke } from '@/lib/kalkulacija';
 import { cn, formatKM, formatDate } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { DecimalInput } from '@/components/ui/decimal-input';
 import { Label } from '@/components/ui/label';
 import { DatePicker } from '@/components/ui/date-picker';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -25,14 +27,18 @@ type Pending = { kind: 'close' } | { kind: 'nav'; id: number };
 
 interface Forma {
   brojPrimke: string; datum: string; dobavljacNaziv: string; dobavljacId: string; dobavljacAdresa: string;
-  brojFakture: string; napomena: string; rows: UlazRed[];
+  brojFakture: string; napomena: string;
+  /** Zavisni troškovi cijelog dokumenta (prevoz i sl.); pri spremanju se rasporede po stavkama. */
+  zavisniTroskovi: string; rows: UlazRed[];
 }
 const praznaForma = (): Forma => ({
-  brojPrimke: '', datum: localDateStr(), dobavljacNaziv: '', dobavljacId: '', dobavljacAdresa: '', brojFakture: '', napomena: '', rows: [praznaStavka()],
+  brojPrimke: '', datum: localDateStr(), dobavljacNaziv: '', dobavljacId: '', dobavljacAdresa: '', brojFakture: '', napomena: '', zavisniTroskovi: '', rows: [praznaStavka()],
 });
+const zavisniDokumenta = (stavke: PrimkaStavka[]) => Math.round(stavke.reduce((s, x) => s + (x.zavisniTroskovi || 0), 0) * 100) / 100;
 const izPrimke = (p: Primka, products: Product[]): Forma => ({
   brojPrimke: p.brojPrimke, datum: p.datum, dobavljacNaziv: p.dobavljacNaziv ?? '', dobavljacId: p.dobavljacId ?? '', dobavljacAdresa: p.dobavljacAdresa ?? '',
   brojFakture: p.brojFakture ?? '', napomena: p.napomena ?? '',
+  zavisniTroskovi: zavisniDokumenta(p.stavke ?? []) > 0 ? String(zavisniDokumenta(p.stavke ?? [])) : '',
   rows: (p.stavke ?? []).map(s => {
     const prod = products.find(x => x.id === s.productId);
     const prikaz = izBazePrimke(prod, s.kolicina, s.nabavnaCijena);
@@ -49,6 +55,31 @@ function Red({ label, value, strong, tone }: { label: string; value: string; str
       <span className={strong ? 'font-semibold text-slate-700' : 'text-slate-500'}>{label}</span>
       <span className={cn('font-mono tabular-nums text-right', strong ? 'font-semibold text-slate-900' : 'text-slate-700', tone === 'plus' && 'text-emerald-600')}>{value}</span>
     </div>
+  );
+}
+
+/** Sume dokumenta po obrascu kalkulacije: fakturna − rabat + zavisni = nabavna; za artikle dalje RUC, PDV i MP vrijednost. */
+function Kalkulacija({ k }: { k: KalkulacijaPrimke }) {
+  const razlozeno = k.rabat > 0 || k.zavisni > 0;
+  return (
+    <>
+      {razlozeno && (
+        <>
+          <Red label="Fakturna (bez PDV)" value={formatKM(k.fakturna)} />
+          {k.rabat > 0 && <Red label="Rabat" value={`− ${formatKM(k.rabat)}`} />}
+          {k.zavisni > 0 && <Red label="Zavisni troškovi" value={`+ ${formatKM(k.zavisni)}`} />}
+        </>
+      )}
+      <Red label="Nabavna" value={formatKM(k.nabavna)} strong />
+      {k.imaArtikala && (
+        <div className="mt-2 pt-2 border-t border-dashed border-slate-200">
+          <Red label="Prodajna bez PDV (artikli)" value={formatKM(k.prodajnaBezPdv)} />
+          <Red label={`RUC · ${k.rucPct.toFixed(1)} %`} value={formatKM(k.ruc)} tone="plus" strong />
+          <Red label="PDV" value={formatKM(k.pdv)} />
+          <Red label="MP vrijednost sa PDV" value={formatKM(k.prodajna)} />
+        </div>
+      )}
+    </>
   );
 }
 
@@ -144,7 +175,7 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
 
   // ── akcije ────────────────────────────────────────────
   const fali = useMemo(() => nedostajeOpis(forma.rows, products), [forma.rows, products]);
-  const totali = useMemo(() => ulazTotali(forma.rows, products), [forma.rows, products]);
+  const totali = useMemo(() => ulazTotali(forma.rows, products, forma.zavisniTroskovi), [forma.rows, products, forma.zavisniTroskovi]);
   const razlike = useMemo(() => (edit ? nivelacijaRazlike(forma.rows, products) : []), [edit, forma.rows, products]);
 
   const spremi = async () => {
@@ -157,7 +188,7 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
         brojPrimke: forma.brojPrimke.trim(), datum: forma.datum || undefined,
         dobavljacNaziv: forma.dobavljacNaziv || undefined, dobavljacId: forma.dobavljacId || undefined, dobavljacAdresa: forma.dobavljacAdresa || undefined,
         brojFakture: forma.brojFakture || undefined, napomena: forma.napomena || undefined,
-        stavke: uPayload(forma.rows, products),
+        stavke: uPayload(forma.rows, products, forma.zavisniTroskovi),
       };
       let savedId: number;
       if (primka) { await window.api.updatePrimka(payload); savedId = primka.id; }
@@ -230,14 +261,7 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
 
   // ── pregled: sume dokumenta ───────────────────────────
   const stavke: PrimkaStavka[] = primka?.stavke ?? [];
-  const pregled = useMemo(() => {
-    const nabavna = stavke.reduce((s, x) => s + x.kolicina * (x.nabavnaCijena || 0), 0);
-    const prodajna = stavke.reduce((s, x) => s + x.kolicina * x.cijena, 0);
-    const nabavnaArt = stavke.reduce((s, x) => s + (x.cijena > 0 ? x.kolicina * (x.nabavnaCijena || 0) : 0), 0);
-    const pdv = stavke.reduce((s, x) => (x.pdvStopa === 'E' && x.cijena > 0 ? s + (x.kolicina * x.cijena - (x.kolicina * x.cijena) / 1.17) : s), 0);
-    const ruc = prodajna - nabavnaArt;
-    return { nabavna, prodajna, ruc, rucPct: nabavnaArt > 0 ? (ruc / nabavnaArt) * 100 : 0, pdv, marza: ruc - pdv, marzaPct: nabavnaArt > 0 ? ((ruc - pdv) / nabavnaArt) * 100 : 0, imaArtikala: nabavnaArt > 0 };
-  }, [stavke]);
+  const pregled = useMemo(() => kalkulacijaPrimke(stavke), [stavke]);
 
   const naslov = edit ? (primka ? forma.brojPrimke || primka.brojPrimke : forma.brojPrimke || 'Novi ulaz') : primka?.brojPrimke ?? '';
   const dob = edit ? forma.dobavljacNaziv : primka?.dobavljacNaziv;
@@ -287,9 +311,14 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
                           </SelectContent>
                         </Select>
                       </div>
-                      <div className="space-y-1.5 col-span-2">
-                        <Label className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">Broj fakture dobavljača</Label>
+                      <div className="space-y-1.5">
+                        <Label className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">Faktura dobavljača</Label>
                         <Input value={forma.brojFakture} onChange={e => setForma(f => ({ ...f, brojFakture: e.target.value }))} placeholder="npr. 208/26" className="h-9 text-[13px]" />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400" title="Prevoz, špedicija i slično — bez PDV-a. Raspoređuje se po stavkama srazmjerno vrijednosti.">Zavisni troškovi</Label>
+                        <DecimalInput value={forma.zavisniTroskovi} onValueChange={t => setForma(f => ({ ...f, zavisniTroskovi: t }))} placeholder="0,00 (prevoz…)" aria-label="Zavisni troškovi"
+                          className="h-9 font-mono text-[13px] text-right" />
                       </div>
                       <div className="space-y-1.5 col-span-2">
                         <Label className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">Napomena</Label>
@@ -307,6 +336,7 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
                       </Fact>
                       <Fact label="Datum prijema"><span className="font-mono tabular-nums">{formatDate(primka.datum)}</span></Fact>
                       <Fact label="Faktura dobavljača">{primka.brojFakture ? <span className="font-mono">{primka.brojFakture}</span> : <span className="text-slate-300">—</span>}</Fact>
+                      {pregled.zavisni > 0 && <Fact label="Zavisni troškovi"><span className="font-mono tabular-nums">{formatKM(pregled.zavisni)}</span></Fact>}
                       {primka.napomena && <Fact label="Napomena" className="col-span-2 md:col-span-4"><span className="text-slate-600">{primka.napomena}</span></Fact>}
                     </div>
                   )}
@@ -328,10 +358,10 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
                               <th className={cn(TH, 'text-right w-6 pr-2')}>#</th>
                               <th className={cn(TH, 'text-left px-2')}>Artikal</th>
                               <th className={cn(TH, 'text-right px-2 w-[110px]')}>Količina</th>
-                              <th className={cn(TH, 'text-right px-2 w-[100px]')}>Nabavna</th>
+                              <th className={cn(TH, 'text-right px-2 w-[100px]')} title="Fakturna cijena bez PDV-a, prije rabata">Fakturna</th>
                               <th className={cn(TH, 'text-right px-2 w-[70px]')}>Rabat</th>
                               <th className={cn(TH, 'text-right px-2 w-[100px]')}>Prodajna</th>
-                              <th className={cn(TH, 'text-right pl-2 w-[110px]')}>Iznos</th>
+                              <th className={cn(TH, 'text-right pl-2 w-[110px]')} title="Fakturna − rabat + zavisni troškovi">Nabavna</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -356,7 +386,12 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
                                   <td className={cn(TD, 'px-2 text-right font-mono text-[12px] tabular-nums text-slate-600 pt-[11px]')}>{formatKM(s.nabavnaCijena || 0)}</td>
                                   <td className={cn(TD, 'px-2 text-right font-mono text-[12px] tabular-nums pt-[11px]', s.rabat > 0 ? 'text-blue-600' : 'text-slate-300')}>{s.rabat > 0 ? `${s.rabat} %` : '—'}</td>
                                   <td className={cn(TD, 'px-2 text-right font-mono text-[12px] tabular-nums pt-[11px]', mat ? 'text-slate-300' : 'text-slate-600')}>{mat ? '—' : formatKM(s.cijena)}</td>
-                                  <td className={cn(TD, 'pl-2 text-right font-mono text-[13px] font-semibold tabular-nums text-slate-900 pt-[11px]')}>{formatKM(s.kolicina * (s.nabavnaCijena || 0))}</td>
+                                  <td className={cn(TD, 'pl-2 text-right font-mono text-[13px] font-semibold tabular-nums text-slate-900 pt-[11px]')}>
+                                    {formatKM(nabavnaVrijednost(s))}
+                                    {(s.rabat > 0 || s.zavisniTroskovi > 0) && s.kolicina > 0 && (
+                                      <span className="block text-[10px] font-normal text-slate-400">{formatKM(nabavnaVrijednost(s) / s.kolicina)} / {s.productJm || 'kom'}</span>
+                                    )}
+                                  </td>
                                 </tr>
                               );
                             })}
@@ -369,26 +404,8 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
 
                 <aside className="lg:sticky lg:top-0 self-start space-y-4">
                   <section className="rounded-xl bg-slate-50/80 border border-slate-200/70 px-4 pt-3 pb-4" aria-label="Vrijednost ulaza">
-                    <Eyebrow className="block mb-1">Vrijednost ulaza</Eyebrow>
-                    {edit ? (
-                      <>
-                        <Red label="Nabavna" value={formatKM(totali.nabavna)} strong />
-                        <Red label="Prodajna (artikli)" value={formatKM(totali.prodajna)} />
-                        {totali.prodajna > 0 && <Red label={`RUC · ${totali.rucPct.toFixed(1)} %`} value={formatKM(totali.ruc)} tone="plus" />}
-                      </>
-                    ) : (
-                      <>
-                        <Red label="Nabavna" value={formatKM(pregled.nabavna)} strong />
-                        <Red label="Prodajna (artikli)" value={formatKM(pregled.prodajna)} />
-                        {pregled.imaArtikala && (
-                          <div className="mt-2 pt-2 border-t border-dashed border-slate-200">
-                            <Red label={`RUC · ${pregled.rucPct.toFixed(1)} %`} value={formatKM(pregled.ruc)} />
-                            <Red label="PDV u prodajnoj" value={formatKM(pregled.pdv)} />
-                            <Red label={`Marža · ${pregled.marzaPct.toFixed(1)} %`} value={formatKM(pregled.marza)} tone="plus" strong />
-                          </div>
-                        )}
-                      </>
-                    )}
+                    <Eyebrow className="block mb-1">Kalkulacija</Eyebrow>
+                    <Kalkulacija k={edit ? totali : pregled} />
                   </section>
                   {edit && razlike.length > 0 && (
                     <section className="rounded-xl bg-amber-50 border border-amber-100 px-4 py-3" aria-label="Nivelacija">

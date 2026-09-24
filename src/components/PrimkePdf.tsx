@@ -3,6 +3,7 @@ import { Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
 import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
 import { POTPIS_AUTORA } from '@/lib/brend';
 import { kontaktFirme } from '@/lib/firma';
+import { nabavnaVrijednost } from '@/lib/kalkulacija';
 
 export interface PrimkePdfProps {
   primke: any[];
@@ -60,7 +61,7 @@ const s = StyleSheet.create({
 
 export function PrimkePdf({ primke, dateFrom, dateTo, firma }: PrimkePdfProps) {
   const totalNabavna = primke.reduce(
-    (sum, p) => sum + (p.stavke || []).reduce((s: number, st: any) => s + (st.nabavnaCijena || 0) * st.kolicina, 0), 0
+    (sum, p) => sum + (p.stavke || []).reduce((s: number, st: any) => s + nabavnaVrijednost(st), 0), 0
   );
   const totalProdajna = primke.reduce(
     (sum, p) => sum + (p.stavke || []).reduce((s: number, st: any) => s + st.cijena * st.kolicina, 0), 0
@@ -129,7 +130,7 @@ export function PrimkePdf({ primke, dateFrom, dateTo, firma }: PrimkePdfProps) {
           </View>
 
           {primke.map((primka, i) => {
-            const nab = (primka.stavke || []).reduce((s: number, st: any) => s + (st.nabavnaCijena || 0) * st.kolicina, 0);
+            const nab = (primka.stavke || []).reduce((s: number, st: any) => s + nabavnaVrijednost(st), 0);
             const prod = (primka.stavke || []).reduce((s: number, st: any) => s + st.cijena * st.kolicina, 0);
             return (
               <View key={primka.id} style={s.tRow}>

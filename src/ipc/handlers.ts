@@ -473,7 +473,7 @@ export function registerIpcHandlers(): void {
   handle('primka:create', (data: {
     brojPrimke: string; datum?: string; napomena?: string; brojFakture?: string;
     dobavljacNaziv?: string; dobavljacId?: string; dobavljacAdresa?: string;
-    stavke: Array<{ productId: number; kolicina: number; cijena: number; nabavnaCijena: number; rabat: number; pdvStopa: string }>;
+    stavke: Array<{ productId: number; kolicina: number; cijena: number; nabavnaCijena: number; rabat: number; zavisniTroskovi?: number; pdvStopa: string }>;
   }) => {
     if (!data.brojPrimke?.trim()) throw new Error('Broj primke je obavezan');
     if (!data.stavke || data.stavke.length === 0) throw new Error('Primka mora imati najmanje jednu stavku');
@@ -488,7 +488,7 @@ export function registerIpcHandlers(): void {
       const primkaId = result.lastInsertRowid;
 
       const insertStavka = db.prepare(
-        'INSERT INTO primka_stavke (primkaId, productId, kolicina, cijena, nabavnaCijena, rabat, pdvStopa) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO primka_stavke (primkaId, productId, kolicina, cijena, nabavnaCijena, rabat, zavisniTroskovi, pdvStopa) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
       );
       const insertStock = db.prepare(
         "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'ulaz', ?, 'primka', ?)"
@@ -499,7 +499,7 @@ export function registerIpcHandlers(): void {
 
       // Now insert stavke and stock movements
       for (const stavka of data.stavke) {
-        insertStavka.run(primkaId, stavka.productId, stavka.kolicina, stavka.cijena, stavka.nabavnaCijena, stavka.rabat, stavka.pdvStopa);
+        insertStavka.run(primkaId, stavka.productId, stavka.kolicina, stavka.cijena, stavka.nabavnaCijena, stavka.rabat, stavka.zavisniTroskovi ?? 0, stavka.pdvStopa);
         insertStock.run(stavka.productId, stavka.kolicina, primkaId);
       }
 
@@ -516,7 +516,7 @@ export function registerIpcHandlers(): void {
     id: number;
     brojPrimke: string; datum?: string; napomena?: string; brojFakture?: string;
     dobavljacNaziv?: string; dobavljacId?: string; dobavljacAdresa?: string;
-    stavke: Array<{ productId: number; kolicina: number; cijena: number; nabavnaCijena: number; rabat: number; pdvStopa: string }>;
+    stavke: Array<{ productId: number; kolicina: number; cijena: number; nabavnaCijena: number; rabat: number; zavisniTroskovi?: number; pdvStopa: string }>;
   }) => {
     const updatePrimka = db.transaction(() => {
       const datum = data.datum || localDateStr();
@@ -538,7 +538,7 @@ export function registerIpcHandlers(): void {
 
       // Collect price diffs BEFORE inserting stock, deduplicate by productId
       const insertStavka = db.prepare(
-        'INSERT INTO primka_stavke (primkaId, productId, kolicina, cijena, nabavnaCijena, rabat, pdvStopa) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO primka_stavke (primkaId, productId, kolicina, cijena, nabavnaCijena, rabat, zavisniTroskovi, pdvStopa) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
       );
       const insertStock = db.prepare(
         "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'ulaz', ?, 'primka', ?)"
@@ -548,7 +548,7 @@ export function registerIpcHandlers(): void {
 
       // Now insert stavke and stock movements
       for (const stavka of data.stavke) {
-        insertStavka.run(data.id, stavka.productId, stavka.kolicina, stavka.cijena, stavka.nabavnaCijena, stavka.rabat, stavka.pdvStopa);
+        insertStavka.run(data.id, stavka.productId, stavka.kolicina, stavka.cijena, stavka.nabavnaCijena, stavka.rabat, stavka.zavisniTroskovi ?? 0, stavka.pdvStopa);
         insertStock.run(stavka.productId, stavka.kolicina, data.id);
       }
 

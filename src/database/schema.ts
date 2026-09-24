@@ -53,6 +53,7 @@ export const schema = `
     cijena REAL NOT NULL,
     nabavnaCijena REAL NOT NULL DEFAULT 0,
     rabat REAL NOT NULL DEFAULT 0,
+    zavisniTroskovi REAL NOT NULL DEFAULT 0,
     pdvStopa TEXT NOT NULL,
     createdAt TEXT DEFAULT (datetime('now','localtime')),
     FOREIGN KEY (primkaId) REFERENCES primke(id),

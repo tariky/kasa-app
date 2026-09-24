@@ -1,7 +1,7 @@
 // src/components/skladiste/UlazStavkeEditor.tsx
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import type { Product } from '@/types';
-import { praznaStavka, redStatus, trebaProdajnu, type UlazRed, type Nedostaje } from '@/lib/ulaz';
+import { praznaStavka, redStatus, trebaProdajnu, redVrijednost, redNabavnaPoJed, type UlazRed, type Nedostaje } from '@/lib/ulaz';
 import { jePloca, komUM2 } from '@/lib/ploca';
 import { cn, formatKM, parseDecimal } from '@/lib/utils';
 import { Input } from '@/components/ui/input';
@@ -71,7 +71,7 @@ export const UlazStavkeEditor = forwardRef<UlazStavkeHandle, {
     pendingFocus.current = key(i, 'kolicina');
   };
 
-  const poljaReda = (p: Product | undefined): Polje[] => (trebaProdajnu(p) ? ['kolicina', 'nabavna', 'rabat', 'prodajna'] : ['kolicina', 'nabavna']);
+  const poljaReda = (p: Product | undefined): Polje[] => (trebaProdajnu(p) ? ['kolicina', 'nabavna', 'rabat', 'prodajna'] : ['kolicina', 'nabavna', 'rabat']);
 
   /** ↵ u polju: sljedeće polje u redu, a sa zadnjeg polja zadnjeg reda — novi red. */
   const onEnter = (i: number, polje: Polje) => {
@@ -103,10 +103,10 @@ export const UlazStavkeEditor = forwardRef<UlazStavkeHandle, {
             <th className={cn(TH, 'text-right w-6 pr-2')}>#</th>
             <th className={cn(TH, 'text-left px-2')}>Artikal</th>
             <th className={cn(TH, 'text-right px-2 w-[118px]')}>Količina</th>
-            <th className={cn(TH, 'text-right px-2 w-[108px]')}>Nabavna</th>
+            <th className={cn(TH, 'text-right px-2 w-[108px]')} title="Fakturna cijena bez PDV-a, prije rabata">Fakturna</th>
             <th className={cn(TH, 'text-right px-2 w-[76px]')}>Rabat %</th>
             <th className={cn(TH, 'text-right px-2 w-[108px]')}>Prodajna</th>
-            <th className={cn(TH, 'text-right px-2 w-[104px] hidden lg:table-cell')}>Iznos</th>
+            <th className={cn(TH, 'text-right px-2 w-[104px] hidden lg:table-cell')} title="Fakturna − rabat; zavisni troškovi dolaze na kraju po stavkama">Nabavna</th>
             <th className={cn(TH, 'w-8')} />
           </tr>
         </thead>
@@ -114,7 +114,7 @@ export const UlazStavkeEditor = forwardRef<UlazStavkeHandle, {
           {rows.map((r, i) => {
             const p = products.find(x => x.id === r.productId);
             const kol = parseDecimal(r.kolicina) || 0;
-            const nab = parseDecimal(r.nabavnaCijena) || 0;
+            const rabat = parseDecimal(r.rabat) || 0;
             const prodajna = trebaProdajnu(p);
             const jeMat = !!p && !prodajna;
             return (
@@ -181,8 +181,8 @@ export const UlazStavkeEditor = forwardRef<UlazStavkeHandle, {
                 <td className={cn(TD, 'px-2')}>
                   <DecimalInput ref={reg(i, 'rabat')} value={r.rabat} onValueChange={t => set(i, { rabat: t })}
                     onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); onEnter(i, 'rabat'); } }}
-                    placeholder="0" aria-label={`Rabat red ${i + 1}`} disabled={jeMat}
-                    className={cn(CELL_INPUT, 'w-full', jeMat && 'invisible')} />
+                    placeholder="0" aria-label={`Rabat red ${i + 1}`}
+                    className={cn(CELL_INPUT, 'w-full')} />
                 </td>
                 <td className={cn(TD, 'px-2')}>
                   {jeMat ? (
@@ -195,7 +195,10 @@ export const UlazStavkeEditor = forwardRef<UlazStavkeHandle, {
                   )}
                 </td>
                 <td className={cn(TD, 'hidden lg:table-cell px-2 text-right pt-[11px] font-mono text-[12px] tabular-nums text-slate-700 whitespace-nowrap')}>
-                  {kol > 0 && r.nabavnaCijena ? formatKM(kol * nab) : <span className="text-slate-300">—</span>}
+                  {kol > 0 && r.nabavnaCijena ? formatKM(redVrijednost(r)) : <span className="text-slate-300">—</span>}
+                  {kol > 0 && r.nabavnaCijena && rabat > 0 && (
+                    <span className="block text-[10px] text-slate-400">{formatKM(redNabavnaPoJed(r))} / {p ? (jePloca(p) ? 'kom' : p.jm) : ''}</span>
+                  )}
                 </td>
                 <td className={cn(TD, 'text-right')}>
                   <button type="button" title="Ukloni red" aria-label={`Ukloni red ${i + 1}`} onClick={() => ukloni(i)}

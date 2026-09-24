@@ -3,6 +3,7 @@
 import type { Product } from '@/types';
 import { parseDecimal } from './utils';
 import { uBazuPrimke } from './ploca';
+import { kalkulacijaPrimke, rasporediZavisne, type KalkulacijaPrimke } from './kalkulacija';
 
 export interface UlazRed {
   productId: number | null;
@@ -38,7 +39,7 @@ export function redStatus(r: UlazRed, products: Product[]): RedStatus {
 
 export const potpuniRedovi = (rows: UlazRed[], products: Product[]) => rows.filter(r => redStatus(r, products).stanje === 'ok');
 
-const LABELA: Record<Nedostaje, string> = { artikal: 'Artikal', kolicina: 'Količina', nabavna: 'Nabavna cijena', prodajna: 'Prodajna cijena' };
+const LABELA: Record<Nedostaje, string> = { artikal: 'Artikal', kolicina: 'Količina', nabavna: 'Fakturna cijena', prodajna: 'Prodajna cijena' };
 const stavki = (n: number) => `${n} ${n === 1 ? 'stavke' : n < 5 ? 'stavke' : 'stavki'}`;
 
 /** Jedna rečenica za podnožje: zašto se ulaz još ne može spremiti. Null kad može. */
@@ -54,23 +55,22 @@ export function nedostajeOpis(rows: UlazRed[], products: Product[]): string | nu
   return null;
 }
 
-/** RUC se računa samo nad artiklima koji se prodaju — materijal nema prodajnu pa bi rušio postotak. */
-export function ulazTotali(rows: UlazRed[], products: Product[]): { nabavna: number; prodajna: number; ruc: number; rucPct: number } {
-  let nabavna = 0, prodajna = 0, nabavnaArtikala = 0;
-  for (const r of potpuniRedovi(rows, products)) {
-    const p = products.find(x => x.id === r.productId);
-    const nab = broj(r.kolicina) * broj(r.nabavnaCijena);
-    nabavna += nab;
-    if (trebaProdajnu(p)) { prodajna += broj(r.kolicina) * broj(r.cijena); nabavnaArtikala += nab; }
-  }
-  const ruc = prodajna - nabavnaArtikala;
-  return { nabavna, prodajna, ruc, rucPct: nabavnaArtikala > 0 ? (ruc / nabavnaArtikala) * 100 : 0 };
-}
+/** Vrijednost reda nakon rabata (fakturna − rabat), u KM — ista je bez obzira na jedinicu unosa. */
+export const redVrijednost = (r: UlazRed) => broj(r.kolicina) * broj(r.nabavnaCijena) * (1 - (broj(r.rabat) || 0) / 100);
 
-export interface UlazStavkaPayload { productId: number; kolicina: number; nabavnaCijena: number; rabat: number; cijena: number; pdvStopa: string }
+/** Nabavna po jedinici u kojoj se red kuca (po ploči za ploču), nakon rabata. Zavisni nisu uključeni. */
+export const redNabavnaPoJed = (r: UlazRed) => broj(r.nabavnaCijena) * (1 - (broj(r.rabat) || 0) / 100);
 
-export function uPayload(rows: UlazRed[], products: Product[]): UlazStavkaPayload[] {
-  return potpuniRedovi(rows, products).map(r => {
+export interface UlazStavkaPayload { productId: number; kolicina: number; nabavnaCijena: number; rabat: number; zavisniTroskovi: number; cijena: number; pdvStopa: string }
+
+/**
+ * Stavke za bazu: ploča se preračuna u m², materijalu se briše prodajna, a zavisni troškovi
+ * dokumenta se rasporede po stavkama srazmjerno vrijednosti (fakturna − rabat).
+ */
+export function uPayload(rows: UlazRed[], products: Product[], zavisniUkupno: string): UlazStavkaPayload[] {
+  const potpuni = potpuniRedovi(rows, products);
+  const zavisni = rasporediZavisne(potpuni.map(redVrijednost), broj(zavisniUkupno) || 0);
+  return potpuni.map((r, i) => {
     const p = products.find(x => x.id === r.productId);
     const baza = uBazuPrimke(p, broj(r.kolicina), broj(r.nabavnaCijena));
     return {
@@ -78,10 +78,16 @@ export function uPayload(rows: UlazRed[], products: Product[]): UlazStavkaPayloa
       kolicina: baza.kolicina,
       nabavnaCijena: baza.nabavnaCijena,
       rabat: broj(r.rabat) || 0,
+      zavisniTroskovi: zavisni[i],
       cijena: trebaProdajnu(p) ? broj(r.cijena) : 0,
       pdvStopa: p?.pdvStopa ?? 'E',
     };
   });
+}
+
+/** Sume forme — ista kalkulacija kao za spremljeni dokument, nad potpunim redovima. */
+export function ulazTotali(rows: UlazRed[], products: Product[], zavisniUkupno: string): KalkulacijaPrimke {
+  return kalkulacijaPrimke(uPayload(rows, products, zavisniUkupno));
 }
 
 export interface NivelacijaRazlika {

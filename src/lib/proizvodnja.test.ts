@@ -36,11 +36,11 @@ export function dodajKupca(db: SqlDb, naziv = 'Kupac d.o.o.'): number {
   const r = db.prepare("INSERT INTO kupci (naziv, idBroj) VALUES (?, '4200000000001')").run(naziv);
   return Number(r.lastInsertRowid);
 }
-export function primka(db: SqlDb, productId: number, kolicina: number, nabavna: number, rabat = 0): void {
+export function primka(db: SqlDb, productId: number, kolicina: number, nabavna: number, rabat = 0, zavisni = 0): void {
   const p = db.prepare("INSERT INTO primke (brojPrimke, datum) VALUES (?, '2026-09-01')")
     .run(`U-${Math.random()}`);
-  db.prepare("INSERT INTO primka_stavke (primkaId, productId, kolicina, cijena, nabavnaCijena, rabat, pdvStopa) VALUES (?, ?, ?, 0, ?, ?, 'E')")
-    .run(p.lastInsertRowid, productId, kolicina, nabavna, rabat);
+  db.prepare("INSERT INTO primka_stavke (primkaId, productId, kolicina, cijena, nabavnaCijena, rabat, zavisniTroskovi, pdvStopa) VALUES (?, ?, ?, 0, ?, ?, ?, 'E')")
+    .run(p.lastInsertRowid, productId, kolicina, nabavna, rabat, zavisni);
   db.prepare("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'ulaz', ?, 'primka', ?)")
     .run(productId, kolicina, p.lastInsertRowid);
 }
@@ -233,6 +233,13 @@ test('prosječna nabavna uračunava rabat primke', () => {
   primka(db, iv, 10, 10, 20); // 10 × 10 × 0.8 = 80
   primka(db, iv, 10, 10, 0);  // 10 × 10 = 100
   expect(getProsjecnaNabavna(db, iv)).toBe(9); // 180 / 20
+});
+
+test('prosječna nabavna uračunava zavisne troškove (prevoz) raspoređene na stavku', () => {
+  const iv = dodajMaterijal(db, 'IV18', 'm²', [2800, 2070]);
+  primka(db, iv, 10, 10, 20, 30); // 80 + 30 = 110
+  primka(db, iv, 10, 10, 0, 0);   // 100
+  expect(getProsjecnaNabavna(db, iv)).toBe(10.5); // 210 / 20
 });
 
 // ── kalkulacija ──────────────────────────────────────────

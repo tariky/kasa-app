@@ -11,6 +11,9 @@ export function runMigrations(database: Database.Database): void {
   if (!stavkeCols.find(c => c.name === 'rabat')) {
     database.exec("ALTER TABLE primka_stavke ADD COLUMN rabat REAL NOT NULL DEFAULT 0");
   }
+  if (!stavkeCols.find(c => c.name === 'zavisniTroskovi')) {
+    database.exec("ALTER TABLE primka_stavke ADD COLUMN zavisniTroskovi REAL NOT NULL DEFAULT 0");
+  }
 
   // primke header migrations — dobavljač fields
   const primkeCols = database.prepare("PRAGMA table_info(primke)").all() as { name: string }[];

@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import CashMovementDialog from '@/components/CashMovementDialog';
 import { cn, formatKM, formatDateTime, formatDate } from '@/lib/utils';
+import { nabavnaVrijednost } from '@/lib/kalkulacija';
 import { Order, Primka } from '@/types';
 import { pdf } from '@react-pdf/renderer';
 import { NivelacijaPdf } from '@/components/NivelacijaPdf';
@@ -191,7 +192,7 @@ export default function IzvjestajiScreen({ korisnikId }: { korisnikId: number })
   const brojRacuna = completedOrders.length;
 
   const primkeNabavna = primkeData.reduce(
-    (sum, p) => sum + (p.stavke || []).reduce((s, st) => s + (st.nabavnaCijena || 0) * st.kolicina, 0), 0
+    (sum, p) => sum + (p.stavke || []).reduce((s, st) => s + nabavnaVrijednost(st), 0), 0
   );
   const primkeProdajna = primkeData.reduce(
     (sum, p) => sum + (p.stavke || []).reduce((s, st) => s + st.cijena * st.kolicina, 0), 0
@@ -618,7 +619,7 @@ export default function IzvjestajiScreen({ korisnikId }: { korisnikId: number })
                       </thead>
                       <tbody>
                         {primkeData.map((primka) => {
-                          const nab = (primka.stavke || []).reduce((s, st) => s + (st.nabavnaCijena || 0) * st.kolicina, 0);
+                          const nab = (primka.stavke || []).reduce((s, st) => s + nabavnaVrijednost(st), 0);
                           const prod = (primka.stavke || []).reduce((s, st) => s + st.cijena * st.kolicina, 0);
                           const marzaPct = nab > 0 ? ((prod - nab) / nab * 100) : 0;
                           return (
