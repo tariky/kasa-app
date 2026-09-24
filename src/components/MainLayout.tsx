@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { User } from '@/types';
 import {
   ScanBarcode, Warehouse, NotebookTabs, ReceiptText, FileSignature, BarChart3, Settings, LogOut, WandSparkles, Factory,
@@ -18,6 +18,7 @@ import PologPrompt from '@/components/PologPrompt';
 import { useProizvodnja } from '@/hooks/useProizvodnja';
 import LicencaTraka from '@/components/licenca/LicencaTraka';
 import type { LicencaInfo } from '@/lib/licencaTipovi';
+import { cn } from '@/lib/utils';
 
 type Screen = 'kasa' | 'skladiste' | 'sifarnik' | 'narudzbe' | 'ponude' | 'proizvodnja' | 'izvjestaji' | 'generator' | 'postavke';
 
@@ -33,6 +34,12 @@ const NAV_ITEMS: { id: Screen; label: string; icon: typeof ScanBarcode; adminOnl
   { id: 'postavke', label: 'Postavke', icon: Settings, adminOnly: true },
 ];
 
+const inicijali = (ime: string) =>
+  ime.trim().split(/\s+/).slice(0, 2).map(r => r[0]?.toUpperCase() ?? '').join('') || '?';
+
+// Kratko kašnjenje: kursor koji samo prođe preko lijeve ivice ne otvara meni.
+const ODGODA_OTVARANJA_MS = 150;
+
 interface Props {
   user: User;
   licenca: LicencaInfo;
@@ -44,6 +51,30 @@ export default function MainLayout({ user, licenca, onLogout }: Props) {
   const [showGenerator, setShowGenerator] = useState(false);
   const proizvodnja = useProizvodnja();
   const [openNalogId, setOpenNalogId] = useState<number | null>(null);
+  const [otvoren, setOtvoren] = useState(false);
+  const tajmer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const sidebar = useRef<HTMLDivElement>(null);
+
+  const zakaziOtvaranje = () => {
+    clearTimeout(tajmer.current);
+    tajmer.current = setTimeout(() => setOtvoren(true), ODGODA_OTVARANJA_MS);
+  };
+  const zatvori = () => {
+    clearTimeout(tajmer.current);
+    setOtvoren(false);
+  };
+
+  useEffect(() => () => clearTimeout(tajmer.current), []);
+
+  // Otvoren dodirom (bez miša nema pointerleave-a): dodir bilo gdje van menija ga zatvara.
+  useEffect(() => {
+    if (!otvoren) return;
+    const van = (e: PointerEvent) => {
+      if (!sidebar.current?.contains(e.target as Node)) zatvori();
+    };
+    document.addEventListener('pointerdown', van);
+    return () => document.removeEventListener('pointerdown', van);
+  }, [otvoren]);
 
   useEffect(() => {
     window.api.getSetting('ui.showGenerator').then((v) => setShowGenerator(v === 'true'));
@@ -81,61 +112,81 @@ export default function MainLayout({ user, licenca, onLogout }: Props) {
 
   return (
     <div className="h-screen flex bg-slate-50">
-      {/* Sidebar */}
-      <aside className="w-56 bg-[#0f1629] text-white flex flex-col no-print">
-        {/* Brand */}
-        <div className="p-5 pb-4">
-          <div className="flex items-center gap-3">
-            <img src={appIcon} alt="Pazar" className="w-9 h-9 rounded-lg shadow-sm shadow-blue-500/20" />
-            <div>
+      {/* Sidebar: u toku zauzima samo traku s ikonama; na prelazak mišem se
+          širi preko sadržaja, a izbor ekrana ga odmah zatvara. */}
+      <div ref={sidebar} className="relative w-16 shrink-0 no-print">
+        <aside
+          onPointerEnter={(e) => { if (e.pointerType !== 'touch') zakaziOtvaranje(); }}
+          onPointerLeave={(e) => { if (e.pointerType !== 'touch') zatvori(); }}
+          className={cn(
+            'absolute inset-y-0 left-0 z-40 flex flex-col overflow-hidden bg-[#0f1629] text-white',
+            'transition-[width,box-shadow] duration-200 ease-out',
+            otvoren ? 'w-56 shadow-2xl shadow-black/40' : 'w-16',
+          )}
+        >
+          {/* Brand — na dodir (touch) otvara/zatvara meni, jer tamo nema prelaska mišem */}
+          <button
+            type="button"
+            tabIndex={-1}
+            onClick={() => setOtvoren(o => !o)}
+            className="flex items-center gap-3 px-[14px] pt-5 pb-4 text-left"
+          >
+            <img src={appIcon} alt="Pazar" className="w-9 h-9 shrink-0 rounded-lg shadow-sm shadow-blue-500/20" />
+            <div className={cn('whitespace-nowrap transition-opacity duration-150', otvoren ? 'opacity-100' : 'opacity-0')}>
               <h1 className="text-base font-bold tracking-tight leading-none">Pazar</h1>
               <p className="text-[11px] text-slate-500 mt-0.5">{user.ime}</p>
             </div>
-          </div>
-        </div>
-
-        {/* Nav */}
-        <nav className="flex-1 px-3 space-y-0.5">
-          {NAV_ITEMS.map(item => {
-            if (item.adminOnly && user.uloga !== 'admin') return null;
-            if (item.id === 'generator' && !showGenerator) return null;
-            if (item.id === 'proizvodnja' && !proizvodnja) return null;
-            const Icon = item.icon;
-            const active = screen === item.id;
-            return (
-              <button
-                key={item.id}
-                onClick={() => setScreen(item.id)}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13px] font-medium transition-all duration-150 ${
-                  active
-                    ? 'bg-blue-600/15 text-blue-400'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.04]'
-                }`}
-              >
-                <Icon size={18} strokeWidth={active ? 2 : 1.5} />
-                {item.label}
-                {active && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-blue-400" />}
-              </button>
-            );
-          })}
-        </nav>
-
-        {/* User & Logout */}
-        <div className="p-3 border-t border-white/[0.06]">
-          <div className="px-3 py-2 mb-2">
-            <p className="text-[11px] text-slate-600 uppercase tracking-wider font-medium">Operater</p>
-            <p className="text-sm text-slate-300 mt-0.5">{user.ime}</p>
-            <p className="text-[11px] text-slate-500 font-mono">{user.uloga === 'admin' ? 'Administrator' : 'Kasir'}</p>
-          </div>
-          <button
-            onClick={onLogout}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-[13px] text-slate-500 hover:text-red-400 hover:bg-red-500/[0.06] transition-all duration-150"
-          >
-            <LogOut size={16} strokeWidth={1.5} />
-            Odjava
           </button>
-        </div>
-      </aside>
+
+          {/* Nav */}
+          <nav className="flex-1 px-2 space-y-0.5">
+            {NAV_ITEMS.map(item => {
+              if (item.adminOnly && user.uloga !== 'admin') return null;
+              if (item.id === 'generator' && !showGenerator) return null;
+              if (item.id === 'proizvodnja' && !proizvodnja) return null;
+              const Icon = item.icon;
+              const active = screen === item.id;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => { setScreen(item.id); zatvori(); }}
+                  aria-label={item.label}
+                  className={`w-full flex items-center gap-3 px-[15px] py-2.5 rounded-lg text-[13px] font-medium whitespace-nowrap transition-colors duration-150 ${
+                    active
+                      ? 'bg-blue-600/15 text-blue-400'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.04]'
+                  }`}
+                >
+                  <Icon size={18} strokeWidth={active ? 2 : 1.5} className="shrink-0" />
+                  <span className={cn('transition-opacity duration-150', otvoren ? 'opacity-100' : 'opacity-0')}>{item.label}</span>
+                  {active && otvoren && <div className="ml-auto w-1.5 h-1.5 shrink-0 rounded-full bg-blue-400" />}
+                </button>
+              );
+            })}
+          </nav>
+
+          {/* User & Logout */}
+          <div className="px-2 py-3 border-t border-white/[0.06]">
+            <div className="flex items-center gap-3 px-2 py-2 mb-1 whitespace-nowrap" title={otvoren ? undefined : user.ime}>
+              <div className="w-8 h-8 shrink-0 rounded-full bg-white/[0.06] flex items-center justify-center text-[12px] font-semibold text-slate-300">
+                {inicijali(user.ime)}
+              </div>
+              <div className={cn('min-w-0 transition-opacity duration-150', otvoren ? 'opacity-100' : 'opacity-0')}>
+                <p className="text-sm text-slate-300 truncate">{user.ime}</p>
+                <p className="text-[11px] text-slate-500 font-mono">{user.uloga === 'admin' ? 'Administrator' : 'Kasir'}</p>
+              </div>
+            </div>
+            <button
+              onClick={() => { zatvori(); onLogout(); }}
+              aria-label="Odjava"
+              className="w-full flex items-center gap-3 px-4 py-2 rounded-lg text-[13px] text-slate-500 whitespace-nowrap hover:text-red-400 hover:bg-red-500/[0.06] transition-colors duration-150"
+            >
+              <LogOut size={16} strokeWidth={1.5} className="shrink-0" />
+              <span className={cn('transition-opacity duration-150', otvoren ? 'opacity-100' : 'opacity-0')}>Odjava</span>
+            </button>
+          </div>
+        </aside>
+      </div>
 
       {/* Main content */}
       <main className="flex-1 overflow-hidden flex flex-col">
