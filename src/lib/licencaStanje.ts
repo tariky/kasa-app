@@ -4,6 +4,7 @@
 import type { KeyObject } from 'node:crypto';
 import { provjeriLicencu } from './licenca';
 import { UPOZORENJE_DANA, PERIOD_MILOSTI_DANA, type StanjeLicence } from './licencaTipovi';
+import { KANALI_MODULA, NAZIV_MODULA, modulVanLicence } from './moduli';
 
 export * from './licencaTipovi';
 
@@ -50,4 +51,30 @@ export function izracunajStanje(
 /** Da li program smije praviti nove dokumente (račune, primke, naloge…). */
 export function smijeRaditi(s: StanjeLicence): boolean {
   return s.stanje === 'aktivna' || s.stanje === 'upozorenje' || s.stanje === 'milost';
+}
+
+/** Kanali koji prave nove dokumente ili mijenjaju stanje zaliha. */
+const BLOKIRANI_KANALI = new Set([
+  'order:create', 'order:createManual', 'order:finalize', 'order:finalizePrilog',
+  'order:refund', 'order:refundAndPrint',
+  'tring:printReceipt', 'tring:printRefund',
+  'primka:create', 'primka:update',
+  'product:adjustStock',
+  'ponuda:create', 'ponuda:update', 'ponuda:konvertuj',
+  'nalog:create', 'nalog:createIzPonude', 'nalog:update', 'nalog:replaceStavke',
+  'nalog:setStatus', 'nalog:izdajRacun',
+]);
+
+/** Da li kanal uopšte zavisi od licence — ostali ne čitaju licenca.json. */
+export function kanalPodLicencom(kanal: string): boolean {
+  return BLOKIRANI_KANALI.has(kanal) || Object.hasOwn(KANALI_MODULA, kanal);
+}
+
+/** Zašto licenca ne dozvoljava kanal; null = dozvoljen. Istekla licenca ima prednost. */
+export function razlogBlokade(s: StanjeLicence, kanal: string): { razlog: 'istekla' | 'modul'; poruka: string } | null {
+  if (BLOKIRANI_KANALI.has(kanal) && !smijeRaditi(s)) {
+    return { razlog: 'istekla', poruka: 'Licenca je istekla — program radi samo za pregled. Unesite novi kod licence.' };
+  }
+  const modul = modulVanLicence(s, kanal);
+  return modul ? { razlog: 'modul', poruka: `Modul ${NAZIV_MODULA[modul]} nije uključen u licencu.` } : null;
 }

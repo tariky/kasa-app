@@ -1,7 +1,7 @@
 import { test, expect } from 'bun:test';
 import { generateKeyPairSync } from 'node:crypto';
 import { izdajLicencu } from './licenca';
-import { izracunajStanje, efektivniDanas, smijeRaditi, razlikaDana, opisLicence, brojDana } from './licencaStanje';
+import { izracunajStanje, efektivniDanas, smijeRaditi, razlikaDana, opisLicence, brojDana, razlogBlokade, kanalPodLicencom } from './licencaStanje';
 
 const { privateKey, publicKey } = generateKeyPairSync('ed25519');
 const token = izdajLicencu({ klijent: 'Pekara', vrijediDo: '2026-10-31', izdana: '2026-10-01' }, privateKey);
@@ -61,4 +61,21 @@ test('opis stanja za prikaz', () => {
   expect(opisLicence(stanje('2026-11-16')).tekst).toContain('Istekla 31.10.2026.');
   expect(brojDana(21)).toBe('21 dan');
   expect(brojDana(11)).toBe('11 dana');
+});
+
+test('razlog blokade: istekla licenca ima prednost nad modulom', () => {
+  const lic = { klijent: 'F', vrijediDo: '2026-01-01', izdana: '2025-01-01', moduli: [] as never[] };
+  expect(razlogBlokade({ stanje: 'zakljucana', licenca: lic }, 'ponuda:create')?.razlog).toBe('istekla');
+  expect(razlogBlokade({ stanje: 'aktivna', licenca: lic, danaDoIsteka: 9 }, 'ponuda:create'))
+    .toEqual({ razlog: 'modul', poruka: 'Modul Ponude nije uključen u licencu.' });
+  expect(razlogBlokade({ stanje: 'aktivna', licenca: lic, danaDoIsteka: 9 }, 'order:create')).toBeNull();
+  expect(razlogBlokade({ stanje: 'zakljucana', licenca: lic }, 'product:getAll')).toBeNull();
+});
+
+test('kanalPodLicencom: pisanje dokumenata i kanali modula, ne čitanje', () => {
+  expect(kanalPodLicencom('order:create')).toBe(true);
+  expect(kanalPodLicencom('normativ:save')).toBe(true);
+  expect(kanalPodLicencom('primka:delete')).toBe(true);
+  expect(kanalPodLicencom('product:getAll')).toBe(false);
+  expect(kanalPodLicencom('toString')).toBe(false);
 });

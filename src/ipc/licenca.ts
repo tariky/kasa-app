@@ -1,7 +1,7 @@
 // Licenca u main procesu: čuva token i zadnji viđeni datum u
 // `userData/licenca.json` (van baze, da ga restore backupa ne pregazi),
 // računa ID uređaja i blokira kanale koji prave nove dokumente kad je
-// licenca zaključana.
+// licenca zaključana ili modul nije licenciran.
 import { app, BrowserWindow } from 'electron';
 import { createHash } from 'node:crypto';
 import { execSync } from 'node:child_process';
@@ -10,19 +10,7 @@ import { hostname } from 'node:os';
 import path from 'node:path';
 import { lokalniDatum } from '../lib/licenca';
 import { LICENCA_JAVNI_KLJUC } from '../lib/licencaJavniKljuc';
-import { izracunajStanje, efektivniDanas, smijeRaditi, type LicencaInfo } from '../lib/licencaStanje';
-
-/** Kanali koji prave nove dokumente ili mijenjaju stanje zaliha. */
-const BLOKIRANI_KANALI = new Set([
-  'order:create', 'order:createManual', 'order:finalize', 'order:finalizePrilog',
-  'order:refund', 'order:refundAndPrint',
-  'tring:printReceipt', 'tring:printRefund',
-  'primka:create', 'primka:update',
-  'product:adjustStock',
-  'ponuda:create', 'ponuda:update', 'ponuda:konvertuj',
-  'nalog:create', 'nalog:createIzPonude', 'nalog:update', 'nalog:replaceStavke',
-  'nalog:setStatus', 'nalog:izdajRacun',
-]);
+import { izracunajStanje, efektivniDanas, kanalPodLicencom, razlogBlokade, type LicencaInfo } from '../lib/licencaStanje';
 
 interface Zapis {
   token?: string;
@@ -104,10 +92,13 @@ export function aktivirajLicencu(token: string): LicencaInfo {
   return { ...s, uredjaj };
 }
 
-/** Baca grešku ako je kanal blokiran a licenca ne dozvoljava rad. */
+/** Baca grešku ako licenca ne dozvoljava kanal (istekla ili modul nije licenciran). */
 export function provjeriKanal(kanal: string): void {
-  if (!BLOKIRANI_KANALI.has(kanal)) return;
-  if (smijeRaditi(stanjeLicence())) return;
-  for (const w of BrowserWindow.getAllWindows()) w.webContents.send('licenca:blokirano');
-  throw new Error('Licenca je istekla — program radi samo za pregled. Unesite novi kod licence.');
+  if (!kanalPodLicencom(kanal)) return;
+  const blokada = razlogBlokade(stanjeLicence(), kanal);
+  if (!blokada) return;
+  if (blokada.razlog === 'istekla') {
+    for (const w of BrowserWindow.getAllWindows()) w.webContents.send('licenca:blokirano');
+  }
+  throw new Error(blokada.poruka);
 }
