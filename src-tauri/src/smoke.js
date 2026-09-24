@@ -25,7 +25,7 @@
 
     // Prijava kroz tastaturu na ekranu (PIN 0000).
     ok('ekran prijave', await cekaj(() => dugme('Prijava')));
-    for (let i = 0; i < 4; i++) dugme('0').click();
+    for (let i = 0; i < 4; i++) { dugme('0').click(); await new Promise(r => setTimeout(r, 50)); }
     dugme('Prijava').click();
     ok('glavni ekran nakon prijave', await cekaj(() => tekst().includes('Skladište') && tekst().includes('Postavke')));
 
@@ -81,6 +81,6 @@
 
     await kraj();
   } catch (e) {
-    await kraj(String(e?.stack || e));
+    await kraj(`${e?.message ?? e}\n${e?.stack ?? ''}`);
   }
 })();
