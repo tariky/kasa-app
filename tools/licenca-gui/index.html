@@ -76,6 +76,14 @@
         <label for="uredjaj">ID uređaja (opcionalno)</label>
         <input id="uredjaj" autocomplete="off" placeholder="prazno = važi na bilo kojem računaru">
 
+        <label>Moduli <span style="font-weight:400;color:var(--blijed)">(Kasa, Šifarnik, Računi i Izvještaji su uvijek uključeni)</span></label>
+        <div class="brzo" id="paketi">
+          <button type="button" data-paket="">Start</button>
+          <button type="button" data-paket="skladiste">Trgovina</button>
+          <button type="button" data-paket="skladiste,ponude,proizvodnja">Biznis</button>
+        </div>
+        <div id="moduli" style="display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:6px"></div>
+
         <div class="dugmad"><button type="submit">Izdaj licencu</button></div>
         <div class="poruka" id="poruka-izdaj"></div>
       </form>
@@ -109,7 +117,7 @@
     </div>
     <div class="tabela-omot">
       <table>
-        <thead><tr><th>Klijent</th><th>Važi do</th><th>Status</th><th>Uređaj</th><th>Izdana</th><th></th></tr></thead>
+        <thead><tr><th>Klijent</th><th>Važi do</th><th>Status</th><th>Uređaj</th><th>Moduli</th><th>Izdana</th><th></th></tr></thead>
         <tbody id="lista"></tbody>
       </table>
     </div>
@@ -119,6 +127,12 @@
 <script>
 const $ = (id) => document.getElementById(id);
 let izdane = [];
+let sviModuli = [];
+function crtajModule(odabrani) {
+  $('moduli').innerHTML = sviModuli.map((m) =>
+    `<label style="display:flex;gap:6px;align-items:center;font-weight:400;margin:0"><input type="checkbox" value="${m.id}" style="width:auto" ${odabrani.includes(m.id) ? 'checked' : ''}>${esc(m.naziv)}</label>`).join('');
+}
+function odabraniModuli() { return [...$('moduli').querySelectorAll('input:checked')].map((i) => i.value); }
 
 function danas() {
   const d = new Date();
@@ -169,13 +183,14 @@ function crtajListu() {
       <td>${prikaz(l.vrijediDo)}</td>
       <td>${starija ? '<span style="font-size:12px;color:var(--blijed)">zamijenjena</span>' : znacka(l.vrijediDo)}</td>
       <td>${l.uredjaj ? esc(l.uredjaj) : '<span style="color:var(--blijed)">bilo koji</span>'}</td>
+      <td>${esc(l.opisModula)}</td>
       <td>${prikaz(l.izdana)}</td>
       <td class="akcija">
         <button class="sekundarno" data-kopiraj="${esc(l.token)}">Kopiraj</button>
         <button class="sekundarno" data-produzi="${i}">Produži</button>
       </td>
     </tr>`;
-  }).join('') : `<tr><td colspan="6" class="prazno">${q ? 'Nema rezultata' : 'Još nema izdanih licenci'}</td></tr>`;
+  }).join('') : `<tr><td colspan="7" class="prazno">${q ? 'Nema rezultata' : 'Još nema izdanih licenci'}</td></tr>`;
 
   const imena = [...new Set(izdane.map((l) => l.klijent))];
   $('klijenti').innerHTML = imena.map((k) => `<option value="${esc(k)}">`).join('');
@@ -185,6 +200,7 @@ async function ucitaj() {
   try {
     const s = await api('/api/stanje');
     izdane = s.izdane;
+    sviModuli = s.moduli; crtajModule(s.podrazumijevani);
     $('kljuc-info').textContent = `Ključ: ${s.kljuc}`;
     crtajListu();
   } catch (e) {
@@ -201,6 +217,7 @@ async function kopiraj(tekst, gdje) {
 }
 
 $('brzo').addEventListener('click', (e) => { if (e.target.dataset.dana) postaviDane(Number(e.target.dataset.dana)); });
+$('paketi').addEventListener('click', (e) => { if (e.target.dataset.paket !== undefined) crtajModule(e.target.dataset.paket.split(',').filter(Boolean)); });
 $('vrijediDo').addEventListener('input', oznaciBrzo);
 $('pretraga').addEventListener('input', crtajListu);
 
@@ -208,11 +225,11 @@ $('forma-izdaj').addEventListener('submit', async (e) => {
   e.preventDefault();
   $('poruka-izdaj').textContent = '';
   try {
-    const l = await api('/api/izdaj', { klijent: $('klijent').value, vrijediDo: $('vrijediDo').value, uredjaj: $('uredjaj').value });
+    const l = await api('/api/izdaj', { klijent: $('klijent').value, vrijediDo: $('vrijediDo').value, uredjaj: $('uredjaj').value, moduli: odabraniModuli() });
     $('token').value = l.token;
     $('rezultat').hidden = false;
     $('poruka-izdaj').className = 'poruka ok';
-    $('poruka-izdaj').textContent = `Izdana za ${l.klijent}, važi do ${prikaz(l.vrijediDo)}.`;
+    $('poruka-izdaj').textContent = `Izdana za ${l.klijent}, važi do ${prikaz(l.vrijediDo)}. Moduli: ${l.opisModula}.`;
     izdane.unshift(l);
     crtajListu();
     kopiraj(l.token, $('kopirano'));
@@ -232,6 +249,7 @@ $('lista').addEventListener('click', (e) => {
     const l = izdane.filter((x) => { const q = $('pretraga').value.trim().toLowerCase(); return !q || x.klijent.toLowerCase().includes(q); })[Number(b.dataset.produzi)];
     $('klijent').value = l.klijent;
     $('uredjaj').value = l.uredjaj || '';
+    crtajModule(l.moduli ?? sviModuli.map((m) => m.id));
     // Nastavlja se od starog isteka ako još važi, inače od danas.
     const pocetak = preostalo(l.vrijediDo) >= 0 ? uDatum(l.vrijediDo) : danas();
     const d = new Date(pocetak); d.setMonth(d.getMonth() + 1);
@@ -256,7 +274,7 @@ $('forma-provjeri').addEventListener('submit', async (e) => {
     $('poruka-provjeri').textContent = r.ok ? 'Token je ispravan' : razlozi[r.razlog] || r.razlog;
     if (r.razlog !== 'potpis') {
       const l = r.licenca;
-      info.innerHTML = `<dt>Klijent</dt><dd>${esc(l.klijent)}</dd><dt>Važi do</dt><dd>${prikaz(l.vrijediDo)} ${znacka(l.vrijediDo)}</dd><dt>Izdana</dt><dd>${prikaz(l.izdana)}</dd><dt>Uređaj</dt><dd>${l.uredjaj ? esc(l.uredjaj) : 'bilo koji'}</dd>`;
+      info.innerHTML = `<dt>Klijent</dt><dd>${esc(l.klijent)}</dd><dt>Važi do</dt><dd>${prikaz(l.vrijediDo)} ${znacka(l.vrijediDo)}</dd><dt>Izdana</dt><dd>${prikaz(l.izdana)}</dd><dt>Uređaj</dt><dd>${l.uredjaj ? esc(l.uredjaj) : 'bilo koji'}</dd><dt>Moduli</dt><dd>${esc(l.opisModula)}</dd>`;
       info.hidden = false;
     }
   } catch (err) {

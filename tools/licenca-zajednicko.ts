@@ -5,9 +5,13 @@ import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { izdajLicencu, provjeriLicencu, lokalniDatum, Licenca } from '../src/lib/licenca';
+import type { Modul } from '../src/lib/moduli';
 
 export const PRIVATNI = process.env.PAZAR_LICENCA_KLJUC ?? join(homedir(), '.pazar-licenca', 'privatni.pem');
 const DNEVNIK = join(dirname(PRIVATNI), 'izdane.jsonl');
+
+/** Novi klijent dobija sve osim Generatora (interni alat). */
+export const PODRAZUMIJEVANI_MODULI: Modul[] = ['skladiste', 'ponude', 'proizvodnja'];
 
 export interface IzdanaLicenca extends Licenca {
   token: string;
@@ -32,12 +36,13 @@ export function doNakonDana(dana: number, od = new Date()): string {
   return lokalniDatum(d);
 }
 
-export function izdaj(unos: { klijent: string; vrijediDo: string; uredjaj?: string }): IzdanaLicenca {
+export function izdaj(unos: { klijent: string; vrijediDo: string; uredjaj?: string; moduli: Modul[] }): IzdanaLicenca {
   const privatni = ucitajPrivatni();
   const licenca: Licenca = {
     klijent: unos.klijent.trim(),
     vrijediDo: unos.vrijediDo,
     izdana: lokalniDatum(new Date()),
+    moduli: unos.moduli,
     ...(unos.uredjaj?.trim() ? { uredjaj: unos.uredjaj.trim() } : {}),
   };
   const token = izdajLicencu(licenca, privatni);

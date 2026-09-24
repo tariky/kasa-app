@@ -6,13 +6,15 @@
 //   bun tools/licenca.ts kljucevi
 //   bun tools/licenca.ts izdaj --klijent "Pekara X" --dana 31
 //   bun tools/licenca.ts izdaj --klijent "Pekara X" --do 2026-12-31 --uredjaj <id>
+//   bun tools/licenca.ts izdaj --klijent X (--dana N | --do YYYY-MM-DD) [--uredjaj ID] [--moduli skladiste,ponude,proizvodnja,generator | --moduli ""]
 //   bun tools/licenca.ts provjeri <token>
 import { generateKeyPairSync } from 'node:crypto';
 import { mkdirSync, existsSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { provjeriLicencu, procitajLicencu } from '../src/lib/licenca';
-import { PRIVATNI, doNakonDana, izdaj as izdajLicencu, javniIzPrivatnog } from './licenca-zajednicko';
+import { opisModula, type Modul } from '../src/lib/moduli';
+import { PODRAZUMIJEVANI_MODULI, PRIVATNI, doNakonDana, izdaj as izdajLicencu, javniIzPrivatnog } from './licenca-zajednicko';
 const JAVNI_TS = join(import.meta.dir, '..', 'src', 'lib', 'licencaJavniKljuc.ts');
 
 function greska(poruka: string): never {
@@ -56,6 +58,7 @@ function izdaj(args: string[]) {
       dana: { type: 'string' },
       do: { type: 'string' },
       uredjaj: { type: 'string' },
+      moduli: { type: 'string' },
     },
   });
   if (!values.klijent) greska('--klijent je obavezan');
@@ -68,15 +71,18 @@ function izdaj(args: string[]) {
     vrijediDo = doNakonDana(n);
   }
 
+  const moduli = (values.moduli === undefined ? PODRAZUMIJEVANI_MODULI : values.moduli.split(',').map(m => m.trim()).filter(Boolean)) as Modul[];
+
   let token: string;
   try {
-    token = izdajLicencu({ klijent: values.klijent, vrijediDo: vrijediDo!, uredjaj: values.uredjaj }).token;
+    token = izdajLicencu({ klijent: values.klijent, vrijediDo: vrijediDo!, uredjaj: values.uredjaj, moduli }).token;
   } catch (e) {
     greska((e as Error).message);
   }
 
   console.error(`Klijent:   ${values.klijent}`);
   console.error(`Važi do:   ${vrijediDo} (uključivo)`);
+  console.error(`Moduli:    ${opisModula(moduli)}`);
   if (values.uredjaj) console.error(`Uređaj:    ${values.uredjaj}`);
   console.error('');
   console.log(token);
@@ -91,6 +97,7 @@ function provjeri(token: string | undefined) {
   console.log(`Izdana:    ${licenca.izdana}`);
   console.log(`Važi do:   ${licenca.vrijediDo}`);
   if (licenca.uredjaj) console.log(`Uređaj:    ${licenca.uredjaj}`);
+  console.log(`Moduli:    ${opisModula(licenca.moduli)}`);
   console.log(`Status:    ${r.ok ? 'ISPRAVNA' : r.razlog.toUpperCase()}`);
   process.exit(r.ok ? 0 : 1);
 }
@@ -107,6 +114,6 @@ switch (komanda) {
     provjeri(ostalo[0]);
     break;
   default:
-    console.log('Upotreba: bun tools/licenca.ts <kljucevi [--prepisi] | izdaj --klijent X (--dana N | --do YYYY-MM-DD) [--uredjaj ID] | provjeri TOKEN>');
+    console.log('Upotreba: bun tools/licenca.ts <kljucevi [--prepisi] | izdaj --klijent X (--dana N | --do YYYY-MM-DD) [--uredjaj ID] [--moduli skladiste,ponude,proizvodnja,generator | --moduli ""] | provjeri TOKEN>');
     process.exit(komanda ? 1 : 0);
 }
