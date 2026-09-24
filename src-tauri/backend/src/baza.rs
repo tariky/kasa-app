@@ -1,9 +1,11 @@
 //! Otvaranje baze: schema + migracije + početni podaci (`database/db.ts`).
 
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::greska::R;
 use crate::p;
+use crate::petlja::Petlja;
 use crate::sql::Db;
 
 /// Schema je ista ona iz `src/database/schema.ts` — jedan izvor istine za
@@ -13,14 +15,20 @@ fn schema() -> &'static str {
     TS.split('`').nth(1).expect("schema.ts mora imati template string")
 }
 
-pub fn otvori(putanja: &Path) -> R<Db> {
-    let db = Db::otvori(putanja)?;
+/// Aktivna baza programa (`getDb()`): WAL, strani ključevi, schema,
+/// migracije i početni podaci — pri svakom otvaranju.
+pub fn otvori(putanja: &Path, petlja: Arc<Petlja>) -> R<Db> {
+    Db::aktivna(putanja, petlja)
+}
+
+/// Priprema tek otvorene konekcije aktivne baze (poziva je `Db`).
+pub(crate) fn inicijalizuj(db: &Db) -> R<()> {
     db.pragma("journal_mode = WAL")?;
     db.pragma("foreign_keys = ON")?;
     db.exec(schema())?;
-    run_migrations(&db)?;
-    seed_defaults(&db)?;
-    Ok(db)
+    run_migrations(db)?;
+    seed_defaults(db)?;
+    Ok(())
 }
 
 fn kolone(db: &Db, tabela: &str) -> R<Vec<String>> {

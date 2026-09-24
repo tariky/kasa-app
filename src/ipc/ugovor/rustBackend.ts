@@ -23,12 +23,16 @@ interface Odgovor {
 }
 
 export async function otvoriRustBackend(): Promise<Backend> {
+  return otvoriRustBackendNad(mkdtempSync(path.join(tmpdir(), 'kasa-ugovor-rs-')));
+}
+
+/** Rust backend nad postojećim folderom (npr. kopija stvarne baze); `close` ga briše. */
+export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
   if (!existsSync(BINARIJ)) {
     throw new Error(`Nema ${BINARIJ} — prvo: cargo build --manifest-path src-tauri/Cargo.toml -p pazar-backend --bin ugovor-server`);
   }
-  const userData = mkdtempSync(path.join(tmpdir(), 'kasa-ugovor-rs-'));
   const radniFolder = path.join(userData, 'radni');
-  mkdirSync(radniFolder);
+  mkdirSync(radniFolder, { recursive: true });
 
   const proc = Bun.spawn([BINARIJ, userData], {
     // bun test radi u UTC-u (ili u TZ iz okruženja); backend mora računati

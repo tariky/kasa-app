@@ -3,7 +3,6 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Mutex;
 use std::time::Duration;
 
 use pazar_backend::sat::Sat;
@@ -14,7 +13,6 @@ use tauri::webview::NewWindowResponse;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult};
 
-type Stanje = Mutex<Backend>;
 
 struct TauriPlatforma {
     app: AppHandle,
@@ -100,9 +98,7 @@ impl Platforma for TauriPlatforma {
         let app = self.app.clone();
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(ms));
-            if let Ok(mut b) = app.state::<Stanje>().lock() {
-                b.zatvori_db();
-            }
+            app.state::<Backend>().zatvori_db();
             app.restart();
         });
     }
@@ -113,14 +109,12 @@ impl Platforma for TauriPlatforma {
 }
 
 /// `ipcRenderer.invoke(kanal, ...args)` — isti kanali i isti oblik podataka
-/// kao u Electronu. Backend blokira (baza, štampa), pa radi van glavne niti.
+/// kao u Electronu. Backend blokira (baza, štampa), pa radi van glavne niti;
+/// mjesto u redu se uzima odmah, da pozivi idu redom kojim su stigli.
 #[tauri::command]
 async fn api(app: AppHandle, kanal: String, args: Vec<Value>) -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let stanje = app.state::<Stanje>();
-        let mut b = stanje.lock().unwrap_or_else(|e| e.into_inner());
-        b.call(&kanal, args)
-    })
+    let tiket = app.state::<Backend>().tiket();
+    tauri::async_runtime::spawn_blocking(move || app.state::<Backend>().call_u_redu(tiket, &kanal, args))
     .await
     .map_err(|e| e.to_string())?
 }
@@ -255,7 +249,7 @@ pub fn run() {
             let platforma = Box::new(TauriPlatforma { app: handle.clone() });
             match Backend::novi(&folder, platforma, Sat::sistemski(), true) {
                 Ok(b) => {
-                    app.manage::<Stanje>(Mutex::new(b));
+                    app.manage(b);
                 }
                 Err(e) => {
                     handle

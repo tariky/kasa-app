@@ -17,7 +17,7 @@ use crate::{baci, fiskalni, p, tring_racun, Args, Backend};
 // ─── Tring ──────────────────────────────────────────────
 
 /// `loadTringConfig()` — aktivna baza se otvori ako je zatvorena (getDb).
-fn load_tring_config(b: &mut Backend) -> R<(Value, Value)> {
+fn load_tring_config(b: &Backend) -> R<(Value, Value)> {
     b.db()?;
     b.load_tring_config()
 }
@@ -30,7 +30,7 @@ fn loguj(b: &Backend, sta: &str, v: &Value) {
     }
 }
 
-fn init(b: &mut Backend) -> R<Odgovor> {
+fn init(b: &Backend) -> R<Odgovor> {
     let (operator_id, operator_password) = load_tring_config(b)?;
     // `parseInt` koji ne uspije je NaN, a `${NaN}` u XML-u je "NaN".
     let operator_id = if operator_id.is_null() { json!("NaN") } else { operator_id };
@@ -39,7 +39,7 @@ fn init(b: &mut Backend) -> R<Odgovor> {
     Ok(result)
 }
 
-fn print_receipt(b: &mut Backend, data: &Value) -> R<Odgovor> {
+fn print_receipt(b: &Backend, data: &Value) -> R<Odgovor> {
     load_tring_config(b)?;
     let racun = tring_racun::build_tring_racun(data);
     loguj(b, "printReceipt request", &racun);
@@ -48,7 +48,7 @@ fn print_receipt(b: &mut Backend, data: &Value) -> R<Odgovor> {
     Ok(result)
 }
 
-fn print_refund(b: &mut Backend, data: &Value) -> R<Odgovor> {
+fn print_refund(b: &Backend, data: &Value) -> R<Odgovor> {
     load_tring_config(b)?;
     let Some(broj_racuna) = fiskalni::parse_fiskalni_broj(&data["brojRacuna"]) else {
         let prikaz = js::to_string(js::nn(&data["brojRacuna"], &json!("")));
@@ -61,28 +61,28 @@ fn print_refund(b: &mut Backend, data: &Value) -> R<Odgovor> {
     Ok(result)
 }
 
-fn x_report(b: &mut Backend) -> R<Odgovor> {
+fn x_report(b: &Backend) -> R<Odgovor> {
     load_tring_config(b)?;
     let result = b.tring.stampati_presjek_stanja();
     loguj(b, "xReport", &result);
     Ok(result)
 }
 
-fn z_report(b: &mut Backend) -> R<Odgovor> {
+fn z_report(b: &Backend) -> R<Odgovor> {
     load_tring_config(b)?;
     let result = b.tring.stampati_dnevni_izvjestaj();
     loguj(b, "zReport", &result);
     Ok(result)
 }
 
-fn periodic_report(b: &mut Backend, from: &Value, to: &Value) -> R<Odgovor> {
+fn periodic_report(b: &Backend, from: &Value, to: &Value) -> R<Odgovor> {
     load_tring_config(b)?;
     let result = b.tring.stampati_periodicni_izvjestaj(from, to);
     loguj(b, "periodicReport", &result);
     Ok(result)
 }
 
-fn write_article(b: &mut Backend, data: &Value) -> R<Odgovor> {
+fn write_article(b: &Backend, data: &Value) -> R<Odgovor> {
     load_tring_config(b)?;
     let result = b.tring.upisi_artikal(data);
     loguj(b, "writeArticle", &result);
@@ -102,14 +102,15 @@ fn opcije(parovi: &[(&str, &Value)]) -> Value {
     Value::Object(m)
 }
 
-fn save_file(b: &mut Backend, data: &Value) -> R<Value> {
-    let izbor = b.platforma.dijalog_sacuvaj(opcije(&[("defaultPath", &data["defaultName"]), ("filters", &data["filters"])]));
+fn save_file(b: &Backend, data: &Value) -> R<Value> {
+    let izbor = b.dijalog_sacuvaj(opcije(&[("defaultPath", &data["defaultName"]), ("filters", &data["filters"])]));
     // Otkazan dijalog poništava i ranije odobrenje — upisiva je samo putanja
     // iz zadnjeg dijaloga.
-    b.odobrena_putanja = None;
+    let mut odobrena = b.odobrena_putanja.lock().unwrap_or_else(|e| e.into_inner());
+    *odobrena = None;
     match izbor.filter(|p| !p.is_empty()) {
         Some(p) => {
-            b.odobrena_putanja = Some(p.clone());
+            *odobrena = Some(p.clone());
             Ok(Value::String(p))
         }
         None => Ok(Value::Null),
@@ -125,12 +126,14 @@ fn u_bajt(v: &Value) -> u8 {
     (x.trunc() % 256.0 + 256.0) as u64 as u8
 }
 
-fn write_file(b: &mut Backend, data: &Value) -> R<Value> {
-    let putanja = match (data["path"].as_str(), &b.odobrena_putanja) {
+fn write_file(b: &Backend, data: &Value) -> R<Value> {
+    let mut odobrena = b.odobrena_putanja.lock().unwrap_or_else(|e| e.into_inner());
+    let putanja = match (data["path"].as_str(), odobrena.as_deref()) {
         (Some(p), Some(o)) if p == o => p.to_string(),
         _ => baci!("Write path not approved by save dialog"),
     };
-    b.odobrena_putanja = None;
+    *odobrena = None;
+    drop(odobrena);
     let bajtovi: Vec<u8> = data["buffer"].as_array().map(|a| a.iter().map(u_bajt).collect()).unwrap_or_default();
     std::fs::write(&putanja, bajtovi)?;
     Ok(json!({ "success": true }))
@@ -138,10 +141,10 @@ fn write_file(b: &mut Backend, data: &Value) -> R<Value> {
 
 // ─── Database Backup ───────────────────────────────────────
 
-fn backup(b: &mut Backend) -> R<Value> {
+fn backup(b: &Backend) -> R<Value> {
     let db_path = b.db_putanja();
     let timestamp = b.sat.danas();
-    let izbor = b.platforma.dijalog_sacuvaj(json!({
+    let izbor = b.dijalog_sacuvaj(json!({
         "defaultPath": format!("kasa-backup-{timestamp}.db"),
         "filters": [{ "name": "SQLite Database", "extensions": ["db"] }],
     }));
@@ -158,10 +161,10 @@ fn backup(b: &mut Backend) -> R<Value> {
 // Uvoz backup-a. Handler radi samo dijaloge; sam rad s fajlovima je niže
 // (`database/restore.ts`). Otvaranje baze nakon zamjene odradi schemu +
 // migracije, pa backup iz starije verzije programa radi bez dodatnih koraka.
-fn restore(b: &mut Backend) -> R<Value> {
+fn restore(b: &Backend) -> R<Value> {
     let db_path = b.db_putanja();
 
-    let picked = b.platforma.dijalog_otvori(json!({
+    let picked = b.dijalog_otvori(json!({
         "title": "Odaberi backup baze",
         "properties": ["openFile"],
         "filters": [{ "name": "SQLite Database", "extensions": ["db"] }],
@@ -174,7 +177,7 @@ fn restore(b: &mut Backend) -> R<Value> {
     // odabrani fajl ionako nije upotrebljiv backup.
     validate_backup(Path::new(&source))?;
 
-    let confirm = b.platforma.dijalog_potvrda(json!({
+    let confirm = b.dijalog_potvrda(json!({
         "type": "warning",
         "buttons": ["Otkaži", "Uvezi i restartuj"],
         "defaultId": 0,
@@ -195,7 +198,7 @@ fn restore(b: &mut Backend) -> R<Value> {
 
     // Renderer drži stanje stare baze (prijavljeni korisnik, korpa) — restart je
     // jedini pouzdan način da se sve osvježi.
-    b.platforma.restartuj_za(500);
+    b.restartuj_za(500);
 
     Ok(json!({ "source": source, "safetyPath": safety_path.to_string_lossy() }))
 }
@@ -326,7 +329,7 @@ fn u_delete_mode(db: &Db) -> R<()> {
 
 /// Kopija aktivne baze kao jedan samostalan fajl (DELETE journal mode), koji
 /// SQLite otvara bilo kako, i read-only, bez -wal/-shm pored njega.
-fn samostalna_kopija(b: &mut Backend, db_path: &Path, cilj: &Path) -> R<()> {
+fn samostalna_kopija(b: &Backend, db_path: &Path, cilj: &Path) -> R<()> {
     b.db()?.pragma("wal_checkpoint(TRUNCATE)")?;
     // Ostaci ranijeg fajla na istoj putanji bi se primijenili na novu kopiju.
     obrisi(&sa_sufiksom(cilj, "-wal"))?;
@@ -345,7 +348,7 @@ fn samostalna_kopija(b: &mut Backend, db_path: &Path, cilj: &Path) -> R<()> {
 /// Zamjenjuje aktivnu bazu backup fajlom. Prije zamjene sprema kopiju zatečene
 /// baze na `safety_path`; ako zamjena ili migracije puknu, vraća to stanje i
 /// baca grešku, tako da program ostaje upotrebljiv.
-fn swap_in_backup(b: &mut Backend, source_path: &Path, db_path: &Path, safety_path: &Path) -> R<()> {
+fn swap_in_backup(b: &Backend, source_path: &Path, db_path: &Path, safety_path: &Path) -> R<()> {
     if resolve(source_path) == resolve(db_path) {
         baci!("Odabrana je trenutno aktivna baza, ne backup fajl.");
     }
@@ -386,7 +389,7 @@ fn replace_db_file(source_path: &Path, db_path: &Path) -> R<()> {
     Ok(())
 }
 
-pub fn obradi(b: &mut Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
+pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
     Some(match kanal {
         "tring:init" => init(b),
         "tring:printReceipt" => print_receipt(b, &a[0]),

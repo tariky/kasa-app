@@ -273,11 +273,11 @@ pub fn provjeri_kanal(b: &Backend, kanal: &str) -> R<()> {
     if smije_raditi(&stanje_licence(b)?) {
         return Ok(());
     }
-    b.platforma.licenca_blokirana();
+    b.licenca_blokirana();
     Err(Greska::nova("Licenca je istekla — program radi samo za pregled. Unesite novi kod licence."))
 }
 
-pub fn obradi(b: &mut Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
+pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
     // Ugovorni testovi rade s otključanom licencom (kao mock u tsBackend.ts).
     if !b.provjera_licence {
         return match kanal {

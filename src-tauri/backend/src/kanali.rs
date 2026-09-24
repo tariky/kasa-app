@@ -6,7 +6,7 @@ use crate::{cash, katalog, korisnici, licenca, ponude, postavke, proizvodnja, ra
 use crate::{Args, Backend};
 use serde_json::Value;
 
-pub fn obradi(b: &mut Backend, kanal: &str, a: &Args) -> R<Value> {
+pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> R<Value> {
     let domena = kanal.split(':').next().unwrap_or("");
     let r = match domena {
         "licenca" => licenca::obradi(b, kanal, a),

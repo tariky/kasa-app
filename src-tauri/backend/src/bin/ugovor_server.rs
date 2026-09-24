@@ -9,10 +9,14 @@
 //! i odgovara `{"id":1,"ok":…}` ili `{"id":1,"greska":"…"}`, uz
 //! `"dijalozi":[{"vrsta":"sacuvaj","opcije":{…}}]` koje je poziv otvorio.
 //! Restart (nakon uvoza backup-a) stiže kasnije kao `{"dogadjaj":"restart"}`.
+//!
+//! Svaki zahtjev radi u svojoj niti, s mjestom u redu uzetim pri čitanju:
+//! kao u Electronu, drugi poziv može raditi dok prvi čeka uređaj.
 
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::thread::ThreadId;
 
 use pazar_backend::sat::Sat;
 use pazar_backend::{Backend, Platforma};
@@ -23,7 +27,8 @@ struct Stanje {
     sacuvaj: Option<String>,
     otvori: Option<String>,
     potvrda: i64,
-    otvoreni: Vec<Value>,
+    /// Otvoreni dijalozi po niti poziva.
+    otvoreni: Vec<(ThreadId, Value)>,
 }
 
 struct TestPlatforma {
@@ -41,17 +46,17 @@ fn posalji(v: &Value) {
 impl Platforma for TestPlatforma {
     fn dijalog_sacuvaj(&self, opcije: Value) -> Option<String> {
         let mut s = self.stanje.lock().unwrap();
-        s.otvoreni.push(json!({ "vrsta": "sacuvaj", "opcije": opcije }));
+        s.otvoreni.push((std::thread::current().id(), json!({ "vrsta": "sacuvaj", "opcije": opcije })));
         s.sacuvaj.clone()
     }
     fn dijalog_otvori(&self, opcije: Value) -> Option<String> {
         let mut s = self.stanje.lock().unwrap();
-        s.otvoreni.push(json!({ "vrsta": "otvori", "opcije": opcije }));
+        s.otvoreni.push((std::thread::current().id(), json!({ "vrsta": "otvori", "opcije": opcije })));
         s.otvori.clone()
     }
     fn dijalog_potvrda(&self, opcije: Value) -> i64 {
         let mut s = self.stanje.lock().unwrap();
-        s.otvoreni.push(json!({ "vrsta": "potvrda", "opcije": opcije }));
+        s.otvoreni.push((std::thread::current().id(), json!({ "vrsta": "potvrda", "opcije": opcije })));
         s.potvrda
     }
     fn restartuj_za(&self, ms: u64) {
@@ -66,8 +71,11 @@ fn main() {
     let user_data = PathBuf::from(std::env::args().nth(1).expect("ugovor-server <userData>"));
     let stanje = Arc::new(Mutex::new(Stanje::default()));
     let sat = Sat::sistemski();
-    let mut b = match Backend::novi(&user_data, Box::new(TestPlatforma { stanje: stanje.clone() }), sat.clone(), false) {
-        Ok(b) => b,
+    // Licenca je u ugovornim testovima otključana (kao mock u tsBackend.ts);
+    // KASA_UGOVOR_LICENCA=1 uključi pravu provjeru (licenca.json u userData).
+    let licenca = std::env::var("KASA_UGOVOR_LICENCA").is_ok_and(|v| v == "1");
+    let b = match Backend::novi(&user_data, Box::new(TestPlatforma { stanje: stanje.clone() }), sat.clone(), licenca) {
+        Ok(b) => Arc::new(b),
         Err(e) => {
             posalji(&json!({ "spreman": false, "greska": e.0 }));
             std::process::exit(1);
@@ -75,6 +83,7 @@ fn main() {
     };
     posalji(&json!({ "spreman": true }));
 
+    let mut niti = Vec::new();
     for linija in std::io::stdin().lock().lines() {
         let Ok(linija) = linija else { break };
         if linija.trim().is_empty() {
@@ -93,17 +102,30 @@ fn main() {
             s.sacuvaj = d["sacuvaj"].as_str().map(str::to_string);
             s.otvori = d["otvori"].as_str().map(str::to_string);
             s.potvrda = d["potvrda"].as_i64().unwrap_or(0);
-            s.otvoreni.clear();
         }
         sat.postavi(z["sada"].as_f64().map(|ms| ms as i64));
-        let args = z["args"].as_array().cloned().unwrap_or_default();
-        let r = b.call(z["kanal"].as_str().unwrap_or(""), args);
-        let dijalozi = std::mem::take(&mut stanje.lock().unwrap().otvoreni);
-        let mut odgovor = match r {
-            Ok(v) => json!({ "id": z["id"], "ok": v }),
-            Err(g) => json!({ "id": z["id"], "greska": g }),
-        };
-        odgovor["dijalozi"] = Value::Array(dijalozi);
-        posalji(&odgovor);
+        let tiket = b.tiket();
+        let (b, stanje) = (b.clone(), stanje.clone());
+        niti.push(std::thread::spawn(move || {
+            let args = z["args"].as_array().cloned().unwrap_or_default();
+            let r = b.call_u_redu(tiket, z["kanal"].as_str().unwrap_or(""), args);
+            let ja = std::thread::current().id();
+            let dijalozi: Vec<Value> = {
+                let mut s = stanje.lock().unwrap();
+                let (moji, ostali) = std::mem::take(&mut s.otvoreni).into_iter().partition(|(t, _)| *t == ja);
+                s.otvoreni = ostali;
+                moji.into_iter().map(|(_, d)| d).collect::<Vec<_>>()
+            };
+            let mut odgovor = match r {
+                Ok(v) => json!({ "id": z["id"], "ok": v }),
+                Err(g) => json!({ "id": z["id"], "greska": g }),
+            };
+            odgovor["dijalozi"] = Value::Array(dijalozi);
+            posalji(&odgovor);
+        }));
+        niti.retain(|n| !n.is_finished());
+    }
+    for n in niti {
+        let _ = n.join();
     }
 }

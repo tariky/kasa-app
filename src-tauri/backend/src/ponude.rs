@@ -453,7 +453,7 @@ fn create(db: &Db, data: &Value, danas: &str) -> R<Value> {
     db.tx(|| create_ponuda(db, data, danas))
 }
 
-pub fn obradi(b: &mut Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
+pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
     if let Err(e) = b.db() {
         return Some(Err(e));
     }

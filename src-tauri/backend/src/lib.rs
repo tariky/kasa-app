@@ -18,6 +18,7 @@ pub mod fiskalni;
 pub mod racun;
 pub mod licenca;
 pub mod kanali;
+pub mod petlja;
 
 // Domene (po grupama kanala)
 pub mod korisnici;
@@ -32,16 +33,18 @@ pub mod uredjaj;
 
 use std::ops::Index;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
 pub use greska::{Greska, R};
+use petlja::Petlja;
 use sat::Sat;
 use sql::Db;
 use tring::Tring;
 
 /// Okruženje u kojem backend radi: Tauri prozor ili test harness.
-pub trait Platforma: Send {
+pub trait Platforma: Send + Sync {
     /// Dijalog za spremanje (`dialog.showSaveDialog`); opcije u Electron obliku
     /// (`defaultPath`, `filters`). `None` = korisnik otkazao.
     fn dijalog_sacuvaj(&self, opcije: Value) -> Option<String>;
@@ -67,32 +70,35 @@ impl Index<usize> for Args {
     }
 }
 
+/// Backend je `Sync`: pozivi stižu s više niti, a [`Petlja`] ih pušta
+/// jedan po jedan (osim dok neki čeka uređaj ili dijalog).
 pub struct Backend {
-    db: Option<Db>,
+    db: Db,
     user_data: PathBuf,
     pub sat: Sat,
     pub tring: Tring,
-    pub platforma: Box<dyn Platforma>,
+    platforma: Box<dyn Platforma>,
+    petlja: Arc<Petlja>,
     /// `false` u ugovornim testovima: licenca je otključana (ima svoje testove).
     pub provjera_licence: bool,
     /// Jedina putanja koju `fs:writeFile` smije upisati — iz zadnjeg dijaloga.
-    pub odobrena_putanja: Option<String>,
+    pub odobrena_putanja: Mutex<Option<String>>,
 }
 
 impl Backend {
     pub fn novi(user_data: &Path, platforma: Box<dyn Platforma>, sat: Sat, provjera_licence: bool) -> R<Backend> {
         std::fs::create_dir_all(user_data)?;
-        let mut b = Backend {
-            db: None,
+        let petlja = Arc::new(Petlja::nova());
+        Ok(Backend {
+            db: baza::otvori(&user_data.join("kasa.db"), petlja.clone())?,
             user_data: user_data.to_path_buf(),
-            tring: Tring::novi(sat.clone()),
+            tring: Tring::novi(sat.clone(), petlja.clone()),
             sat,
             platforma,
+            petlja,
             provjera_licence,
-            odobrena_putanja: None,
-        };
-        b.otvori_db()?;
-        Ok(b)
+            odobrena_putanja: Mutex::new(None),
+        })
     }
 
     pub fn user_data(&self) -> &Path {
@@ -100,35 +106,65 @@ impl Backend {
     }
 
     pub fn db_putanja(&self) -> PathBuf {
-        self.user_data.join("kasa.db")
+        self.db.putanja().to_path_buf()
     }
 
-    /// Aktivna baza (`getDb()`), otvara je ako je zatvorena.
-    pub fn db(&mut self) -> R<&Db> {
-        if self.db.is_none() {
-            self.otvori_db()?;
-        }
-        Ok(self.db.as_ref().unwrap())
+    /// Aktivna baza (`getDb()`); zatvorena se otvori pri prvom upitu.
+    pub fn db(&self) -> R<&Db> {
+        Ok(&self.db)
     }
 
-    /// Aktivna baza bez ponovnog otvaranja — za kod koji drži `&self`.
+    /// Isto što i [`Backend::db`] (ostalo iz vremena kad je `db()` tražio `&mut`).
     pub fn baza(&self) -> R<&Db> {
-        self.db.as_ref().ok_or_else(|| Greska::nova("Baza nije otvorena"))
+        Ok(&self.db)
     }
 
-    pub fn otvori_db(&mut self) -> R<()> {
-        if self.db.is_none() {
-            self.db = Some(baza::otvori(&self.db_putanja())?);
-        }
-        Ok(())
+    /// Otvori aktivnu bazu odmah, s greškom ako schema/migracije puknu.
+    pub fn otvori_db(&self) -> R<()> {
+        self.db.otvori()
     }
 
-    pub fn zatvori_db(&mut self) {
-        self.db = None;
+    pub fn zatvori_db(&self) {
+        self.db.zatvori();
+    }
+
+    /// Sistemski dijalozi; dok su otvoreni, drugi pozivi rade (kao `await dialog...`).
+    pub fn dijalog_sacuvaj(&self, opcije: Value) -> Option<String> {
+        let _o = self.petlja.odmor();
+        self.platforma.dijalog_sacuvaj(opcije)
+    }
+
+    pub fn dijalog_otvori(&self, opcije: Value) -> Option<String> {
+        let _o = self.petlja.odmor();
+        self.platforma.dijalog_otvori(opcije)
+    }
+
+    pub fn dijalog_potvrda(&self, opcije: Value) -> i64 {
+        let _o = self.petlja.odmor();
+        self.platforma.dijalog_potvrda(opcije)
+    }
+
+    pub fn restartuj_za(&self, ms: u64) {
+        self.platforma.restartuj_za(ms);
+    }
+
+    pub fn licenca_blokirana(&self) {
+        self.platforma.licenca_blokirana();
+    }
+
+    /// Mjesto u redu poziva; uzmi ga čim poziv stigne, da redoslijed ostane
+    /// redoslijed dolaska i kad se izvršava na drugoj niti.
+    pub fn tiket(&self) -> petlja::Tiket {
+        self.petlja.tiket()
     }
 
     /// Poziv kanala kao iz renderera. Greška je poruka za `new Error(...)`.
-    pub fn call(&mut self, kanal: &str, args: Vec<Value>) -> Result<Value, String> {
+    pub fn call(&self, kanal: &str, args: Vec<Value>) -> Result<Value, String> {
+        self.call_u_redu(self.tiket(), kanal, args)
+    }
+
+    pub fn call_u_redu(&self, tiket: petlja::Tiket, kanal: &str, args: Vec<Value>) -> Result<Value, String> {
+        let _z = self.petlja.uzmi(tiket);
         let a = Args(args);
         let r = licenca::provjeri_kanal(self, kanal).and_then(|_| kanali::obradi(self, kanal, &a));
         r.map_err(|g| {

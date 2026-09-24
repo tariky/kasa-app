@@ -65,9 +65,13 @@
     const tring = await window.api.getTringSettings();
     ok('settings:getTring', tring?.port === 8085 && tring?.host === 'localhost', JSON.stringify(tring));
 
-    // Tring bez uređaja: odgovor s greškom veze, ne izuzetak.
+    // Tring: odgovor uređaja (ako neki sluša na 8085, npr. tring-mock-server) ima isti oblik.
     const x = await window.api.tringXReport();
-    ok('tring:xReport bez uređaja', x?.success === false && typeof x?.error === 'string', JSON.stringify(x));
+    ok('tring:xReport odgovor', typeof x?.success === 'boolean' && typeof x?.vrstaOdgovora === 'string', JSON.stringify(x));
+    // Bez uređaja: greška veze u odgovoru, ne izuzetak.
+    await window.api.saveTringSettings({ host: '127.0.0.1', port: 1, operatorId: 0, operatorPassword: '0' });
+    const bez = await window.api.tringXReport();
+    ok('tring:xReport bez uređaja', bez?.success === false && /ECONNREFUSED/.test(bez?.error) && bez?.statusCode === null, JSON.stringify(bez));
 
     // Ekran skladišta prikazuje artikal iz Rust baze.
     dugme('Skladište')?.click() ?? [...document.querySelectorAll('button,a')].find(e => e.innerText.includes('Skladište'))?.click();

@@ -1,8 +1,8 @@
 //! Kanali `order:*`, `pending:*`, `prilog:*` i `fiscal:*` (handlers.ts) i
 //! logika iz `lib/prilog.ts`, `lib/refund.ts` i `lib/valuta.ts`.
 
-use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::sync::Mutex;
 
 use regex::Regex;
 use serde_json::{json, Map, Value};
@@ -451,9 +451,12 @@ fn je_nedovoljno_sredstava(r: &Odgovor) -> bool {
     NEDOVOLJNO_RE.with(|re| re.is_match(&dijelovi.join(" ")))
 }
 
-thread_local! {
-    /// Računi kojima se storno trenutno štampa — zaštita od dvoklika.
-    static REFUNDS_IN_FLIGHT: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+/// Računi kojima se storno trenutno štampa — zaštita od dvoklika (dok jedan
+/// poziv čeka uređaj, drugi može stići; vidi petlja.rs).
+static REFUNDS_IN_FLIGHT: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+
+fn refunds_in_flight() -> std::sync::MutexGuard<'static, BTreeSet<String>> {
+    REFUNDS_IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// Skida račun iz `REFUNDS_IN_FLIGHT` kad storno završi (JS `finally`).
@@ -461,7 +464,7 @@ struct UToku(String);
 
 impl Drop for UToku {
     fn drop(&mut self) {
-        REFUNDS_IN_FLIGHT.with(|s| s.borrow_mut().remove(&self.0));
+        refunds_in_flight().remove(&self.0);
     }
 }
 
@@ -485,7 +488,7 @@ fn refund_and_print(b: &Backend, data: &Value) -> R<Value> {
     let id = &data["id"];
     let kljuc = js::stringify(id);
 
-    if REFUNDS_IN_FLIGHT.with(|s| s.borrow().contains(&kljuc)) {
+    if refunds_in_flight().contains(&kljuc) {
         baci!("Storniranje ovog računa je već u toku");
     }
 
@@ -538,7 +541,7 @@ fn refund_and_print(b: &Backend, data: &Value) -> R<Value> {
         manjak_ladica = js_max(0.0, round2(js_min(potrebno_ladica, potrebno_uredjaj) - stanje_ladice));
     }
 
-    REFUNDS_IN_FLIGHT.with(|s| s.borrow_mut().insert(kljuc.clone()));
+    refunds_in_flight().insert(kljuc.clone());
     let _u_toku = UToku(kljuc);
 
     let dozvoli_polog = truthy(&data["dozvoliPolog"]);
@@ -973,7 +976,7 @@ const KANALI: [&str; 19] = [
     "fiscal:getNumeracija", "fiscal:setZadnjiBroj",
 ];
 
-pub fn obradi(b: &mut Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
+pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
     if !KANALI.contains(&kanal) {
         return None;
     }

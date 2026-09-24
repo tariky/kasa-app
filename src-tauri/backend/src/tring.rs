@@ -2,7 +2,8 @@
 //! Stanje (konfiguracija, brojač zahtjeva, dnevnik) živi u instanci, ne u
 //! globalnim varijablama.
 
-use std::cell::{Cell, RefCell};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::io::ErrorKind;
 use std::time::{Duration, Instant};
 
@@ -10,6 +11,7 @@ use regex::Regex;
 use serde_json::{json, Map, Value};
 
 use crate::js::{self, to_string};
+use crate::petlja::Petlja;
 use crate::sat::Sat;
 
 const DEFAULT_HOST: &str = "localhost";
@@ -24,13 +26,15 @@ const UNOS_NOVCA_PATHS: [&str; 2] = ["/unosnovca", "/un"];
 const POVRAT_NOVCA_PATHS: [&str; 2] = ["/povratnovca", "/pn"];
 
 pub struct Tring {
-    host: RefCell<String>,
-    port: Cell<i64>,
-    request_counter: Cell<i64>,
-    log_id_counter: Cell<i64>,
-    logs: RefCell<Vec<Value>>,
-    logging: Cell<bool>,
+    host: Mutex<String>,
+    port: AtomicI64,
+    request_counter: AtomicI64,
+    log_id_counter: AtomicI64,
+    logs: Mutex<Vec<Value>>,
+    logging: AtomicBool,
     sat: Sat,
+    /// Dok se čeka uređaj, drugi pozivi rade (`await` u Electronu).
+    petlja: Arc<Petlja>,
 }
 
 /// Odgovor uređaja kao JSON objekat (`TringResponse`).
@@ -41,53 +45,55 @@ pub fn uspjeh(o: &Odgovor) -> bool {
 }
 
 impl Tring {
-    pub fn novi(sat: Sat) -> Self {
+    pub fn novi(sat: Sat, petlja: Arc<Petlja>) -> Self {
         Tring {
-            host: RefCell::new(DEFAULT_HOST.into()),
-            port: Cell::new(DEFAULT_PORT),
-            request_counter: Cell::new(0),
-            log_id_counter: Cell::new(0),
-            logs: RefCell::new(Vec::new()),
-            logging: Cell::new(false),
+            host: Mutex::new(DEFAULT_HOST.into()),
+            port: AtomicI64::new(DEFAULT_PORT),
+            request_counter: AtomicI64::new(0),
+            log_id_counter: AtomicI64::new(0),
+            logs: Mutex::new(Vec::new()),
+            logging: AtomicBool::new(false),
             sat,
+            petlja,
         }
+    }
+
+    fn logs(&self) -> std::sync::MutexGuard<'_, Vec<Value>> {
+        self.logs.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// `configure({host, port})` — port `null` (NaN iz parseInt) pada na zadani.
     pub fn configure(&self, host: &str, port: Option<i64>) {
-        *self.host.borrow_mut() = host.to_string();
-        self.port.set(port.unwrap_or(DEFAULT_PORT));
+        *self.host.lock().unwrap_or_else(|e| e.into_inner()) = host.to_string();
+        self.port.store(port.unwrap_or(DEFAULT_PORT), Ordering::SeqCst);
     }
 
     pub fn set_logging_enabled(&self, on: bool) {
-        self.logging.set(on);
+        self.logging.store(on, Ordering::SeqCst);
     }
 
     pub fn is_logging_enabled(&self) -> bool {
-        self.logging.get()
+        self.logging.load(Ordering::SeqCst)
     }
 
     pub fn get_logs(&self) -> Value {
-        Value::Array(self.logs.borrow().clone())
+        Value::Array(self.logs().clone())
     }
 
     pub fn clear_logs(&self) {
-        self.logs.borrow_mut().clear();
+        self.logs().clear();
     }
 
     fn next_request_number(&self) -> i64 {
-        let n = self.request_counter.get() + 1;
-        self.request_counter.set(n);
-        n
+        self.request_counter.fetch_add(1, Ordering::SeqCst) + 1
     }
 
     fn add_log(&self, path: &str, request_xml: &str, response_xml: &str, status: Value, parsed: &Value, trajanje: Duration) {
-        if !self.logging.get() {
+        if !self.logging.load(Ordering::SeqCst) {
             return;
         }
-        let id = self.log_id_counter.get() + 1;
-        self.log_id_counter.set(id);
-        let mut logs = self.logs.borrow_mut();
+        let id = self.log_id_counter.fetch_add(1, Ordering::SeqCst) + 1;
+        let mut logs = self.logs();
         logs.push(json!({
             "id": id,
             "timestamp": self.sat.iso(),
@@ -106,8 +112,8 @@ impl Tring {
     }
 
     fn post_xml(&self, url_path: &str, body: &str) -> Odgovor {
-        let host = self.host.borrow().clone();
-        let port = self.port.get();
+        let host = self.host.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let port = self.port.load(Ordering::SeqCst);
         let start = Instant::now();
         let url = format!("http://{}:{}{}", url_host(&host), port, url_path);
 
@@ -117,6 +123,7 @@ impl Tring {
             .build()
             .into();
 
+        let odmor = self.petlja.odmor();
         let odgovor = agent
             .post(&url)
             .header("Content-Type", "text/xml")
@@ -126,6 +133,7 @@ impl Tring {
                 let xml = res.body_mut().read_to_string()?;
                 Ok((status, xml))
             });
+        drop(odmor);
 
         match odgovor {
             Ok((status, xml)) => {

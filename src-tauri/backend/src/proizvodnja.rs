@@ -795,7 +795,7 @@ fn set_status(db: &Db, data: &Value) -> R<Value> {
     Ok(json!({ "success": true }))
 }
 
-pub fn obradi(b: &mut Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
+pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
     if let Err(e) = b.db() {
         return Some(Err(e));
     }

@@ -123,7 +123,7 @@ fn delete(db: &Db, id: &Value) -> R<Value> {
     Ok(json!({ "changes": r.changes }))
 }
 
-pub fn obradi(b: &mut Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
+pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
     let db = match b.db() {
         Ok(db) => db,
         Err(e) => return Some(Err(e)),

@@ -116,7 +116,7 @@ fn save_cart(db: &Db, naziv: &Value, items: &Value, ukupno: &Value) -> R<Value> 
     Ok(json!(r.last_insert_rowid))
 }
 
-pub fn obradi(b: &mut Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
+pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
     let db = match b.db() {
         Ok(db) => db,
         Err(e) => return Some(Err(e)),

@@ -230,7 +230,7 @@ pub fn device_cash_in(b: &Backend, iznos: f64) -> R<()> {
     Ok(())
 }
 
-pub fn obradi(b: &mut Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
+pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
     if !matches!(kanal, "cash:add" | "cash:retry" | "cash:getToday" | "cash:lastPolog" | "cash:drawerState") {
         return None;
     }

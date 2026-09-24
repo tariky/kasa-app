@@ -1155,7 +1155,7 @@ fn report_get_data(db: &Db, tip: &Value, from: &Value, to: &Value) -> R<Value> {
     baci!("Nepoznat tip izvještaja: {}", js::to_string(tip))
 }
 
-pub fn obradi(b: &mut Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
+pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
     let dan = Dan { danas: b.sat.danas(), godina: b.sat.godina() };
     let db = match b.db() {
         Ok(db) => db,
