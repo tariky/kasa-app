@@ -147,8 +147,8 @@ export default function ProizvodnjaScreen({ korisnikId, uloga, initialNalogId }:
   return (
     <div className="flex flex-col h-full bg-[#f4f6f9]">
       <div className="flex-shrink-0 bg-white border-b border-slate-200/80 px-6 py-3.5">
-        <div className="flex items-center justify-between gap-4">
-          <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2.5">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2.5">
             <h2 className="text-[15px] font-semibold text-slate-800 tracking-tight">Proizvodnja</h2>
             <div className="flex items-center gap-1 bg-slate-100 rounded-xl p-1">
               {([['nalozi', 'Radni nalozi', Hammer], ['normativi', 'Normativi', ClipboardList]] as const).map(([id, label, Icon]) => (
@@ -196,11 +196,11 @@ export default function ProizvodnjaScreen({ korisnikId, uloga, initialNalogId }:
                   <table className="w-full border-separate border-spacing-0">
                     <LedgerHead columns={[
                       { label: 'Broj', className: 'text-left pl-5 pr-2 w-[100px]' },
-                      { label: 'Datum', className: 'text-left px-2 w-[90px]' },
-                      { label: 'Vrsta', className: 'text-left px-2 w-[90px]' },
+                      { label: 'Datum', className: 'text-left px-2 w-[90px] hidden xl:table-cell' },
+                      { label: 'Vrsta', className: 'text-left px-2 w-[90px] hidden 2xl:table-cell' },
                       { label: 'Kupac / proizvod', className: 'text-left px-2' },
-                      { label: 'Rok', className: 'text-left px-2 w-[90px]' },
-                      { label: 'Cijena', className: 'text-right px-2 w-[110px]' },
+                      { label: 'Rok', className: 'text-left px-2 w-[90px] hidden lg:table-cell' },
+                      { label: 'Cijena', className: 'text-right px-2 w-[110px] hidden md:table-cell' },
                       { label: 'Status', className: 'text-right pr-5 pl-2 w-[110px]' },
                     ]} />
                     <tbody>
@@ -211,14 +211,14 @@ export default function ProizvodnjaScreen({ korisnikId, uloga, initialNalogId }:
                             className={cn('cursor-pointer transition-colors', isSel ? 'bg-blue-50/80' : 'hover:bg-slate-50')}>
                             <td className={cn('pl-5 pr-2 py-2.5 border-b border-slate-100 font-mono text-[11.5px] font-semibold tabular-nums',
                               isSel ? 'text-blue-600 shadow-[inset_3px_0_0_0_#2563eb]' : 'text-slate-500')}>{formatBrojNaloga(n)}</td>
-                            <td className="px-2 py-2.5 border-b border-slate-100 text-[12px] text-slate-500 tabular-nums">{formatDate(n.datum)}</td>
-                            <td className="px-2 py-2.5 border-b border-slate-100 text-[11px] text-slate-500">{n.vrsta === 'narudzba' ? 'Narudžba' : 'Zaliha'}</td>
-                            <td className="px-2 py-2.5 border-b border-slate-100 text-[12px] text-slate-700 truncate max-w-[260px]">
+                            <td className="hidden xl:table-cell px-2 py-2.5 border-b border-slate-100 text-[12px] text-slate-500 tabular-nums">{formatDate(n.datum)}</td>
+                            <td className="hidden 2xl:table-cell px-2 py-2.5 border-b border-slate-100 text-[11px] text-slate-500">{n.vrsta === 'narudzba' ? 'Narudžba' : 'Zaliha'}</td>
+                            <td className="px-2 py-2.5 border-b border-slate-100 text-[12px] text-slate-700 truncate max-w-0 w-full">
                               {n.vrsta === 'narudzba' ? (n.kupacNaziv || '—') : `${n.productNaziv} × ${n.kolicina}`}
                               <span className="block text-[10.5px] text-slate-400 truncate">{n.opis}</span>
                             </td>
-                            <td className="px-2 py-2.5 border-b border-slate-100 text-[12px] text-slate-400 tabular-nums">{n.rok ? formatDate(n.rok) : '—'}</td>
-                            <td className="px-2 py-2.5 border-b border-slate-100 text-right font-mono text-[12.5px] font-semibold tabular-nums text-slate-800">
+                            <td className="hidden lg:table-cell px-2 py-2.5 border-b border-slate-100 text-[12px] text-slate-400 tabular-nums">{n.rok ? formatDate(n.rok) : '—'}</td>
+                            <td className="hidden md:table-cell px-2 py-2.5 border-b border-slate-100 text-right font-mono text-[12.5px] font-semibold tabular-nums text-slate-800">
                               {n.dogovorenaCijena != null ? formatKM(n.dogovorenaCijena) : '—'}
                             </td>
                             <td className="pr-5 pl-2 py-2.5 border-b border-slate-100 text-right"><StatusChip status={n.status} /></td>
@@ -233,60 +233,77 @@ export default function ProizvodnjaScreen({ korisnikId, uloga, initialNalogId }:
           </div>
 
           {/* Detalj */}
-          <div className="w-[460px] flex-shrink-0">
+          <div className="w-[340px] lg:w-[380px] 2xl:w-[440px] flex-shrink-0">
             {selected ? (
               <div className="bg-white rounded-2xl border border-slate-200/70 shadow-sm shadow-slate-200/40 h-full flex flex-col overflow-hidden">
-                <div className="flex-shrink-0 px-5 pt-5 pb-3">
+                {/* Zaglavlje */}
+                <div className="flex-shrink-0 px-5 pt-5 pb-4">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <Eyebrow>{selected.vrsta === 'narudzba' ? 'Radni nalog po narudžbi' : 'Radni nalog za zalihu'}</Eyebrow>
+                      <Eyebrow>{selected.vrsta === 'narudzba' ? 'Nalog po narudžbi' : 'Nalog za zalihu'}</Eyebrow>
                       <h3 className="text-[19px] font-bold font-mono tracking-tight text-slate-900 leading-tight mt-1">{formatBrojNaloga(selected)}</h3>
                       <p className="text-[11.5px] text-slate-400 mt-0.5 tabular-nums">
-                        {formatDate(selected.datum)}{selected.rok ? ` · rok ${formatDate(selected.rok)}` : ''}
+                        {formatDate(selected.datum)}
+                        {selected.rok && <span className="ml-2">rok <span className="text-slate-600 font-medium">{formatDate(selected.rok)}</span></span>}
                       </p>
                     </div>
-                    <StatusChip status={selected.status} size="md" />
+                    <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
+                      <StatusChip status={selected.status} size="md" />
+                      {(uredivo || selected.status === 'zavrsen') && (
+                        <button onClick={() => { setEditNalog(selected); setFormOpen(true); }}
+                          className="flex items-center gap-1 rounded-md px-1.5 py-0.5 -mr-1.5 text-[11px] font-medium text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50">
+                          <Pencil size={11} /> Uredi
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
 
-                <div className="flex-shrink-0 px-5 pb-3">
-                  <dl className="rounded-xl bg-slate-50/80 border border-slate-100 px-4 py-3 space-y-1.5 text-[12px]">
-                    {selected.vrsta === 'narudzba' ? (
-                      <div className="flex justify-between gap-3"><dt className="text-slate-400">Kupac</dt><dd className="font-medium text-slate-700 text-right truncate">{selected.kupacNaziv || '—'}</dd></div>
-                    ) : (
-                      <div className="flex justify-between gap-3"><dt className="text-slate-400">Proizvod</dt><dd className="font-medium text-slate-700 text-right truncate">{selected.productNaziv} × {selected.kolicina}</dd></div>
-                    )}
-                    <div className="flex justify-between gap-3"><dt className="text-slate-400">Opis</dt><dd className="text-slate-700 text-right">{selected.opis}</dd></div>
-                    {selected.ponudaBroj && (
-                      <div className="flex justify-between gap-3"><dt className="text-slate-400">Iz ponude</dt><dd className="font-mono text-slate-600">{selected.ponudaBroj}/{selected.ponudaGodina}</dd></div>
-                    )}
-                    {selected.racunBroj && (
-                      <div className="flex justify-between gap-3"><dt className="text-violet-400">Fiskalni račun</dt>
-                        <dd className="font-mono font-medium text-violet-600">#{selected.racunBroj}{selected.racunStatus === 'refunded' ? ' · stornirano' : ''}</dd></div>
-                    )}
-                    {selected.napomena && <p className="pt-1.5 border-t border-slate-200/70 text-[11.5px] text-slate-500">{selected.napomena}</p>}
-                  </dl>
+                {/* Sadržaj — jedan skrol, da se stavke ne stisnu na niskom ekranu */}
+                <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
+                  <div className="min-h-full flex flex-col">
+                    <div className="px-5 pb-4">
+                      <dl className="rounded-xl bg-slate-50/80 border border-slate-100 px-4 py-3 space-y-2 text-[12px]">
+                        {selected.vrsta === 'narudzba' ? (
+                          <div className="flex items-baseline justify-between gap-3"><dt className="text-slate-400 flex-shrink-0">Kupac</dt><dd className="font-medium text-slate-700 text-right truncate">{selected.kupacNaziv || '—'}</dd></div>
+                        ) : (
+                          <div className="flex items-baseline justify-between gap-3"><dt className="text-slate-400 flex-shrink-0">Proizvod</dt><dd className="font-medium text-slate-700 text-right truncate">{selected.productNaziv} × {selected.kolicina}</dd></div>
+                        )}
+                        {selected.opis && (
+                          <div className="flex items-baseline justify-between gap-3"><dt className="text-slate-400 flex-shrink-0">Opis</dt><dd className="text-slate-700 text-right break-words min-w-0">{selected.opis}</dd></div>
+                        )}
+                        {selected.vrsta === 'narudzba' && selected.dogovorenaCijena != null && (
+                          <div className="flex items-baseline justify-between gap-3"><dt className="text-slate-400 flex-shrink-0">Cijena</dt><dd className="font-mono font-medium tabular-nums text-slate-700">{formatKM(selected.dogovorenaCijena)}</dd></div>
+                        )}
+                        {selected.ponudaBroj && (
+                          <div className="flex items-baseline justify-between gap-3"><dt className="text-slate-400">Iz ponude</dt><dd className="font-mono text-slate-600">{selected.ponudaBroj}/{selected.ponudaGodina}</dd></div>
+                        )}
+                        {selected.racunBroj && (
+                          <div className="flex items-baseline justify-between gap-3"><dt className="text-violet-400">Fiskalni račun</dt>
+                            <dd className="font-mono font-medium text-violet-600">#{selected.racunBroj}{selected.racunStatus === 'refunded' ? ', stornirano' : ''}</dd></div>
+                        )}
+                        {selected.napomena && <p className="pt-2 border-t border-slate-200/70 text-[11.5px] text-slate-500">{selected.napomena}</p>}
+                      </dl>
+                    </div>
+
+                    <div className="flex-1 border-t border-slate-100">
+                      <StavkeUtroska
+                        nalogId={selected.id}
+                        stavke={selected.stavke ?? []}
+                        uredivo={!!uredivo}
+                        onDirtyChange={setStavkeDirty}
+                        onSave={async (stavke) => { await window.api.saveNalogStavke(selected.id, stavke); await select(selected.id); }}
+                      />
+                    </div>
+                    <KalkulacijaPanel
+                      nalog={selected} kalkulacija={kalk} uredivo={!!uredivo}
+                      onTrosakRada={async (iznos) => { await window.api.updateNalog(selected.id, { trosakRada: iznos }); await select(selected.id); }}
+                    />
+                  </div>
                 </div>
 
-                <div className="flex-1 min-h-0 border-t border-slate-100">
-                  <StavkeUtroska
-                    nalogId={selected.id}
-                    stavke={selected.stavke ?? []}
-                    uredivo={!!uredivo}
-                    onDirtyChange={setStavkeDirty}
-                    onSave={async (stavke) => { await window.api.saveNalogStavke(selected.id, stavke); await select(selected.id); }}
-                  />
-                </div>
-                <KalkulacijaPanel
-                  nalog={selected} kalkulacija={kalk} uredivo={!!uredivo}
-                  onTrosakRada={async (iznos) => { await window.api.updateNalog(selected.id, { trosakRada: iznos }); await select(selected.id); }}
-                />
-
+                {/* Akcije — sljedeći korak naloga je glavni */}
                 <div className="flex-shrink-0 border-t border-slate-100 px-5 py-3.5 space-y-2">
-                  <ActionRow icon={Printer} label="Štampaj nalog" onClick={() => printPdf(selected)}
-                    disabled={stavkeDirty} hint={stavkeDirty ? 'spremi stavke' : undefined}
-                    trailing={{ icon: Download, onClick: () => exportPdf(selected), title: 'Sačuvaj PDF', disabled: stavkeDirty }} />
-                  {selected.status === 'otvoren' && <ActionRow icon={Play} label="U izradu" onClick={uIzradu} />}
                   {uredivo && (selected.stavke?.length ?? 0) > 0 && (
                     <ActionRow icon={CheckCircle2} label="Završi nalog" tone="primary" onClick={() => setZavrsiOpen(true)}
                       disabled={stavkeDirty} hint={stavkeDirty ? 'spremi stavke' : undefined} />
@@ -294,18 +311,27 @@ export default function ProizvodnjaScreen({ korisnikId, uloga, initialNalogId }:
                   {selected.status === 'zavrsen' && selected.vrsta === 'narudzba' && (
                     <ActionRow icon={Receipt} label="Izdaj račun" tone="primary" onClick={() => setRacunOpen(true)} />
                   )}
+                  <ActionRow icon={Printer} label="Štampaj nalog" onClick={() => printPdf(selected)}
+                    disabled={stavkeDirty} hint={stavkeDirty ? 'spremi stavke' : undefined}
+                    trailing={{ icon: Download, onClick: () => exportPdf(selected), title: 'Sačuvaj PDF', disabled: stavkeDirty }} />
+                  {selected.status === 'otvoren' && <ActionRow icon={Play} label="U izradu" onClick={uIzradu} />}
                   {selected.status === 'zavrsen' && uloga === 'admin' && (
                     <ActionRow icon={Undo2} label="Vrati u izradu" onClick={() => setVratiOpen(true)} />
                   )}
-                  {(uredivo || selected.status === 'zavrsen') && (
-                    <ActionRow icon={Pencil} label="Uredi zaglavlje" onClick={() => { setEditNalog(selected); setFormOpen(true); }} />
+                  {uredivo && (
+                    <div className="pt-2 mt-1 border-t border-slate-100">
+                      <ActionRow icon={Trash2} label="Obriši nalog" tone="danger" onClick={() => setBrisiOpen(true)} />
+                    </div>
                   )}
-                  {uredivo && <ActionRow icon={Trash2} label="Obriši nalog" tone="danger" onClick={() => setBrisiOpen(true)} />}
                 </div>
               </div>
             ) : (
-              <div className="h-full flex items-center justify-center text-[12.5px] text-slate-400 bg-white/60 rounded-2xl border border-dashed border-slate-200">
-                Odaberite nalog iz liste
+              <div className="bg-white rounded-2xl border border-slate-200/70 shadow-sm shadow-slate-200/40 h-full flex flex-col items-center justify-center px-8 text-center select-none">
+                <div className="w-12 h-12 rounded-2xl bg-slate-50 flex items-center justify-center mb-3">
+                  <Hammer size={20} className="text-slate-300" strokeWidth={1.5} />
+                </div>
+                <p className="text-[13px] font-medium text-slate-500">Odaberite nalog</p>
+                <p className="text-[12px] text-slate-400 mt-0.5">Stavke utroška, kalkulacija i akcije pojavljuju se ovdje.</p>
               </div>
             )}
           </div>
