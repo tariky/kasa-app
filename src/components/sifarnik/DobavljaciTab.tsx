@@ -13,6 +13,7 @@ import { Separator } from '@/components/ui/separator';
 import {
   Plus, Trash2, Search, Pencil, X, Building2, Phone,
 } from 'lucide-react';
+import { potvrdi, obavijesti } from '@/lib/dijalog';
 
 // ---------------------------------------------------------------------------
 // Dobavljač Dialog
@@ -229,9 +230,9 @@ export function DobavljaciTab({
   };
 
   const handleDelete = async (d: Dobavljac) => {
-    if (!confirm(`Obrisati dobavljača "${d.naziv}"?`)) return;
+    if (!(await potvrdi(`Obrisati dobavljača "${d.naziv}"?`))) return;
     try { await window.api.deleteDobavljac(d.id); onReload(); }
-    catch (e) { alert(porukaGreske(e)); }
+    catch (e) { await obavijesti(porukaGreske(e)); }
   };
 
   const filtered = dobavljaci.filter(d => {

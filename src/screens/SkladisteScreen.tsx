@@ -23,6 +23,7 @@ import {
   DollarSign, Layers, Ruler, ChevronRight, Building2,
   ArrowUpRight, ArrowDownRight, Lock, RefreshCw,
 } from 'lucide-react';
+import { potvrdi, obavijesti } from '@/lib/dijalog';
 
 type SkladisteTab = 'artikli' | 'primke';
 
@@ -373,9 +374,9 @@ function ArtikliTab({
   };
 
   const handleDelete = async (p: Product) => {
-    if (!confirm(`Obrisati artikal "${p.naziv}"?`)) return;
+    if (!(await potvrdi(`Obrisati artikal "${p.naziv}"?`))) return;
     try { await window.api.deleteProduct(p.id); onReload(); }
-    catch (e) { alert(porukaGreske(e)); }
+    catch (e) { await obavijesti(porukaGreske(e)); }
   };
 
   const filtered = products

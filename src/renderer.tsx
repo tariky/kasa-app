@@ -1,3 +1,5 @@
+// Mora biti prvi: pod Tauri-jem pravi `window.api` prije nego ga ekrani koriste.
+import './tauri/api';
 import './index.css';
 import React from 'react';
 import { createRoot } from 'react-dom/client';

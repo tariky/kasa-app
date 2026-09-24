@@ -18,6 +18,7 @@ import { OtpremnicaPdf } from '@/components/OtpremnicaPdf';
 import { PrilogPdf } from '@/components/PrilogPdf';
 import PrilogRacunDialog from '@/components/PrilogRacunDialog';
 import type { User, Product, CartItem, Kupac } from '@/types';
+import { potvrdi } from '@/lib/dijalog';
 
 type PaymentType = 'Gotovina' | 'Kartica' | 'Virman' | 'Ček';
 
@@ -342,7 +343,7 @@ export default function KasaScreen({ user }: KasaScreenProps) {
   }, [cart, total, loadSavedCarts]);
 
   const handleRestoreCart = useCallback(async (saved: SavedCartRow) => {
-    if (cart.length > 0 && !window.confirm('Trenutna košarica nije prazna i bit će zamijenjena. Nastaviti?')) return;
+    if (cart.length > 0 && !(await potvrdi('Trenutna košarica nije prazna i bit će zamijenjena. Nastaviti?'))) return;
     try {
       // Svježi podaci iz šifarnika — cijene i stanje se provjeravaju sada.
       const fresh: Product[] = await window.api.getProducts();

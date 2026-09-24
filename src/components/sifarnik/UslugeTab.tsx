@@ -18,6 +18,7 @@ import { Badge } from '@/components/ui/badge';
 import {
   Plus, Trash2, Search, Pencil, X, Wrench,
 } from 'lucide-react';
+import { potvrdi, obavijesti } from '@/lib/dijalog';
 
 // ---------------------------------------------------------------------------
 // Usluga Dialog — simplified for services
@@ -172,9 +173,9 @@ export function UslugeTab({ usluge, onReload }: { usluge: Product[]; onReload: (
   const handleNew = () => { setEditProduct(null); setDialogOpen(true); };
   const handleEdit = (p: Product) => { setEditProduct(p); setDialogOpen(true); };
   const handleDelete = async (p: Product) => {
-    if (!confirm(`Obrisati uslugu "${p.naziv}"?`)) return;
+    if (!(await potvrdi(`Obrisati uslugu "${p.naziv}"?`))) return;
     try { await window.api.deleteProduct(p.id); onReload(); }
-    catch (e) { alert(porukaGreske(e)); }
+    catch (e) { await obavijesti(porukaGreske(e)); }
   };
 
   const handleDialogOpenChange = (v: boolean) => {

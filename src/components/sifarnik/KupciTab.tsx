@@ -13,6 +13,7 @@ import { Separator } from '@/components/ui/separator';
 import {
   Plus, Trash2, Search, Pencil, X, Users, Phone,
 } from 'lucide-react';
+import { potvrdi, obavijesti } from '@/lib/dijalog';
 
 // ---------------------------------------------------------------------------
 // Kupac Dialog
@@ -256,9 +257,9 @@ export function KupciTab({
   };
 
   const handleDelete = async (k: Kupac) => {
-    if (!confirm(`Obrisati kupca "${k.naziv}"?`)) return;
+    if (!(await potvrdi(`Obrisati kupca "${k.naziv}"?`))) return;
     try { await window.api.deleteKupac(k.id); onReload(); }
-    catch (e) { alert(porukaGreske(e)); }
+    catch (e) { await obavijesti(porukaGreske(e)); }
   };
 
   const filtered = kupci.filter(k => {

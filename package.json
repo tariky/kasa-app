@@ -13,7 +13,12 @@
     "lint": "eslint --ext .ts,.tsx .",
     "test": "bun test",
     "test:rust": "cargo build --manifest-path src-tauri/Cargo.toml -p pazar-backend --bin ugovor-server && KASA_BACKEND=rust bun test src/ipc/ugovor",
-    "licence": "bun tools/licenca-gui/server.ts"
+    "licence": "bun tools/licenca-gui/server.ts",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "tauri:vite": "vite --config vite.tauri.config.ts",
+    "tauri:vite:build": "vite build --config vite.tauri.config.ts"
   },
   "keywords": [],
   "author": {
@@ -32,6 +37,7 @@
     "@electron-forge/plugin-vite": "^7.11.1",
     "@electron/fuses": "^1.8.0",
     "@electron/rebuild": "^4.0.3",
+    "@tauri-apps/cli": "^2.11.5",
     "@types/better-sqlite3": "^7.6.13",
     "@types/electron-squirrel-startup": "^1.0.2",
     "@types/react": "^19.2.14",
@@ -63,6 +69,8 @@
     "@radix-ui/react-toast": "^1.2.15",
     "@radix-ui/react-tooltip": "^1.2.8",
     "@react-pdf/renderer": "^4.3.2",
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-dialog": "^2.7.3",
     "better-sqlite3": "^12.6.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { Plus, Trash2, Search, Pencil, X, Layers } from 'lucide-react';
+import { potvrdi } from '@/lib/dijalog';
 
 const JEDINICE = [JM_PLOCA, 'kom', 'm', 'kg', 'l', 'pak'] as const;
 
@@ -120,7 +121,7 @@ export function MaterijalTab({ materijali, onReload }: { materijali: Product[]; 
   };
 
   const handleDelete = async (p: Product) => {
-    if (!confirm(`Obrisati materijal "${p.naziv}"?`)) return;
+    if (!(await potvrdi(`Obrisati materijal "${p.naziv}"?`))) return;
     try { await window.api.deleteProduct(p.id); onReload(); }
     catch (e: any) { setMsg(e?.message || 'Greška'); }
   };
