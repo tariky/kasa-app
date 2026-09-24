@@ -175,12 +175,10 @@ const s = StyleSheet.create({
     marginBottom: 2,
   },
   tHeaderCell: {
-    fontSize: 7,
+    fontSize: 7.5,
     fontFamily: FB,
     fontWeight: 700,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-    color: '#000',
+    color: '#555',
   },
   tRow: {
     flexDirection: 'row',

@@ -92,8 +92,7 @@ const s = StyleSheet.create({
     borderBottom: '1.5pt solid #000', paddingBottom: 4, marginBottom: 2,
   },
   tHeaderCell: {
-    fontSize: 6.5, fontFamily: FB, fontWeight: 700, textTransform: 'uppercase',
-    letterSpacing: 0.5, color: '#000', paddingRight: 6,
+    fontSize: 7.5, fontFamily: FB, fontWeight: 700, color: '#555', paddingRight: 6,
   },
   tHeaderCellLast: { paddingRight: 0 },
   tRow: { flexDirection: 'row', paddingVertical: 5, borderBottom: '0.5pt solid #ddd', alignItems: 'flex-start' },

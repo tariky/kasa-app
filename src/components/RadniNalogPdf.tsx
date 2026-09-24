@@ -33,7 +33,7 @@ const s = StyleSheet.create({
   opisText: { fontSize: 10, lineHeight: 1.4 },
   table: { marginBottom: 20 },
   tHeaderRow: { flexDirection: 'row', borderBottom: '1.5pt solid #000', paddingBottom: 5, marginBottom: 2 },
-  tHeaderCell: { fontSize: 7, fontFamily: FB, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.8 },
+  tHeaderCell: { fontSize: 7.5, fontFamily: FB, fontWeight: 700, color: '#555' },
   tRow: { flexDirection: 'row', paddingVertical: 5, borderBottom: '0.5pt solid #ddd', alignItems: 'flex-start' },
   tCell: { fontSize: 8.5, lineHeight: 1.3 },
   tCellBold: { fontSize: 8.5, fontFamily: FB, fontWeight: 700, lineHeight: 1.3 },
