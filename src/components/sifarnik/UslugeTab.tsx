@@ -90,7 +90,6 @@ function UslugaDialog({
                 onRezim={cijena.setRezim}
                 stopa={pdvStopa}
                 bruto={cijena.bruto}
-                inputClassName="font-mono"
               />
             </div>
             <div className="space-y-2">

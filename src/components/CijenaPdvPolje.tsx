@@ -14,21 +14,18 @@ interface Props {
   /** Bruto iznos izveden iz unosa (NaN dok unos nije broj). */
   bruto: number;
   onKeyDown?: React.KeyboardEventHandler<HTMLInputElement>;
-  inputClassName?: string;
 }
 
-const REZIMI: { bezPdv: boolean; label: string }[] = [
-  { bezPdv: false, label: 'sa PDV-om' },
-  { bezPdv: true, label: 'bez PDV-a' },
-];
+const iznos = (n: number) => formatKM(n).replace(/\s*KM$/, '');
 
 /**
- * Polje za cijenu uz koje operator bira upisuje li cijenu sa PDV-om ili bez.
- * Ispod polja uvijek stoji drugi iznos, da se odmah vidi šta kupac plaća.
- * Kod stope K (0 %) izbor nema smisla pa se ne prikazuje.
+ * Polje za cijenu spojeno s malim obračunom ispod: osnovica, PDV i iznos sa
+ * PDV-om. Red koji operator upisuje je označen — klik na drugi red prebacuje
+ * unos (117 sa PDV-om postaje 100 bez PDV-a, cijena ostaje ista).
+ * Kod stope K (0 %) obračun nema smisla pa se prikazuje samo napomena.
  */
 export const CijenaPdvPolje = forwardRef<HTMLInputElement, Props>(function CijenaPdvPolje(
-  { id, unos, onUnos, bezPdv, onRezim, stopa, bruto, onKeyDown, inputClassName }, ref,
+  { id, unos, onUnos, bezPdv, onRezim, stopa, bruto, onKeyDown }, ref,
 ) {
   const saPdv = stopa === 'E';
   const netto = bezPdv && saPdv;
@@ -37,48 +34,115 @@ export const CijenaPdvPolje = forwardRef<HTMLInputElement, Props>(function Cijen
   const pdv = round2(bruto - osnovica);
 
   return (
-    <div className="space-y-1.5">
-      <DecimalInput
-        id={id}
-        ref={ref}
-        value={unos}
-        onValueChange={text => onUnos(text)}
-        onKeyDown={onKeyDown}
-        placeholder="0,00"
-        aria-label={netto ? 'Cijena bez PDV-a' : 'Cijena sa PDV-om'}
-        className={inputClassName}
-      />
+    <div
+      className={cn(
+        'rounded-xl border border-slate-200 bg-white overflow-hidden transition-shadow',
+        'focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-500/20',
+      )}
+    >
+      <div className="relative">
+        <span
+          className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[11px] font-medium text-slate-400"
+          aria-hidden
+        >
+          {saPdv ? (netto ? 'bez PDV' : 'sa PDV') : 'KM'}
+        </span>
+        <DecimalInput
+          id={id}
+          ref={ref}
+          value={unos}
+          onValueChange={text => onUnos(text)}
+          onKeyDown={onKeyDown}
+          placeholder="0,00"
+          aria-label={saPdv ? (netto ? 'Cijena bez PDV-a' : 'Cijena sa PDV-om') : 'Cijena'}
+          className={cn(
+            'h-11 border-0 rounded-none bg-transparent pl-16 pr-3 text-right font-mono text-base shadow-none',
+            'focus-visible:ring-0 focus-visible:ring-offset-0',
+          )}
+        />
+      </div>
+
       {saPdv ? (
-        <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5" role="radiogroup" aria-label="Upisana cijena je">
-          {REZIMI.map(r => (
-            <button
-              key={r.label}
-              type="button"
-              role="radio"
-              aria-checked={bezPdv === r.bezPdv}
-              onClick={() => onRezim(r.bezPdv)}
-              className={cn(
-                'h-6 px-2.5 rounded-md text-[11.5px] font-medium transition-colors',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40',
-                bezPdv === r.bezPdv ? 'bg-slate-900 text-white' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50',
-              )}
-            >
-              {r.label}
-            </button>
-          ))}
+        <div
+          className="border-t border-slate-100 bg-slate-50/70 px-1 py-1 text-[12px]"
+          role="radiogroup"
+          aria-label="Upisujem cijenu"
+          onKeyDown={e => {
+            if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+              e.preventDefault();
+              const grupa = e.currentTarget;
+              onRezim(e.key === 'ArrowUp');
+              requestAnimationFrame(() =>
+                grupa.querySelector<HTMLElement>('[aria-checked="true"]')?.focus());
+            }
+          }}
+        >
+          <Red
+            odabran={netto}
+            onClick={() => onRezim(true)}
+            naziv="Bez PDV-a"
+            vrijednost={ima ? iznos(osnovica) : '—'}
+          />
+          <div className="flex items-center justify-between gap-2 whitespace-nowrap pl-7 pr-2 h-6 text-slate-400">
+            <span>PDV 17 %</span>
+            <span className="font-mono tabular-nums">{ima ? `+ ${iznos(pdv)}` : '—'}</span>
+          </div>
+          <Red
+            odabran={!netto}
+            onClick={() => onRezim(false)}
+            naziv="Sa PDV-om"
+            vrijednost={ima ? iznos(bruto) : '—'}
+            istaknut
+          />
         </div>
       ) : (
-        <p className="text-[12px] text-slate-500">Stopa K — bez PDV-a</p>
-      )}
-      {saPdv && (
-        <p className="text-[12px] leading-[18px] text-slate-600 min-h-[36px]" aria-live="polite">
-          {ima && (netto ? (
-            <>Kupac plaća <span className="font-mono font-semibold text-slate-900">{formatKM(bruto)}</span> <span className="block text-slate-400">u tome PDV {formatKM(pdv)}</span></>
-          ) : (
-            <>Bez PDV-a <span className="font-mono font-semibold text-slate-900">{formatKM(osnovica)}</span> <span className="block text-slate-400">+ PDV {formatKM(pdv)}</span></>
-          ))}
+        <p className="border-t border-slate-100 bg-slate-50/70 px-3 py-2 text-[12px] text-slate-500">
+          Stopa K — bez PDV-a
         </p>
       )}
     </div>
   );
 });
+
+function Red({ odabran, onClick, naziv, vrijednost, istaknut }: {
+  odabran: boolean;
+  onClick: () => void;
+  naziv: string;
+  vrijednost: string;
+  istaknut?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={odabran}
+      tabIndex={odabran ? 0 : -1}
+      onClick={onClick}
+      title={odabran ? 'Ovaj iznos upisuješ u polje' : `Upiši ${naziv.toLowerCase()} u polje`}
+      className={cn(
+        'group flex w-full items-center gap-2 whitespace-nowrap rounded-md pl-2 pr-2 h-7 text-left transition-colors',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40',
+        odabran ? 'bg-white shadow-[0_0_0_1px_rgb(226_232_240)]' : 'hover:bg-white/80',
+      )}
+    >
+      <span
+        className={cn(
+          'grid h-3.5 w-3.5 shrink-0 place-items-center rounded-full border transition-colors',
+          odabran ? 'border-slate-900 bg-slate-900' : 'border-slate-300 bg-white group-hover:border-slate-500',
+        )}
+        aria-hidden
+      >
+        {odabran && <span className="h-1.5 w-1.5 rounded-full bg-white" />}
+      </span>
+      <span className={cn('flex-1 min-w-0 truncate', odabran ? 'text-slate-900 font-medium' : 'text-slate-500')}>{naziv}</span>
+      <span
+        className={cn(
+          'font-mono tabular-nums',
+          istaknut ? 'font-semibold text-slate-900' : odabran ? 'text-slate-900' : 'text-slate-500',
+        )}
+      >
+        {vrijednost}
+      </span>
+    </button>
+  );
+}

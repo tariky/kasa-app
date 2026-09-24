@@ -214,7 +214,6 @@ function ArtikalDialog({
                 onRezim={cijena.setRezim}
                 stopa={form.pdvStopa}
                 bruto={cijena.bruto}
-                inputClassName="font-mono text-base h-11"
               />
             </div>
             <div className="space-y-1.5">

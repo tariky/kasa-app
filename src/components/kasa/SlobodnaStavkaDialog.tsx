@@ -112,7 +112,6 @@ export default function SlobodnaStavkaDialog({ open, onClose, onDodaj }: Props) 
                   stopa={stopa}
                   bruto={cijena.bruto}
                   onKeyDown={naEnter}
-                  inputClassName="h-11 rounded-xl font-mono text-right"
                 />
               </div>
               <label className="block">
