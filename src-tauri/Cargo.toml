@@ -18,6 +18,11 @@ tauri-plugin-dialog = "2"
 serde_json = { version = "1", features = ["preserve_order"] }
 pazar-backend = { path = "backend" }
 
+# Samo Windows: gašenje WebView2 tipki preglednika (F5 reload…), iste verzije kao u wry-u.
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.38"
+windows = { version = "0.61", features = ["Win32_Foundation"] }
+
 [workspace]
 members = ["backend"]
 resolver = "2"

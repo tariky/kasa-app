@@ -180,7 +180,7 @@ fn novi_prozor(app: &AppHandle, url: tauri::Url, features: tauri::webview::NewWi
 
 fn glavni_prozor(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     let a = app.clone();
-    WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
+    let prozor = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
         .title("Pazar")
         .inner_size(1280.0, 800.0)
         .min_inner_size(1024.0, 700.0)
@@ -191,8 +191,31 @@ fn glavni_prozor(app: &AppHandle) -> tauri::Result<WebviewWindow> {
                 let _ = w.eval(include_str!("smoke.js"));
             }
         })
-        .build()
+        .build()?;
+    iskljuci_precice_preglednika(&prozor);
+    Ok(prozor)
 }
+
+/// WebView2 na Windowsu sam obradi tipke preglednika (F5 = osvježi, Ctrl+F = traži,
+/// F3, Ctrl+P…) prije nego stignu do stranice, pa `preventDefault` u Reactu ne
+/// pomaže: F5 bi osvježio kasu umjesto da naplati. Isključujemo ih isto kao wry
+/// (`with_browser_accelerator_keys(false)`), što Tauri ne izlaže kroz builder.
+/// Nativni meni (Cmd/Ctrl+P → „Štampaj…“) i kontekstni meni ostaju.
+#[cfg(windows)]
+fn iskljuci_precice_preglednika(prozor: &WebviewWindow) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
+    use windows::core::Interface;
+    let _ = prozor.with_webview(|webview| unsafe {
+        let Ok(core) = webview.controller().CoreWebView2() else { return };
+        let Ok(settings) = core.Settings() else { return };
+        if let Ok(s3) = settings.cast::<ICoreWebView2Settings3>() {
+            let _ = s3.SetAreBrowserAcceleratorKeysEnabled(false);
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn iskljuci_precice_preglednika(_prozor: &WebviewWindow) {}
 
 /// Meni s "Štampaj…" (Cmd/Ctrl+P): PDF pregled u WebKitu nema svoju traku za štampu.
 fn meni(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
