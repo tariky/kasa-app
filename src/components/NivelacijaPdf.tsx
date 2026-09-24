@@ -3,6 +3,7 @@ import { Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
 import { Nivelacija, NivelacijaStavka } from '@/types';
 import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
 import { POTPIS_AUTORA } from '@/lib/brend';
+import { kontaktFirme } from '@/lib/firma';
 
 export interface NivelacijaPdfProps {
   nivelacija: Nivelacija;
@@ -14,6 +15,9 @@ export interface NivelacijaPdfProps {
     pdvBroj: string;
     skladiste: string;
     logo: string;
+    web?: string;
+    email?: string;
+    logoVelicina?: number;
   };
 }
 
@@ -202,6 +206,12 @@ export function NivelacijaPdf({ nivelacija, firma }: NivelacijaPdfProps) {
               <Text style={s.fieldLabel}>Adresa:</Text>
               <Text style={s.fieldValue}>{firma.adresa}, {firma.grad}</Text>
             </View>
+            {kontaktFirme(firma) ? (
+              <View style={s.fieldRow}>
+                <Text style={s.fieldLabel}>Web / Email:</Text>
+                <Text style={s.fieldValue}>{kontaktFirme(firma)}</Text>
+              </View>
+            ) : null}
             {firma.idBroj ? (
               <View style={s.fieldRow}>
                 <Text style={s.fieldLabel}>ID broj:</Text>

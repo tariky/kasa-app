@@ -31,6 +31,7 @@ import {
 } from '../lib/ponuda';
 import { buildTringRacun, buildTringReklamacija } from '../lib/tringRacun';
 import { addCashMovement, retryCashMovement, getTodayMovements, getDrawerState, getLastPologIznos } from '../lib/cash';
+import { logoVelicina } from '../lib/firma';
 import * as Tring from '../services/tring';
 import Database from 'better-sqlite3';
 
@@ -1222,7 +1223,10 @@ export function registerIpcHandlers(): void {
       idBroj: settings.idBroj ?? '',
       pdvBroj: settings.pdvBroj ?? '',
       skladiste: settings.skladiste ?? '',
+      web: settings.web ?? '',
+      email: settings.email ?? '',
       logo: settings.logo ?? '',
+      logoVelicina: logoVelicina({ logoVelicina: Number(settings.logoVelicina) }),
       bankAccounts,
     };
   });
@@ -1255,6 +1259,7 @@ export function registerIpcHandlers(): void {
   handle('settings:saveFirma', (data: {
     naziv: string; adresa: string; grad: string;
     idBroj: string; pdvBroj: string; skladiste: string; logo: string;
+    web?: string; email?: string; logoVelicina?: number;
     bankAccounts?: Array<{ bankName: string; accountNumber: string }>;
   }) => {
     const save = db.transaction(() => {
@@ -1268,6 +1273,9 @@ export function registerIpcHandlers(): void {
       upsert.run('firma.pdvBroj', data.pdvBroj);
       upsert.run('firma.skladiste', data.skladiste);
       upsert.run('firma.logo', data.logo);
+      upsert.run('firma.web', data.web ?? '');
+      upsert.run('firma.email', data.email ?? '');
+      upsert.run('firma.logoVelicina', String(logoVelicina(data)));
 
       const accounts = data.bankAccounts ?? [];
       for (let i = 0; i < 3; i++) {

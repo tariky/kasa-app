@@ -3,6 +3,7 @@ import { Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
 import { Primka, PrimkaStavka } from '@/types';
 import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
 import { POTPIS_AUTORA } from '@/lib/brend';
+import { kontaktFirme } from '@/lib/firma';
 
 export interface UlazPdfProps {
   primka: Primka;
@@ -14,6 +15,9 @@ export interface UlazPdfProps {
     pdvBroj: string;
     skladiste: string;
     logo: string;
+    web?: string;
+    email?: string;
+    logoVelicina?: number;
   };
 }
 
@@ -299,6 +303,12 @@ export function UlazPdf({ primka, firma }: UlazPdfProps) {
               <Text style={s.fieldLabel}>Naziv i sjedište trgovca:</Text>
               <Text style={s.fieldValue}>{firma.naziv}   {firma.adresa}   {firma.grad}</Text>
             </View>
+            {kontaktFirme(firma) ? (
+              <View style={s.fieldRow}>
+                <Text style={s.fieldLabel}>Web / Email:</Text>
+                <Text style={s.fieldValue}>{kontaktFirme(firma)}</Text>
+              </View>
+            ) : null}
             <View style={s.fieldRow}>
               <Text style={s.fieldLabel}>Naziv i sjedište dobavljača:</Text>
               <Text style={s.fieldValue}>

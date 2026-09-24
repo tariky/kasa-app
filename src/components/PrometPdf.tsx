@@ -2,6 +2,7 @@ import React from 'react';
 import { Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
 import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
 import { POTPIS_AUTORA } from '@/lib/brend';
+import { kontaktFirme } from '@/lib/firma';
 
 export interface PrometPdfProps {
   orders: any[];
@@ -13,6 +14,9 @@ export interface PrometPdfProps {
     grad: string;
     idBroj: string;
     pdvBroj: string;
+    web?: string;
+    email?: string;
+    logoVelicina?: number;
   };
 }
 
@@ -90,6 +94,12 @@ export function PrometPdf({ orders, dateFrom, dateTo, firma }: PrometPdfProps) {
               <Text style={s.fieldLabel}>Adresa:</Text>
               <Text style={s.fieldValue}>{firma.adresa}, {firma.grad}</Text>
             </View>
+            {kontaktFirme(firma) ? (
+              <View style={s.fieldRow}>
+                <Text style={s.fieldLabel}>Web / Email:</Text>
+                <Text style={s.fieldValue}>{kontaktFirme(firma)}</Text>
+              </View>
+            ) : null}
           </View>
           <View style={s.headerCol}>
             {firma.idBroj ? (

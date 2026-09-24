@@ -4,6 +4,7 @@ import { BankAccount } from '@/types';
 import { formatBrojPonude } from '@/lib/ponuda';
 import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
 import { POTPIS_AUTORA } from '@/lib/brend';
+import { logoVelicina, kontaktFirme } from '@/lib/firma';
 
 export interface PonudaPdfProps {
   ponuda: {
@@ -40,6 +41,9 @@ export interface PonudaPdfProps {
     skladiste: string;
     logo: string;
     bankAccounts: BankAccount[];
+    web?: string;
+    email?: string;
+    logoVelicina?: number;
   };
 }
 
@@ -370,10 +374,11 @@ export function PonudaPdf({ ponuda, firma }: PonudaPdfProps) {
         {/* ── Top: Logo+Firma left, Ponuda title right ── */}
         <View style={s.topBar}>
           <View style={s.logoWrap}>
-            {firma.logo && <Image src={firma.logo} style={s.logo} />}
+            {firma.logo && <Image src={firma.logo} style={[s.logo, { width: logoVelicina(firma), height: logoVelicina(firma) }]} />}
             <View>
               <Text style={s.firmaNaziv}>{firma.naziv}</Text>
               <Text style={s.firmaLine}>{firma.adresa}, {firma.grad}</Text>
+              {kontaktFirme(firma) ? <Text style={s.firmaLine}>{kontaktFirme(firma)}</Text> : null}
             </View>
           </View>
           <View style={s.invoiceLabel}>

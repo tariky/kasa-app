@@ -169,7 +169,11 @@ export interface FirmaSettings {
   idBroj: string;
   pdvBroj: string;
   skladiste: string;
+  web: string;
+  email: string;
   logo: string;
+  /** Veličina loga na dokumentima u pt (vidi LOGO_VELICINA). */
+  logoVelicina: number;
   bankAccounts: BankAccount[];
 }
 

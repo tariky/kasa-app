@@ -6,6 +6,7 @@ import { iznosStavke, pdvStavke } from '@/lib/racun';
 import { round2 } from '@/lib/novac';
 import { prilogNaziv } from '@/lib/prilog';
 import { formatDatumValute } from '@/lib/valuta';
+import { logoVelicina, kontaktFirme } from '@/lib/firma';
 
 /** Red iz `prilog:getStavke` (prilog_stavke + JOIN na products). */
 export interface PrilogPdfStavka {
@@ -29,6 +30,9 @@ export interface PrilogPdfProps {
     skladiste: string;
     logo: string;
     bankAccounts: BankAccount[];
+    web?: string;
+    email?: string;
+    logoVelicina?: number;
   };
   stavke: PrilogPdfStavka[];
 }
@@ -185,10 +189,11 @@ export function PrilogPdf({ order, firma, stavke }: PrilogPdfProps) {
         {/* ── Top: Logo+Firma left, title right ── */}
         <View style={s.topBar}>
           <View style={s.logoWrap}>
-            {firma.logo && <Image src={firma.logo} style={s.logo} />}
+            {firma.logo && <Image src={firma.logo} style={[s.logo, { width: logoVelicina(firma), height: logoVelicina(firma) }]} />}
             <View>
               <Text style={s.firmaNaziv}>{firma.naziv}</Text>
               <Text style={s.firmaLine}>{firma.adresa}, {firma.grad}</Text>
+              {kontaktFirme(firma) ? <Text style={s.firmaLine}>{kontaktFirme(firma)}</Text> : null}
               {firma.bankAccounts.map((b, i) => (
                 <Text key={i} style={s.bankLine}>{b.bankName}: {b.accountNumber}</Text>
               ))}

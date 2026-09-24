@@ -27,6 +27,7 @@ import { prilogKompletan, sumaPriloga } from '@/lib/prilog';
 import { formatDatumValute } from '@/lib/valuta';
 import { gotovinskiIznos } from '@/lib/drawer';
 import { round2 } from '@/lib/novac';
+import { LOGO_VELICINA } from '@/lib/firma';
 
 type Filter = 'sve' | 'aktivni' | 'storno';
 
@@ -213,7 +214,7 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
     try {
       return await window.api.getFirmaSettings();
     } catch {
-      return { naziv: '', adresa: '', grad: '', idBroj: '', pdvBroj: '', skladiste: '', logo: '', bankAccounts: [] };
+      return { naziv: '', adresa: '', grad: '', idBroj: '', pdvBroj: '', skladiste: '', web: '', email: '', logo: '', logoVelicina: LOGO_VELICINA.zadano, bankAccounts: [] };
     }
   };
 

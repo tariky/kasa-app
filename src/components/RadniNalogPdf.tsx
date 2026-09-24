@@ -4,6 +4,7 @@ import type { FirmaSettings, RadniNalog } from '@/types';
 import { formatBrojNaloga } from '@/lib/proizvodnja';
 import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
 import { POTPIS_AUTORA } from '@/lib/brend';
+import { logoVelicina, kontaktFirme } from '@/lib/firma';
 
 const F = PDF_FONT_FAMILY;
 const FB = PDF_FONT_FAMILY_BOLD;
@@ -62,10 +63,11 @@ export function RadniNalogPdf({ nalog, firma }: { nalog: RadniNalog; firma: Firm
       <Page size="A4" style={s.page}>
         <View style={s.topBar}>
           <View style={s.logoWrap}>
-            {firma.logo && <Image src={firma.logo} style={s.logo} />}
+            {firma.logo && <Image src={firma.logo} style={[s.logo, { width: logoVelicina(firma), height: logoVelicina(firma) }]} />}
             <View>
               <Text style={s.firmaNaziv}>{firma.naziv}</Text>
               <Text style={s.firmaLine}>{firma.adresa}, {firma.grad}</Text>
+              {kontaktFirme(firma) ? <Text style={s.firmaLine}>{kontaktFirme(firma)}</Text> : null}
             </View>
           </View>
           <View>

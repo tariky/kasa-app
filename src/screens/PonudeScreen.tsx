@@ -25,6 +25,7 @@ import { localDateStr } from '@/lib/novac';
 import { cn, formatKM, formatDate } from '@/lib/utils';
 import { useProizvodnja } from '@/hooks/useProizvodnja';
 import { formatBrojNaloga } from '@/lib/proizvodnja';
+import { LOGO_VELICINA } from '@/lib/firma';
 
 /** "8 dana od datuma ponude" — bosanska množina: 1/21/31 dan, ostalo dana. */
 function opisRoka(dana: number): string {
@@ -391,7 +392,7 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
     try {
       return await window.api.getFirmaSettings();
     } catch {
-      return { naziv: '', adresa: '', grad: '', idBroj: '', pdvBroj: '', skladiste: '', logo: '', bankAccounts: [] };
+      return { naziv: '', adresa: '', grad: '', idBroj: '', pdvBroj: '', skladiste: '', web: '', email: '', logo: '', logoVelicina: LOGO_VELICINA.zadano, bankAccounts: [] };
     }
   };
 

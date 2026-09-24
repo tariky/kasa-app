@@ -6,6 +6,7 @@ import { POTPIS_AUTORA, POTPIS_AUTORA_EN } from '@/lib/brend';
 import { pdvStavke, iznosStavke } from '@/lib/racun';
 import { uNetto } from '@/lib/pdvUnos';
 import { formatDatumValute } from '@/lib/valuta';
+import { logoVelicina, kontaktFirme } from '@/lib/firma';
 
 export type InvoiceLang = 'bs' | 'en';
 
@@ -20,6 +21,9 @@ export interface RacunPdfProps {
     skladiste: string;
     logo: string;
     bankAccounts: BankAccount[];
+    web?: string;
+    email?: string;
+    logoVelicina?: number;
   };
   lang?: InvoiceLang;
 }
@@ -440,10 +444,11 @@ export function RacunPdf({ order, firma, lang = 'bs' }: RacunPdfProps) {
         {/* ── Top: Logo+Firma left, Invoice title right ── */}
         <View style={s.topBar}>
           <View style={s.logoWrap}>
-            {firma.logo && <Image src={firma.logo} style={s.logo} />}
+            {firma.logo && <Image src={firma.logo} style={[s.logo, { width: logoVelicina(firma), height: logoVelicina(firma) }]} />}
             <View>
               <Text style={s.firmaNaziv}>{firma.naziv}</Text>
               <Text style={s.firmaLine}>{firma.adresa}, {firma.grad}</Text>
+              {kontaktFirme(firma) ? <Text style={s.firmaLine}>{kontaktFirme(firma)}</Text> : null}
             </View>
           </View>
           <View style={s.invoiceLabel}>

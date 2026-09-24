@@ -12,6 +12,9 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
+import { Slider } from '@/components/ui/slider';
+import { ZaglavljePrikaz } from '@/components/ZaglavljePrikaz';
+import { LOGO_VELICINA, kontaktFirme } from '@/lib/firma';
 import { cn } from '@/lib/utils';
 import { User, TringSettings, BankAccount } from '@/types';
 import {
@@ -19,7 +22,7 @@ import {
   Users, Printer, Building2, Shield, Hash, KeyRound,
   MapPin, FileText, Image, CheckCircle2, AlertTriangle,
   HardDrive, Download, Upload, Bug, RefreshCw, X, ChevronDown, ChevronUp, Settings, Landmark, Percent,
-  Paperclip,
+  Paperclip, Globe, Mail,
 } from 'lucide-react';
 
 type SettingsTab = 'korisnici' | 'fiskalni' | 'firma' | 'sistem';
@@ -49,6 +52,9 @@ export default function PostavkeScreen() {
   const [firmaPdvBroj, setFirmaPdvBroj] = useState('');
   const [firmaSkladiste, setFirmaSkladiste] = useState('');
   const [firmaLogo, setFirmaLogo] = useState('');
+  const [firmaLogoVelicina, setFirmaLogoVelicina] = useState<number>(LOGO_VELICINA.zadano);
+  const [firmaWeb, setFirmaWeb] = useState('');
+  const [firmaEmail, setFirmaEmail] = useState('');
   const [firmaBankAccounts, setFirmaBankAccounts] = useState<BankAccount[]>([
     { bankName: '', accountNumber: '' },
     { bankName: '', accountNumber: '' },
@@ -170,6 +176,9 @@ export default function PostavkeScreen() {
       setFirmaPdvBroj(s.pdvBroj);
       setFirmaSkladiste(s.skladiste);
       setFirmaLogo(s.logo);
+      setFirmaLogoVelicina(s.logoVelicina);
+      setFirmaWeb(s.web);
+      setFirmaEmail(s.email);
 
       const padded: BankAccount[] = [0, 1, 2].map(i =>
         s.bankAccounts[i] ?? { bankName: '', accountNumber: '' }
@@ -252,7 +261,8 @@ export default function PostavkeScreen() {
     await window.api.saveFirmaSettings({
       naziv: firmaNaziv, adresa: firmaAdresa, grad: firmaGrad,
       idBroj: firmaIdBroj, pdvBroj: firmaPdvBroj,
-      skladiste: firmaSkladiste, logo: firmaLogo,
+      skladiste: firmaSkladiste, logo: firmaLogo, logoVelicina: firmaLogoVelicina,
+      web: firmaWeb.trim(), email: firmaEmail.trim(),
       bankAccounts: cleanedAccounts,
     });
     setFirmaStatus('Postavke firme spremljene!');
@@ -792,7 +802,7 @@ export default function PostavkeScreen() {
                       </div>
                     </div>
                   </div>
-                  <div className="px-6 py-5">
+                  <div className="px-6 py-5 space-y-5">
                     <div className="flex items-center gap-5">
                       {firmaLogo ? (
                         <div className="w-20 h-20 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center overflow-hidden">
@@ -807,6 +817,52 @@ export default function PostavkeScreen() {
                         <Input type="file" accept="image/*" onChange={handleLogoChange} className="text-[12px] h-9 bg-slate-50 border-slate-200" />
                         <p className="text-[11px] text-slate-400 mt-1.5">PNG, JPG ili SVG. Preporučena veličina 200x200px.</p>
                       </div>
+                    </div>
+
+                    <div className="space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                          Veličina loga na dokumentima
+                        </Label>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-[12px] text-slate-600 tabular-nums">{firmaLogoVelicina} pt</span>
+                          {firmaLogoVelicina !== LOGO_VELICINA.zadano && (
+                            <button
+                              type="button"
+                              onClick={() => setFirmaLogoVelicina(LOGO_VELICINA.zadano)}
+                              className="text-[11px] text-slate-400 hover:text-slate-700 underline-offset-2 hover:underline"
+                            >
+                              Vrati zadano
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      <Slider
+                        value={[firmaLogoVelicina]}
+                        onValueChange={([v]) => setFirmaLogoVelicina(v)}
+                        min={LOGO_VELICINA.min}
+                        max={LOGO_VELICINA.max}
+                        step={2}
+                      />
+                      <div className="flex justify-between text-[10px] text-slate-400">
+                        <span>Manji</span>
+                        <span>Veći</span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <Label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                        Prikaz zaglavlja dokumenta
+                      </Label>
+                      <ZaglavljePrikaz
+                        naziv={firmaNaziv}
+                        adresa={firmaAdresa}
+                        grad={firmaGrad}
+                        kontakt={kontaktFirme({ web: firmaWeb, email: firmaEmail })}
+                        logo={firmaLogo}
+                        logoVelicina={firmaLogoVelicina}
+                      />
+                      <p className="text-[11px] text-slate-400">Primjenjuje se na račune, fakture, ponude, otpremnice i radne naloge.</p>
                     </div>
                   </div>
                 </div>
@@ -871,6 +927,33 @@ export default function PostavkeScreen() {
                         placeholder="Sarajevo"
                         className="text-[13px] h-9 bg-slate-50 border-slate-200"
                       />
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-1.5">
+                        <Label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                          <Globe className="h-3 w-3" />
+                          Web stranica
+                        </Label>
+                        <Input
+                          value={firmaWeb}
+                          onChange={e => setFirmaWeb(e.target.value)}
+                          placeholder="www.firma.ba"
+                          className="text-[13px] h-9 bg-slate-50 border-slate-200"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                          <Mail className="h-3 w-3" />
+                          Email
+                        </Label>
+                        <Input
+                          type="email"
+                          value={firmaEmail}
+                          onChange={e => setFirmaEmail(e.target.value)}
+                          placeholder="info@firma.ba"
+                          className="text-[13px] h-9 bg-slate-50 border-slate-200"
+                        />
+                      </div>
                     </div>
                   </div>
                 </div>
