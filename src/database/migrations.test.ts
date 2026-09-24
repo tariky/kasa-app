@@ -94,7 +94,7 @@ const ADDED_COLUMNS: Array<[string, string]> = [
 ];
 const ADDED_TABLES = [
   'dobavljaci', 'kupci', 'pending_receipts', 'prilog_stavke',
-  'normativi', 'radni_nalozi', 'radni_nalog_stavke',
+  'normativi', 'radni_nalozi', 'radni_nalog_stavke', 'cijena_historija',
 ];
 
 function columns(db: Db, table: string): Set<string> {
@@ -205,6 +205,22 @@ test('stare stavke primke nemaju zapamćenu staru cijenu (NULL), nova se može u
     "INSERT INTO primka_stavke (primkaId, productId, kolicina, cijena, pdvStopa, staraCijena) VALUES (1, 1, 1, 3, 'E', 2.5)"
   ).run();
   expect((db.prepare('SELECT staraCijena FROM primka_stavke WHERE id = 2').get() as any).staraCijena).toBe(2.5);
+  db.close();
+});
+
+test('historija cijena starih primki se ne izmišlja: tabela je nakon nadogradnje prazna', () => {
+  const db = legacyDbWithData();
+  db.prepare("INSERT INTO primke (brojPrimke, datum) VALUES ('P-OLD', '2025-01-10')").run();
+  db.prepare("INSERT INTO primka_stavke (primkaId, productId, kolicina, cijena, pdvStopa) VALUES (1, 1, 3, 2.5, 'E')").run();
+  openAsCurrentVersion(db);
+
+  expect((db.prepare('SELECT COUNT(*) AS n FROM cijena_historija').get() as any).n).toBe(0);
+  db.prepare(
+    "INSERT INTO cijena_historija (productId, izvor, izvorId, staraCijena, novaCijena) VALUES (1, 'primka', 1, 2.5, 3)"
+  ).run();
+  expect(() => db.prepare(
+    "INSERT INTO cijena_historija (productId, izvor, izvorId, staraCijena, novaCijena) VALUES (1, 'nesto', NULL, 1, 2)"
+  ).run()).toThrow();
   db.close();
 });
 

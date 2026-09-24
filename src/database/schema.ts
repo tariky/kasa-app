@@ -177,6 +177,23 @@ export const schema = `
     FOREIGN KEY (productId) REFERENCES products(id)
   );
 
+  -- Historija promjena prodajne cijene (products.cijena), redom (id). Služi
+  -- da poništavanje primke vrati cijenu kakva bi bila da primke nikad nije
+  -- bilo: izvor ('primka' | 'rucno'), izvorId = primkaId za primku.
+  -- staraCijena je cijena prije ove promjene među izvorima koji još postoje:
+  -- kad se prethodna promjena poništi, ovdje se prepiše njena staraCijena.
+  -- Promjene prije uvođenja tabele nisu upisane (nema izmišljene historije).
+  CREATE TABLE IF NOT EXISTS cijena_historija (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    productId INTEGER NOT NULL,
+    izvor TEXT NOT NULL CHECK(izvor IN ('primka', 'rucno')),
+    izvorId INTEGER,
+    staraCijena REAL NOT NULL,
+    novaCijena REAL NOT NULL,
+    createdAt TEXT DEFAULT (datetime('now','localtime')),
+    FOREIGN KEY (productId) REFERENCES products(id)
+  );
+
   CREATE TABLE IF NOT EXISTS ponude (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     broj INTEGER NOT NULL,
@@ -280,6 +297,8 @@ export const schema = `
   CREATE INDEX IF NOT EXISTS idx_order_items_orderId ON order_items(orderId);
   CREATE INDEX IF NOT EXISTS idx_order_items_productId ON order_items(productId);
   CREATE INDEX IF NOT EXISTS idx_primka_stavke_primkaId ON primka_stavke(primkaId);
+  CREATE INDEX IF NOT EXISTS idx_cijena_historija_product ON cijena_historija(productId, id);
+  CREATE INDEX IF NOT EXISTS idx_cijena_historija_izvor ON cijena_historija(izvor, izvorId);
   CREATE INDEX IF NOT EXISTS idx_primka_stavke_productId ON primka_stavke(productId);
   CREATE INDEX IF NOT EXISTS idx_nivelacija_stavke_nivelacijaId ON nivelacija_stavke(nivelacijaId);
   CREATE INDEX IF NOT EXISTS idx_prilog_stavke_orderId ON prilog_stavke(orderId);

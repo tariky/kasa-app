@@ -7,6 +7,7 @@ import { schema } from '@/database/schema';
 import {
   collectPriceChanges, applyPricesWithoutStock, revertNivelacijaPrices,
   revertPricesWithoutStock, revertPrimkaPrices, stareCijeneStavki, datumKretanjaPrimke,
+  zapisiPromjeneCijena, ponistiPromjeneCijenaPrimke,
   getProductStock, isDobavljacUsed,
 } from './skladiste';
 import type { SqlDb } from './sqldb';
@@ -189,6 +190,57 @@ test('revertPrimkaPrices vraća i nivelaciju i cijene bez zalihe iste primke', (
   expect(revertPrimkaPrices(db, 1)).toBe(2);
   expect(cijenaArtikla(sa)).toBe(12);
   expect(cijenaArtikla(bez)).toBe(5);
+});
+
+// ── Historija cijena (cijena_historija) ────────────────────────────────
+
+function historija(productId: number): Array<{ izvor: string; izvorId: number | null; staraCijena: number; novaCijena: number }> {
+  return db.prepare('SELECT izvor, izvorId, staraCijena, novaCijena FROM cijena_historija WHERE productId = ? ORDER BY id')
+    .all(productId) as any;
+}
+
+test('poništavanje primke usred lanca premošćuje lanac: sljedeća promjena preuzima njenu staru cijenu', () => {
+  const id = dodajArtikal('030', 14);
+  zapisiPromjeneCijena(db, 'primka', 1, [{ productId: id, staraCijena: 10, novaCijena: 12 }]);
+  zapisiPromjeneCijena(db, 'primka', 2, [{ productId: id, staraCijena: 12, novaCijena: 14 }]);
+
+  expect([...ponistiPromjeneCijenaPrimke(db, 1)]).toEqual([id]);
+  expect(cijenaArtikla(id)).toBe(14);
+  expect(historija(id)).toEqual([{ izvor: 'primka', izvorId: 2, staraCijena: 10, novaCijena: 14 }]);
+
+  ponistiPromjeneCijenaPrimke(db, 2);
+  expect(cijenaArtikla(id)).toBe(10);
+  expect(historija(id)).toEqual([]);
+});
+
+test('poništavanje posljednje promjene ne gazi cijenu promijenjenu mimo historije', () => {
+  const id = dodajArtikal('031', 13);
+  zapisiPromjeneCijena(db, 'primka', 1, [{ productId: id, staraCijena: 10, novaCijena: 12 }]);
+
+  ponistiPromjeneCijenaPrimke(db, 1);
+  expect(cijenaArtikla(id)).toBe(13);
+  expect(historija(id)).toEqual([]);
+});
+
+test('ručna izmjena preuzima staru cijenu poništene primke, a cijena ostaje ručna', () => {
+  const id = dodajArtikal('032', 13);
+  zapisiPromjeneCijena(db, 'primka', 1, [{ productId: id, staraCijena: 10, novaCijena: 12 }]);
+  zapisiPromjeneCijena(db, 'rucno', null, [{ productId: id, staraCijena: 12, novaCijena: 13 }]);
+
+  ponistiPromjeneCijenaPrimke(db, 1);
+  expect(cijenaArtikla(id)).toBe(13);
+  expect(historija(id)).toEqual([{ izvor: 'rucno', izvorId: null, staraCijena: 10, novaCijena: 13 }]);
+});
+
+test('revertPrimkaPrices: artikal iz historije ne ide i starim putem (nivelacija)', () => {
+  const id = dodajArtikal('033', 14);
+  dodajNivelaciju(1, id, 10, 12);
+  zapisiPromjeneCijena(db, 'primka', 1, [{ productId: id, staraCijena: 10, novaCijena: 12 }]);
+  zapisiPromjeneCijena(db, 'primka', 2, [{ productId: id, staraCijena: 12, novaCijena: 14 }]);
+
+  revertPrimkaPrices(db, 1);
+  expect(cijenaArtikla(id)).toBe(14);
+  expect(historija(id)[0].staraCijena).toBe(10);
 });
 
 test('datumKretanjaPrimke: datum primke u formatu kretanja zalihe (ponoć)', () => {

@@ -9,7 +9,7 @@ import {
 } from '../lib/fiskalni';
 import { round2, localDateStr } from '../lib/novac';
 import {
-  collectPriceChanges, applyPricesWithoutStock, revertPrimkaPrices, stareCijeneStavki, datumKretanjaPrimke, validirajPrimku,
+  collectPriceChanges, applyPricesWithoutStock, revertPrimkaPrices, zapisiPromjeneCijena, stareCijeneStavki, datumKretanjaPrimke, validirajPrimku,
   isDobavljacUsed, type PriceChange,
 } from '../lib/skladiste';
 import {
@@ -286,10 +286,17 @@ export function registerIpcHandlers(): void {
     fields.push("updatedAt = datetime('now','localtime')");
     values.push(id);
 
-    const result = db
-      .prepare(`UPDATE products SET ${fields.join(', ')} WHERE id = ?`)
-      .run(...values);
-    return { changes: result.changes };
+    return db.transaction(() => {
+      const prije = db.prepare('SELECT cijena FROM products WHERE id = ?').get(id) as { cijena: number } | undefined;
+      const result = db
+        .prepare(`UPDATE products SET ${fields.join(', ')} WHERE id = ?`)
+        .run(...values);
+      // Ručna izmjena cijene ulazi u historiju: poništavanje ranije primke je ne smije pregaziti.
+      if (prije && data.cijena !== undefined && data.cijena !== prije.cijena) {
+        zapisiPromjeneCijena(db, 'rucno', null, [{ productId: id, staraCijena: prije.cijena, novaCijena: data.cijena }]);
+      }
+      return { changes: result.changes };
+    })();
   });
 
   handle('product:delete', (id: number) => {
@@ -309,8 +316,12 @@ export function registerIpcHandlers(): void {
     for (const [tabela, poruka] of ostaleVeze) {
       if (db.prepare(`SELECT 1 FROM ${tabela} WHERE productId = ? LIMIT 1`).get(id)) throw new Error(poruka);
     }
-    const result = db.prepare('DELETE FROM products WHERE id = ?').run(id);
-    return { changes: result.changes };
+    // Historija cijena artikla bez primki ima samo ručne izmjene — ide s artiklom.
+    return db.transaction(() => {
+      db.prepare('DELETE FROM cijena_historija WHERE productId = ?').run(id);
+      const result = db.prepare('DELETE FROM products WHERE id = ?').run(id);
+      return { changes: result.changes };
+    })();
   });
 
   handle('product:adjustStock', (productId: number, newStanje: number) => {
@@ -581,6 +592,7 @@ export function registerIpcHandlers(): void {
 
       applyPricesWithoutStock(db, bezZaliha);
       createNivelacijaInTransaction(primkaId, nivelacija);
+      zapisiPromjeneCijena(db, 'primka', primkaId, [...nivelacija, ...bezZaliha]);
 
       return { id: primkaId, nivelacijaCreated: nivelacija.length > 0 };
     });
@@ -636,6 +648,7 @@ export function registerIpcHandlers(): void {
 
       applyPricesWithoutStock(db, bezZaliha);
       createNivelacijaInTransaction(data.id, nivelacija);
+      zapisiPromjeneCijena(db, 'primka', data.id, [...nivelacija, ...bezZaliha]);
 
       return { id: data.id, nivelacijaCreated: nivelacija.length > 0 };
     });
