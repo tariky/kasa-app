@@ -51,7 +51,7 @@ function errorResponse(message: string): string {
   );
 }
 
-function extractTag(xml: string, tag: string): string | null {
+export function extractTag(xml: string, tag: string): string | null {
   const match = xml.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`));
   return match ? match[1].trim() : null;
 }
@@ -99,7 +99,7 @@ function parsePlacanja(body: string): Array<{ oznaka: string; iznos: string }> {
   return placanja;
 }
 
-function logReceipt(type: string, num: string, body: string): void {
+export function logReceipt(type: string, num: string, body: string): void {
   const kupac = parseKupac(body);
   const stavke = parseStavke(body);
   const placanja = parsePlacanja(body);
