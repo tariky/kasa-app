@@ -126,10 +126,33 @@ async fn api(app: AppHandle, kanal: String, args: Vec<Value>) -> Result<Value, S
 }
 
 /// Isti folder kao Electron `app.getPath('userData')` (appData/Pazar), da
-/// Tauri verzija otvori postojeću bazu i licencu.
+/// Tauri verzija otvori postojeću bazu i licencu. `PAZAR_USER_DATA` ga
+/// zamijeni (testovi, rad nad kopijom baze).
 fn user_data(app: &AppHandle) -> PathBuf {
+    if let Some(p) = std::env::var_os("PAZAR_USER_DATA") {
+        return PathBuf::from(p);
+    }
     let baza = app.path().config_dir().unwrap_or_else(|_| std::env::temp_dir());
     baza.join("Pazar")
+}
+
+fn smoke() -> bool {
+    std::env::var_os("PAZAR_SMOKE").is_some()
+}
+
+/// Kraj smoke testa (`smoke.js`): ispiše rezultat i prozore, pa ugasi program.
+/// Bez `PAZAR_SMOKE` ne radi ništa.
+#[tauri::command]
+fn smoke_kraj(app: AppHandle, rezultat: Value) {
+    if !smoke() {
+        return;
+    }
+    let mut prozori: Vec<String> = app.webview_windows().keys().cloned().collect();
+    prozori.sort();
+    let pao = rezultat["greska"].is_string()
+        || rezultat["provjere"].as_array().into_iter().flatten().any(|p| p["ok"] != Value::Bool(true));
+    println!("{}", serde_json::json!({ "rezultat": rezultat, "prozori": prozori }));
+    app.exit(if pao { 1 } else { 0 });
 }
 
 static PDF_PROZORI: AtomicU32 = AtomicU32::new(0);
@@ -163,6 +186,11 @@ fn glavni_prozor(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         .min_inner_size(1024.0, 700.0)
         .background_color(tauri::window::Color(0x0f, 0x17, 0x2a, 0xff))
         .on_new_window(move |url, features| novi_prozor(&a, url, features))
+        .on_page_load(|w, p| {
+            if smoke() && p.event() == tauri::webview::PageLoadEvent::Finished {
+                let _ = w.eval(include_str!("smoke.js"));
+            }
+        })
         .build()
 }
 
@@ -212,7 +240,7 @@ fn meni(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![api])
+        .invoke_handler(tauri::generate_handler![api, smoke_kraj])
         .menu(|app| meni(app))
         .on_menu_event(|app, e| {
             if e.id() == "stampaj" {
