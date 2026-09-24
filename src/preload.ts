@@ -47,6 +47,10 @@ contextBridge.exposeInMainWorld('api', {
   getNextBrojUlaza: () => ipcRenderer.invoke('primka:nextBroj'),
   updatePrimka: (data: any) => ipcRenderer.invoke('primka:update', data),
   deletePrimka: (id: number) => ipcRenderer.invoke('primka:delete', id),
+  // Šta bi spremanje/brisanje uradilo s cijenama — ništa ne upisuje.
+  pregledUnosaPrimke: (data: any) => ipcRenderer.invoke('primka:pregledUnosa', data),
+  pregledIzmjenePrimke: (data: any) => ipcRenderer.invoke('primka:pregledIzmjene', data),
+  pregledBrisanjaPrimke: (id: number) => ipcRenderer.invoke('primka:pregledBrisanja', id),
 
   // Nivelacije
   getNivelacije: (from?: string, to?: string) => ipcRenderer.invoke('nivelacija:getAll', from, to),

@@ -1,10 +1,10 @@
 // src/components/skladiste/UlazDialog.tsx
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { pdf } from '@react-pdf/renderer';
-import type { Dobavljac, Primka, PrimkaStavka, Product } from '@/types';
+import type { Dobavljac, PregledCijenaUlaza, Primka, PrimkaStavka, Product } from '@/types';
 import { izBazePrimke, jePloca, m2UKom } from '@/lib/ploca';
 import { localDateStr } from '@/lib/novac';
-import { cijeneBezUcinka, nedostajeOpis, nivelacijaRazlike, praznaStavka, redStatus, ulazTotali, uPayload, type UlazRed, type NivelacijaRazlika } from '@/lib/ulaz';
+import { nedostajeOpis, praznaStavka, redStatus, ulazTotali, uPayload, type UlazRed } from '@/lib/ulaz';
 import { kalkulacijaPrimke, nabavnaVrijednost, type KalkulacijaPrimke } from '@/lib/kalkulacija';
 import { cn, formatKM, formatDate } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -18,6 +18,7 @@ import { Eyebrow, Key, mod } from '@/components/ui/ledger';
 import { FullDialog, FullDialogContent, FullDialogHeader, FullDialogFooter, FullDialogNotice, FullDialogTitle, FooterBtn, Fact, HeaderBtn, LegendKey } from '@/components/ui/full-dialog';
 import { UlazPdf } from '@/components/UlazPdf';
 import { UlazStavkeEditor, type UlazStavkeHandle } from './UlazStavkeEditor';
+import { PregledCijenaAside, PregledCijenaTabela, imaPromjena } from './PregledCijenaUlaza';
 import { Pencil, Trash2, Printer, Download, Save, ChevronUp, ChevronDown, Building2, AlertTriangle, X } from 'lucide-react';
 
 export type UlazStanje = { kind: 'zatvoren' } | { kind: 'pregled'; id: number } | { kind: 'uredi'; id: number } | { kind: 'novi' };
@@ -45,6 +46,22 @@ const izPrimke = (p: Primka, products: Product[]): Forma => ({
     return { productId: s.productId, kolicina: prikaz.kolicina, nabavnaCijena: prikaz.nabavnaCijena, rabat: s.rabat ? String(s.rabat) : '', cijena: String(s.cijena) };
   }),
 });
+
+/** Payload za primka:create / primka:update (i njihov pregled) iz forme. */
+const payloadForme = (forma: Forma, products: Product[], primka: Primka | null) => ({
+  ...(primka ? { id: primka.id } : {}),
+  brojPrimke: forma.brojPrimke.trim(), datum: forma.datum || undefined,
+  dobavljacNaziv: forma.dobavljacNaziv || undefined, dobavljacId: forma.dobavljacId || undefined, dobavljacAdresa: forma.dobavljacAdresa || undefined,
+  brojFakture: forma.brojFakture || undefined, napomena: forma.napomena || undefined,
+  stavke: uPayload(forma.rows, products, forma.zavisniTroskovi),
+});
+type PayloadForme = ReturnType<typeof payloadForme>;
+
+/** Pregled cijena za tačno određen payload (ključ = JSON payload-a) — zastario je čim se forma promijeni. */
+type PregledZa = { kljuc: string; pregled: PregledCijenaUlaza } | { kljuc: string; greska: string };
+
+/** Koliko forma miruje prije nego se backend pita šta bi spremanje uradilo s cijenama. */
+const PREGLED_DEBOUNCE_MS = 350;
 
 const TH = 'text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400 pb-2 border-b border-slate-200/80 whitespace-nowrap';
 const TD = 'py-2.5 border-b border-slate-100 align-top';
@@ -101,7 +118,11 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
   const [notice, setNotice] = useState<Notice | null>(null);
   const [saving, setSaving] = useState(false);
   const [brisiOpen, setBrisiOpen] = useState(false);
-  const [nivelacija, setNivelacija] = useState<NivelacijaRazlika[] | null>(null);
+  // Dijalog potvrde prije spremanja: pregled za payload koji se sprema.
+  const [potvrda, setPotvrda] = useState<{ kljuc: string; pregled: PregledCijenaUlaza } | null>(null);
+  const [pregledCijena, setPregledCijena] = useState<PregledZa | null>(null);
+  // Pregled uz dijalog brisanja (null = još se učitava).
+  const [pregledBrisanja, setPregledBrisanja] = useState<PregledZa | null>(null);
   const [pending, setPending] = useState<Pending | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<UlazStavkeHandle>(null);
@@ -176,33 +197,68 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
   // ── akcije ────────────────────────────────────────────
   const fali = useMemo(() => nedostajeOpis(forma.rows, products), [forma.rows, products]);
   const totali = useMemo(() => ulazTotali(forma.rows, products, forma.zavisniTroskovi), [forma.rows, products, forma.zavisniTroskovi]);
-  // Pri izmjeni se cijena mijenja samo gdje je korisnik mijenja, i samo ako je ovaj ulaz i dalje zadnja promjena cijene.
-  const izvorne = useMemo(() => (primka?.stavke ?? []), [primka]);
-  const razlike = useMemo(() => (edit ? nivelacijaRazlike(forma.rows, products, izvorne) : []), [edit, forma.rows, products, izvorne]);
-  const bezUcinka = useMemo(() => (edit && primka ? cijeneBezUcinka(forma.rows, products, izvorne) : []), [edit, primka, forma.rows, products, izvorne]);
+  // Šta spremanje radi s cijenama pita se backend: on pokrene istu izmjenu i
+  // poništi je, pa najava ne može odstupiti od onoga što spremanje uradi
+  // (uključujući protunivelacije za uklonjene stavke i vraćene cijene).
+  const payload = useMemo(() => (edit && !fali && forma.brojPrimke.trim() ? payloadForme(forma, products, primka) : null), [edit, fali, forma, products, primka]);
+  const kljuc = payload ? JSON.stringify(payload) : null;
+  const payloadRef = useRef<PayloadForme | null>(payload);
+  payloadRef.current = payload;
+  const dohvatiPregled = useCallback((p: PayloadForme) =>
+    ('id' in p ? window.api.pregledIzmjenePrimke(p) : window.api.pregledUnosaPrimke(p)), []);
+
+  useEffect(() => {
+    const p = payloadRef.current;
+    if (!p || !kljuc) { setPregledCijena(null); return; }
+    let ziv = true;
+    const t = setTimeout(() => {
+      dohvatiPregled(p)
+        .then(pregled => { if (ziv) setPregledCijena({ kljuc, pregled }); })
+        .catch(e => { if (ziv) setPregledCijena({ kljuc, greska: e?.message || 'Greška' }); });
+    }, PREGLED_DEBOUNCE_MS);
+    return () => { ziv = false; clearTimeout(t); };
+  }, [kljuc, dohvatiPregled]);
+
+  // Dok se novi pregled računa, prethodni se prikazuje zatamnjen.
+  const prikazPregleda = payload && pregledCijena && 'pregled' in pregledCijena ? pregledCijena.pregled : null;
+  const pregledAktuelan = pregledCijena?.kljuc === kljuc;
 
   const spremi = async () => {
-    if (!edit || fali || !forma.brojPrimke.trim() || saving) return;
-    if (razlike.length > 0 && !nivelacija) { setNivelacija(razlike); return; }
+    if (!edit || !payload || !kljuc || saving) return;
+    // Potvrda uvijek za payload koji se sprema: ako forma nije ista kao u
+    // prikazanom pregledu, pregled se prvo osvježi.
+    if (potvrda?.kljuc !== kljuc) {
+      let pregled: PregledCijenaUlaza;
+      if (pregledCijena?.kljuc === kljuc && 'pregled' in pregledCijena) pregled = pregledCijena.pregled;
+      else {
+        try { pregled = await dohvatiPregled(payload); } catch (e) { greska(e); return; }
+        setPregledCijena({ kljuc, pregled });
+      }
+      if (pregled.dokumenti.length > 0) { setPotvrda({ kljuc, pregled }); return; }
+    }
     setSaving(true);
     try {
-      const payload = {
-        ...(primka ? { id: primka.id } : {}),
-        brojPrimke: forma.brojPrimke.trim(), datum: forma.datum || undefined,
-        dobavljacNaziv: forma.dobavljacNaziv || undefined, dobavljacId: forma.dobavljacId || undefined, dobavljacAdresa: forma.dobavljacAdresa || undefined,
-        brojFakture: forma.brojFakture || undefined, napomena: forma.napomena || undefined,
-        stavke: uPayload(forma.rows, products, forma.zavisniTroskovi),
-      };
       let savedId: number;
       if (primka) { await window.api.updatePrimka(payload); savedId = primka.id; }
       else { const r = await window.api.createPrimka(payload); savedId = Number(r?.id ?? 0); }
-      setNivelacija(null); setEdit(false);
+      setPotvrda(null); setEdit(false);
       zadrziPoruku.current = true;
       setNotice({ type: 'success', text: primka ? 'Ulaz izmijenjen' : `Ulaz ${forma.brojPrimke} spremljen` });
       onSaved(savedId);
-    } catch (e) { setNivelacija(null); greska(e); }
+    } catch (e) { setPotvrda(null); greska(e); }
     finally { setSaving(false); }
   };
+
+  // Dijalog brisanja najavljuje protunivelacije i vraćene cijene — iz backenda, kao i spremanje.
+  useEffect(() => {
+    if (!brisiOpen || !primka) { setPregledBrisanja(null); return; }
+    let ziv = true;
+    const k = String(primka.id);
+    window.api.pregledBrisanjaPrimke(primka.id)
+      .then(pregled => { if (ziv) setPregledBrisanja({ kljuc: k, pregled }); })
+      .catch(e => { if (ziv) setPregledBrisanja({ kljuc: k, greska: e?.message || 'Greška' }); });
+    return () => { ziv = false; };
+  }, [brisiOpen, primka]);
 
   const obrisi = async () => {
     if (!primka) return;
@@ -225,7 +281,7 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
     await window.api.writeFile(path, Array.from(new Uint8Array(await blob.arrayBuffer())) as any);
   };
 
-  const anySub = brisiOpen || nivelacija != null || pending != null;
+  const anySub = brisiOpen || potvrda != null || pending != null;
 
   // ── tastatura ─────────────────────────────────────────
   useEffect(() => {
@@ -410,33 +466,11 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
                     <Eyebrow className="block mb-1">Kalkulacija</Eyebrow>
                     <Kalkulacija k={edit ? totali : pregled} />
                   </section>
-                  {edit && bezUcinka.length > 0 && (
-                    <section className="rounded-xl bg-slate-50 border border-slate-200/70 px-4 py-3" aria-label="Cijene bez promjene u prodaji">
-                      <p className="text-[11.5px] font-semibold text-slate-600">Cijena u prodaji ostaje</p>
-                      <ul className="mt-1.5 space-y-0.5">
-                        {bezUcinka.map(r => (
-                          <li key={r.productId} className="flex items-center justify-between gap-2 text-[11px] text-slate-600">
-                            <span className="truncate">{r.productNaziv}</span>
-                            <span className="font-mono tabular-nums whitespace-nowrap">{formatKM(r.cijena)}</span>
-                          </li>
-                        ))}
-                      </ul>
-                      <p className="mt-1.5 text-[10.5px] text-slate-500">Cijenu je kasnije promijenio drugi ulaz ili ručna izmjena. Nova cijena se pamti na ovom ulazu i važi ako se kasnija promjena poništi.</p>
-                    </section>
+                  {edit && prikazPregleda && imaPromjena(prikazPregleda) && (
+                    <PregledCijenaAside pregled={prikazPregleda} zastario={!pregledAktuelan} />
                   )}
-                  {edit && razlike.length > 0 && (
-                    <section className="rounded-xl bg-amber-50 border border-amber-100 px-4 py-3" aria-label="Nivelacija">
-                      <p className="flex items-center gap-1.5 text-[11.5px] font-semibold text-amber-700"><AlertTriangle size={12} /> Spremanje mijenja prodajne cijene</p>
-                      <ul className="mt-1.5 space-y-0.5">
-                        {razlike.map(r => (
-                          <li key={r.productId} className="flex items-center justify-between gap-2 text-[11px] text-amber-700">
-                            <span className="truncate">{r.productNaziv}</span>
-                            <span className="font-mono tabular-nums whitespace-nowrap">{formatKM(r.staraCijena)} → {formatKM(r.novaCijena)}</span>
-                          </li>
-                        ))}
-                      </ul>
-                      <p className="mt-1.5 text-[10.5px] text-amber-600/80">Zaliha se niveliše automatski uz ulaz.</p>
-                    </section>
+                  {edit && pregledCijena && pregledCijena.kljuc === kljuc && 'greska' in pregledCijena && (
+                    <p className="flex items-start gap-1.5 px-1 text-[11px] text-slate-500"><AlertTriangle size={12} className="mt-[1px] flex-shrink-0 text-amber-500" /> Pregled promjena cijena nije dostupan: {pregledCijena.greska}</p>
                   )}
                 </aside>
               </div>
@@ -493,11 +527,25 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
 
       {primka && (
         <Dialog open={brisiOpen} onOpenChange={setBrisiOpen}>
-          <DialogContent className="sm:max-w-[420px]" onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); obrisi(); } }}>
+          <DialogContent className={cn(pregledBrisanja && 'pregled' in pregledBrisanja && (pregledBrisanja.pregled.dokumenti.length > 0 || pregledBrisanja.pregled.bezZalihe.length > 0) ? 'sm:max-w-lg' : 'sm:max-w-[420px]')} onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); obrisi(); } }}>
             <DialogHeader>
               <DialogTitle>Obrisati ulaz {primka.brojPrimke}?</DialogTitle>
-              <DialogDescription>Stanje robe sa ovog ulaza se skida sa skladišta, a prodajna cijena koju je ulaz postavio se vraća. Nivelacija uz ulaz ostaje; ako se cijena robe na stanju mijenja, nastaje nova nivelacija s današnjim datumom. Brisanje se ne može poništiti.</DialogDescription>
+              <DialogDescription>Stanje robe sa ovog ulaza se skida sa skladišta, a prodajna cijena koju je ulaz postavio se vraća. Nivelacija uz ulaz ostaje. Brisanje se ne može poništiti.</DialogDescription>
             </DialogHeader>
+            {!pregledBrisanja ? (
+              <p className="text-[12px] text-slate-400">Provjeravam prodajne cijene…</p>
+            ) : 'greska' in pregledBrisanja ? (
+              <p className="flex items-center gap-1.5 text-[12px] text-rose-600"><AlertTriangle size={12} /> {pregledBrisanja.greska}</p>
+            ) : pregledBrisanja.pregled.dokumenti.length === 0 && pregledBrisanja.pregled.bezZalihe.length === 0 ? (
+              <p className="text-[12px] text-slate-500">Prodajne cijene se ne mijenjaju.</p>
+            ) : (
+              <>
+                {pregledBrisanja.pregled.dokumenti.length > 0 && (
+                  <p className="text-[12px] text-slate-600">Brisanje s današnjim datumom kreira:</p>
+                )}
+                <PregledCijenaTabela pregled={pregledBrisanja.pregled} />
+              </>
+            )}
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="ghost" onClick={() => setBrisiOpen(false)}>Otkaži</Button>
               <Button variant="destructive" onClick={obrisi}>Obriši <Key tone="danger">{mod('↵')}</Key></Button>
@@ -506,38 +554,15 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
         </Dialog>
       )}
 
-      <Dialog open={nivelacija != null} onOpenChange={v => { if (!v) setNivelacija(null); }}>
+      <Dialog open={potvrda != null} onOpenChange={v => { if (!v) setPotvrda(null); }}>
         <DialogContent className="sm:max-w-lg" onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); spremi(); } }}>
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2"><AlertTriangle className="h-5 w-5 text-amber-500" /> Nivelacija cijena</DialogTitle>
-            <DialogDescription>Ovi artikli imaju zalihu po staroj prodajnoj cijeni. Spremanje ulaza automatski kreira nivelaciju i ažurira cijene.</DialogDescription>
+            <DialogTitle className="flex items-center gap-2"><AlertTriangle className="h-5 w-5 text-amber-500" /> Promjena cijena u prodaji</DialogTitle>
+            <DialogDescription>Spremanje ulaza mijenja prodajne cijene robe na zalihi i kreira ove dokumente s današnjim datumom.</DialogDescription>
           </DialogHeader>
-          <div className="max-h-[300px] overflow-y-auto">
-            <table className="w-full text-[12px]">
-              <thead>
-                <tr className="text-[10px] uppercase tracking-[0.14em] text-slate-400 border-b">
-                  <th className="text-left py-2 font-semibold">Artikal</th>
-                  <th className="text-right py-2 font-semibold">Zaliha</th>
-                  <th className="text-right py-2 font-semibold">Stara</th>
-                  <th className="text-right py-2 font-semibold">Nova</th>
-                  <th className="text-right py-2 font-semibold">Razlika</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(nivelacija ?? []).map(r => (
-                  <tr key={r.productId} className="border-b border-slate-50">
-                    <td className="py-2 text-slate-800">{r.productNaziv}</td>
-                    <td className="py-2 text-right font-mono tabular-nums text-slate-500">{r.kolicina}</td>
-                    <td className="py-2 text-right font-mono tabular-nums text-slate-500">{formatKM(r.staraCijena)}</td>
-                    <td className="py-2 text-right font-mono tabular-nums text-slate-800">{formatKM(r.novaCijena)}</td>
-                    <td className={cn('py-2 text-right font-mono tabular-nums font-semibold', r.ukupnaRazlika >= 0 ? 'text-emerald-600' : 'text-rose-600')}>{formatKM(r.ukupnaRazlika)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          {potvrda && <PregledCijenaTabela pregled={potvrda.pregled} />}
           <div className="flex justify-end gap-2 pt-2">
-            <Button variant="ghost" onClick={() => setNivelacija(null)}>Otkaži</Button>
+            <Button variant="ghost" onClick={() => setPotvrda(null)}>Otkaži</Button>
             <Button onClick={spremi} disabled={saving}>{saving ? 'Spremam…' : 'Spremi i niveliši'} <Key tone="dark">{mod('↵')}</Key></Button>
           </div>
         </DialogContent>

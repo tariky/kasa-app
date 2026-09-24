@@ -150,6 +150,29 @@ export interface NivelacijaStavka {
   productJm?: string;
 }
 
+/**
+ * Šta spremanje ili brisanje ulaza radi s prodajnim cijenama — backend pokrene
+ * istu operaciju i poništi je (primka:pregledUnosa / pregledIzmjene / pregledBrisanja).
+ */
+export interface PregledCijenaUlaza {
+  /** Nivelacije koje će nastati, redom i s brojem koji će dobiti. */
+  dokumenti: Array<{
+    /** `nivelacija` — nova cijena s ulaza; `protunivelacija` — poništenje cijene (uklonjena stavka, brisanje, povrat). */
+    vrsta: 'nivelacija' | 'protunivelacija';
+    brojNivelacije: string;
+    datum: string;
+    napomena: string | null;
+    stavke: Array<{
+      productId: number; productNaziv: string; kolicina: number;
+      staraCijena: number; novaCijena: number; razlika: number; ukupnaRazlika: number;
+    }>;
+  }>;
+  /** Artikli bez zalihe kojima se cijena mijenja bez dokumenta. */
+  bezZalihe: Array<{ productId: number; productNaziv: string; staraCijena: number; novaCijena: number }>;
+  /** Izmjena: cijena na ulazu promijenjena, ali u prodaji ostaje (kasnije ju je mijenjalo nešto drugo). */
+  cijenaOstaje: Array<{ productId: number; productNaziv: string; cijena: number }>;
+}
+
 export interface Nivelacija {
   id: number;
   brojNivelacije: string;

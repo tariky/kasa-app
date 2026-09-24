@@ -40,6 +40,9 @@ interface Window {
     getNextBrojUlaza: () => Promise<string>;
     updatePrimka: (data: any) => Promise<any>;
     deletePrimka: (id: number) => Promise<any>;
+    pregledUnosaPrimke: (data: any) => Promise<import('./types').PregledCijenaUlaza>;
+    pregledIzmjenePrimke: (data: any) => Promise<import('./types').PregledCijenaUlaza>;
+    pregledBrisanjaPrimke: (id: number) => Promise<import('./types').PregledCijenaUlaza>;
     getNivelacije: (from?: string, to?: string) => Promise<any[]>;
     getNivelacija: (id: number) => Promise<any>;
     getOrders: () => Promise<any[]>;

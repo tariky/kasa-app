@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test';
-import { redStatus, praznaStavka, ulazTotali, nedostajeOpis, uPayload, nivelacijaRazlike, cijeneBezUcinka, redNabavnaPoJed, type UlazRed } from './ulaz';
+import { redStatus, praznaStavka, ulazTotali, nedostajeOpis, uPayload, redNabavnaPoJed, type UlazRed } from './ulaz';
 
 const artikal = { id: 1, sifra: 'A-1', naziv: 'Artikal', jm: 'kom', cijena: 10, pdvStopa: 'E', tip: 'artikal', stanje: 3 } as any;
 const ploca = { id: 11, sifra: 'IV', naziv: 'Iverica', jm: 'm²', cijena: 0, pdvStopa: 'E', tip: 'materijal', plocaSirina: 2000, plocaVisina: 1000, stanje: 0 } as any;
@@ -79,52 +79,4 @@ test('nabavna po jedinici reda: nakon rabata, u jedinici u kojoj se kuca', () =>
   expect(redNabavnaPoJed(red({ productId: 12, kolicina: '10', nabavnaCijena: '10', rabat: '20' }))).toBe(8);
   expect(redNabavnaPoJed(red({ productId: 12, kolicina: '10', nabavnaCijena: '10' }))).toBe(10);
   expect(redNabavnaPoJed(red({ productId: 12, kolicina: '', nabavnaCijena: '10' }))).toBe(10);
-});
-
-test('nivelacija se javlja samo za artikal sa zalihom i drugom prodajnom', () => {
-  const rows = [
-    red({ productId: 1, kolicina: '2', nabavnaCijena: '5', cijena: '12' }),
-    red({ productId: 12, kolicina: '1', nabavnaCijena: '1', cijena: '' }),
-  ];
-  expect(nivelacijaRazlike(rows, products)).toEqual([
-    { productId: 1, productNaziv: 'Artikal', kolicina: 3, staraCijena: 10, novaCijena: 12, razlika: 2, ukupnaRazlika: 6 },
-  ]);
-  expect(nivelacijaRazlike([red({ productId: 1, kolicina: '2', nabavnaCijena: '5', cijena: '10' })], products)).toEqual([]);
-});
-
-// Izmjena postojećeg ulaza: cijena se mijenja samo gdje je korisnik mijenja,
-// i samo ako ulaz i dalje određuje cijenu (nema kasnije promjene).
-test('izmjena ulaza: nepromijenjena prodajna cijena ne najavljuje nivelaciju iako se razlikuje od trenutne', () => {
-  const izvorne = [{ productId: 1, cijena: 12, kolicina: 1 }];
-  const rows = [red({ productId: 1, kolicina: '5', nabavnaCijena: '5', cijena: '12' })];
-  expect(nivelacijaRazlike(rows, products, izvorne)).toEqual([]);
-  expect(cijeneBezUcinka(rows, products, izvorne)).toEqual([]);
-});
-
-test('izmjena ulaza: promjena cijene koju je kasnije pregazila druga promjena se ne najavljuje, nego se javlja da ne djeluje', () => {
-  const izvorne = [{ productId: 1, cijena: 12, kolicina: 1, cijenaKasnijeMijenjana: true }];
-  const rows = [red({ productId: 1, kolicina: '1', nabavnaCijena: '5', cijena: '13' })];
-  expect(nivelacijaRazlike(rows, products, izvorne)).toEqual([]);
-  expect(cijeneBezUcinka(rows, products, izvorne)).toEqual([{ productId: 1, productNaziv: 'Artikal', cijena: 10 }]);
-});
-
-test('izmjena ulaza: promjena cijene zadnjeg ulaza nivelira zalihu bez robe iz tog ulaza', () => {
-  const izvorne = [{ productId: 1, cijena: 10, kolicina: 1 }];
-  const rows = [red({ productId: 1, kolicina: '1', nabavnaCijena: '5', cijena: '12' })];
-  expect(nivelacijaRazlike(rows, products, izvorne)).toEqual([
-    { productId: 1, productNaziv: 'Artikal', kolicina: 2, staraCijena: 10, novaCijena: 12, razlika: 2, ukupnaRazlika: 4 },
-  ]);
-});
-
-test('izmjena zadnjeg ulaza koji je postavio 12: nivelacija ide od cijene u prodaji (12 → 15), kao u bazi', () => {
-  // Artikal 10 → ulaz postavio 12 (u prodaji je 12, zaliha 5 + 3 iz ulaza).
-  const art = { ...artikal, cijena: 12, stanje: 8 };
-  const izvorne = [{ productId: 1, cijena: 12, kolicina: 3 }];
-  expect(nivelacijaRazlike([red({ productId: 1, kolicina: '3', nabavnaCijena: '5', cijena: '15' })], [art], izvorne)).toEqual([
-    { productId: 1, productNaziv: 'Artikal', kolicina: 5, staraCijena: 12, novaCijena: 15, razlika: 3, ukupnaRazlika: 15 },
-  ]);
-  // Vraćanje na cijenu prije ulaza: u bazi protunivelacija 12 → 10 na istoj zalihi.
-  expect(nivelacijaRazlike([red({ productId: 1, kolicina: '3', nabavnaCijena: '5', cijena: '10' })], [art], izvorne)).toEqual([
-    { productId: 1, productNaziv: 'Artikal', kolicina: 5, staraCijena: 12, novaCijena: 10, razlika: -2, ukupnaRazlika: -10 },
-  ]);
 });

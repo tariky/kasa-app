@@ -1,4 +1,5 @@
 import type { SqlDb } from './sqldb';
+import type { PregledCijenaUlaza } from '../types';
 
 /** Tolerancija pri poređenju cijena (fening). */
 const EPS = 0.001;
@@ -418,6 +419,75 @@ export function stareCijeneIzmjene(
     if (nove[i] !== null) return nove[i];
     return prva ? (zadrzane.get(s.productId) ?? null) : null;
   });
+}
+
+// ── Pregled prije spremanja/brisanja ───────────────────────────────────
+//
+// Operacija se pokrene u transakciji koja se poništi; ovdje se samo pročita
+// šta je napravila. Tako najava na ekranu i prava operacija dijele istu logiku.
+
+export interface PocetakPregleda { zadnjaNivelacija: number; cijene: Map<number, number> }
+
+/** Stanje prije operacije: zadnja nivelacija i sve prodajne cijene. */
+export function pocetakPregleda(db: SqlDb): PocetakPregleda {
+  const zadnja = db.prepare('SELECT COALESCE(MAX(id), 0) AS id FROM nivelacije').get() as { id: number };
+  const cijene = new Map((db.prepare('SELECT id, cijena FROM products').all() as Array<{ id: number; cijena: number }>).map(p => [p.id, p.cijena]));
+  return { zadnjaNivelacija: zadnja.id, cijene };
+}
+
+/**
+ * Nivelacije nastale poslije `pocetak` i promjene cijena koje nisu u njima
+ * (artikli bez zalihe). Nivelacija s vezom na primku nosi novu cijenu ulaza;
+ * bez veze je protunivelacija (poništenje cijene).
+ */
+export function rezultatPregleda(db: SqlDb, pocetak: PocetakPregleda, cijenaOstaje: PregledCijenaUlaza['cijenaOstaje']): PregledCijenaUlaza {
+  const stavkeNiv = db.prepare(`
+    SELECT ns.productId, p.naziv AS productNaziv, ns.kolicina, ns.staraCijena, ns.novaCijena, ns.razlika, ns.ukupnaRazlika
+    FROM nivelacija_stavke ns JOIN products p ON p.id = ns.productId
+    WHERE ns.nivelacijaId = ? ORDER BY ns.id
+  `);
+  const dokumenti = (db.prepare('SELECT id, brojNivelacije, datum, primkaId, napomena FROM nivelacije WHERE id > ? ORDER BY id')
+    .all(pocetak.zadnjaNivelacija) as Array<{ id: number; brojNivelacije: string; datum: string; primkaId: number | null; napomena: string | null }>)
+    .map(n => ({
+      vrsta: n.primkaId === null ? 'protunivelacija' as const : 'nivelacija' as const,
+      brojNivelacije: n.brojNivelacije, datum: n.datum, napomena: n.napomena,
+      stavke: stavkeNiv.all(n.id) as PregledCijenaUlaza['dokumenti'][number]['stavke'],
+    }));
+
+  const uDokumentu = new Set(dokumenti.flatMap(d => d.stavke.map(s => s.productId)));
+  const promijenjene = new Set<number>();
+  const bezZalihe: PregledCijenaUlaza['bezZalihe'] = [];
+  for (const p of db.prepare('SELECT id, naziv, cijena FROM products ORDER BY id').all() as Array<{ id: number; naziv: string; cijena: number }>) {
+    const stara = pocetak.cijene.get(p.id);
+    if (stara === undefined || Math.abs(stara - p.cijena) <= EPS) continue;
+    promijenjene.add(p.id);
+    if (!uDokumentu.has(p.id)) bezZalihe.push({ productId: p.id, productNaziv: p.naziv, staraCijena: stara, novaCijena: p.cijena });
+  }
+
+  return { dokumenti, bezZalihe, cijenaOstaje: cijenaOstaje.filter(c => !promijenjene.has(c.productId)) };
+}
+
+/**
+ * Izmjena primke: artikli kojima korisnik mijenja prodajnu cijenu na primci,
+ * a cijenu je poslije ove primke mijenjalo nešto drugo — cijena u prodaji
+ * ostaje (vidi `pripremiIzmjenuPrimke`). Poziva se prije izmjene.
+ */
+export function cijeneKojeOstaju(
+  db: SqlDb,
+  primkaId: number,
+  noveStavke: Array<{ productId: number; cijena: number }>
+): PregledCijenaUlaza['cijenaOstaje'] {
+  const stare = prveCijene(db.prepare('SELECT productId, cijena FROM primka_stavke WHERE primkaId = ? ORDER BY id')
+    .all(primkaId) as Array<{ productId: number; cijena: number }>);
+  const artikal = db.prepare('SELECT naziv, cijena, tip FROM products WHERE id = ?');
+  const out: PregledCijenaUlaza['cijenaOstaje'] = [];
+  for (const [productId, nova] of prveCijene(noveStavke)) {
+    const stara = stare.get(productId);
+    if (!stara || Math.abs(stara.cijena - nova.cijena) <= EPS || !cijenaKasnijeMijenjana(db, primkaId, productId)) continue;
+    const p = artikal.get(productId) as { naziv: string; cijena: number; tip: string } | undefined;
+    if (p && p.tip !== 'materijal') out.push({ productId, productNaziv: p.naziv, cijena: p.cijena });
+  }
+  return out;
 }
 
 /**
