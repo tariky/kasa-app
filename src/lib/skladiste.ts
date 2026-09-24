@@ -73,6 +73,51 @@ export function applyPricesWithoutStock(db: SqlDb, changes: PriceChange[]): void
 }
 
 /**
+ * Stara prodajna cijena koju treba zapamtiti na svakoj stavci primke
+ * (`primka_stavke.staraCijena`), po redu stavki. Upisuje se samo za artikle
+ * bez zalihe (kod njih nema nivelacije koja bi je čuvala) i samo na prvu
+ * stavku artikla — njena cijena je ona koju je `collectPriceChanges` upisao.
+ */
+export function stareCijeneStavki(
+  stavke: Array<{ productId: number }>,
+  bezZaliha: PriceChange[]
+): Array<number | null> {
+  const stare = new Map(bezZaliha.map(c => [c.productId, c.staraCijena]));
+  return stavke.map(s => {
+    const stara = stare.get(s.productId);
+    if (stara === undefined) return null;
+    stare.delete(s.productId);
+    return stara;
+  });
+}
+
+/**
+ * Vrati `staraCijena` artiklima koji još uvijek stoje na `novaCijena`. Ako je
+ * cijenu u međuvremenu promijenilo nešto drugo (kasnija primka, ručna izmjena),
+ * ta vrijednost se ne smije pregaziti. Vraća broj vraćenih artikala.
+ */
+function vratiCijeneAkoNepromijenjene(
+  db: SqlDb,
+  promjene: Array<{ productId: number; staraCijena: number; novaCijena: number }>
+): number {
+  const revertPrice = db.prepare(
+    "UPDATE products SET cijena = ?, updatedAt = datetime('now','localtime') WHERE id = ?"
+  );
+  let reverted = 0;
+
+  for (const p of promjene) {
+    const current = db.prepare('SELECT cijena FROM products WHERE id = ?')
+      .get(p.productId) as { cijena: number } | undefined;
+    if (current && Math.abs(current.cijena - p.novaCijena) <= EPS) {
+      revertPrice.run(p.staraCijena, p.productId);
+      reverted++;
+    }
+  }
+
+  return reverted;
+}
+
+/**
  * Vrati cijene koje je nivelacija ove primke postavila — ali samo za artikle
  * koji još uvijek stoje na toj cijeni. Ako je kasnija primka u međuvremenu
  * promijenila cijenu, njena vrijednost se ne smije pregaziti.
@@ -86,21 +131,67 @@ export function revertNivelacijaPrices(db: SqlDb, primkaId: number): number {
     WHERE n.primkaId = ?
   `).all(primkaId) as Array<{ productId: number; staraCijena: number; novaCijena: number }>;
 
-  const revertPrice = db.prepare(
-    "UPDATE products SET cijena = ?, updatedAt = datetime('now','localtime') WHERE id = ?"
-  );
-  let reverted = 0;
+  return vratiCijeneAkoNepromijenjene(db, oldNivStavke);
+}
 
-  for (const ons of oldNivStavke) {
-    const current = db.prepare('SELECT cijena FROM products WHERE id = ?')
-      .get(ons.productId) as { cijena: number } | undefined;
-    if (current && Math.abs(current.cijena - ons.novaCijena) <= EPS) {
-      revertPrice.run(ons.staraCijena, ons.productId);
-      reverted++;
-    }
+/**
+ * Isto kao `revertNivelacijaPrices`, ali za cijene koje je primka promijenila
+ * artiklima bez zalihe (zapamćene u `primka_stavke.staraCijena`). Stavke bez
+ * zapamćene cijene (stare primke) se ne diraju.
+ */
+export function revertPricesWithoutStock(db: SqlDb, primkaId: number): number {
+  const promjene = db.prepare(`
+    SELECT productId, staraCijena, cijena AS novaCijena
+    FROM primka_stavke
+    WHERE primkaId = ? AND staraCijena IS NOT NULL
+  `).all(primkaId) as Array<{ productId: number; staraCijena: number; novaCijena: number }>;
+
+  return vratiCijeneAkoNepromijenjene(db, promjene);
+}
+
+/**
+ * Vrati sve prodajne cijene koje je primka promijenila (nivelacija + artikli
+ * bez zalihe). Poziva se prije brisanja stavki/nivelacije u primka:update i
+ * primka:delete. Artikal je u jednoj primci samo u jednoj od dvije grupe.
+ */
+export function revertPrimkaPrices(db: SqlDb, primkaId: number): number {
+  return revertNivelacijaPrices(db, primkaId) + revertPricesWithoutStock(db, primkaId);
+}
+
+/**
+ * `stock_movements.createdAt` za ulaz iz primke: datum primke u formatu
+ * kretanja (`YYYY-MM-DD HH:MM:SS`). Primka nosi samo datum, pa ulaz dobija
+ * ponoć — deterministično (izmjena primke ne pomjera vrijeme) i unutar dana
+ * pri poređenju stringova (`BETWEEN 'D 00:00:00' AND 'D 23:59:59'`, `LIKE 'D%'`).
+ */
+export function datumKretanjaPrimke(datum: string): string {
+  return /^\d{4}-\d{2}-\d{2}$/.test(datum) ? `${datum} 00:00:00` : datum;
+}
+
+/**
+ * Zajednička validacija za primka:create i primka:update. Baca grešku sa
+ * porukom za korisnika; vraća trimovan broj primke koji treba upisati.
+ * `primkaId` je id primke koja se mijenja — njen vlastiti broj nije duplikat.
+ */
+export function validirajPrimku(
+  db: SqlDb,
+  data: { brojPrimke?: string; stavke?: Array<{ productId: number }> },
+  primkaId?: number
+): string {
+  const brojPrimke = data.brojPrimke?.trim();
+  if (!brojPrimke) throw new Error('Broj primke je obavezan');
+  if (!data.stavke || data.stavke.length === 0) throw new Error('Primka mora imati najmanje jednu stavku');
+
+  const postojeca = db.prepare('SELECT id FROM primke WHERE brojPrimke = ? AND id IS NOT ?')
+    .get(brojPrimke, primkaId ?? null);
+  if (postojeca) throw new Error(`Primka sa brojem "${data.brojPrimke}" već postoji`);
+
+  const postojiArtikal = db.prepare('SELECT 1 FROM products WHERE id = ?');
+  for (const s of data.stavke) {
+    if (!postojiArtikal.get(s.productId)) throw new Error(`Artikal (ID ${s.productId}) ne postoji`);
   }
 
-  return reverted;
+  return brojPrimke;
 }
 
 /**

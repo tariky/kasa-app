@@ -60,6 +60,8 @@ export interface PrimkaStavka {
   /** Dio zavisnih troškova dokumenta (prevoz i sl.) koji otpada na stavku, ukupno u KM. */
   zavisniTroskovi: number;
   pdvStopa: string;
+  /** Prodajna cijena koju je stavka pregazila bez nivelacije (artikal bez zalihe); null inače. */
+  staraCijena?: number | null;
   createdAt: string;
   productNaziv?: string;
   productJm?: string;

@@ -6,7 +6,7 @@ import { Database } from 'bun:sqlite';
 import { schema } from '@/database/schema';
 import {
   nextBrojPonude, formatBrojPonude, createPonuda, updatePonuda,
-  efektivniStatus, setStatusPonude, konvertujPonudu, plusDana, danaIzmedju, DEFAULT_ROK_DANA,
+  efektivniStatus, setStatusPonude, deletePonuda, konvertujPonudu, plusDana, danaIzmedju, DEFAULT_ROK_DANA,
 } from './ponuda';
 import type { SqlDb } from './sqldb';
 
@@ -214,6 +214,35 @@ test('konvertovana se ne može postaviti ručno', () => {
     .toThrow('Status "konvertovana" postavlja se konverzijom u račun');
 });
 
+test('nepoznat status se odbija jasnom porukom, ništa se ne upisuje', () => {
+  const { id } = napraviPonudu();
+  expect(() => setStatusPonude(db, id, 'istekla' as any)).toThrow('Nepoznat status ponude: "istekla"');
+  expect((db.prepare('SELECT status FROM ponude WHERE id = ?').get(id) as any).status).toBe('draft');
+});
+
+// ─── deletePonuda ───────────────────────────────────────────
+
+test('deletePonuda briše ponudu i stavke; nepostojeća vraća 0', () => {
+  const { id } = napraviPonudu();
+  expect(deletePonuda(db, id)).toEqual({ changes: 1 });
+  expect(db.prepare('SELECT COUNT(*) AS c FROM ponuda_stavke WHERE ponudaId = ?').get(id)).toEqual({ c: 0 });
+  expect(deletePonuda(db, id)).toEqual({ changes: 0 });
+});
+
+test('deletePonuda odbija ponudu vezanu za radni nalog i ne dira nalog', () => {
+  const { id } = napraviPonudu();
+  const korisnikId = dodajKorisnika();
+  db.prepare(`
+    INSERT INTO radni_nalozi (broj, godina, datum, vrsta, ponudaId, opis, korisnikId)
+    VALUES (4, 2026, '2026-03-01', 'narudzba', ?, 'Test', ?)
+  `).run(id, korisnikId);
+
+  expect(() => deletePonuda(db, id))
+    .toThrow('Ponuda je vezana za radni nalog RN-4/2026 — prvo obrišite nalog');
+  expect(db.prepare('SELECT COUNT(*) AS c FROM ponude WHERE id = ?').get(id)).toEqual({ c: 1 });
+  expect(db.prepare('SELECT COUNT(*) AS c FROM radni_nalozi').get()).toEqual({ c: 1 });
+});
+
 test('status konvertovane ponude se ne može mijenjati', () => {
   const { id } = napraviPonudu();
   db.prepare("UPDATE ponude SET status = 'konvertovana' WHERE id = ?").run(id);
@@ -296,6 +325,28 @@ test('već konvertovana ponuda se ne može ponovo konvertovati', async () => {
   const { print } = printOk();
   await expect(konvertujPonudu(deps(print), { id, korisnikId, nacinPlacanja: 'Gotovina' }))
     .rejects.toThrow('Ponuda je već konvertovana u račun');
+});
+
+test('konverzija se odbija PRIJE štampe: korisnik, način plaćanja, odbijena ponuda, nestali artikal', async () => {
+  const { id, productId } = napraviPonudu(10);
+  const korisnikId = dodajKorisnika();
+  const { print, calls } = printOk();
+  const k = (d: any) => konvertujPonudu(deps(print), { id, korisnikId, nacinPlacanja: 'Gotovina', ...d });
+
+  await expect(k({ korisnikId: 0 })).rejects.toThrow('Korisnik nije prijavljen');
+  await expect(k({ korisnikId: 9999 })).rejects.toThrow('Korisnik nije prijavljen');
+  await expect(k({ nacinPlacanja: '' })).rejects.toThrow('Način plaćanja je obavezan');
+  await expect(k({ nacinPlacanja: 'Bitcoin' })).rejects.toThrow('Nepoznat način plaćanja: "Bitcoin"');
+
+  setStatusPonude(db, id, 'odbijena');
+  await expect(k({})).rejects.toThrow('Odbijena ponuda se ne može pretvoriti u račun');
+  setStatusPonude(db, id, 'prihvacena');
+
+  db.prepare('DELETE FROM products WHERE id = ?').run(productId);
+  await expect(k({})).rejects.toThrow('Artikal na stavci ponude više ne postoji');
+
+  expect(calls).toEqual([]);
+  expect(db.prepare('SELECT COUNT(*) AS c FROM orders').get()).toEqual({ c: 0 });
 });
 
 test('usluge ne prave kretanje zaliha pri konverziji', async () => {

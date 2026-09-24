@@ -58,6 +58,22 @@ function validirajStavke(db: SqlDb, stavke: NalogStavkaInput[]): void {
   }
 }
 
+/**
+ * Normativ drži jedan red po materijalu (UNIQUE productId+materijalId). Nalog
+ * namjerno dozvoljava isti materijal više puta — npr. ista ploča u dvije
+ * dimenzije krojenja, svaka sa svojom napomenom.
+ */
+function baciAkoDupliMaterijal(db: SqlDb, stavke: NalogStavkaInput[]): void {
+  const vidjeni = new Set<number>();
+  for (const s of stavke) {
+    if (vidjeni.has(s.materijalId)) {
+      const naziv = productTip(db, s.materijalId)?.naziv ?? `#${s.materijalId}`;
+      throw new Error(`Materijal "${naziv}" je unesen više puta — saberite količine u jednu stavku`);
+    }
+    vidjeni.add(s.materijalId);
+  }
+}
+
 function ucitajNalogIliBaci(db: SqlDb, id: number): { status: NalogStatus; vrsta: NalogVrsta; kolicina: number; productId: number | null; ponudaId: number | null } {
   const n = db.prepare('SELECT status, vrsta, kolicina, productId, ponudaId FROM radni_nalozi WHERE id = ?').get(id) as any;
   if (!n) throw new Error('Radni nalog ne postoji');
@@ -194,7 +210,19 @@ export function updateNalog(
     if (!(kolicina > 0)) throw new Error('Količina mora biti veća od nule');
     set('kolicina', kolicina);
   }
-  if (patch.datum !== undefined) set('datum', patch.datum);
+  if (patch.datum !== undefined) {
+    if (typeof patch.datum !== 'string' || !/^\d{4}-\d{2}-\d{2}/.test(patch.datum)) {
+      throw new Error('Datum naloga nije ispravan');
+    }
+    set('datum', patch.datum);
+    // Numeracija ide po godini: prelazak u drugu godinu daje sljedeći slobodan broj te godine.
+    const godina = Number(patch.datum.slice(0, 4));
+    const trenutna = db.prepare('SELECT godina FROM radni_nalozi WHERE id = ?').get(id) as { godina: number };
+    if (trenutna.godina !== godina) {
+      set('godina', godina);
+      set('broj', nextBrojNaloga(db, godina));
+    }
+  }
   if (patch.rok !== undefined) set('rok', patch.rok || null);
   if (patch.dogovorenaCijena !== undefined) set('dogovorenaCijena', patch.dogovorenaCijena ?? null);
   if (patch.trosakRada !== undefined) set('trosakRada', patch.trosakRada ?? 0);
@@ -285,6 +313,7 @@ export function saveNormativ(db: SqlDb, productId: number, stavke: NalogStavkaIn
   const p = productTip(db, productId);
   if (!p || p.tip !== 'artikal') throw new Error('Normativ se vodi samo za artikal');
   validirajStavke(db, stavke);
+  baciAkoDupliMaterijal(db, stavke);
   db.prepare('DELETE FROM normativi WHERE productId = ?').run(productId);
   const ins = db.prepare('INSERT INTO normativi (productId, materijalId, kolicina, napomena) VALUES (?, ?, ?, ?)');
   for (const s of stavke) ins.run(productId, s.materijalId, round4(s.kolicina), s.napomena ?? null);
@@ -439,6 +468,28 @@ export function fakturisiNalog(db: SqlDb, id: number, racunId: number): void {
 /** Usluga preko koje se prodaje rad po mjeri — kreira se pri uključivanju modula. */
 export const PRODAJNA_USLUGA = { sifra: 'NAMJ', naziv: 'Namještaj po mjeri' } as const;
 
+/**
+ * Id postojeće usluge NAMJ ili null ako je još nema. Baca ako šifru drži
+ * artikal/materijal — prodaja preko njega bi skidala robu sa zalihe.
+ */
+function postojecaProdajnaUsluga(db: SqlDb): number | null {
+  const row = db.prepare('SELECT id, tip, naziv FROM products WHERE sifra = ?').get(PRODAJNA_USLUGA.sifra) as
+    { id: number; tip: string; naziv: string } | undefined;
+  if (!row) return null;
+  if (row.tip !== 'usluga') {
+    throw new Error(
+      `Šifra ${PRODAJNA_USLUGA.sifra} je zauzeta artiklom "${row.naziv}" koji nije usluga — ` +
+      'promijenite šifru tog artikla pa ponovo izdajte račun'
+    );
+  }
+  return row.id;
+}
+
+/**
+ * Pri uključivanju modula: kreira uslugu NAMJ ako šifra nije zauzeta. Postojeći
+ * proizvod sa tom šifrom se ne dira (ni kad nije usluga — tada izdavanje
+ * računa za nalog javi grešku prije štampe).
+ */
 export function osigurajProdajnuUslugu(db: SqlDb): number {
   const row = db.prepare('SELECT id FROM products WHERE sifra = ?').get(PRODAJNA_USLUGA.sifra) as { id: number } | undefined;
   if (row) return row.id;
@@ -485,6 +536,11 @@ export async function izdajRacunZaNalog(
   if (nalog.vrsta !== 'narudzba') throw new Error('Račun se izdaje samo za nalog po narudžbi');
   if (nalog.status !== 'zavrsen') throw new Error('Nalog mora biti završen prije izdavanja računa');
   if (izdavanjaUToku.has(nalog.id)) throw new Error('Izdavanje računa za ovaj nalog je već u toku');
+  // Sve što bi upis nakon štampe odbio (FK na korisnika) provjerava se prije štampe.
+  const korisnik = data.korisnikId ? db.prepare('SELECT id FROM users WHERE id = ?').get(data.korisnikId) : undefined;
+  if (!korisnik) throw new Error('Korisnik nije prijavljen');
+  // Štampa bez oznake plaćanja ide kao Gotovina — i u bazu se tako upisuje.
+  const nacinPlacanja = data.nacinPlacanja || 'Gotovina';
 
   izdavanjaUToku.add(nalog.id);
   try {
@@ -500,7 +556,7 @@ export async function izdajRacunZaNalog(
         return { success: true, racunId: ponuda.racunId, brojFiskalnogRacuna, odgovori: {} };
       }
 
-      const res = await konvertujPonudu(deps, { id: nalog.ponudaId, korisnikId: data.korisnikId, nacinPlacanja: data.nacinPlacanja });
+      const res = await konvertujPonudu(deps, { id: nalog.ponudaId, korisnikId: data.korisnikId, nacinPlacanja });
       if (res.success && res.racunId) {
         knjiziFakturisanjeNaloga(db, transaction, nalog.id, res.racunId, res.brojFiskalnogRacuna ?? null);
       }
@@ -508,9 +564,10 @@ export async function izdajRacunZaNalog(
     }
 
     if (!(nalog.dogovorenaCijena! > 0)) throw new Error('Dogovorena cijena mora biti upisana prije izdavanja računa');
-    const uslugaId = osigurajProdajnuUslugu(db);
+    // Usluga se kreira tek uz uspješan upis — neuspjela štampa ne ostavlja tragove.
+    const postojecaUsluga = postojecaProdajnaUsluga(db);
     const stavke = [{
-      productId: uslugaId, kolicina: 1, cijena: nalog.dogovorenaCijena!, rabat: 0, pdvStopa: 'E',
+      productId: postojecaUsluga ?? 0, kolicina: 1, cijena: nalog.dogovorenaCijena!, rabat: 0, pdvStopa: 'E',
       productSifra: PRODAJNA_USLUGA.sifra, productNaziv: PRODAJNA_USLUGA.naziv, productJm: 'kom', productTip: 'usluga',
     }];
     const { ukupno, pdvIznos } = izracunajTotale(stavke);
@@ -519,7 +576,7 @@ export async function izdajRacunZaNalog(
       : null;
 
     const racun = buildTringRacun({
-      stavke, ukupno, nacinPlacanja: data.nacinPlacanja,
+      stavke, ukupno, nacinPlacanja,
       kupac: kupac ? {
         idBroj: kupac.idBroj, naziv: kupac.naziv, adresa: kupac.adresa || '',
         postanskiBroj: kupac.postanskiBroj || '', grad: kupac.grad || '',
@@ -533,8 +590,9 @@ export async function izdajRacunZaNalog(
 
     try {
       const racunId = transaction(() => {
+        stavke[0].productId = postojecaProdajnaUsluga(db) ?? osigurajProdajnuUslugu(db);
         const orderId = upisiRacun(db, {
-          korisnikId: data.korisnikId, ukupno, pdvIznos, nacinPlacanja: data.nacinPlacanja,
+          korisnikId: data.korisnikId, ukupno, pdvIznos, nacinPlacanja,
           brojFiskalnogRacuna, kupac, stavke,
         });
         fakturisiNalog(db, nalog.id, orderId);

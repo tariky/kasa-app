@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Product, Primka, Dobavljac } from '@/types';
-import { cn, formatKM, formatDate, parseDecimal } from '@/lib/utils';
+import { cn, formatKM, formatDate, parseDecimal, porukaGreske } from '@/lib/utils';
 import { uBruto, uNetto, cijenaZaSpremanje } from '@/lib/pdvUnos';
 import { useUnosBezPdv } from '@/hooks/useUnosBezPdv';
 import { useProizvodnja } from '@/hooks/useProizvodnja';
@@ -374,8 +374,8 @@ function ArtikliTab({
 
   const handleDelete = async (p: Product) => {
     if (!confirm(`Obrisati artikal "${p.naziv}"?`)) return;
-    await window.api.deleteProduct(p.id);
-    onReload();
+    try { await window.api.deleteProduct(p.id); onReload(); }
+    catch (e) { alert(porukaGreske(e)); }
   };
 
   const filtered = products

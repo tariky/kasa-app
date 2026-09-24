@@ -75,6 +75,7 @@ const ADDED_COLUMNS: Array<[string, string]> = [
   ['primka_stavke', 'nabavnaCijena'],
   ['primka_stavke', 'rabat'],
   ['primka_stavke', 'zavisniTroskovi'],
+  ['primka_stavke', 'staraCijena'],
   ['primke', 'dobavljacNaziv'],
   ['primke', 'dobavljacId'],
   ['primke', 'dobavljacAdresa'],
@@ -190,6 +191,20 @@ test('nakon nadogradnje se u staru bazu može pisati kroz nove kolone', () => {
 
   const stavka = db.prepare('SELECT nabavnaCijena, rabat FROM primka_stavke WHERE id = 1').get() as any;
   expect(stavka).toEqual({ nabavnaCijena: 1.8, rabat: 5 });
+  db.close();
+});
+
+test('stare stavke primke nemaju zapamćenu staru cijenu (NULL), nova se može upisati', () => {
+  const db = legacyDbWithData();
+  db.prepare("INSERT INTO primke (brojPrimke, datum) VALUES ('P-OLD', '2025-01-10')").run();
+  db.prepare("INSERT INTO primka_stavke (primkaId, productId, kolicina, cijena, pdvStopa) VALUES (1, 1, 3, 2.5, 'E')").run();
+  openAsCurrentVersion(db);
+
+  expect((db.prepare('SELECT staraCijena FROM primka_stavke WHERE id = 1').get() as any).staraCijena).toBeNull();
+  db.prepare(
+    "INSERT INTO primka_stavke (primkaId, productId, kolicina, cijena, pdvStopa, staraCijena) VALUES (1, 1, 1, 3, 'E', 2.5)"
+  ).run();
+  expect((db.prepare('SELECT staraCijena FROM primka_stavke WHERE id = 2').get() as any).staraCijena).toBe(2.5);
   db.close();
 });
 

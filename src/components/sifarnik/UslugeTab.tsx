@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Product } from '@/types';
-import { cn, formatKM, parseDecimal } from '@/lib/utils';
+import { cn, formatKM, parseDecimal, porukaGreske } from '@/lib/utils';
 import { uBruto, uNetto, cijenaZaSpremanje } from '@/lib/pdvUnos';
 import { useUnosBezPdv } from '@/hooks/useUnosBezPdv';
 import { Button } from '@/components/ui/button';
@@ -173,8 +173,8 @@ export function UslugeTab({ usluge, onReload }: { usluge: Product[]; onReload: (
   const handleEdit = (p: Product) => { setEditProduct(p); setDialogOpen(true); };
   const handleDelete = async (p: Product) => {
     if (!confirm(`Obrisati uslugu "${p.naziv}"?`)) return;
-    await window.api.deleteProduct(p.id);
-    onReload();
+    try { await window.api.deleteProduct(p.id); onReload(); }
+    catch (e) { alert(porukaGreske(e)); }
   };
 
   const handleDialogOpenChange = (v: boolean) => {

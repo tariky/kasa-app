@@ -1,4 +1,5 @@
-import { copyFileSync, existsSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 // Minimalni podskup drivera koji uvoz koristi — omogućava testiranje bez
@@ -9,8 +10,11 @@ export interface RestoreDb {
 }
 
 export interface RestoreDeps {
-  /** Otvara backup fajl read-only, samo radi provjere. */
-  openReadonly: (filePath: string) => RestoreDb;
+  /**
+   * Otvara postojeći fajl read-write (bez kreiranja). Koristi se samo nad
+   * kopijama koje ovaj modul pravi — korisnikov backup se nikad ne otvara.
+   */
+  open: (filePath: string) => RestoreDb;
   /** Zatvara aktivnu bazu (closeDb). */
   closeActive: () => void;
   /** Otvara aktivnu bazu i primjenjuje schemu + migracije (getDb). */
@@ -26,9 +30,32 @@ const REQUIRED_TABLES = ['users', 'products', 'orders'];
  * Baca grešku s objašnjenjem; ne dira ništa na disku.
  */
 export function validateBackup(filePath: string, deps: RestoreDeps): void {
+  const tmp = mkdtempSync(path.join(tmpdir(), 'kasa-uvoz-'));
+  try {
+    pripremiKopiju(filePath, tmp, deps);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Kopira backup (i njegov -wal, ako postoji) u `folder`, prebaci kopiju u
+ * DELETE journal mode i provjeri je. Vraća putanju provjerene kopije.
+ *
+ * Kopija baze u WAL modu bez -shm ne može se pouzdano otvoriti read-only
+ * (SQLITE_CANTOPEN, ili "attempt to write a readonly database" kad je folder
+ * read-only), a read-write otvaranje originala bi pored njega ostavilo
+ * -wal/-shm. Zato se radi nad kopijom.
+ */
+function pripremiKopiju(filePath: string, folder: string, deps: RestoreDeps): string {
+  const kopija = path.join(folder, 'backup.db');
   let db: RestoreDb | null = null;
   try {
-    db = deps.openReadonly(filePath);
+    if (!existsSync(filePath)) throw new Error('Fajl ne postoji.');
+    copyFileSync(filePath, kopija);
+    if (existsSync(`${filePath}-wal`)) copyFileSync(`${filePath}-wal`, `${kopija}-wal`);
+    db = deps.open(kopija);
+    uDeleteMode(db);
     const integrity = db.prepare('PRAGMA integrity_check').get() as { integrity_check?: string } | undefined;
     if (integrity?.integrity_check !== 'ok') {
       throw new Error('Baza je oštećena.');
@@ -48,6 +75,36 @@ export function validateBackup(filePath: string, deps: RestoreDeps): void {
       // Fajl koji se nije mogao ni otvoriti nema šta da se zatvara.
     }
   }
+  return kopija;
+}
+
+/** Upiše sve iz -wal u glavni fajl i prebaci bazu u DELETE journal mode. */
+function uDeleteMode(db: RestoreDb): void {
+  const r = db.prepare('PRAGMA journal_mode = DELETE').get() as { journal_mode?: string } | undefined;
+  if (r?.journal_mode !== 'delete') {
+    throw new Error(`Baza se ne može prebaciti iz ${r?.journal_mode ?? 'nepoznatog'} journal moda.`);
+  }
+}
+
+/**
+ * Kopija aktivne baze kao jedan samostalan fajl (DELETE journal mode), koji
+ * SQLite otvara bilo kako, i read-only, bez -wal/-shm pored njega.
+ */
+export function samostalnaKopija(dbPath: string, cilj: string, deps: RestoreDeps): void {
+  deps.checkpointActive();
+  // Ostaci ranijeg fajla na istoj putanji bi se primijenili na novu kopiju.
+  rmSync(`${cilj}-wal`, { force: true });
+  rmSync(`${cilj}-shm`, { force: true });
+  copyFileSync(dbPath, cilj);
+  const db = deps.open(cilj);
+  try {
+    uDeleteMode(db);
+  } finally {
+    db.close();
+  }
+  // Neki SQLite buildovi (npr. sistemski na macOS-u) ostave prazan -shm i
+  // nakon prelaska u DELETE mode; baza ga više ne koristi.
+  rmSync(`${cilj}-shm`, { force: true });
 }
 
 /**
@@ -65,33 +122,34 @@ export function swapInBackup(
     throw new Error('Odabrana je trenutno aktivna baza, ne backup fajl.');
   }
 
-  validateBackup(sourcePath, deps);
-
-  deps.checkpointActive();
-  copyFileSync(dbPath, safetyPath);
-  deps.closeActive();
-
+  const tmp = mkdtempSync(path.join(tmpdir(), 'kasa-uvoz-'));
   try {
-    replaceDbFiles(sourcePath, dbPath);
-    // Otvaranje pokreće schemu + migracije, pa se backup iz starije verzije
-    // programa podiže na aktuelnu strukturu.
-    deps.openActive();
-  } catch (error: any) {
+    // Uvozi se provjerena kopija: transakcije iz -wal uz backup su već
+    // upisane u nju, pa se prenosi samo jedan fajl.
+    const kopija = pripremiKopiju(sourcePath, tmp, deps);
+
+    samostalnaKopija(dbPath, safetyPath, deps);
     deps.closeActive();
-    replaceDbFiles(safetyPath, dbPath);
-    deps.openActive();
-    throw new Error(`Uvoz nije uspio, vraćena je prethodna baza: ${error.message}`);
+
+    try {
+      replaceDbFile(kopija, dbPath);
+      // Otvaranje pokreće schemu + migracije, pa se backup iz starije verzije
+      // programa podiže na aktuelnu strukturu.
+      deps.openActive();
+    } catch (error: any) {
+      deps.closeActive();
+      replaceDbFile(safetyPath, dbPath);
+      deps.openActive();
+      throw new Error(`Uvoz nije uspio, vraćena je prethodna baza: ${error.message}`);
+    }
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
   }
 }
 
-function replaceDbFiles(sourcePath: string, dbPath: string): void {
+function replaceDbFile(sourcePath: string, dbPath: string): void {
   // WAL/SHM prethodne baze moraju otići, inače se miješaju s novim fajlom.
   rmSync(`${dbPath}-wal`, { force: true });
   rmSync(`${dbPath}-shm`, { force: true });
   copyFileSync(sourcePath, dbPath);
-  // Ako je backup ručno kopiran uz svoj WAL, prenesi i njega da se ne izgube
-  // transakcije koje nisu bile checkpointane.
-  if (existsSync(`${sourcePath}-wal`)) {
-    copyFileSync(`${sourcePath}-wal`, `${dbPath}-wal`);
-  }
 }

@@ -14,6 +14,11 @@ export function runMigrations(database: Database.Database): void {
   if (!stavkeCols.find(c => c.name === 'zavisniTroskovi')) {
     database.exec("ALTER TABLE primka_stavke ADD COLUMN zavisniTroskovi REAL NOT NULL DEFAULT 0");
   }
+  // Stara prodajna cijena artikla bez zalihe (primka je mijenja bez nivelacije).
+  // Postojeće stavke ostaju NULL — za njih se cijena pri brisanju ne vraća.
+  if (!stavkeCols.find(c => c.name === 'staraCijena')) {
+    database.exec("ALTER TABLE primka_stavke ADD COLUMN staraCijena REAL");
+  }
 
   // primke header migrations — dobavljač fields
   const primkeCols = database.prepare("PRAGMA table_info(primke)").all() as { name: string }[];

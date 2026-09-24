@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Dobavljac } from '@/types';
-import { cn } from '@/lib/utils';
+import { cn, porukaGreske } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -230,8 +230,8 @@ export function DobavljaciTab({
 
   const handleDelete = async (d: Dobavljac) => {
     if (!confirm(`Obrisati dobavljača "${d.naziv}"?`)) return;
-    await window.api.deleteDobavljac(d.id);
-    onReload();
+    try { await window.api.deleteDobavljac(d.id); onReload(); }
+    catch (e) { alert(porukaGreske(e)); }
   };
 
   const filtered = dobavljaci.filter(d => {

@@ -16,7 +16,7 @@ import { Slider } from '@/components/ui/slider';
 import { ZaglavljePrikaz } from '@/components/ZaglavljePrikaz';
 import LicencaKartica from '@/components/licenca/LicencaKartica';
 import { LOGO_VELICINA, kontaktFirme } from '@/lib/firma';
-import { cn } from '@/lib/utils';
+import { cn, porukaGreske } from '@/lib/utils';
 import { User, TringSettings, BankAccount } from '@/types';
 import {
   UserPlus, Wifi, WifiOff, Save, Trash2, Pencil,
@@ -32,6 +32,7 @@ export default function PostavkeScreen() {
   // ── Korisnici state ──
   const [users, setUsers] = useState<User[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [userGreska, setUserGreska] = useState('');
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [formIme, setFormIme] = useState('');
   const [formPin, setFormPin] = useState('');
@@ -211,6 +212,7 @@ export default function PostavkeScreen() {
     setFormIme('');
     setFormPin('');
     setFormUloga('kasir');
+    setUserGreska('');
     setDialogOpen(true);
   };
 
@@ -219,18 +221,25 @@ export default function PostavkeScreen() {
     setFormIme(user.ime);
     setFormPin(user.pin);
     setFormUloga(user.uloga);
+    setUserGreska('');
     setDialogOpen(true);
   };
 
   const handleSaveUser = async () => {
     if (!formIme.trim() || !formPin.trim()) return;
 
-    if (editingUser) {
-      await window.api.updateUser(editingUser.id, { ime: formIme, pin: formPin, uloga: formUloga });
-    } else {
-      await window.api.createUser({ ime: formIme, pin: formPin, uloga: formUloga });
+    try {
+      if (editingUser) {
+        await window.api.updateUser(editingUser.id, { ime: formIme, pin: formPin, uloga: formUloga });
+      } else {
+        await window.api.createUser({ ime: formIme, pin: formPin, uloga: formUloga });
+      }
+    } catch (err: any) {
+      setUserGreska(porukaGreske(err));
+      return;
     }
 
+    setUserGreska('');
     setDialogOpen(false);
     loadUsers();
   };
@@ -239,7 +248,12 @@ export default function PostavkeScreen() {
     const ac = users.filter(u => u.uloga === 'admin').length;
     if (user.uloga === 'admin' && ac <= 1) return;
 
-    await window.api.deleteUser(user.id);
+    try {
+      await window.api.deleteUser(user.id);
+      setUserGreska('');
+    } catch (err: any) {
+      setUserGreska(porukaGreske(err));
+    }
     loadUsers();
   };
 
@@ -455,6 +469,11 @@ export default function PostavkeScreen() {
                     Novi korisnik
                   </Button>
                 </div>
+                {userGreska && !dialogOpen && (
+                  <div className="mx-5 mt-3 rounded-xl px-4 py-2.5 text-[12px] font-medium bg-red-50/60 border border-red-100 text-red-600">
+                    {userGreska}
+                  </div>
+                )}
 
                 {users.length === 0 ? (
                   <div className="flex-1 flex flex-col items-center justify-center text-slate-400 select-none">
@@ -1075,6 +1094,8 @@ export default function PostavkeScreen() {
             <div className="px-6 pt-5 pb-6">
               <div className="max-w-xl space-y-4">
 
+                <LicencaKartica />
+
                 {/* Kasa settings card */}
                 <div className="bg-white rounded-2xl border border-slate-100 shadow-sm shadow-slate-200/50 overflow-hidden">
                   <div className="px-6 py-4 border-b border-slate-100">
@@ -1094,8 +1115,6 @@ export default function PostavkeScreen() {
                         <p className="text-[13px] font-medium text-slate-700">Prikaži dnevni promet</p>
                         <p className="text-[12px] text-slate-400 mt-0.5">Prikazuje ukupan promet za danas na kasa ekranu</p>
                       </div>
-                <LicencaKartica />
-
                       <Switch
                         checked={showDailyTotal}
                         onCheckedChange={async (checked) => {
@@ -1488,6 +1507,9 @@ export default function PostavkeScreen() {
           </div>
 
           <div className="border-t bg-slate-50/50 px-6 py-4 flex items-center justify-end gap-3">
+            {userGreska && (
+              <span className="mr-auto text-[12px] font-medium text-red-600">{userGreska}</span>
+            )}
             <Button variant="ghost" onClick={() => setDialogOpen(false)}>
               Otkaži
             </Button>

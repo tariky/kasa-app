@@ -15,7 +15,7 @@ import {
   PRILOG_OPIS_DEFAULT, PRILOG_VEZA_DEFAULT, PRILOG_OPIS_MAX, PRILOG_VEZA_MAX,
 } from '@/lib/prilog';
 import { iznosStavke } from '@/lib/racun';
-import { formatKM, cn } from '@/lib/utils';
+import { formatKM, cn, porukaGreske } from '@/lib/utils';
 import type { Kupac, Product } from '@/types';
 
 type PaymentType = 'Gotovina' | 'Kartica' | 'Virman' | 'Ček';
@@ -27,12 +27,6 @@ const PAYMENTS: Array<{ tip: PaymentType; Icon: LucideIcon }> = [
   { tip: 'Virman', Icon: Landmark },
   { tip: 'Ček', Icon: ReceiptText },
 ];
-
-/** Electron IPC greške dolaze umotane u "Error invoking remote method '…': Error: …". */
-function porukaGreske(err: any): string {
-  const raw = err?.message || 'Nepoznata greška';
-  return raw.replace(/^Error invoking remote method '[^']*':\s*(Error:\s*)?/, '');
-}
 
 interface StavkaRed {
   productId: number;

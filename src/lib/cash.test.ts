@@ -28,6 +28,19 @@ function dodajRacun(nacinPlacanja: string, ukupno: number, opts: { createdAt?: s
   );
 }
 
+test('nepoznat tip ili nepostojeći korisnik se odbija prije slanja printeru', async () => {
+  let poslano = 0;
+  const deps = { db, send: async () => { poslano++; return ok; } };
+
+  await expect(addCashMovement(deps, { tip: 'xyz' as any, iznos: 50, korisnikId: 1 }))
+    .rejects.toThrow('Nepoznata vrsta unosa gotovine: xyz');
+  await expect(addCashMovement(deps, { tip: 'polog', iznos: 50, korisnikId: 999 }))
+    .rejects.toThrow('Korisnik ne postoji');
+
+  expect(poslano).toBe(0);
+  expect(db.prepare('SELECT COUNT(*) AS n FROM cash_movements').get()).toEqual({ n: 0 });
+});
+
 test('polog se upiše sa statusom ok kad printer potvrdi', async () => {
   const r = await addCashMovement({ db, send: async () => ok }, { tip: 'polog', iznos: 50, korisnikId: 1 });
   expect(r.tringStatus).toBe('ok');

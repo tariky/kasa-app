@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Kupac } from '@/types';
-import { cn } from '@/lib/utils';
+import { cn, porukaGreske } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -257,8 +257,8 @@ export function KupciTab({
 
   const handleDelete = async (k: Kupac) => {
     if (!confirm(`Obrisati kupca "${k.naziv}"?`)) return;
-    await window.api.deleteKupac(k.id);
-    onReload();
+    try { await window.api.deleteKupac(k.id); onReload(); }
+    catch (e) { alert(porukaGreske(e)); }
   };
 
   const filtered = kupci.filter(k => {

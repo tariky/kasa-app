@@ -93,6 +93,9 @@ export function createPonuda(
 
 export type PonudaStatus = 'draft' | 'poslana' | 'prihvacena' | 'odbijena' | 'konvertovana';
 
+/** Statusi koje baza prihvata (CHECK na ponude.status). */
+export const PONUDA_STATUSI: readonly PonudaStatus[] = ['draft', 'poslana', 'prihvacena', 'odbijena', 'konvertovana'];
+
 /**
  * Status kakav se prikazuje: 'istekla' se ne upisuje u bazu nego izvodi iz
  * roka — samo za ponude koje još čekaju odgovor (draft/poslana). Zadnji dan
@@ -108,6 +111,10 @@ export function efektivniStatus(
 
 /** Ručna promjena statusa. 'konvertovana' smije postaviti samo konverzija. */
 export function setStatusPonude(db: SqlDb, id: number, status: PonudaStatus): void {
+  if (!PONUDA_STATUSI.includes(status)) {
+    // 'istekla' je samo prikazni status (vidi efektivniStatus) — ne upisuje se.
+    throw new Error(`Nepoznat status ponude: "${status ?? ''}"`);
+  }
   if (status === 'konvertovana') {
     throw new Error('Status "konvertovana" postavlja se konverzijom u račun');
   }
@@ -117,6 +124,28 @@ export function setStatusPonude(db: SqlDb, id: number, status: PonudaStatus): vo
   if (ponuda.status === 'konvertovana') throw new Error('Konvertovana ponuda se ne može mijenjati');
 
   db.prepare('UPDATE ponude SET status = ? WHERE id = ?').run(status, id);
+}
+
+/**
+ * Obriše ponudu i njene stavke. Konvertovana ponuda i ponuda za koju postoji
+ * radni nalog se ne brišu — nalog se ne briše kaskadno, operater ga mora
+ * svjesno obrisati prvo. Nepostojeća ponuda nije greška (changes: 0).
+ * Poziva se unutar transakcije.
+ */
+export function deletePonuda(db: SqlDb, id: number): { changes: number } {
+  const ponuda = db.prepare('SELECT status FROM ponude WHERE id = ?').get(id) as { status: string } | undefined;
+  if (!ponuda) return { changes: 0 };
+  if (ponuda.status === 'konvertovana') {
+    throw new Error('Konvertovana ponuda se ne može obrisati — po njoj je izdat račun');
+  }
+  const nalog = db.prepare('SELECT broj, godina FROM radni_nalozi WHERE ponudaId = ? ORDER BY id LIMIT 1')
+    .get(id) as { broj: number; godina: number } | undefined;
+  if (nalog) {
+    throw new Error(`Ponuda je vezana za radni nalog RN-${nalog.broj}/${nalog.godina} — prvo obrišite nalog`);
+  }
+  db.prepare('DELETE FROM ponuda_stavke WHERE ponudaId = ?').run(id);
+  const r = db.prepare('DELETE FROM ponude WHERE id = ?').run(id);
+  return { changes: Number(r.changes) };
 }
 
 /**
@@ -175,6 +204,9 @@ export interface KonverzijaResult {
   odgovori?: Record<string, string>;
 }
 
+/** Načini plaćanja koje nude ekrani (u bazi se čuva "Ček" s kvačicom). */
+export const NACINI_PLACANJA = ['Gotovina', 'Kartica', 'Virman', 'Ček'] as const;
+
 /** Ponude kojima se konverzija trenutno štampa — zaštita od dvoklika. */
 const konverzijeInFlight = new Set<number>();
 
@@ -183,7 +215,10 @@ const konverzijeInFlight = new Set<number>();
  * razduži skladište i zaključa ponudu — u jednoj transakciji (isti obrazac
  * kao refundAndPrint). Račun ide po cijenama zamrznutim na ponudi, ne po
  * trenutnom cjenovniku. Istekla ponuda se smije konvertovati — operater
- * odlučuje da li dogovor još važi.
+ * odlučuje da li dogovor još važi; odbijena ne smije.
+ *
+ * Sve što bi upis u bazu moglo oboriti (korisnik, način plaćanja, artikli)
+ * provjerava se PRIJE štampe — odštampan fiskalni račun se ne može povući.
  */
 export async function konvertujPonudu(
   deps: KonverzijaDeps,
@@ -194,9 +229,23 @@ export async function konvertujPonudu(
 
   if (konverzijeInFlight.has(id)) throw new Error('Konverzija ove ponude je već u toku');
 
+  const korisnik = data.korisnikId
+    ? db.prepare('SELECT id FROM users WHERE id = ?').get(data.korisnikId)
+    : undefined;
+  if (!korisnik) throw new Error('Korisnik nije prijavljen');
+
+  const nacinPlacanja = typeof data.nacinPlacanja === 'string' ? data.nacinPlacanja.trim() : '';
+  if (!nacinPlacanja) throw new Error('Način plaćanja je obavezan');
+  if (!(NACINI_PLACANJA as readonly string[]).includes(nacinPlacanja)) {
+    throw new Error(`Nepoznat način plaćanja: "${nacinPlacanja}"`);
+  }
+
   const ponuda = db.prepare('SELECT * FROM ponude WHERE id = ?').get(id) as any;
   if (!ponuda) throw new Error('Ponuda ne postoji');
   if (ponuda.status === 'konvertovana') throw new Error('Ponuda je već konvertovana u račun');
+  if (ponuda.status === 'odbijena') {
+    throw new Error('Odbijena ponuda se ne može pretvoriti u račun — ako kupac ipak prihvata, prvo promijenite status');
+  }
 
   const stavke = db.prepare(`
     SELECT ps.*, p.naziv AS productNaziv, p.jm AS productJm, p.sifra AS productSifra,
@@ -206,6 +255,11 @@ export async function konvertujPonudu(
     WHERE ps.ponudaId = ?
   `).all(id) as any[];
   if (stavke.length === 0) throw new Error('Ponuda nema stavki');
+  // LEFT JOIN: artikal koji je nestao daje NULL naziv — upis stavke bi pao na
+  // stranom ključu tek nakon štampe.
+  if (stavke.some(s => s.productNaziv == null)) {
+    throw new Error('Artikal na stavci ponude više ne postoji — izmijenite ponudu prije izdavanja računa');
+  }
 
   const kupac = db.prepare('SELECT * FROM kupci WHERE id = ?').get(ponuda.kupacId) as any;
 
@@ -214,7 +268,7 @@ export async function konvertujPonudu(
     const racun = buildTringRacun({
       stavke,
       ukupno: ponuda.ukupno,
-      nacinPlacanja: data.nacinPlacanja,
+      nacinPlacanja,
       kupac: kupac ? {
         idBroj: kupac.idBroj, naziv: kupac.naziv, adresa: kupac.adresa || '',
         postanskiBroj: kupac.postanskiBroj || '', grad: kupac.grad || '',
@@ -237,7 +291,7 @@ export async function konvertujPonudu(
       const racunId = transaction(() => {
         const orderId = upisiRacun(db, {
           korisnikId: data.korisnikId, ukupno: ponuda.ukupno, pdvIznos: ponuda.pdvIznos,
-          nacinPlacanja: data.nacinPlacanja, brojFiskalnogRacuna,
+          nacinPlacanja, brojFiskalnogRacuna,
           kupac: kupac ?? null, stavke,
         });
         db.prepare("UPDATE ponude SET status = 'konvertovana', racunId = ? WHERE id = ?")

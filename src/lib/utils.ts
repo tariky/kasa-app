@@ -31,3 +31,9 @@ export function formatDateTime(date: string): string {
   const d = new Date(date);
   return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()} u ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
+
+/** Electron IPC greške dolaze umotane u "Error invoking remote method '…': Error: …". */
+export function porukaGreske(err: any): string {
+  const raw = String(err?.message || err || 'Nepoznata greška');
+  return raw.replace(/^Error invoking remote method '[^']*':\s*(Error:\s*)?/, '');
+}

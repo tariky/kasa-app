@@ -38,8 +38,16 @@ export async function addCashMovement(
   deps: CashDeps,
   data: { tip: CashTip; iznos: number; korisnikId: number; napomena?: string }
 ): Promise<AddCashResult> {
+  // Sve provjere prije slanja: uređaj je fizički primio/izdao novac čim
+  // odgovori, pa upis nakon toga ne smije pasti na CHECK ili FOREIGN KEY.
+  if (data.tip !== 'polog' && data.tip !== 'povrat') {
+    throw new Error(`Nepoznata vrsta unosa gotovine: ${data.tip}`);
+  }
   const iznos = round2(data.iznos);
   if (!Number.isFinite(iznos) || iznos <= 0) throw new Error('Iznos mora biti veći od nule');
+  if (!deps.db.prepare('SELECT 1 FROM users WHERE id = ?').get(data.korisnikId ?? null)) {
+    throw new Error('Korisnik ne postoji');
+  }
 
   const result = await deps.send(data.tip, iznos);
   const tringStatus: TringStatus = result === null ? 'skipped' : result.success ? 'ok' : 'error';

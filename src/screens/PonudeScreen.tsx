@@ -422,6 +422,8 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
 
   const selStatus = selected ? efektivniStatus(selected, danas) : '';
   const selEditable = Boolean(selected && selected.status !== 'konvertovana');
+  // Odbijena ponuda se ne pretvara u račun (backend to odbija) — prvo vratiti status.
+  const selKonvertibilna = selEditable && selected?.status !== 'odbijena';
 
   const otvoriNalog = (id: number) => window.dispatchEvent(new CustomEvent('ui:openNalog', { detail: id }));
 
@@ -503,7 +505,7 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
           if (selEditable) { e.preventDefault(); openUredi(selected); }
           break;
         case 'k':
-          if (selEditable && !nalogZaPonudu) {
+          if (selKonvertibilna && !nalogZaPonudu) {
             e.preventDefault();
             setKonvertujMsg(null);
             setPaymentType('Gotovina');
@@ -521,7 +523,7 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selected, selEditable, filter, anyDialogOpen, openNova, openUredi, nalogZaPonudu]);
+  }, [selected, selEditable, selKonvertibilna, filter, anyDialogOpen, openNova, openUredi, nalogZaPonudu]);
 
   /** ⌘↵ potvrđuje dijalog s bilo kojeg polja. */
   const submitOnMeta = (fn: () => void) => (e: React.KeyboardEvent) => {
@@ -846,7 +848,7 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
                       </div>
                     </div>
 
-                    {!nalogZaPonudu && (
+                    {!nalogZaPonudu && selKonvertibilna && (
                       <div className="pt-2 mt-1 border-t border-slate-100">
                         <ActionRow
                           icon={Receipt}
@@ -856,6 +858,11 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
                           onClick={() => { setKonvertujMsg(null); setPaymentType('Gotovina'); setKonvertujOpen(true); }}
                         />
                       </div>
+                    )}
+                    {!selKonvertibilna && (
+                      <p className="text-[11px] text-slate-400 pt-2 mt-1 border-t border-slate-100">
+                        Odbijena ponuda se ne pretvara u račun — ako kupac ipak prihvata, prvo promijenite status.
+                      </p>
                     )}
                   </>
                 )}

@@ -2,12 +2,12 @@ import { test, expect, beforeEach, afterEach } from 'bun:test';
 // Vidi migrations.test.ts — better-sqlite3 ne učitava se van Electrona, pa se
 // driver injektira kroz RestoreDeps i testovi voze bun:sqlite.
 import { Database } from 'bun:sqlite';
-import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync, copyFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { schema } from './schema';
 import { runMigrations } from './migrations';
-import { validateBackup, swapInBackup, type RestoreDeps } from './restore';
+import { validateBackup, swapInBackup, samostalnaKopija, type RestoreDeps } from './restore';
 
 let dir: string;
 let dbPath: string;
@@ -28,7 +28,7 @@ function openActive(): void {
 }
 
 const deps: RestoreDeps = {
-  openReadonly: (filePath) => new Database(filePath, { readonly: true }) as any,
+  open: (filePath) => new Database(filePath, { create: false, readwrite: true }) as any,
   closeActive: () => {
     active?.close();
     active = null;
@@ -62,6 +62,32 @@ function writeLegacyBackup(filePath: string, productName: string): void {
     '001', productName, 'E'
   );
   db.close();
+}
+
+/**
+ * Kasa baza kakvu pravi `copyFileSync` aktivne baze: zaglavlje kaže WAL, a
+ * -wal/-shm nema. `sWalom` ostavi i -wal s transakcijom koja nije checkpointana.
+ */
+function writeWalBackup(filePath: string, productName: string, opts: { sWalom?: boolean } = {}): void {
+  const izvor = path.join(dir, 'izvor-wal.db');
+  const db = new Database(izvor);
+  db.exec('PRAGMA journal_mode = WAL');
+  db.exec(schema);
+  db.prepare("INSERT INTO products (sifra, naziv, cijena, pdvStopa) VALUES ('001', ?, 1, 'E')").run(productName);
+  db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+  if (opts.sWalom) {
+    db.exec('PRAGMA wal_autocheckpoint = 0');
+    db.prepare("INSERT INTO products (sifra, naziv, cijena, pdvStopa) VALUES ('002', 'IZ WAL-A', 1, 'E')").run();
+    copyFileSync(`${izvor}-wal`, `${filePath}-wal`);
+  }
+  copyFileSync(izvor, filePath);
+  db.close();
+}
+
+/** Journal mode zapisan u zaglavlju fajla (bajtovi 18-19): 1 = rollback, 2 = WAL. */
+function journalHeader(filePath: string): 'wal' | 'rollback' {
+  const h = readFileSync(filePath).subarray(18, 20);
+  return h[0] === 2 && h[1] === 2 ? 'wal' : 'rollback';
 }
 
 beforeEach(() => {
@@ -161,14 +187,75 @@ test('stari WAL/SHM se ne prenose na uvezenu bazu', () => {
   }
 });
 
-test('WAL uz backup fajl se prenosi zajedno s bazom', () => {
+test('transakcije iz WAL-a uz backup fajl se uvezu zajedno s bazom', () => {
   const backup = path.join(dir, 'backup.db');
-  writeLegacyBackup(backup, 'IZ BACKUPA');
-  writeFileSync(`${backup}-wal`, 'sadrzaj wal-a');
+  writeWalBackup(backup, 'IZ BACKUPA', { sWalom: true });
+  expect(existsSync(`${backup}-wal`)).toBe(true);
 
   swapInBackup(backup, dbPath, path.join(dir, 'safety.db'), deps);
 
-  expect(existsSync(`${dbPath}-wal`)).toBe(true);
+  expect(productNames(dbPath)).toEqual(['IZ BACKUPA', 'IZ WAL-A']);
+});
+
+// Kopija baze u WAL modu bez -shm: SQLite je read-only ne otvara uvijek
+// (bun:sqlite nikad, better-sqlite3 ne u read-only folderu), a read-write
+// otvaranje ostavlja -wal/-shm pored korisnikovog fajla.
+test('prihvata backup u WAL modu (kopija aktivne baze bez -wal/-shm)', () => {
+  const backup = path.join(dir, 'backup.db');
+  writeWalBackup(backup, 'IZ BACKUPA');
+  expect(journalHeader(backup)).toBe('wal');
+
+  expect(() => validateBackup(backup, deps)).not.toThrow();
+  swapInBackup(backup, dbPath, path.join(dir, 'safety.db'), deps);
+
+  expect(productNames(dbPath)).toEqual(['IZ BACKUPA']);
+});
+
+test('provjera i uvoz ne diraju odabrani fajl i ne ostavljaju -wal/-shm pored njega', () => {
+  const backup = path.join(dir, 'backup.db');
+  writeWalBackup(backup, 'IZ BACKUPA');
+  const prije = readFileSync(backup);
+
+  validateBackup(backup, deps);
+  swapInBackup(backup, dbPath, path.join(dir, 'safety.db'), deps);
+
+  expect(readFileSync(backup).equals(prije)).toBe(true);
+  expect(existsSync(`${backup}-wal`)).toBe(false);
+  expect(existsSync(`${backup}-shm`)).toBe(false);
+});
+
+test('odbija nepostojeći fajl', () => {
+  expect(() => validateBackup(path.join(dir, 'nema.db'), deps)).toThrow('Neispravan backup fajl: Fajl ne postoji.');
+});
+
+test('sigurnosna kopija je samostalan fajl koji se otvara i read-only', () => {
+  active.exec('PRAGMA journal_mode = WAL');
+  const backup = path.join(dir, 'backup.db');
+  writeWalBackup(backup, 'IZ BACKUPA');
+  const safety = path.join(dir, 'safety.db');
+
+  swapInBackup(backup, dbPath, safety, deps);
+
+  expect(journalHeader(safety)).toBe('rollback');
+  expect(existsSync(`${safety}-wal`)).toBe(false);
+  expect(productNames(safety)).toEqual(['TRENUTNI']);
+});
+
+test('samostalnaKopija aktivne baze u WAL modu daje fajl koji se otvara read-only', () => {
+  active.exec('PRAGMA journal_mode = WAL');
+  active.exec('PRAGMA wal_autocheckpoint = 0');
+  active.prepare("INSERT INTO products (sifra, naziv, cijena, pdvStopa) VALUES ('998','SVJEZE',1,'E')").run();
+  const cilj = path.join(dir, 'kasa-backup.db');
+  // Ostaci ranijeg fajla na istoj putanji ne smiju se primijeniti na novu kopiju.
+  writeFileSync(`${cilj}-wal`, 'stari wal');
+  writeFileSync(`${cilj}-shm`, 'stari shm');
+
+  samostalnaKopija(dbPath, cilj, deps);
+
+  expect(journalHeader(cilj)).toBe('rollback');
+  expect(existsSync(`${cilj}-wal`)).toBe(false);
+  expect(existsSync(`${cilj}-shm`)).toBe(false);
+  expect(productNames(cilj)).toEqual(['SVJEZE', 'TRENUTNI']);
 });
 
 test('pad migracija vraća prethodnu bazu i javlja grešku', () => {

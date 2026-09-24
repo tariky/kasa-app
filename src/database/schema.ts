@@ -55,6 +55,9 @@ export const schema = `
     rabat REAL NOT NULL DEFAULT 0,
     zavisniTroskovi REAL NOT NULL DEFAULT 0,
     pdvStopa TEXT NOT NULL,
+    -- Prodajna cijena koju je ova stavka pregazila BEZ nivelacije (artikal
+    -- bez zalihe); NULL = stavka nije tako mijenjala cijenu ili stara primka.
+    staraCijena REAL,
     createdAt TEXT DEFAULT (datetime('now','localtime')),
     FOREIGN KEY (primkaId) REFERENCES primke(id),
     FOREIGN KEY (productId) REFERENCES products(id)

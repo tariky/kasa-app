@@ -6,6 +6,7 @@ import { Database } from 'bun:sqlite';
 import { schema } from '@/database/schema';
 import {
   collectPriceChanges, applyPricesWithoutStock, revertNivelacijaPrices,
+  revertPricesWithoutStock, revertPrimkaPrices, stareCijeneStavki, datumKretanjaPrimke,
   getProductStock, isDobavljacUsed,
 } from './skladiste';
 import type { SqlDb } from './sqldb';
@@ -125,6 +126,75 @@ test('revert ne gazi kasniju nivelaciju druge primke', () => {
   expect(revertNivelacijaPrices(db, 1)).toBe(0);
   const p = db.prepare('SELECT cijena FROM products WHERE id = ?').get(id) as { cijena: number };
   expect(p.cijena).toBe(15);
+});
+
+// ── Stara cijena artikla bez zalihe (primka_stavke.staraCijena) ────────
+
+function dodajStavku(primkaId: number, productId: number, cijena: number, staraCijena: number | null): void {
+  db.prepare("INSERT INTO primke (id, brojPrimke, datum) VALUES (?, ?, '2026-01-01') ON CONFLICT DO NOTHING")
+    .run(primkaId, `U-${primkaId}`);
+  db.prepare("INSERT INTO primka_stavke (primkaId, productId, kolicina, cijena, pdvStopa, staraCijena) VALUES (?, ?, 1, ?, 'E', ?)")
+    .run(primkaId, productId, cijena, staraCijena);
+}
+
+function cijenaArtikla(id: number): number {
+  return (db.prepare('SELECT cijena FROM products WHERE id = ?').get(id) as { cijena: number }).cijena;
+}
+
+test('stareCijeneStavki: stara cijena ide samo na prvu stavku artikla bez zalihe', () => {
+  const bez = dodajArtikal('020', 10);
+  const sa = dodajArtikal('021', 20);
+  dodajZalihu(sa, 3);
+  const stavke = [
+    { productId: bez, cijena: 12, pdvStopa: 'E' },
+    { productId: sa, cijena: 25, pdvStopa: 'E' },
+    { productId: bez, cijena: 13, pdvStopa: 'E' },
+  ];
+  const { bezZaliha } = collectPriceChanges(db, stavke);
+
+  expect(stareCijeneStavki(stavke, bezZaliha)).toEqual([10, null, null]);
+  expect(stareCijeneStavki(stavke, [])).toEqual([null, null, null]);
+});
+
+test('revertPricesWithoutStock vraća zapamćenu cijenu kad artikal još stoji na cijeni primke', () => {
+  const id = dodajArtikal('022', 12);
+  dodajStavku(1, id, 12, 10);
+
+  expect(revertPricesWithoutStock(db, 1)).toBe(1);
+  expect(cijenaArtikla(id)).toBe(10);
+});
+
+test('revertPricesWithoutStock ne gazi cijenu koju je promijenilo nešto drugo', () => {
+  const id = dodajArtikal('023', 14);
+  dodajStavku(1, id, 12, 10);
+
+  expect(revertPricesWithoutStock(db, 1)).toBe(0);
+  expect(cijenaArtikla(id)).toBe(14);
+});
+
+test('revertPricesWithoutStock ne dira stavke bez zapamćene cijene (stare primke)', () => {
+  const id = dodajArtikal('024', 12);
+  dodajStavku(1, id, 12, null);
+
+  expect(revertPricesWithoutStock(db, 1)).toBe(0);
+  expect(cijenaArtikla(id)).toBe(12);
+});
+
+test('revertPrimkaPrices vraća i nivelaciju i cijene bez zalihe iste primke', () => {
+  const sa = dodajArtikal('025', 15);
+  const bez = dodajArtikal('026', 7);
+  dodajNivelaciju(1, sa, 12, 15);
+  dodajStavku(1, bez, 7, 5);
+
+  expect(revertPrimkaPrices(db, 1)).toBe(2);
+  expect(cijenaArtikla(sa)).toBe(12);
+  expect(cijenaArtikla(bez)).toBe(5);
+});
+
+test('datumKretanjaPrimke: datum primke u formatu kretanja zalihe (ponoć)', () => {
+  expect(datumKretanjaPrimke('2026-03-10')).toBe('2026-03-10 00:00:00');
+  // Ako datum već nosi vrijeme, ostaje kakav jeste.
+  expect(datumKretanjaPrimke('2026-03-10 14:20:00')).toBe('2026-03-10 14:20:00');
 });
 
 // ── isDobavljacUsed ───────────────────────────────────────────────────
