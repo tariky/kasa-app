@@ -78,14 +78,14 @@ fn update(db: &Db, id: &Value, data: &Value) -> R<Value> {
     let mut fields: Vec<&str> = Vec::new();
     let mut values: Vec<Value> = Vec::new();
 
-    if has(data, "ime") && !data["ime"].is_null() {
+    if has(data, "ime") {
         if js::blank(&data["ime"]) {
             baci!("Ime korisnika je obavezno");
         }
         fields.push("ime = ?");
         values.push(json!(js::trim(&data["ime"])));
     }
-    if has(data, "pin") && !data["pin"].is_null() {
+    if has(data, "pin") {
         let pin = validiraj_pin(&data["pin"])?;
         if db.ima("SELECT id FROM users WHERE pin = ? AND id != ?", p![pin, id])? {
             baci!("Korisnik sa PIN-om \"{pin}\" već postoji");
@@ -93,7 +93,7 @@ fn update(db: &Db, id: &Value, data: &Value) -> R<Value> {
         fields.push("pin = ?");
         values.push(json!(pin));
     }
-    if has(data, "uloga") && !data["uloga"].is_null() {
+    if has(data, "uloga") {
         let uloga = validiraj_ulogu(&data["uloga"])?;
         if uloga != "admin" && je_posljednji_admin(db, id)? {
             baci!("Posljednji administrator ne može postati kasir");

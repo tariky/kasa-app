@@ -36,7 +36,7 @@ async function tsBackend(userData: string): Promise<Pozovi> {
   mock.module('better-sqlite3', () => ({ default: BetterSqliteShim }));
   mock.module('electron', () => ({
     ipcMain: { handle: (k: string, fn: any) => { handleri.set(k, fn); } },
-    app: { getPath: () => userData, relaunch: () => {}, exit: () => {} },
+    app: { getPath: () => userData, relaunch: () => undefined, exit: () => undefined },
     dialog: {},
     BrowserWindow: { getAllWindows: () => [] },
   }));
@@ -51,7 +51,9 @@ async function tsBackend(userData: string): Promise<Pozovi> {
     const log = console.error;
     console.error = () => undefined;
     try {
-      const r = await handleri.get(kanal)!({}, ...JSON.parse(JSON.stringify(args)));
+      const fn = handleri.get(kanal);
+      if (!fn) throw new Error(`Kanal ne postoji: ${kanal}`);
+      const r = await fn({}, ...JSON.parse(JSON.stringify(args)));
       return r === undefined ? null : JSON.parse(JSON.stringify(r));
     } catch (e: any) {
       return { __greska: e.message };

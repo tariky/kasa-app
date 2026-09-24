@@ -166,7 +166,15 @@ impl Backend {
     pub fn call_u_redu(&self, tiket: petlja::Tiket, kanal: &str, args: Vec<Value>) -> Result<Value, String> {
         let _z = self.petlja.uzmi(tiket);
         let a = Args(args);
-        let r = licenca::provjeri_kanal(self, kanal).and_then(|_| kanali::obradi(self, kanal, &a));
+        // Panika (bug) u jednom pozivu je greška tog poziva, kao izuzetak u
+        // Electron handleru — program i ostali pozivi rade dalje.
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            licenca::provjeri_kanal(self, kanal).and_then(|_| kanali::obradi(self, kanal, &a))
+        }))
+        .unwrap_or_else(|p| {
+            let poruka = p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned());
+            Err(Greska(format!("Interna greška: {}", poruka.unwrap_or_else(|| "nepoznata".into()))))
+        });
         r.map_err(|g| {
             eprintln!("[IPC {kanal}] {}", g.0);
             if g.0.is_empty() { "Nepoznata greška".to_string() } else { g.0 }
