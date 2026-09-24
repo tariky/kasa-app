@@ -56,11 +56,13 @@ fn base64url(s: &str) -> Option<Vec<u8>> {
             .with_decode_padding_mode(DecodePaddingMode::Indifferent)
             .with_decode_allow_trailing_bits(true),
     );
-    E.decode(s.trim_end_matches('=')).ok()
+    // Node ignoriše razmake/prelome reda i prihvata i obični base64 alfabet (+/).
+    let cist: String = s.chars().filter(|c| !c.is_whitespace()).map(|c| match c { '+' => '-', '/' => '_', c => c }).collect();
+    E.decode(cist.trim_end_matches('=')).ok()
 }
 
 fn datum_ok(s: &str) -> bool {
-    thread_local!(static D: Regex = Regex::new(r"^\d{4}-\d{2}-\d{2}$").unwrap());
+    thread_local!(static D: Regex = Regex::new(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$").unwrap());
     D.with(|r| r.is_match(s))
 }
 

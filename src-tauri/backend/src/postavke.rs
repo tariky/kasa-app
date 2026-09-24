@@ -109,7 +109,7 @@ fn save_firma(db: &Db, data: &Value) -> R<Value> {
 }
 
 fn save_cart(db: &Db, naziv: &Value, items: &Value, ukupno: &Value) -> R<Value> {
-    if items.as_array().map_or(true, |a| a.is_empty()) {
+    if js::length(items).map_or(true, |n| n == 0) {
         baci!("Košarica je prazna");
     }
     let r = db.run("INSERT INTO saved_carts (naziv, items, ukupno) VALUES (?, ?, ?)", p![naziv, js::stringify(items), ukupno])?;

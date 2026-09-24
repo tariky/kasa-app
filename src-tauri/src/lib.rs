@@ -10,7 +10,8 @@ use pazar_backend::{Backend, Platforma};
 use serde_json::Value;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::webview::NewWindowResponse;
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::ipc::Channel;
+use tauri::{AppHandle, Emitter, RunEvent, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult};
 
 
@@ -98,7 +99,7 @@ impl Platforma for TauriPlatforma {
         let app = self.app.clone();
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(ms));
-            app.state::<Backend>().zatvori_db();
+            app.state::<Backend>().zatvori_db_u_redu();
             app.restart();
         });
     }
@@ -109,14 +110,19 @@ impl Platforma for TauriPlatforma {
 }
 
 /// `ipcRenderer.invoke(kanal, ...args)` — isti kanali i isti oblik podataka
-/// kao u Electronu. Backend blokira (baza, štampa), pa radi van glavne niti;
-/// mjesto u redu se uzima odmah, da pozivi idu redom kojim su stigli.
+/// kao u Electronu. Sinhrona komanda radi na glavnoj niti, redom kojim su
+/// pozivi stigli: tu se uzme mjesto u redu, a sam poziv (baza, štampa) ide na
+/// drugu nit i odgovor vrati kroz `odgovor` kanal (`{ok}` ili `{greska}`).
 #[tauri::command]
-async fn api(app: AppHandle, kanal: String, args: Vec<Value>) -> Result<Value, String> {
+fn api(app: AppHandle, kanal: String, args: Vec<Value>, odgovor: Channel<Value>) {
     let tiket = app.state::<Backend>().tiket();
-    tauri::async_runtime::spawn_blocking(move || app.state::<Backend>().call_u_redu(tiket, &kanal, args))
-    .await
-    .map_err(|e| e.to_string())?
+    std::thread::spawn(move || {
+        let r = app.state::<Backend>().call_u_redu(tiket, &kanal, args);
+        let _ = odgovor.send(match r {
+            Ok(v) => serde_json::json!({ "ok": v }),
+            Err(g) => serde_json::json!({ "greska": g }),
+        });
+    });
 }
 
 /// Isti folder kao Electron `app.getPath('userData')` (appData/Pazar), da
@@ -264,6 +270,14 @@ pub fn run() {
             glavni_prozor(&handle)?;
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("greška pri pokretanju Pazara");
+        .build(tauri::generate_context!())
+        .expect("greška pri pokretanju Pazara")
+        .run(|app, e| {
+            // `before-quit` → closeDb(): WAL se upiše u kasa.db.
+            if let RunEvent::Exit = e {
+                if let Some(b) = app.try_state::<Backend>() {
+                    b.zatvori_db_u_redu();
+                }
+            }
+        });
 }

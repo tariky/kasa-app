@@ -641,7 +641,7 @@ fn refund_and_print(b: &Backend, data: &Value) -> R<Value> {
 /// Prihvata samo `YYYY-MM-DD` koji zaista postoji u kalendaru (ne 2026-02-30).
 pub fn validan_datum_valute(datum: &str) -> bool {
     // ISO datum bez vremena, onako kako ga vraća `DatePicker`.
-    thread_local!(static ISO_DATUM: Regex = Regex::new(r"^\d{4}-\d{2}-\d{2}$").unwrap());
+    thread_local!(static ISO_DATUM: Regex = Regex::new(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$").unwrap());
     if !ISO_DATUM.with(|r| r.is_match(datum)) {
         return false;
     }

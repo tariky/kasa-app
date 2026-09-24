@@ -24,7 +24,7 @@ pub const DEFAULT_ROK_DANA: i64 = 8;
 /// mjesecu do 31 se (kao u V8) prelije u sljedeći mjesec, a neispravan datum
 /// daje "NaN-NaN-NaN".
 pub fn plus_dana(datum: &str, dana: i64) -> String {
-    thread_local!(static ISO: Regex = Regex::new(r"^(\d{4})-(\d{2})-(\d{2})$").unwrap());
+    thread_local!(static ISO: Regex = Regex::new(r"^([0-9]{4})-([0-9]{2})-([0-9]{2})$").unwrap());
     let d = ISO.with(|re| {
         let c = re.captures(datum)?;
         let (g, m, d): (i32, u32, i64) = (c[1].parse().ok()?, c[2].parse().ok()?, c[3].parse().ok()?);

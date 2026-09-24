@@ -112,7 +112,7 @@ pub fn add_cash_movement(b: &Backend, data: &Value) -> R<Value> {
         Some(t @ ("polog" | "povrat")) => t,
         _ => baci!("Nepoznata vrsta unosa gotovine: {}", js::to_string(&data["tip"])),
     };
-    let iznos = round2(to_number(&data["iznos"]));
+    let iznos = js::round2_js(&data["iznos"]);
     if !iznos.is_finite() || iznos <= 0.0 {
         baci!("Iznos mora biti veći od nule");
     }

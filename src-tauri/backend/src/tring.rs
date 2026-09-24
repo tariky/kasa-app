@@ -120,6 +120,8 @@ impl Tring {
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .timeout_global(Some(TIMEOUT))
             .http_status_as_error(false)
+            // Node `http` ne gleda HTTP(S)_PROXY; uređaj je na localhostu/LAN-u.
+            .proxy(None)
             .build()
             .into();
 
@@ -314,7 +316,7 @@ pub fn parse_response(xml: &str) -> Value {
     thread_local! {
         static VRSTA: Regex = Regex::new(r"<VrstaOdgovora>(.*?)</VrstaOdgovora>").unwrap();
         static ODGOVOR: Regex = Regex::new(r"<Odgovor>\s*<Naziv>(.*?)</Naziv>\s*(?:<Vrijednost[^>]*/>\s*|<Vrijednost[^>]*>(.*?)</Vrijednost>\s*)</Odgovor>").unwrap();
-        static BROJ: Regex = Regex::new(r"<Broj>(\d+)</Broj>").unwrap();
+        static BROJ: Regex = Regex::new(r"<Broj>([0-9]+)</Broj>").unwrap();
         static OPIS: Regex = Regex::new(r"(?s)<Opis>(.*?)</Opis>").unwrap();
     }
     let vrsta = VRSTA.with(|r| r.captures(xml).map(|c| c[1].to_string())).unwrap_or_else(|| "Greska".into());

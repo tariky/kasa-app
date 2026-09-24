@@ -228,22 +228,63 @@ impl Db {
         let ugnijezdena = d > 0 || self.u_transakciji()?;
         let ime = format!("tx{d}");
         self.exec(&if ugnijezdena { format!("SAVEPOINT {ime}") } else { "BEGIN".into() })?;
-        brojac.store(d + 1, Ordering::SeqCst);
-        let r = f();
-        brojac.store(d, Ordering::SeqCst);
-        match r {
-            Ok(v) => {
-                self.exec(&if ugnijezdena { format!("RELEASE {ime}") } else { "COMMIT".into() })?;
-                Ok(v)
-            }
-            Err(e) => {
-                if ugnijezdena {
-                    let _ = self.exec(&format!("ROLLBACK TO {ime}; RELEASE {ime}"));
-                } else if self.u_transakciji().unwrap_or(false) {
-                    let _ = self.exec("ROLLBACK");
+
+        /// Vrati brojač i poništi transakciju ako se closure ne završi
+        /// uspješnim COMMIT-om (greška, panika, pad COMMIT-a) — kao
+        /// better-sqlite3, koji i COMMIT radi unutar `try`.
+        struct Cuvar<'a> { db: &'a Db, d: u32, ime: String, ugnijezdena: bool, gotovo: bool }
+        impl Drop for Cuvar<'_> {
+            fn drop(&mut self) {
+                self.db.petlja.transakcije.store(self.d, Ordering::SeqCst);
+                if self.gotovo {
+                    return;
                 }
-                Err(e)
+                if self.ugnijezdena {
+                    let _ = self.db.exec(&format!("ROLLBACK TO {0}; RELEASE {0}", self.ime));
+                } else if self.db.u_transakciji().unwrap_or(false) {
+                    let _ = self.db.exec("ROLLBACK");
+                }
             }
         }
+        let mut cuvar = Cuvar { db: self, d, ime: ime.clone(), ugnijezdena, gotovo: false };
+        brojac.store(d + 1, Ordering::SeqCst);
+        let v = f()?;
+        self.exec(&if ugnijezdena { format!("RELEASE {ime}") } else { "COMMIT".into() })?;
+        cuvar.gotovo = true;
+        Ok(v)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::greska::Greska;
+
+    #[test]
+    fn tx_ponisti_na_gresku_i_paniku() {
+        let dir = std::env::temp_dir().join(format!("kasa-sql-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = Db::aktivna(&dir.join("kasa.db"), Arc::new(Petlja::nova())).unwrap();
+        let broj = |db: &Db| db.val("SELECT COUNT(*) FROM saved_carts", &[]).unwrap();
+
+        let r: R<()> = db.tx(|| {
+            db.run("INSERT INTO saved_carts (naziv, items, ukupno) VALUES ('a', '[]', 1)", &[])?;
+            Err(Greska::nova("pukne"))
+        });
+        assert!(r.is_err());
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _: R<()> = db.tx(|| {
+                db.run("INSERT INTO saved_carts (naziv, items, ukupno) VALUES ('b', '[]', 1)", &[])?;
+                panic!("bug");
+            });
+        }));
+        assert_eq!(broj(&db), serde_json::json!(0));
+        assert!(!db.u_transakciji().unwrap());
+        assert_eq!(db.petlja.transakcije.load(Ordering::SeqCst), 0);
+
+        db.tx(|| db.run("INSERT INTO saved_carts (naziv, items, ukupno) VALUES ('c', '[]', 1)", &[])).unwrap();
+        assert_eq!(broj(&db), serde_json::json!(1));
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

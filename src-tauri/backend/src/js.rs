@@ -83,6 +83,24 @@ pub fn round2(n: f64) -> f64 {
     js_round((n + f64::EPSILON) * 100.0) / 100.0
 }
 
+/// `round2(v)` kad `v` nije sigurno broj: u JS-u `"50" + Number.EPSILON`
+/// spaja stringove ("502.220446049250313e-16"), pa ispadne ~0, a ne 50.
+pub fn round2_js(v: &Value) -> f64 {
+    match v {
+        Value::String(s) => js_round(to_number(&Value::String(format!("{s}{}", num_str(f64::EPSILON)))) * 100.0) / 100.0,
+        other => round2(to_number(other)),
+    }
+}
+
+/// `x?.length` za niz ili string (broj UTF-16 jedinica); `None` za ostalo.
+pub fn length(v: &Value) -> Option<usize> {
+    match v {
+        Value::Array(a) => Some(a.len()),
+        Value::String(s) => Some(s.encode_utf16().count()),
+        _ => None,
+    }
+}
+
 /// Broj kao JSON vrijednost: cijeli brojevi ostaju cijeli (kao JS), NaN/±∞ → null
 /// (kao `JSON.stringify`).
 pub fn f(x: f64) -> Value {
@@ -149,7 +167,7 @@ pub fn parse_int_value(v: &Value) -> Value {
 /// `parseFloat(s)`; NaN kad nema broja na početku.
 pub fn parse_float(s: &str) -> f64 {
     let t = s.trim_start();
-    let re = regex::Regex::new(r"^[+-]?(Infinity|\d+\.?\d*(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?)").unwrap();
+    let re = regex::Regex::new(r"^[+-]?(Infinity|[0-9]+\.?[0-9]*(?:[eE][+-]?[0-9]+)?|\.[0-9]+(?:[eE][+-]?[0-9]+)?)").unwrap();
     match re.find(t) {
         Some(m) => {
             let x = m.as_str();

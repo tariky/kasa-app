@@ -128,6 +128,13 @@ impl Backend {
         self.db.zatvori();
     }
 
+    /// Zatvori bazu kad dođe red (restart, izlaz iz programa) — nikad usred
+    /// tuđeg poziva ili transakcije, kao `closeDb()` na JS niti.
+    pub fn zatvori_db_u_redu(&self) {
+        let _z = self.petlja.uzmi(self.tiket());
+        self.db.zatvori();
+    }
+
     /// Sistemski dijalozi; dok su otvoreni, drugi pozivi rade (kao `await dialog...`).
     pub fn dijalog_sacuvaj(&self, opcije: Value) -> Option<String> {
         let _o = self.petlja.odmor();

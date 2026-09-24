@@ -24,7 +24,7 @@ pub fn validiraj_pin(pin: &Value) -> R<&str> {
     if pin.is_null() || pin.as_str().is_some_and(|s| s.trim().is_empty()) {
         baci!("PIN je obavezan");
     }
-    thread_local!(static CIFRE: Regex = Regex::new(r"^\d+$").unwrap());
+    thread_local!(static CIFRE: Regex = Regex::new(r"^[0-9]+$").unwrap());
     let Some(s) = pin.as_str().filter(|s| CIFRE.with(|r| r.is_match(s))) else {
         baci!("PIN smije sadržavati samo cifre");
     };

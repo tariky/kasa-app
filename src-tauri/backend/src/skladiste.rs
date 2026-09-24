@@ -713,7 +713,7 @@ fn cijene_koje_ostaju(db: &Db, primka_id: &Value, nove_stavke: &[Value]) -> R<Ve
 /// ponoć — deterministično (izmjena primke ne pomjera vrijeme) i unutar dana
 /// pri poređenju stringova (`BETWEEN 'D 00:00:00' AND 'D 23:59:59'`, `LIKE 'D%'`).
 fn datum_kretanja_primke(datum: &Value) -> Value {
-    thread_local!(static DATUM: regex::Regex = regex::Regex::new(r"^\d{4}-\d{2}-\d{2}$").unwrap());
+    thread_local!(static DATUM: regex::Regex = regex::Regex::new(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$").unwrap());
     let s = js::to_string(datum);
     if DATUM.with(|r| r.is_match(&s)) { Value::String(format!("{s} 00:00:00")) } else { datum.clone() }
 }

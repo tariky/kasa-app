@@ -17,7 +17,7 @@ pub fn parse_fiskalni_broj(raw: &Value) -> Option<i64> {
     }
     let t = js::to_string(raw);
     let t = t.trim();
-    thread_local!(static CIFRE: Regex = Regex::new(r"^\d+$").unwrap());
+    thread_local!(static CIFRE: Regex = Regex::new(r"^[0-9]+$").unwrap());
     if !CIFRE.with(|r| r.is_match(t)) {
         return None;
     }

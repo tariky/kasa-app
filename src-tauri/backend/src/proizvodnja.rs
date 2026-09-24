@@ -310,7 +310,7 @@ pub fn update_nalog(db: &Db, id: &Value, patch: &Value) -> R<()> {
         set("kolicina", js::f(kolicina));
     }
     if has(patch, "datum") {
-        thread_local!(static DATUM: Regex = Regex::new(r"^\d{4}-\d{2}-\d{2}").unwrap());
+        thread_local!(static DATUM: Regex = Regex::new(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}").unwrap());
         let Some(datum) = patch["datum"].as_str().filter(|d| DATUM.with(|r| r.is_match(d))) else {
             baci!("Datum naloga nije ispravan");
         };
