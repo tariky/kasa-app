@@ -6,6 +6,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
  * Dijele ga Računi i Ponude; drži se ovdje da se dva ekrana ne razidu u sitnicama.
  */
 
+/** Modifikator prečica po platformi: ⌘ na Macu, Ctrl na Windowsu/Linuxu. Handleri gledaju oba (`metaKey || ctrlKey`). */
+export const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
+export const MOD = IS_MAC ? '⌘' : 'Ctrl';
+/** Spoji modifikator i tipku onako kako se piše na toj platformi: „⌘S“ / „Ctrl+S“. */
+export const mod = (key: string) => (IS_MAC ? `${MOD}${key}` : `${MOD}+${key}`);
+
 /** Keycap — mono čip koji nosi stvarnu prečicu sa dugmeta pored kojeg stoji. */
 export function Key({ children, tone = 'light', className }: {
   children: React.ReactNode;

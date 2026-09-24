@@ -5,7 +5,7 @@ import { cn, formatKM } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Eyebrow, Key } from '@/components/ui/ledger';
+import { Eyebrow, Key, mod } from '@/components/ui/ledger';
 import { Receipt, AlertTriangle, Banknote, CreditCard, Building, FileCheck } from 'lucide-react';
 
 type PaymentType = 'Gotovina' | 'Kartica' | 'Virman' | 'Ček';
@@ -94,7 +94,7 @@ export function IzdajRacunDialog({ open, onOpenChange, nalog, korisnikId, onIzda
           {err && <div className="flex items-center gap-2 rounded-lg bg-rose-50 border border-rose-100 px-3 py-2 text-[12px] font-medium text-rose-600"><AlertTriangle size={13} /> {err}</div>}
         </div>
         <div className="border-t bg-slate-50/50 px-6 py-4 flex items-center justify-between gap-3">
-          <span className="flex items-center gap-1.5 text-[10.5px] text-slate-400"><Key className="ml-0">⌘↵</Key> izdaj</span>
+          <span className="flex items-center gap-1.5 text-[10.5px] text-slate-400"><Key className="ml-0">{mod('↵')}</Key> izdaj</span>
           <div className="flex items-center gap-3">
             <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>Otkaži</Button>
             <Button onClick={izdaj} disabled={busy || !(nalog.dogovorenaCijena! > 0)} className="min-w-[160px]">{busy ? 'Štampam…' : 'Izdaj fiskalni račun'}</Button>

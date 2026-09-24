@@ -1,24 +1,17 @@
 // src/screens/ProizvodnjaScreen.tsx
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { pdf } from '@react-pdf/renderer';
 import type { RadniNalog, NalogStatus } from '@/types';
 import { formatBrojNaloga } from '@/lib/proizvodnja';
+import { rokOznaka } from '@/lib/nalogPrikaz';
+import { localDateStr } from '@/lib/novac';
 import { cn, formatKM, formatDate } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { ActionRow, Eyebrow, FilterSelect, LedgerHead } from '@/components/ui/ledger';
+import { FilterSelect, Key, LedgerHead } from '@/components/ui/ledger';
 import { NalogDialog } from '@/components/proizvodnja/NalogDialog';
-import { StavkeUtroska } from '@/components/proizvodnja/StavkeUtroska';
-import { KalkulacijaPanel } from '@/components/proizvodnja/KalkulacijaPanel';
-import { IzdajRacunDialog } from '@/components/proizvodnja/IzdajRacunDialog';
+import { NalogDetailDialog } from '@/components/proizvodnja/NalogDetailDialog';
 import { NormativiTab } from '@/components/proizvodnja/NormativiTab';
-import { RadniNalogPdf } from '@/components/RadniNalogPdf';
-import type { Kalkulacija } from '@/lib/proizvodnja';
-import {
-  RefreshCw, Plus, Pencil, Trash2, Hammer, ClipboardList, AlertTriangle, X, Factory, Play,
-  CheckCircle2, Undo2, Receipt, Printer, Download,
-} from 'lucide-react';
+import { RefreshCw, Plus, Hammer, ClipboardList, AlertTriangle, X, Factory, User, Package } from 'lucide-react';
 
 export const STATUS_META: Record<NalogStatus, { label: string; cls: string }> = {
   otvoren: { label: 'Otvoren', cls: 'bg-slate-50 text-slate-500 border-slate-200' },
@@ -48,49 +41,37 @@ const FILTERS: { id: Filter; label: string }[] = [
 
 type Tab = 'nalozi' | 'normativi';
 
+const ROK_CLS = { ok: 'text-slate-400', warn: 'text-amber-600', late: 'text-rose-600 font-medium' } as const;
+
+/**
+ * Proizvodnja: lista naloga preko cijelog ekrana, nalog se otvara u dijalogu preko svega.
+ * Tastatura na listi: ↑↓ kreću selekciju, ↵ otvara, N novi, ←→ ili [ ] mijenjaju filter.
+ */
 export default function ProizvodnjaScreen({ korisnikId, uloga, initialNalogId }: {
   korisnikId: number; uloga: 'admin' | 'kasir'; initialNalogId?: number | null;
 }) {
   const [tab, setTab] = useState<Tab>('nalozi');
   const [nalozi, setNalozi] = useState<RadniNalog[]>([]);
-  const [selected, setSelected] = useState<RadniNalog | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [openId, setOpenId] = useState<number | null>(null);
   const [filter, setFilter] = useState<Filter>('aktivni');
   const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [formOpen, setFormOpen] = useState(false);
-  const [editNalog, setEditNalog] = useState<RadniNalog | null>(null);
-  const [brisiOpen, setBrisiOpen] = useState(false);
-  const [kalk, setKalk] = useState<Kalkulacija | null>(null);
-  const [zavrsiOpen, setZavrsiOpen] = useState(false);
-  const [vratiOpen, setVratiOpen] = useState(false);
-  const [racunOpen, setRacunOpen] = useState(false);
-  const [stavkeDirty, setStavkeDirty] = useState(false);
-  const selectedIdRef = useRef<number | null>(null);
-  useEffect(() => { selectedIdRef.current = selected?.id ?? null; }, [selected]);
+  const rowRefs = useRef<(HTMLTableRowElement | null)[]>([]);
 
   const load = useCallback(async () => {
     setNalozi(await window.api.getNalozi());
   }, []);
   useEffect(() => { load(); }, [load]);
 
-  const select = useCallback(async (id: number) => {
-    try {
-      const n = await window.api.getNalog(id);
-      if (selectedIdRef.current !== id) setStavkeDirty(false);
-      setSelected(n);
-      setKalk(await window.api.getNalogKalkulacija(id));
-    } catch (e: any) { setMsg({ type: 'error', text: e?.message || 'Greška' }); }
-  }, []);
-
-  useEffect(() => { if (initialNalogId) { setTab('nalozi'); select(initialNalogId); } }, [initialNalogId, select]);
-
-  const refreshSelected = useCallback(async () => {
-    await load();
-    if (selected) await select(selected.id);
-  }, [load, select, selected]);
+  useEffect(() => {
+    if (initialNalogId) { setTab('nalozi'); setSelectedId(initialNalogId); setOpenId(initialNalogId); }
+  }, [initialNalogId]);
 
   const visible = useMemo(() => nalozi.filter(n =>
     filter === 'sve' ? true : filter === 'aktivni' ? n.status !== 'fakturisan' : n.status === filter
   ), [nalozi, filter]);
+  const visibleIds = useMemo(() => visible.map(n => n.id), [visible]);
 
   const counts = useMemo(() => {
     const c: Record<string, number> = { sve: nalozi.length, aktivni: 0 };
@@ -98,50 +79,75 @@ export default function ProizvodnjaScreen({ korisnikId, uloga, initialNalogId }:
     return c;
   }, [nalozi]);
 
-  const uredivo = selected && (selected.status === 'otvoren' || selected.status === 'u_izradi');
+  const selIndex = visible.findIndex(n => n.id === selectedId);
+  const danas = localDateStr();
 
-  useEffect(() => { if (!uredivo) setStavkeDirty(false); }, [uredivo]);
+  const focusRow = useCallback((index: number) => {
+    const n = visible[index];
+    if (!n) return;
+    setSelectedId(n.id);
+    const el = rowRefs.current[index];
+    el?.focus();
+    el?.scrollIntoView({ block: 'nearest' });
+  }, [visible]);
 
-  const uIzradu = async () => {
-    if (!selected) return;
-    try {
-      await window.api.setNalogStatus({ id: selected.id, status: 'u_izradi', korisnikId });
-      await refreshSelected();
-    } catch (e: any) { setMsg({ type: 'error', text: e?.message || 'Greška' }); }
+  const otvori = (id: number) => { setSelectedId(id); setOpenId(id); };
+
+  const handleListKeyDown = (e: React.KeyboardEvent<HTMLTableSectionElement>) => {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const current = selIndex < 0 ? -1 : selIndex;
+    const last = visible.length - 1;
+    const go = (i: number) => { e.preventDefault(); focusRow(Math.max(0, Math.min(last, i))); };
+    switch (e.key) {
+      case 'ArrowDown': return go(current + 1);
+      case 'ArrowUp': return go(current < 0 ? 0 : current - 1);
+      case 'PageDown': return go(current + 10);
+      case 'PageUp': return go(current < 0 ? 0 : current - 10);
+      case 'Home': return go(0);
+      case 'End': return go(last);
+      case 'Enter': case ' ':
+        if (selectedId != null) { e.preventDefault(); otvori(selectedId); }
+        return;
+      default:
+    }
   };
 
-  const obrisi = async () => {
-    if (!selected) return;
-    try {
-      await window.api.deleteNalog(selected.id);
-      setBrisiOpen(false); setSelected(null); await load();
-      setMsg({ type: 'success', text: 'Nalog obrisan' });
-    } catch (e: any) { setMsg({ type: 'error', text: e?.message || 'Greška' }); }
-  };
+  const anyDialogOpen = formOpen || openId != null;
 
-  // ── PDF ────────────────────────────────────────────────────
+  // Prečice ekrana — dijalog naloga ima svoje, pa se ove gase dok je otvoren.
+  useEffect(() => {
+    if (anyDialogOpen || tab !== 'nalozi') return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+      if (t && t.closest('[role="combobox"], [role="listbox"]')) return;
 
-  const loadFirma = async () => {
-    try { return await window.api.getFirmaSettings(); }
-    catch { return { naziv: '', adresa: '', grad: '', idBroj: '', pdvBroj: '', skladiste: '', logo: '', bankAccounts: [] }; }
-  };
+      const cycleFilter = (step: number) => {
+        e.preventDefault();
+        const i = FILTERS.findIndex(f => f.id === filter);
+        setFilter(FILTERS[(i + step + FILTERS.length) % FILTERS.length].id);
+      };
+      // Strelice rade na svakom rasporedu; zagrade su alias jer na bosanskom traže AltGr.
+      if (e.key === 'ArrowLeft' || e.key === '[') return cycleFilter(-1);
+      if (e.key === 'ArrowRight' || e.key === ']') return cycleFilter(1);
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        // Fokus nije na listi — uvedi ga na selektovani ili prvi red.
+        if (!t?.closest('tbody')) { e.preventDefault(); focusRow(selIndex < 0 ? 0 : selIndex); }
+        return;
+      }
+      if (e.key.toLowerCase() === 'n') { e.preventDefault(); setFormOpen(true); return; }
+      if (e.key.toLowerCase() === 'r') { e.preventDefault(); load(); return; }
+      if (e.key === 'Enter' && selectedId != null) { e.preventDefault(); otvori(selectedId); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [anyDialogOpen, tab, filter, selectedId, selIndex, focusRow, load]);
 
-  const buildPdfBlob = async (n: RadniNalog) => {
-    const full = n.stavke ? n : await window.api.getNalog(n.id);
-    return pdf(<RadniNalogPdf nalog={full} firma={await loadFirma()} />).toBlob();
-  };
-
-  const printPdf = async (n: RadniNalog) => {
-    const url = URL.createObjectURL(await buildPdfBlob(n));
-    const win = window.open(url, '_blank');
-    if (win) win.onafterprint = () => URL.revokeObjectURL(url);
-  };
-
-  const exportPdf = async (n: RadniNalog) => {
-    const blob = await buildPdfBlob(n);
-    const savePath = await window.api.showSaveDialog({ defaultName: `RadniNalog-${n.broj}-${n.godina}.pdf`, filters: [{ name: 'PDF', extensions: ['pdf'] }] });
-    if (!savePath) return;
-    await window.api.writeFile(savePath, Array.from(new Uint8Array(await blob.arrayBuffer())) as any);
+  // Po zatvaranju dijaloga fokus se vraća na red naloga da ↑↓ odmah rade dalje.
+  const zatvori = () => {
+    setOpenId(null);
+    requestAnimationFrame(() => { const i = visible.findIndex(n => n.id === selectedId); if (i >= 0) rowRefs.current[i]?.focus(); });
   };
 
   return (
@@ -153,7 +159,7 @@ export default function ProizvodnjaScreen({ korisnikId, uloga, initialNalogId }:
             <div className="flex items-center gap-1 bg-slate-100 rounded-xl p-1">
               {([['nalozi', 'Radni nalozi', Hammer], ['normativi', 'Normativi', ClipboardList]] as const).map(([id, label, Icon]) => (
                 <button key={id} onClick={() => setTab(id)}
-                  className={cn('flex items-center gap-2 px-3 py-1.5 rounded-lg text-[12.5px] font-medium', tab === id ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700')}>
+                  className={cn('flex items-center gap-2 px-3 py-1.5 rounded-lg text-[12.5px] font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50', tab === id ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700')}>
                   <Icon size={14} /> {label}
                 </button>
               ))}
@@ -163,7 +169,7 @@ export default function ProizvodnjaScreen({ korisnikId, uloga, initialNalogId }:
           {tab === 'nalozi' && (
             <div className="flex items-center gap-2">
               <Button variant="outline" size="sm" onClick={load} className="h-8 gap-1.5 text-[12px]"><RefreshCw className="h-3.5 w-3.5" /> Osvježi</Button>
-              <Button size="sm" onClick={() => { setEditNalog(null); setFormOpen(true); }} className="h-8 gap-1.5 text-[12px]"><Plus className="h-3.5 w-3.5" /> Novi nalog</Button>
+              <Button size="sm" onClick={() => setFormOpen(true)} className="h-8 gap-1.5 pl-3 pr-2 text-[12px]"><Plus className="h-3.5 w-3.5" /> Novi nalog <Key tone="dark">N</Key></Button>
             </div>
           )}
         </div>
@@ -174,238 +180,109 @@ export default function ProizvodnjaScreen({ korisnikId, uloga, initialNalogId }:
           msg.type === 'error' ? 'bg-rose-50/70 border-rose-200 text-rose-700' : 'bg-emerald-50/70 border-emerald-200 text-emerald-700')}>
           {msg.type === 'error' ? <AlertTriangle size={14} /> : <Factory size={14} />}
           {msg.text}
-          <button className="ml-auto text-slate-400 hover:text-slate-600" onClick={() => setMsg(null)}><X size={13} /></button>
+          <button className="ml-auto text-slate-400 hover:text-slate-600" onClick={() => setMsg(null)} aria-label="Sakrij poruku"><X size={13} /></button>
         </div>
       )}
 
       {tab === 'normativi' ? (
         <NormativiTab />
       ) : (
-        <div className="flex-1 min-h-0 flex gap-4 p-5 overflow-hidden">
-          {/* Lista */}
-          <div className="flex-1 min-w-0">
-            <div className="bg-white rounded-2xl border border-slate-200/70 shadow-sm shadow-slate-200/40 h-full flex flex-col overflow-hidden">
-              {visible.length === 0 ? (
-                <div className="flex-1 flex flex-col items-center justify-center text-slate-400 select-none">
-                  <div className="w-12 h-12 rounded-2xl bg-slate-50 flex items-center justify-center mb-3"><Hammer size={20} className="text-slate-300" /></div>
-                  <p className="text-[13px] font-medium text-slate-500">Nema radnih naloga</p>
-                  <p className="text-[12px] text-slate-400 mt-0.5">Otvorite nalog za kupca ili za zalihu.</p>
-                </div>
-              ) : (
+        <div className="flex-1 min-h-0 p-5">
+          <div className="bg-white rounded-2xl border border-slate-200/70 shadow-sm shadow-slate-200/40 h-full flex flex-col overflow-hidden">
+            {visible.length === 0 ? (
+              <div className="flex-1 flex flex-col items-center justify-center text-slate-400 select-none">
+                <div className="w-12 h-12 rounded-2xl bg-slate-50 flex items-center justify-center mb-3"><Hammer size={20} className="text-slate-300" /></div>
+                <p className="text-[13px] font-medium text-slate-500">Nema radnih naloga</p>
+                <p className="text-[12px] text-slate-400 mt-0.5">Otvorite nalog za kupca ili za zalihu — tipka <Key className="ml-0 mx-0.5">N</Key>.</p>
+              </div>
+            ) : (
+              <>
                 <ScrollArea className="flex-1">
                   <table className="w-full border-separate border-spacing-0">
                     <LedgerHead columns={[
-                      { label: 'Broj', className: 'text-left pl-5 pr-2 w-[100px]' },
-                      { label: 'Datum', className: 'text-left px-2 w-[90px] hidden xl:table-cell' },
-                      { label: 'Vrsta', className: 'text-left px-2 w-[90px] hidden 2xl:table-cell' },
-                      { label: 'Kupac / proizvod', className: 'text-left px-2' },
-                      { label: 'Rok', className: 'text-left px-2 w-[90px] hidden lg:table-cell' },
-                      { label: 'Cijena', className: 'text-right px-2 w-[110px] hidden md:table-cell' },
+                      { label: 'Broj', className: 'text-left pl-5 pr-2 w-[110px]' },
+                      { label: 'Datum', className: 'text-left px-2 w-[96px] hidden lg:table-cell' },
+                      { label: 'Kupac / proizvod', className: 'text-left px-2 w-[34%] xl:w-[28%]' },
+                      { label: 'Opis', className: 'text-left px-2 hidden xl:table-cell' },
+                      { label: 'Rok', className: 'text-left px-2 w-[170px] hidden md:table-cell' },
+                      { label: 'Cijena', className: 'text-right px-2 w-[120px]' },
                       { label: 'Status', className: 'text-right pr-5 pl-2 w-[110px]' },
                     ]} />
-                    <tbody>
-                      {visible.map(n => {
-                        const isSel = selected?.id === n.id;
+                    <tbody onKeyDown={handleListKeyDown}>
+                      {visible.map((n, i) => {
+                        const isSel = selectedId === n.id;
+                        const zatvoren = n.status === 'zavrsen' || n.status === 'fakturisan';
+                        const rok = rokOznaka(n.rok, danas, zatvoren);
+                        const Icon = n.vrsta === 'narudzba' ? User : Package;
                         return (
-                          <tr key={n.id} onClick={() => select(n.id)}
-                            className={cn('cursor-pointer transition-colors', isSel ? 'bg-blue-50/80' : 'hover:bg-slate-50')}>
-                            <td className={cn('pl-5 pr-2 py-2.5 border-b border-slate-100 font-mono text-[11.5px] font-semibold tabular-nums',
+                          <tr key={n.id}
+                            ref={el => { rowRefs.current[i] = el; }}
+                            tabIndex={isSel || (selIndex < 0 && i === 0) ? 0 : -1}
+                            aria-selected={isSel}
+                            onClick={() => otvori(n.id)}
+                            onFocus={() => setSelectedId(n.id)}
+                            className={cn('cursor-pointer transition-colors duration-100 group',
+                              'focus:outline focus:outline-2 focus:-outline-offset-2 focus:outline-blue-500',
+                              isSel ? 'bg-blue-50/70' : 'hover:bg-slate-50')}>
+                            <td className={cn('pl-5 pr-2 py-3 border-b border-slate-100 font-mono text-[12px] font-semibold tabular-nums whitespace-nowrap',
                               isSel ? 'text-blue-600 shadow-[inset_3px_0_0_0_#2563eb]' : 'text-slate-500')}>{formatBrojNaloga(n)}</td>
-                            <td className="hidden xl:table-cell px-2 py-2.5 border-b border-slate-100 text-[12px] text-slate-500 tabular-nums">{formatDate(n.datum)}</td>
-                            <td className="hidden 2xl:table-cell px-2 py-2.5 border-b border-slate-100 text-[11px] text-slate-500">{n.vrsta === 'narudzba' ? 'Narudžba' : 'Zaliha'}</td>
-                            <td className="px-2 py-2.5 border-b border-slate-100 text-[12px] text-slate-700 truncate max-w-0 w-full">
-                              {n.vrsta === 'narudzba' ? (n.kupacNaziv || '—') : `${n.productNaziv} × ${n.kolicina}`}
-                              <span className="block text-[10.5px] text-slate-400 truncate">{n.opis}</span>
+                            <td className="hidden lg:table-cell px-2 py-3 border-b border-slate-100 text-[12px] text-slate-500 tabular-nums">{formatDate(n.datum)}</td>
+                            <td className="px-2 py-3 border-b border-slate-100 text-[12.5px] text-slate-800 max-w-0">
+                              <span className="flex items-center gap-2 min-w-0">
+                                <Icon size={13} className="text-slate-300 flex-shrink-0" />
+                                <span className="truncate font-medium">{n.vrsta === 'narudzba' ? (n.kupacNaziv || '—') : n.productNaziv}</span>
+                                {n.vrsta === 'zaliha' && <span className="font-mono text-[11.5px] text-slate-400 tabular-nums flex-shrink-0">× {n.kolicina}</span>}
+                              </span>
+                              <span className="xl:hidden block pl-[21px] text-[10.5px] text-slate-400 truncate">{n.opis}</span>
                             </td>
-                            <td className="hidden lg:table-cell px-2 py-2.5 border-b border-slate-100 text-[12px] text-slate-400 tabular-nums">{n.rok ? formatDate(n.rok) : '—'}</td>
-                            <td className="hidden md:table-cell px-2 py-2.5 border-b border-slate-100 text-right font-mono text-[12.5px] font-semibold tabular-nums text-slate-800">
-                              {n.dogovorenaCijena != null ? formatKM(n.dogovorenaCijena) : '—'}
+                            <td className="hidden xl:table-cell px-2 py-3 border-b border-slate-100 text-[12px] text-slate-500 truncate max-w-0 w-full">{n.opis}</td>
+                            <td className="hidden md:table-cell px-2 py-3 border-b border-slate-100 text-[12px] tabular-nums whitespace-nowrap">
+                              {n.rok ? (
+                                <span className="flex items-baseline gap-2">
+                                  <span className="text-slate-600">{formatDate(n.rok)}</span>
+                                  {rok && <span className={cn('text-[10.5px]', ROK_CLS[rok.tone])}>{rok.label}</span>}
+                                </span>
+                              ) : <span className="text-slate-300">—</span>}
                             </td>
-                            <td className="pr-5 pl-2 py-2.5 border-b border-slate-100 text-right"><StatusChip status={n.status} /></td>
+                            <td className="px-2 py-3 border-b border-slate-100 text-right font-mono text-[12.5px] font-semibold tabular-nums text-slate-800 whitespace-nowrap">
+                              {n.dogovorenaCijena != null ? formatKM(n.dogovorenaCijena) : <span className="text-slate-300 font-normal">—</span>}
+                            </td>
+                            <td className="pr-5 pl-2 py-3 border-b border-slate-100 text-right"><StatusChip status={n.status} /></td>
                           </tr>
                         );
                       })}
                     </tbody>
                   </table>
                 </ScrollArea>
-              )}
-            </div>
-          </div>
-
-          {/* Detalj */}
-          <div className="w-[340px] lg:w-[380px] 2xl:w-[440px] flex-shrink-0">
-            {selected ? (
-              <div className="bg-white rounded-2xl border border-slate-200/70 shadow-sm shadow-slate-200/40 h-full flex flex-col overflow-hidden">
-                {/* Zaglavlje */}
-                <div className="flex-shrink-0 px-5 pt-5 pb-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <Eyebrow>{selected.vrsta === 'narudzba' ? 'Nalog po narudžbi' : 'Nalog za zalihu'}</Eyebrow>
-                      <h3 className="text-[19px] font-bold font-mono tracking-tight text-slate-900 leading-tight mt-1">{formatBrojNaloga(selected)}</h3>
-                      <p className="text-[11.5px] text-slate-400 mt-0.5 tabular-nums">
-                        {formatDate(selected.datum)}
-                        {selected.rok && <span className="ml-2">rok <span className="text-slate-600 font-medium">{formatDate(selected.rok)}</span></span>}
-                      </p>
-                    </div>
-                    <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
-                      <StatusChip status={selected.status} size="md" />
-                      {(uredivo || selected.status === 'zavrsen') && (
-                        <button onClick={() => { setEditNalog(selected); setFormOpen(true); }}
-                          className="flex items-center gap-1 rounded-md px-1.5 py-0.5 -mr-1.5 text-[11px] font-medium text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50">
-                          <Pencil size={11} /> Uredi
-                        </button>
-                      )}
-                    </div>
-                  </div>
+                <div className="flex-shrink-0 border-t border-slate-100 px-5 h-9 flex items-center gap-3 text-[10.5px] text-slate-400 select-none">
+                  <span className="font-mono tabular-nums">{selIndex >= 0 ? `${selIndex + 1} / ${visible.length}` : `${visible.length}`}</span>
+                  <span className="text-slate-300">·</span>
+                  <span className="hidden sm:flex items-center gap-3">
+                    <span className="flex items-center gap-1"><Key className="ml-0">↑↓</Key> odaberi</span>
+                    <span className="flex items-center gap-1"><Key className="ml-0">↵</Key> otvori</span>
+                    <span className="flex items-center gap-1"><Key className="ml-0">←→</Key> filter</span>
+                    <span className="flex items-center gap-1"><Key className="ml-0">N</Key> novi</span>
+                  </span>
                 </div>
-
-                {/* Sadržaj — jedan skrol, da se stavke ne stisnu na niskom ekranu */}
-                <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
-                  <div className="min-h-full flex flex-col">
-                    <div className="px-5 pb-4">
-                      <dl className="rounded-xl bg-slate-50/80 border border-slate-100 px-4 py-3 space-y-2 text-[12px]">
-                        {selected.vrsta === 'narudzba' ? (
-                          <div className="flex items-baseline justify-between gap-3"><dt className="text-slate-400 flex-shrink-0">Kupac</dt><dd className="font-medium text-slate-700 text-right truncate">{selected.kupacNaziv || '—'}</dd></div>
-                        ) : (
-                          <div className="flex items-baseline justify-between gap-3"><dt className="text-slate-400 flex-shrink-0">Proizvod</dt><dd className="font-medium text-slate-700 text-right truncate">{selected.productNaziv} × {selected.kolicina}</dd></div>
-                        )}
-                        {selected.opis && (
-                          <div className="flex items-baseline justify-between gap-3"><dt className="text-slate-400 flex-shrink-0">Opis</dt><dd className="text-slate-700 text-right break-words min-w-0">{selected.opis}</dd></div>
-                        )}
-                        {selected.vrsta === 'narudzba' && selected.dogovorenaCijena != null && (
-                          <div className="flex items-baseline justify-between gap-3"><dt className="text-slate-400 flex-shrink-0">Cijena</dt><dd className="font-mono font-medium tabular-nums text-slate-700">{formatKM(selected.dogovorenaCijena)}</dd></div>
-                        )}
-                        {selected.ponudaBroj && (
-                          <div className="flex items-baseline justify-between gap-3"><dt className="text-slate-400">Iz ponude</dt><dd className="font-mono text-slate-600">{selected.ponudaBroj}/{selected.ponudaGodina}</dd></div>
-                        )}
-                        {selected.racunBroj && (
-                          <div className="flex items-baseline justify-between gap-3"><dt className="text-violet-400">Fiskalni račun</dt>
-                            <dd className="font-mono font-medium text-violet-600">#{selected.racunBroj}{selected.racunStatus === 'refunded' ? ', stornirano' : ''}</dd></div>
-                        )}
-                        {selected.napomena && <p className="pt-2 border-t border-slate-200/70 text-[11.5px] text-slate-500">{selected.napomena}</p>}
-                      </dl>
-                    </div>
-
-                    <div className="flex-1 border-t border-slate-100">
-                      <StavkeUtroska
-                        nalogId={selected.id}
-                        stavke={selected.stavke ?? []}
-                        uredivo={!!uredivo}
-                        onDirtyChange={setStavkeDirty}
-                        onSave={async (stavke) => { await window.api.saveNalogStavke(selected.id, stavke); await select(selected.id); }}
-                      />
-                    </div>
-                    <KalkulacijaPanel
-                      nalog={selected} kalkulacija={kalk} uredivo={!!uredivo}
-                      onTrosakRada={async (iznos) => { await window.api.updateNalog(selected.id, { trosakRada: iznos }); await select(selected.id); }}
-                    />
-                  </div>
-                </div>
-
-                {/* Akcije — sljedeći korak naloga je glavni */}
-                <div className="flex-shrink-0 border-t border-slate-100 px-5 py-3.5 space-y-2">
-                  {uredivo && (selected.stavke?.length ?? 0) > 0 && (
-                    <ActionRow icon={CheckCircle2} label="Završi nalog" tone="primary" onClick={() => setZavrsiOpen(true)}
-                      disabled={stavkeDirty} hint={stavkeDirty ? 'spremi stavke' : undefined} />
-                  )}
-                  {selected.status === 'zavrsen' && selected.vrsta === 'narudzba' && (
-                    <ActionRow icon={Receipt} label="Izdaj račun" tone="primary" onClick={() => setRacunOpen(true)} />
-                  )}
-                  <ActionRow icon={Printer} label="Štampaj nalog" onClick={() => printPdf(selected)}
-                    disabled={stavkeDirty} hint={stavkeDirty ? 'spremi stavke' : undefined}
-                    trailing={{ icon: Download, onClick: () => exportPdf(selected), title: 'Sačuvaj PDF', disabled: stavkeDirty }} />
-                  {selected.status === 'otvoren' && <ActionRow icon={Play} label="U izradu" onClick={uIzradu} />}
-                  {selected.status === 'zavrsen' && uloga === 'admin' && (
-                    <ActionRow icon={Undo2} label="Vrati u izradu" onClick={() => setVratiOpen(true)} />
-                  )}
-                  {uredivo && (
-                    <div className="pt-2 mt-1 border-t border-slate-100">
-                      <ActionRow icon={Trash2} label="Obriši nalog" tone="danger" onClick={() => setBrisiOpen(true)} />
-                    </div>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <div className="bg-white rounded-2xl border border-slate-200/70 shadow-sm shadow-slate-200/40 h-full flex flex-col items-center justify-center px-8 text-center select-none">
-                <div className="w-12 h-12 rounded-2xl bg-slate-50 flex items-center justify-center mb-3">
-                  <Hammer size={20} className="text-slate-300" strokeWidth={1.5} />
-                </div>
-                <p className="text-[13px] font-medium text-slate-500">Odaberite nalog</p>
-                <p className="text-[12px] text-slate-400 mt-0.5">Stavke utroška, kalkulacija i akcije pojavljuju se ovdje.</p>
-              </div>
+              </>
             )}
           </div>
         </div>
       )}
 
-      <NalogDialog open={formOpen} onOpenChange={setFormOpen} korisnikId={korisnikId} nalog={editNalog}
-        onSaved={async (id) => { await load(); await select(id); setMsg({ type: 'success', text: editNalog ? 'Nalog izmijenjen' : 'Nalog otvoren' }); }} />
+      <NalogDialog open={formOpen} onOpenChange={setFormOpen} korisnikId={korisnikId} nalog={null}
+        onSaved={async (id) => { await load(); setMsg({ type: 'success', text: 'Nalog otvoren' }); otvori(id); }} />
 
-      {selected && (
-        <IzdajRacunDialog open={racunOpen} onOpenChange={setRacunOpen} nalog={selected} korisnikId={korisnikId}
-          onIzdat={async (bf) => { await refreshSelected(); setMsg({ type: 'success', text: `Račun #${bf ?? ''} izdat po nalogu ${formatBrojNaloga(selected)}` }); }} />
-      )}
-
-      <Dialog open={brisiOpen} onOpenChange={setBrisiOpen}>
-        <DialogContent className="sm:max-w-[400px]">
-          <DialogHeader>
-            <DialogTitle>Obrisati nalog {selected ? formatBrojNaloga(selected) : ''}?</DialogTitle>
-            <DialogDescription>Nalog nije završen pa ništa nije knjiženo. Brisanje se ne može poništiti.</DialogDescription>
-          </DialogHeader>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="ghost" onClick={() => setBrisiOpen(false)}>Otkaži</Button>
-            <Button variant="destructive" onClick={obrisi}>Obriši</Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={zavrsiOpen} onOpenChange={setZavrsiOpen}>
-        <DialogContent className="sm:max-w-[460px]">
-          <DialogHeader>
-            <DialogTitle>Završiti nalog {selected ? formatBrojNaloga(selected) : ''}?</DialogTitle>
-            <DialogDescription>
-              Materijal se skida sa skladišta po stavkama utroška i nabavne cijene se zamrzavaju.
-              {selected?.vrsta === 'zaliha' && ` Na stanje ulazi ${selected.kolicina} × ${selected.productNaziv}.`}
-            </DialogDescription>
-          </DialogHeader>
-          {kalk && kalk.upozorenja.length > 0 && (
-            <div className="rounded-lg bg-amber-50/70 border border-amber-100 px-3 py-2 space-y-0.5">
-              {kalk.upozorenja.map((u, i) => <p key={i} className="text-[11.5px] text-amber-700">{u}</p>)}
-              <p className="text-[11px] text-amber-600/80 pt-1">Završetak nije blokiran — stanje će ići u minus dok se ne unese primka.</p>
-            </div>
-          )}
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="ghost" onClick={() => setZavrsiOpen(false)}>Otkaži</Button>
-            <Button onClick={async () => {
-              if (!selected) return;
-              try {
-                await window.api.setNalogStatus({ id: selected.id, status: 'zavrsen', korisnikId });
-                setZavrsiOpen(false); await refreshSelected();
-                setMsg({ type: 'success', text: `Nalog ${formatBrojNaloga(selected)} završen, materijal razdužen` });
-              } catch (e: any) { setMsg({ type: 'error', text: e?.message || 'Greška' }); setZavrsiOpen(false); }
-            }}>Završi i razduži</Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={vratiOpen} onOpenChange={setVratiOpen}>
-        <DialogContent className="sm:max-w-[420px]">
-          <DialogHeader>
-            <DialogTitle>Vratiti nalog u izradu?</DialogTitle>
-            <DialogDescription>Knjiženja završetka se brišu (materijal se vraća na stanje), stavke se otključavaju.</DialogDescription>
-          </DialogHeader>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="ghost" onClick={() => setVratiOpen(false)}>Otkaži</Button>
-            <Button onClick={async () => {
-              if (!selected) return;
-              try {
-                await window.api.setNalogStatus({ id: selected.id, status: 'vrati', korisnikId });
-                setVratiOpen(false); await refreshSelected();
-              } catch (e: any) { setMsg({ type: 'error', text: e?.message || 'Greška' }); setVratiOpen(false); }
-            }}>Vrati u izradu</Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <NalogDetailDialog
+        nalogId={openId}
+        redoslijed={visibleIds}
+        korisnikId={korisnikId}
+        uloga={uloga}
+        onClose={zatvori}
+        onNavigate={otvori}
+        onChanged={load}
+        onDeleted={async (n) => { setOpenId(null); setSelectedId(null); await load(); setMsg({ type: 'success', text: `Nalog ${formatBrojNaloga(n)} obrisan` }); }}
+      />
     </div>
   );
 }

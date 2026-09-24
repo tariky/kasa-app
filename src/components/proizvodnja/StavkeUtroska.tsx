@@ -1,20 +1,26 @@
 // src/components/proizvodnja/StavkeUtroska.tsx
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import type { RadniNalogStavka } from '@/types';
-import type { NalogStavkaInput } from '@/lib/proizvodnja';
+import type { NalogStavkaInput, KalkulacijaStavka } from '@/lib/proizvodnja';
 import { jePloca, napomenaUElemente } from '@/lib/ploca';
-import { cn, parseDecimal } from '@/lib/utils';
+import { cn, formatKM, parseDecimal } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { DecimalInput } from '@/components/ui/decimal-input';
-import { Eyebrow } from '@/components/ui/ledger';
+import { Eyebrow, Key, mod } from '@/components/ui/ledger';
 import { ElementiDialog } from './ElementiDialog';
-import { Search, X, Ruler, Save, AlertTriangle } from 'lucide-react';
+import { Search, X, Ruler, Save, AlertTriangle, Lock } from 'lucide-react';
 
 export interface StavkaDraft {
   materijalId: number; naziv: string; sifra: string; jm: string;
   kolicina: string; napomena: string; stanje: number;
   plocaSirina?: number | null; plocaVisina?: number | null;
+}
+
+export interface StavkeHandle {
+  /** Spremi draft; true kad je prošlo (ili nije bilo šta spremiti). */
+  save: () => Promise<boolean>;
+  focusSearch: () => void;
 }
 
 function izStavke(s: RadniNalogStavka): StavkaDraft {
@@ -25,150 +31,228 @@ function izStavke(s: RadniNalogStavka): StavkaDraft {
   };
 }
 
-export function StavkeUtroska({ nalogId, stavke, uredivo, onSave, onDirtyChange }: {
-  nalogId: number; stavke: RadniNalogStavka[]; uredivo: boolean; onSave: (stavke: NalogStavkaInput[]) => Promise<void>;
+const TH = 'text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400 pb-2 border-b border-slate-200/80 whitespace-nowrap';
+const TD = 'py-2 border-b border-slate-100 align-top';
+
+/**
+ * Utrošak materijala — glavna radna površina naloga. Široka tabela: materijal, napomena,
+ * stanje, nabavna cijena i iznos iz kalkulacije, količina. Pretraga radi s tastature
+ * (↑↓ ↵ esc), a nova stavka odmah dobija fokus na količini.
+ */
+export const StavkeUtroska = forwardRef<StavkeHandle, {
+  nalogId: number; stavke: RadniNalogStavka[]; uredivo: boolean;
+  kalkStavke?: KalkulacijaStavka[];
+  onSave: (stavke: NalogStavkaInput[]) => Promise<void>;
   onDirtyChange?: (dirty: boolean) => void;
-}) {
+}>(function StavkeUtroska({ nalogId, stavke, uredivo, kalkStavke, onSave, onDirtyChange }, ref) {
   const [draft, setDraft] = useState<StavkaDraft[]>(stavke.map(izStavke));
   const [dirty, setDirty] = useState(false);
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<any[]>([]);
+  const [active, setActive] = useState(0);
   const [elementiZa, setElementiZa] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const kolRefs = useRef<Map<number, HTMLInputElement>>(new Map());
+  const focusAfterAdd = useRef<number | null>(null);
 
   useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
 
-  // Nalog se promijenio (druga stavka je izabrana u listi) — odbaci draft bez obzira na dirty.
+  // Nalog se promijenio — odbaci draft bez obzira na dirty.
   useEffect(() => { setDraft(stavke.map(izStavke)); setDirty(false); }, [nalogId]);
 
   // Osvježenje istog naloga (npr. nakon promjene troška rada) ne smije obrisati neusnimljene
-  // izmjene korisnika; kad se spremanje završi, dirty pređe na false i ovaj efekat tad povuče
-  // svježe stanje sa servera.
+  // izmjene; kad spremanje prođe, dirty padne na false i ovaj efekat povuče svježe stanje.
   useEffect(() => { if (!dirty) setDraft(stavke.map(izStavke)); }, [stavke, dirty]);
 
-  // Nalog je izgubio uređivost (npr. završen ispod ruku) — odbaci draft i otključaj dirty
-  // da se disabled dugmad koja zavise o njemu ne zaglave uklj.
+  // Nalog je izgubio uređivost (npr. završen) — odbaci draft i otključaj dirty.
   useEffect(() => { if (!uredivo) { setDirty(false); setDraft(stavke.map(izStavke)); } }, [uredivo]);
 
   useEffect(() => {
     if (debounce.current) clearTimeout(debounce.current);
-    if (!query.trim()) { setResults([]); return; }
-    debounce.current = setTimeout(async () => setResults(await window.api.searchMaterijal(query.trim())), 150);
+    if (!query.trim()) { setResults([]); setActive(0); return; }
+    debounce.current = setTimeout(async () => { setResults(await window.api.searchMaterijal(query.trim())); setActive(0); }, 150);
   }, [query]);
 
+  // Nova stavka: fokus ide pravo na količinu, jer je to sljedeće što se kuca.
+  useEffect(() => {
+    if (focusAfterAdd.current == null) return;
+    const el = kolRefs.current.get(focusAfterAdd.current);
+    focusAfterAdd.current = null;
+    el?.focus(); el?.select();
+  }, [draft]);
+
+  const cijene = useMemo(() => {
+    const m = new Map<number, KalkulacijaStavka>();
+    for (const s of kalkStavke ?? []) m.set(s.materijalId, s);
+    return m;
+  }, [kalkStavke]);
+
   const dodaj = (m: any) => {
-    setDraft(d => d.some(x => x.materijalId === m.id) ? d : [...d, {
-      materijalId: m.id, naziv: m.naziv, sifra: m.sifra, jm: m.jm, kolicina: '', napomena: '',
-      stanje: m.stanje ?? 0, plocaSirina: m.plocaSirina, plocaVisina: m.plocaVisina,
-    }]);
-    setDirty(true); setQuery(''); setResults([]);
+    const postoji = draft.some(x => x.materijalId === m.id);
+    if (!postoji) {
+      setDraft(d => [...d, {
+        materijalId: m.id, naziv: m.naziv, sifra: m.sifra, jm: m.jm, kolicina: '', napomena: '',
+        stanje: m.stanje ?? 0, plocaSirina: m.plocaSirina, plocaVisina: m.plocaVisina,
+      }]);
+      setDirty(true);
+    }
+    focusAfterAdd.current = m.id;
+    setQuery(''); setResults([]);
+    if (postoji) { const el = kolRefs.current.get(m.id); el?.focus(); el?.select(); }
   };
   const set = (i: number, patch: Partial<StavkaDraft>) => { setDraft(d => d.map((s, j) => (j === i ? { ...s, ...patch } : s))); setDirty(true); };
   const ukloni = (i: number) => { setDraft(d => d.filter((_, j) => j !== i)); setDirty(true); };
 
-  // Stabilna referenca dok je dijalog otvoren — inače bi svaki re-render StavkeUtroska (npr.
-  // izmjena druge stavke) rekreirao niz, ponovo pokrenuo ElementiDialog-ov [open, initial]
-  // efekat i pregazio redove koje korisnik trenutno kuca.
+  // Stabilna referenca dok je dijalog otvoren — inače bi svaki re-render rekreirao niz i
+  // ElementiDialog-ov [open, initial] efekat pregazio redove koje korisnik trenutno kuca.
   const elementiNapomena = elementiZa != null ? draft[elementiZa]?.napomena ?? '' : '';
   const elementiInitial = useMemo(
     () => (elementiZa != null ? napomenaUElemente(elementiNapomena) : []),
     [elementiZa, elementiNapomena]
   );
 
-  const spremi = async () => {
+  const spremi = async (): Promise<boolean> => {
+    if (!dirty) return true;
+    if (saving) return false;
     setSaving(true); setError('');
     try {
       await onSave(draft.map(s => ({ materijalId: s.materijalId, kolicina: parseDecimal(s.kolicina) || 0, napomena: s.napomena || null })));
       setDirty(false);
-    } catch (e: any) { setError(e?.message || 'Greška pri spremanju'); }
+      return true;
+    } catch (e: any) { setError(e?.message || 'Greška pri spremanju'); return false; }
     finally { setSaving(false); }
   };
 
+  useImperativeHandle(ref, () => ({ save: spremi, focusSearch: () => searchRef.current?.focus() }));
+
+  const onSearchKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    // Esc s upitom briše upit; bez upita dijalog sam skida fokus s polja (vidi onEscapeKeyDown).
+    if (e.key === 'Escape') { if (query) { setQuery(''); setResults([]); } return; }
+    if (results.length === 0) return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); setActive(a => Math.min(results.length - 1, a + 1)); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(a => Math.max(0, a - 1)); }
+    else if (e.key === 'Enter') { e.preventDefault(); dodaj(results[active]); }
+  };
+
+  const zamrznuto = !uredivo && (kalkStavke?.some(s => s.zamrznuto) ?? false);
+
   return (
-    <div className="flex flex-col">
-      {/* Zaglavlje sekcije ostaje vidljivo dok se lista skrola — nosi i spremanje. */}
-      <div className="sticky top-0 z-10 flex items-center gap-2 px-5 h-10 bg-white/95 backdrop-blur-sm border-b border-slate-100">
+    <section className="flex flex-col min-h-0" aria-label="Utrošak materijala">
+      <div className="flex items-center gap-2.5 h-9">
         <Eyebrow>Utrošak materijala</Eyebrow>
-        <span className="font-mono text-[10px] tabular-nums text-slate-400">{draft.length}</span>
+        <span className="font-mono text-[10.5px] tabular-nums text-slate-400">{draft.length}</span>
+        {zamrznuto && <span className="flex items-center gap-1 text-[10.5px] text-slate-400"><Lock size={10} /> cijene zamrznute pri završetku</span>}
         {uredivo && dirty && (
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex items-center gap-2 animate-fade-in">
             {error
               ? <span className="flex items-center gap-1 text-[11px] text-rose-600"><AlertTriangle size={12} /> {error}</span>
-              : <span className="text-[11px] text-amber-600">nespremljeno</span>}
-            <Button size="sm" className="h-7 gap-1.5 px-2.5 text-[12px]" onClick={spremi} disabled={saving}>
+              : <span className="text-[11px] font-medium text-amber-600">nespremljeno</span>}
+            <Button size="sm" className="h-7 gap-1.5 pl-2.5 pr-2 text-[12px]" onClick={spremi} disabled={saving}>
               <Save className="h-3.5 w-3.5" /> {saving ? 'Spremam…' : 'Spremi'}
+              <Key tone="dark" className="ml-1">{mod('S')}</Key>
             </Button>
           </div>
         )}
       </div>
 
       {uredivo && (
-        <div className="px-5 pt-3 pb-1">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400 pointer-events-none" />
-            <Input value={query} onChange={e => setQuery(e.target.value)} placeholder="Dodaj materijal (naziv ili šifra)…"
-              className="pl-8 h-8 text-[12.5px] bg-slate-50" />
-          </div>
-          {/* Rezultati su u toku stranice, ne lebde — unutar skrol-panela plutajući meni bi se sjekao. */}
+        <div className="relative mt-1 mb-2">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400 pointer-events-none" />
+          <Input ref={searchRef} value={query} onChange={e => setQuery(e.target.value)} onKeyDown={onSearchKey}
+            placeholder="Dodaj materijal — naziv ili šifra…" aria-label="Dodaj materijal"
+            role="combobox" aria-expanded={results.length > 0} aria-autocomplete="list"
+            className="pl-9 pr-10 h-9 text-[12.5px] bg-slate-50 border-slate-200 focus-visible:bg-white" />
+          {!query && <Key className="absolute right-2.5 top-1/2 -translate-y-1/2 ml-0">/</Key>}
           {results.length > 0 && (
-            <div className="mt-1 rounded-lg border border-slate-200 bg-white shadow-sm max-h-56 overflow-auto divide-y divide-slate-50">
-              {results.map(m => (
-                <button key={m.id} onClick={() => dodaj(m)}
-                  className="w-full flex items-center gap-3 px-3 py-2 text-left text-[12px] hover:bg-slate-50 focus:outline-none focus-visible:bg-blue-50">
+            <ul role="listbox" className="absolute left-0 right-0 top-full z-20 mt-1 rounded-lg border border-slate-200 bg-white shadow-lg shadow-slate-900/10 max-h-64 overflow-auto py-1">
+              {results.map((m, i) => (
+                <li key={m.id} role="option" aria-selected={i === active}
+                  onMouseEnter={() => setActive(i)} onMouseDown={e => e.preventDefault()} onClick={() => dodaj(m)}
+                  className={cn('flex items-center gap-3 px-3 py-2 text-[12px] cursor-pointer', i === active ? 'bg-blue-50 text-slate-900' : 'text-slate-700')}>
                   <span className="min-w-0 flex-1 truncate"><span className="font-mono text-[11px] text-slate-400 mr-2">{m.sifra}</span>{m.naziv}</span>
                   <span className={cn('flex-shrink-0 font-mono text-[11px] tabular-nums', (m.stanje ?? 0) <= 0 ? 'text-rose-500' : 'text-slate-400')}>{m.stanje} {m.jm}</span>
-                </button>
+                </li>
               ))}
-            </div>
+            </ul>
           )}
         </div>
       )}
 
       {draft.length === 0 ? (
-        <p className="px-5 py-4 text-[12px] text-slate-400">
-          {uredivo ? 'Nema stavki. Potražite materijal iznad i dodajte ga u nalog.' : 'Nalog nema stavki utroška.'}
-        </p>
+        <div className="rounded-xl border border-dashed border-slate-200 px-5 py-8 text-center">
+          <p className="text-[12.5px] text-slate-500">{uredivo ? 'Nalog još nema stavki.' : 'Nalog nema stavki utroška.'}</p>
+          {uredivo && <p className="text-[11.5px] text-slate-400 mt-0.5">Potražite materijal iznad — tipka <Key className="ml-0 mx-0.5">/</Key> otvara pretragu.</p>}
+        </div>
       ) : (
-        <div className="divide-y divide-slate-50">
-          {draft.map((s, i) => {
-            const kol = parseDecimal(s.kolicina) || 0;
-            const prekoracenje = uredivo && kol > s.stanje;
-            return (
-              <div key={s.materijalId} className="px-5 py-2.5">
-                <div className="flex items-start gap-2">
-                  <span className="text-[10px] text-slate-300 font-mono tabular-nums w-4 text-right flex-shrink-0 pt-[3px]">{i + 1}</span>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-[12px] font-medium text-slate-700 leading-snug break-words">{s.naziv}</p>
-                    <p className={cn('text-[10.5px] font-mono tabular-nums', prekoracenje ? 'text-rose-500' : 'text-slate-400')}>
-                      {s.sifra && <span className="mr-1.5">{s.sifra}</span>}stanje {s.stanje} {s.jm}{prekoracenje ? ', nedovoljno' : ''}
-                    </p>
-                  </div>
-                  {uredivo ? (
-                    <div className="flex items-center gap-1 flex-shrink-0">
-                      {jePloca(s) && (
-                        <button title="Elementi" aria-label="Elementi" onClick={() => setElementiZa(i)}
-                          className="h-8 w-7 flex items-center justify-center rounded text-slate-400 hover:text-blue-600 hover:bg-blue-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"><Ruler size={14} /></button>
+        <div className="overflow-x-auto -mx-1 px-1">
+          <table className="w-full border-separate border-spacing-0 min-w-[640px]">
+            <thead>
+              <tr>
+                <th className={cn(TH, 'text-right w-6 pr-2')}>#</th>
+                <th className={cn(TH, 'text-left px-2')}>Materijal</th>
+                <th className={cn(TH, 'text-left px-2 w-[26%]')}>Napomena</th>
+                <th className={cn(TH, 'text-right px-2 w-[96px]')}>Stanje</th>
+                <th className={cn(TH, 'text-right px-2 w-[96px] hidden xl:table-cell')}>Nab. cijena</th>
+                <th className={cn(TH, 'text-right px-2 w-[104px] hidden lg:table-cell')}>Iznos</th>
+                <th className={cn(TH, 'text-right pl-2', uredivo ? 'w-[190px]' : 'w-[120px]')}>Količina</th>
+              </tr>
+            </thead>
+            <tbody>
+              {draft.map((s, i) => {
+                const kol = parseDecimal(s.kolicina) || 0;
+                const prekoracenje = uredivo && kol > s.stanje;
+                const c = cijene.get(s.materijalId);
+                return (
+                  <tr key={s.materijalId} className="group">
+                    <td className={cn(TD, 'text-right pr-2 pt-[11px] font-mono text-[10.5px] tabular-nums text-slate-300')}>{i + 1}</td>
+                    <td className={cn(TD, 'px-2 min-w-[180px]')}>
+                      <p className="text-[12.5px] font-medium text-slate-800 leading-snug pt-[3px]">{s.naziv}</p>
+                      {s.sifra && <p className="text-[10.5px] font-mono text-slate-400">{s.sifra}</p>}
+                    </td>
+                    <td className={cn(TD, 'px-2')}>
+                      {uredivo ? (
+                        <Input value={s.napomena} onChange={e => set(i, { napomena: e.target.value })} placeholder="npr. korpus 600×720 ×2"
+                          aria-label={`Napomena ${s.naziv}`}
+                          className="h-8 text-[11.5px] placeholder:text-slate-300 bg-transparent border-transparent hover:border-slate-200 focus-visible:border-blue-400 focus-visible:bg-white shadow-none px-2 -mx-2 w-[calc(100%+1rem)]" />
+                      ) : <p className="text-[11.5px] text-slate-500 pt-[5px]">{s.napomena || <span className="text-slate-300">—</span>}</p>}
+                    </td>
+                    <td className={cn(TD, 'px-2 text-right pt-[11px] font-mono text-[11.5px] tabular-nums whitespace-nowrap', prekoracenje ? 'text-rose-500 font-medium' : 'text-slate-500')}>
+                      {s.stanje} {s.jm}
+                      {prekoracenje && <span className="block text-[10px] font-sans font-medium">nedovoljno</span>}
+                    </td>
+                    <td className={cn(TD, 'hidden xl:table-cell px-2 text-right pt-[11px] font-mono text-[11.5px] tabular-nums text-slate-500')}>
+                      {c ? formatKM(c.cijena) : '—'}
+                    </td>
+                    <td className={cn(TD, 'hidden lg:table-cell px-2 text-right pt-[11px] font-mono text-[12px] tabular-nums text-slate-700')}>
+                      {c ? formatKM(c.iznos) : '—'}
+                    </td>
+                    <td className={cn(TD, 'pl-2 text-right')}>
+                      {uredivo ? (
+                        <div className="flex items-center justify-end gap-1">
+                          {jePloca(s) && (
+                            <button title="Elementi (širina × visina × kom)" aria-label={`Elementi ${s.naziv}`} onClick={() => setElementiZa(i)}
+                              className="h-8 w-7 flex items-center justify-center rounded text-slate-400 hover:text-blue-600 hover:bg-blue-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"><Ruler size={14} /></button>
+                          )}
+                          <DecimalInput maxDecimals={4} value={s.kolicina} onValueChange={t => set(i, { kolicina: t })} placeholder="0"
+                            ref={el => { if (el) kolRefs.current.set(s.materijalId, el); else kolRefs.current.delete(s.materijalId); }}
+                            aria-label={`Količina ${s.naziv}`}
+                            className={cn('h-8 w-[84px] font-mono text-[12.5px] text-right', prekoracenje && 'border-rose-300 text-rose-600 focus-visible:ring-rose-400/40')} />
+                          <span className="text-[11px] text-slate-400 w-7 text-left truncate">{s.jm}</span>
+                          <button title="Ukloni" aria-label={`Ukloni ${s.naziv}`} onClick={() => ukloni(i)}
+                            className="h-8 w-7 flex items-center justify-center rounded text-slate-300 hover:text-rose-500 hover:bg-rose-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"><X size={14} /></button>
+                        </div>
+                      ) : (
+                        <span className="block pt-[3px] font-mono text-[13px] font-semibold tabular-nums text-slate-900 whitespace-nowrap">{s.kolicina} <span className="text-[11px] font-normal text-slate-400">{s.jm}</span></span>
                       )}
-                      <DecimalInput maxDecimals={4} value={s.kolicina} onValueChange={t => set(i, { kolicina: t })} placeholder="0"
-                        aria-label={`Količina ${s.naziv}`}
-                        className={cn('h-8 w-[76px] font-mono text-[12.5px] text-right', prekoracenje && 'border-rose-200 text-rose-600')} />
-                      <span className="text-[11px] text-slate-400 w-6 truncate">{s.jm}</span>
-                      <button title="Ukloni" aria-label={`Ukloni ${s.naziv}`} onClick={() => ukloni(i)}
-                        className="h-8 w-7 flex items-center justify-center rounded text-slate-300 hover:text-rose-500 hover:bg-rose-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"><X size={14} /></button>
-                    </div>
-                  ) : (
-                    <span className="flex-shrink-0 font-mono text-[12.5px] font-semibold tabular-nums text-slate-800">{s.kolicina} {s.jm}</span>
-                  )}
-                </div>
-                {uredivo ? (
-                  <Input value={s.napomena} onChange={e => set(i, { napomena: e.target.value })} placeholder="Napomena (npr. korpus 600×720 ×2)"
-                    className="ml-6 mt-1 w-[calc(100%-1.5rem)] h-7 text-[11px] bg-transparent border-0 border-b border-slate-100 rounded-none px-0 shadow-none focus-visible:ring-0 focus-visible:border-blue-400" />
-                ) : s.napomena ? <p className="ml-6 mt-1 text-[11px] text-slate-400">{s.napomena}</p> : null}
-              </div>
-            );
-          })}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       )}
 
@@ -178,6 +262,6 @@ export function StavkeUtroska({ nalogId, stavke, uredivo, onSave, onDirtyChange 
         initial={elementiInitial}
         onConfirm={(m2, nap) => { if (elementiZa != null) set(elementiZa, { kolicina: String(m2), napomena: nap }); }}
       />
-    </div>
+    </section>
   );
-}
+});
