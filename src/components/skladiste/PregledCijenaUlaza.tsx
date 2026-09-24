@@ -147,6 +147,37 @@ export function PregledCijenaTabela({ pregled }: { pregled: PregledCijenaUlaza }
           </ul>
         </div>
       )}
+      {pregled.cijenaOstaje.length > 0 && (
+        <div>
+          <p className="text-[12px] font-semibold text-slate-800">Cijena u prodaji ostaje <span className="text-[11px] font-normal text-slate-400">· kasnije mijenjana</span></p>
+          <ul className="mt-1 space-y-0.5">
+            {pregled.cijenaOstaje.map(r => (
+              <li key={r.productId} className="flex justify-between gap-2 text-[12px] text-slate-600">
+                <span className="truncate">{r.productNaziv}</span>
+                <span className="font-mono tabular-nums whitespace-nowrap">{formatKM(r.cijena)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {!imaPromjena(pregled) && <p className="text-[12px] text-slate-500">Prodajne cijene se ne mijenjaju.</p>}
+    </div>
+  );
+}
+
+/**
+ * Backend je odbio spremanje/brisanje: od pregleda koji je korisnik potvrdio
+ * promijenila se zaliha, cijena, datum ili broj nivelacije. Ništa nije
+ * upisano; ispod ide novi pregled za ponovnu potvrdu.
+ */
+export function PregledPromijenjen() {
+  return (
+    <div role="alert" className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-[12px] text-amber-800">
+      <AlertTriangle size={14} className="mt-[1px] flex-shrink-0 text-amber-500" />
+      <div>
+        <p className="font-semibold">Stanje se promijenilo od pregleda — provjerite nove dokumente.</p>
+        <p className="mt-0.5 text-amber-700/90">Ništa nije spremljeno. U međuvremenu se promijenila zaliha, prodajna cijena, datum ili broj nivelacije. Ispod je ono što bi se sada napravilo.</p>
+      </div>
     </div>
   );
 }

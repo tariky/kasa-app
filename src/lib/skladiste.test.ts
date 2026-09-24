@@ -9,7 +9,7 @@ import {
   cijeneArtikala, promjeneUProdaji, artikliPrimke, brojeviNivelacijaPrimke, napomenaProtunivelacije,
   revertPricesWithoutStock, revertPrimkaPrices, stareCijeneStavki, datumKretanjaPrimke,
   zapisiPromjeneCijena, ponistiPromjeneCijenaPrimke,
-  getProductStock, isDobavljacUsed,
+  getProductStock, isDobavljacUsed, otisakPregleda, istiPregled,
 } from './skladiste';
 import type { SqlDb } from './sqldb';
 
@@ -344,4 +344,53 @@ test('dobavljač bez JIB-a se prepoznaje po nazivu', () => {
   db.prepare("INSERT INTO primke (brojPrimke, datum, dobavljacNaziv) VALUES ('U-2', '2026-01-01', 'Bez JIB-a')").run();
   const d = db.prepare('SELECT naziv, idBroj, pdvBroj FROM dobavljaci WHERE id = 5').get() as any;
   expect(isDobavljacUsed(db, d)).toBe(true);
+});
+
+// ── Otisak potvrđenog pregleda ─────────────────────────────────────────
+
+const pregledPrimjer = () => ({
+  dokumenti: [{ vrsta: 'nivelacija' as const, brojNivelacije: 'NIV-2026-001', datum: '2026-05-12', napomena: null, stavke: [
+    { productId: 2, productNaziv: 'B', kolicina: 1.5, staraCijena: 10, novaCijena: 12, razlika: 2, ukupnaRazlika: 3 },
+    { productId: 1, productNaziv: 'A', kolicina: 5, staraCijena: 1, novaCijena: 1.1, razlika: 0.1, ukupnaRazlika: 0.5 },
+  ] }],
+  bezZalihe: [{ productId: 3, productNaziv: 'C', staraCijena: 20, novaCijena: 25 }],
+  cijenaOstaje: [],
+});
+
+test('otisak: isti sadržaj s drugim nazivom, redom stavki i šumom zaokruživanja je isti', () => {
+  const b = pregledPrimjer();
+  b.dokumenti[0].stavke.reverse();
+  b.dokumenti[0].stavke[0].productNaziv = 'Drugi naziv';
+  b.dokumenti[0].stavke[0].razlika = 0.1 + 1e-12;
+  expect(istiPregled(b, pregledPrimjer())).toBe(true);
+});
+
+test('otisak: svako polje dokumenta je u poređenju', () => {
+  const izmjene: Array<(p: ReturnType<typeof pregledPrimjer>) => void> = [
+    p => { (p.dokumenti[0] as any).vrsta = 'protunivelacija'; },
+    p => { p.dokumenti[0].brojNivelacije = 'NIV-2026-002'; },
+    p => { p.dokumenti[0].datum = '2026-05-13'; },
+    p => { (p.dokumenti[0] as any).napomena = 'x'; },
+    p => { p.dokumenti[0].stavke[0].kolicina = 2; },
+    p => { p.dokumenti[0].stavke[0].staraCijena = 11; },
+    p => { p.dokumenti[0].stavke[0].novaCijena = 13; },
+    p => { p.dokumenti[0].stavke[0].ukupnaRazlika = 4; },
+    p => { p.dokumenti[0].stavke[0].productId = 9; },
+    p => { p.dokumenti = []; },
+    p => { p.bezZalihe[0].novaCijena = 26; },
+    p => { p.bezZalihe = []; },
+    p => { (p.cijenaOstaje as any) = [{ productId: 4, productNaziv: 'D', cijena: 1 }]; },
+  ];
+  for (const izmijeni of izmjene) {
+    const p = pregledPrimjer();
+    izmijeni(p);
+    expect(istiPregled(p, pregledPrimjer())).toBe(false);
+  }
+});
+
+test('otisak: neispravan oblik nije nikad isti', () => {
+  expect(otisakPregleda(null)).toBeNull();
+  expect(otisakPregleda({})).toBeNull();
+  expect(otisakPregleda({ dokumenti: [], bezZalihe: [], cijenaOstaje: [{ productId: 1, cijena: 'x' }] })).toBeNull();
+  expect(istiPregled({}, pregledPrimjer())).toBe(false);
 });

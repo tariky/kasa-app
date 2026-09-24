@@ -36,10 +36,11 @@ interface Window {
     deleteKupac: (id: number) => Promise<any>;
     getPrimke: () => Promise<any[]>;
     getPrimka: (id: number) => Promise<any>;
-    createPrimka: (data: any) => Promise<any>;
+    /** Uz potvrđeni pregled; ako se stanje promijenilo od pregleda, ništa se ne upisuje i vraća se novi pregled. */
+    createPrimka: (data: any, potvrda: import('./types').PregledCijenaUlaza) => Promise<{ id: number; nivelacijaCreated: boolean } | import('./types').PromijenjenoOdPregleda>;
     getNextBrojUlaza: () => Promise<string>;
-    updatePrimka: (data: any) => Promise<any>;
-    deletePrimka: (id: number) => Promise<any>;
+    updatePrimka: (data: any, potvrda: import('./types').PregledCijenaUlaza) => Promise<{ id: number; nivelacijaCreated: boolean } | import('./types').PromijenjenoOdPregleda>;
+    deletePrimka: (id: number, potvrda: import('./types').PregledCijenaUlaza) => Promise<null | import('./types').PromijenjenoOdPregleda>;
     pregledUnosaPrimke: (data: any) => Promise<import('./types').PregledCijenaUlaza>;
     pregledIzmjenePrimke: (data: any) => Promise<import('./types').PregledCijenaUlaza>;
     pregledBrisanjaPrimke: (id: number) => Promise<import('./types').PregledCijenaUlaza>;

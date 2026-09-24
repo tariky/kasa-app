@@ -1,5 +1,5 @@
 // Ugovor za kanale primka:*, nivelacija:* i report:getData — vidi backend.ts.
-import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
+import { test, expect, describe, beforeEach, afterEach, setSystemTime } from 'bun:test';
 import { otvoriBackend, type Backend } from './backend';
 
 let b: Backend;
@@ -1453,23 +1453,20 @@ type Operacija =
 
 const KANAL_PREGLEDA = { 'primka:create': 'primka:pregledUnosa', 'primka:update': 'primka:pregledIzmjene', 'primka:delete': 'primka:pregledBrisanja' } as const;
 
+/** Zadnja nivelacija i sve cijene — polazište za `ocekujUpisanPregled`. */
+function stanjeCijena(): { zadnjaNiv: number; cijenePrije: Map<number, number> } {
+  return {
+    zadnjaNiv: red('SELECT COALESCE(MAX(id), 0) AS m FROM nivelacije').m,
+    cijenePrije: new Map<number, number>(redovi('SELECT id, cijena FROM products').map(p => [p.id, p.cijena])),
+  };
+}
+
 /**
- * Pregled pa prava operacija: pregled ne mijenja bazu, a dokumenti i promjene
- * cijena koje najavi su tačno one koje operacija napravi (broj, datum,
- * napomena, stavke; svaka promijenjena cijena je u dokumentu ili bez zalihe).
+ * Operacija poslije `prije` je napravila tačno dokumente i promjene cijena iz
+ * `pregled` (broj, datum, napomena, stavke; svaka promijenjena cijena je u
+ * dokumentu ili bez zalihe; "cijena ostaje" stvarno ostaje).
  */
-async function pregledPaOperacija(op: Operacija): Promise<any> {
-  const arg = op.kanal === 'primka:delete' ? op.id : op.data;
-  const snimak = snimakBaze();
-  const pregled = await b.call(KANAL_PREGLEDA[op.kanal], arg);
-  expect(snimakBaze()).toEqual(snimak);
-  // Ponovljiv: drugi pregled vidi istu bazu.
-  expect(await b.call(KANAL_PREGLEDA[op.kanal], arg)).toEqual(pregled);
-
-  const zadnjaNiv = red('SELECT COALESCE(MAX(id), 0) AS m FROM nivelacije').m;
-  const cijenePrije = new Map<number, number>(redovi('SELECT id, cijena FROM products').map(p => [p.id, p.cijena]));
-  await b.call(op.kanal, arg);
-
+function ocekujUpisanPregled(pregled: any, { zadnjaNiv, cijenePrije }: ReturnType<typeof stanjeCijena>): void {
   const nastali = redovi('SELECT id, brojNivelacije, datum, primkaId, napomena FROM nivelacije WHERE id > ? ORDER BY id', zadnjaNiv).map(n => ({
     vrsta: n.primkaId === null ? 'protunivelacija' : 'nivelacija',
     brojNivelacije: n.brojNivelacije, datum: n.datum, napomena: n.napomena,
@@ -1494,6 +1491,26 @@ async function pregledPaOperacija(op: Operacija): Promise<any> {
     expect(cijenePrije.get(o.productId)).toBe(o.cijena);
     expect(cijena(o.productId)).toBe(o.cijena);
   }
+}
+
+/**
+ * Pregled pa prava operacija: pregled ne mijenja bazu, a dokumenti i promjene
+ * cijena koje najavi su tačno one koje operacija napravi (broj, datum,
+ * napomena, stavke; svaka promijenjena cijena je u dokumentu ili bez zalihe).
+ */
+async function pregledPaOperacija(op: Operacija): Promise<any> {
+  const arg = op.kanal === 'primka:delete' ? op.id : op.data;
+  const snimak = snimakBaze();
+  const pregled = await b.call(KANAL_PREGLEDA[op.kanal], arg);
+  expect(snimakBaze()).toEqual(snimak);
+  // Ponovljiv: drugi pregled vidi istu bazu.
+  expect(await b.call(KANAL_PREGLEDA[op.kanal], arg)).toEqual(pregled);
+
+  // Spremanje kao iz ekrana: s potvrđenim pregledom — baza je ista, pa prolazi.
+  const prije = stanjeCijena();
+  const r = await b.call(op.kanal, arg, pregled);
+  expect(r?.promijenjeno).toBeUndefined();
+  ocekujUpisanPregled(pregled, prije);
   return pregled;
 }
 
@@ -1698,5 +1715,294 @@ describe('primka: pregled promjena cijena', () => {
     await expect(b.call('primka:pregledIzmjene', { id, ...primka('U-1', [stavka(p, 1, 15)]) })).rejects.toThrow('Primka sa brojem "U-1" već postoji');
     await expect(b.call('primka:pregledIzmjene', { id, ...primka('U-2', []) })).rejects.toThrow('Primka mora imati najmanje jednu stavku');
     expect(snimakBaze()).toEqual(snimak);
+  });
+});
+
+// ─── Spremanje tačno onoga što je korisnik potvrdio ─────────
+//
+// Pregled i spremanje nisu ista transakcija: između njih prodaja promijeni
+// zalihu, druga primka ili ručna izmjena cijenu, prođe ponoć, neko uzme broj
+// nivelacije. Ekran zato uz create/update/delete šalje potvrđeni pregled;
+// backend u istoj transakciji izvrši operaciju, izračuna pregled nad
+// rezultatom i uporedi. Razlika → ništa se ne upisuje, a vraća se
+// { promijenjeno: true, pregled } s novim pregledom za ponovnu potvrdu.
+
+/**
+ * Spremanje s potvrđenim pregledom koje backend mora odbiti: ništa se ne
+ * upiše, a vraćeni pregled je onaj koji bi pregled sada pokazao.
+ */
+async function ocekujOdbijeno(op: Operacija, potvrda: unknown): Promise<any> {
+  const arg = op.kanal === 'primka:delete' ? op.id : op.data;
+  const snimak = snimakBaze();
+  const r = await b.call(op.kanal, arg, potvrda);
+  expect(snimakBaze()).toEqual(snimak);
+  expect(r).toEqual({ promijenjeno: true, pregled: await b.call(KANAL_PREGLEDA[op.kanal], arg) });
+  expect(r.pregled).not.toEqual(potvrda);
+  return r.pregled;
+}
+
+/** Ponovna potvrda novog pregleda: spremljeno, i to tačno taj pregled. */
+async function ocekujSpremljeno(op: Operacija, potvrda: any): Promise<any> {
+  const arg = op.kanal === 'primka:delete' ? op.id : op.data;
+  const prije = stanjeCijena();
+  const r = await b.call(op.kanal, arg, potvrda);
+  expect(r?.promijenjeno).toBeUndefined();
+  ocekujUpisanPregled(potvrda, prije);
+  return r;
+}
+
+const pregledZa = (op: Operacija) => b.call(KANAL_PREGLEDA[op.kanal], op.kanal === 'primka:delete' ? op.id : op.data);
+
+describe('primka: spremanje potvrđenog pregleda', () => {
+  afterEach(() => { setSystemTime(); });
+
+  test('create: ništa se ne mijenja → spremljeno, dokumenti jednaki pregledu', async () => {
+    const p = dodajArtikal('P1', 10, { stanje: 5 });
+    const op: Operacija = { kanal: 'primka:create', data: primka('U-1', [stavka(p, 3, 12)]) };
+    const pregled = await pregledZa(op);
+    const r = await ocekujSpremljeno(op, pregled);
+    expect(r).toEqual({ id: r.id, nivelacijaCreated: true });
+    expect(pregled.dokumenti.map((d: any) => [d.brojNivelacije, d.stavke[0].kolicina])).toEqual([[niv(1), 5]]);
+  });
+
+  test('create: prodaja promijeni zalihu → odbijeno, ništa upisano; ponovna potvrda → spremljeno', async () => {
+    const p = dodajArtikal('P2', 10, { stanje: 5 });
+    const op: Operacija = { kanal: 'primka:create', data: primka('U-1', [stavka(p, 3, 12)]) };
+    const pregled = await pregledZa(op);
+
+    izlaz(p, 2);
+    const novi = await ocekujOdbijeno(op, pregled);
+    expect(novi.dokumenti[0].stavke[0]).toMatchObject({ kolicina: 3, staraCijena: 10, novaCijena: 12, ukupnaRazlika: 6 });
+
+    await ocekujSpremljeno(op, novi);
+    expect(broj('primke')).toBe(1);
+  });
+
+  test('create: druga primka promijeni cijenu između pregleda i spremanja → odbijeno', async () => {
+    const p = dodajArtikal('P3', 10, { stanje: 5 });
+    const op: Operacija = { kanal: 'primka:create', data: primka('U-1', [stavka(p, 3, 12)]) };
+    const pregled = await pregledZa(op);
+
+    await b.call('primka:create', primka('U-2', [stavka(p, 1, 11)]));
+    const novi = await ocekujOdbijeno(op, pregled);
+    expect(novi.dokumenti.map((d: any) => [d.brojNivelacije, d.stavke[0].staraCijena, d.stavke[0].novaCijena])).toEqual([[niv(2), 11, 12]]);
+    await ocekujSpremljeno(op, novi);
+  });
+
+  test('create: ručna izmjena cijene između pregleda i spremanja → odbijeno', async () => {
+    const p = dodajArtikal('P4', 10, { stanje: 5 });
+    const op: Operacija = { kanal: 'primka:create', data: primka('U-1', [stavka(p, 3, 12)]) };
+    const pregled = await pregledZa(op);
+
+    await b.call('product:update', p, { cijena: 11 });
+    const novi = await ocekujOdbijeno(op, pregled);
+    expect(novi.dokumenti[0].stavke[0]).toMatchObject({ staraCijena: 11, novaCijena: 12 });
+  });
+
+  test('create: zaliha prodana do nule → nivelacija se više ne pravi → odbijeno', async () => {
+    const p = dodajArtikal('P5', 10, { stanje: 2 });
+    const op: Operacija = { kanal: 'primka:create', data: primka('U-1', [stavka(p, 3, 12)]) };
+    const pregled = await pregledZa(op);
+    expect(pregled.dokumenti).toHaveLength(1);
+
+    izlaz(p, 2);
+    const novi = await ocekujOdbijeno(op, pregled);
+    expect(novi).toEqual({ dokumenti: [], bezZalihe: [{ productId: p, productNaziv: naziv(p), staraCijena: 10, novaCijena: 12 }], cijenaOstaje: [] });
+    await ocekujSpremljeno(op, novi);
+  });
+
+  test('create: zaliha bila 0 pa stigla roba → nivelacija sada nastaje → odbijeno', async () => {
+    const p = dodajArtikal('P6', 10);
+    const op: Operacija = { kanal: 'primka:create', data: primka('U-1', [stavka(p, 3, 12)]) };
+    const pregled = await pregledZa(op);
+    expect(pregled.dokumenti).toEqual([]);
+
+    zaliha(p, 'sa');
+    const novi = await ocekujOdbijeno(op, pregled);
+    expect(novi.dokumenti.map((d: any) => d.vrsta)).toEqual(['nivelacija']);
+    await ocekujSpremljeno(op, novi);
+  });
+
+  test('create: najavljeno "bez promjena cijena", a sada bi nastala nivelacija → odbijeno', async () => {
+    const p = dodajArtikal('P7', 12, { stanje: 4 });
+    const op: Operacija = { kanal: 'primka:create', data: primka('U-1', [stavka(p, 1, 12)]) };
+    const pregled = await pregledZa(op);
+    expect(pregled).toEqual({ dokumenti: [], bezZalihe: [], cijenaOstaje: [] });
+
+    await b.call('product:update', p, { cijena: 11 });
+    const novi = await ocekujOdbijeno(op, pregled);
+    expect(novi.dokumenti[0].stavke[0]).toMatchObject({ staraCijena: 11, novaCijena: 12 });
+  });
+
+  test('create: najavljena nivelacija, a sada nema promjene cijene → odbijeno', async () => {
+    const p = dodajArtikal('P8', 10, { stanje: 4 });
+    const op: Operacija = { kanal: 'primka:create', data: primka('U-1', [stavka(p, 1, 12)]) };
+    const pregled = await pregledZa(op);
+
+    await b.call('product:update', p, { cijena: 12 });
+    expect(await ocekujOdbijeno(op, pregled)).toEqual({ dokumenti: [], bezZalihe: [], cijenaOstaje: [] });
+  });
+
+  test('broj nivelacije pomjeren tuđom nivelacijom (sadržaj isti) → odbijeno, novi broj u pregledu', async () => {
+    const p = dodajArtikal('P9', 10, { stanje: 5 });
+    const q = dodajArtikal('P10', 20, { stanje: 1 });
+    const op: Operacija = { kanal: 'primka:create', data: primka('U-1', [stavka(p, 3, 12)]) };
+    const pregled = await pregledZa(op);
+    expect(pregled.dokumenti[0].brojNivelacije).toBe(niv(1));
+
+    await b.call('primka:create', primka('U-2', [stavka(q, 1, 22)]));
+    const novi = await ocekujOdbijeno(op, pregled);
+    expect(novi.dokumenti[0].brojNivelacije).toBe(niv(2));
+    expect(novi.dokumenti[0].stavke).toEqual(pregled.dokumenti[0].stavke);
+    await ocekujSpremljeno(op, novi);
+  });
+
+  test('ponoć između pregleda i spremanja: datum nivelacije drugi → odbijeno', async () => {
+    const p = dodajArtikal('P11', 10, { stanje: 5 });
+    const op: Operacija = { kanal: 'primka:create', data: primka('U-1', [stavka(p, 3, 12)]) };
+    setSystemTime(new Date(2026, 4, 12, 23, 59, 50));
+    const pregled = await pregledZa(op);
+    expect(pregled.dokumenti[0].datum).toBe('2026-05-12');
+
+    setSystemTime(new Date(2026, 4, 13, 0, 0, 5));
+    const novi = await ocekujOdbijeno(op, pregled);
+    expect(novi.dokumenti[0].datum).toBe('2026-05-13');
+    await ocekujSpremljeno(op, novi);
+  });
+
+  test('nova godina između pregleda i spremanja: datum i broj nivelacije drugi → odbijeno', async () => {
+    const p = dodajArtikal('P12', 10, { stanje: 5 });
+    const op: Operacija = { kanal: 'primka:create', data: primka('U-1', [stavka(p, 3, 12)]) };
+    setSystemTime(new Date(2026, 11, 31, 23, 59, 50));
+    await b.call('primka:create', primka('U-0', [stavka(dodajArtikal('P13', 1, { stanje: 1 }), 1, 2)]));
+    const pregled = await pregledZa(op);
+    expect(pregled.dokumenti.map((d: any) => [d.brojNivelacije, d.datum])).toEqual([['NIV-2026-002', '2026-12-31']]);
+
+    setSystemTime(new Date(2027, 0, 1, 0, 0, 5));
+    const novi = await ocekujOdbijeno(op, pregled);
+    expect(novi.dokumenti.map((d: any) => [d.brojNivelacije, d.datum])).toEqual([['NIV-2027-001', '2027-01-01']]);
+  });
+
+  test('update: prodaja promijeni zalihu → odbijeno; ponovna potvrda → spremljeno', async () => {
+    const p = dodajArtikal('P14', 10, { stanje: 5 });
+    const { id } = await b.call('primka:create', primka('U-1', [stavka(p, 3, 12)]));
+    const op: Operacija = { kanal: 'primka:update', data: { id, ...primka('U-1', [stavka(p, 3, 15)]) } };
+    const pregled = await pregledZa(op);
+
+    izlaz(p, 1);
+    const novi = await ocekujOdbijeno(op, pregled);
+    expect(novi.dokumenti[0].stavke[0]).toMatchObject({ kolicina: 4, staraCijena: 12, novaCijena: 15 });
+    expect(red('SELECT cijena FROM primka_stavke WHERE primkaId = ?', id).cijena).toBe(12);
+
+    const r = await ocekujSpremljeno(op, novi);
+    expect(r).toEqual({ id, nivelacijaCreated: true });
+    expect(cijena(p)).toBe(15);
+  });
+
+  test('update: kasnija primka promijeni cijenu → izmjena više ne mijenja cijenu u prodaji → odbijeno', async () => {
+    const p = dodajArtikal('P15', 10, { stanje: 5 });
+    const { id } = await b.call('primka:create', primka('U-1', [stavka(p, 3, 12)]));
+    const op: Operacija = { kanal: 'primka:update', data: { id, ...primka('U-1', [stavka(p, 3, 15)]) } };
+    const pregled = await pregledZa(op);
+    expect(pregled.dokumenti).toHaveLength(1);
+
+    await b.call('primka:create', primka('U-2', [stavka(p, 1, 13)]));
+    const novi = await ocekujOdbijeno(op, pregled);
+    expect(novi).toEqual({ dokumenti: [], bezZalihe: [], cijenaOstaje: [{ productId: p, productNaziv: naziv(p), cijena: 13 }] });
+    await ocekujSpremljeno(op, novi);
+    expect(cijena(p)).toBe(13);
+  });
+
+  test('update: prazan pregled (samo količina), a zaliha u međuvremenu stigla — i dalje prazno → spremljeno', async () => {
+    const p = dodajArtikal('P16', 10, { stanje: 5 });
+    const { id } = await b.call('primka:create', primka('U-1', [stavka(p, 3, 12)]));
+    const op: Operacija = { kanal: 'primka:update', data: { id, ...primka('U-1', [stavka(p, 7, 12)]) } };
+    const pregled = await pregledZa(op);
+    expect(pregled).toEqual({ dokumenti: [], bezZalihe: [], cijenaOstaje: [] });
+    izlaz(p, 1);
+    await ocekujSpremljeno(op, pregled);
+    expect(red('SELECT kolicina FROM primka_stavke WHERE primkaId = ?', id).kolicina).toBe(7);
+  });
+
+  test('delete: prodaja promijeni zalihu → odbijeno, primka ostaje; ponovna potvrda → obrisano', async () => {
+    const p = dodajArtikal('P17', 10, { stanje: 5 });
+    const { id } = await b.call('primka:create', primka('U-1', [stavka(p, 3, 12)]));
+    const op: Operacija = { kanal: 'primka:delete', id };
+    const pregled = await pregledZa(op);
+    expect(pregled.dokumenti[0].stavke[0]).toMatchObject({ kolicina: 5, staraCijena: 12, novaCijena: 10 });
+
+    izlaz(p, 2);
+    const novi = await ocekujOdbijeno(op, pregled);
+    expect(novi.dokumenti[0].stavke[0]).toMatchObject({ kolicina: 3, staraCijena: 12, novaCijena: 10 });
+    expect(broj('primke')).toBe(1);
+
+    await ocekujSpremljeno(op, novi);
+    expect(broj('primke')).toBe(0);
+    expect(cijena(p)).toBe(10);
+  });
+
+  test('delete: najavljena cijena bez dokumenta, a stigla roba → sada protunivelacija → odbijeno', async () => {
+    const p = dodajArtikal('P18', 10);
+    const { id } = await b.call('primka:create', primka('U-1', [stavka(p, 3, 12)]));
+    izlaz(p, 3);
+    const op: Operacija = { kanal: 'primka:delete', id };
+    const pregled = await pregledZa(op);
+    expect(pregled.dokumenti).toEqual([]);
+
+    // Roba s ulaza je prodana; stiglo je 5 drugim putem — bez ove primke ostaje 2.
+    b.db.prepare("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'ulaz', 5, 'test', 0)").run(p);
+    const novi = await ocekujOdbijeno(op, pregled);
+    expect(novi.dokumenti.map((d: any) => [d.vrsta, d.stavke[0].kolicina])).toEqual([['protunivelacija', 2]]);
+  });
+
+  test('delete: ručna izmjena cijene poslije pregleda → brisanje više ne vraća cijenu → odbijeno', async () => {
+    const p = dodajArtikal('P19', 10, { stanje: 5 });
+    const { id } = await b.call('primka:create', primka('U-1', [stavka(p, 3, 12)]));
+    const op: Operacija = { kanal: 'primka:delete', id };
+    const pregled = await pregledZa(op);
+
+    await b.call('product:update', p, { cijena: 13 });
+    expect(await ocekujOdbijeno(op, pregled)).toEqual({ dokumenti: [], bezZalihe: [], cijenaOstaje: [] });
+  });
+
+  test('delete: ništa se ne mijenja → obrisano; povratna vrijednost ista kao bez potvrde', async () => {
+    const p = dodajArtikal('P20', 10, { stanje: 5 });
+    const { id } = await b.call('primka:create', primka('U-1', [stavka(p, 3, 12)]));
+    const pregled = await pregledZa({ kanal: 'primka:delete', id });
+    expect(await ocekujSpremljeno({ kanal: 'primka:delete', id }, pregled)).toBeNull();
+  });
+
+  test('naziv artikla nije dio poređenja: preimenovanje između pregleda i spremanja ne traži novu potvrdu', async () => {
+    const p = dodajArtikal('P21', 10, { stanje: 5 });
+    const op: Operacija = { kanal: 'primka:create', data: primka('U-1', [stavka(p, 3, 12)]) };
+    const pregled = await pregledZa(op);
+    await b.call('product:update', p, { naziv: 'Novi naziv' });
+    const r = await b.call(op.kanal, op.data, pregled);
+    expect(r?.promijenjeno).toBeUndefined();
+    expect(broj('nivelacije')).toBe(1);
+  });
+
+  test('neispravan potvrđeni pregled se tretira kao drugačiji: odbijeno, ništa upisano', async () => {
+    const p = dodajArtikal('P22', 10, { stanje: 5 });
+    const op: Operacija = { kanal: 'primka:create', data: primka('U-1', [stavka(p, 3, 12)]) };
+    await ocekujOdbijeno(op, {});
+    await ocekujOdbijeno(op, { dokumenti: 'x' });
+  });
+
+  test('greška operacije ima prednost nad poređenjem: ista poruka kao bez potvrde', async () => {
+    const p = dodajArtikal('P23', 10, { stanje: 5 });
+    await b.call('primka:create', primka('U-1', [stavka(p, 1, 10)]));
+    await expect(b.call('primka:create', primka('U-1', [stavka(p, 1, 12)]), { dokumenti: [], bezZalihe: [], cijenaOstaje: [] }))
+      .rejects.toThrow('Primka sa brojem "U-1" već postoji');
+  });
+
+  test('bez potvrđenog pregleda (stari klijent): sprema prema trenutnom stanju, bez provjere', async () => {
+    const p = dodajArtikal('P24', 10, { stanje: 5 });
+    const op: Operacija = { kanal: 'primka:create', data: primka('U-1', [stavka(p, 3, 12)]) };
+    await pregledZa(op);
+    izlaz(p, 2);
+    const r = await b.call('primka:create', op.data);
+    expect(r).toEqual({ id: r.id, nivelacijaCreated: true });
+    expect(nivelacijeDok()[0].stavke[0].kolicina).toBe(3);
   });
 });

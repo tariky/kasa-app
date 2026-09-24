@@ -1,7 +1,7 @@
 // src/components/skladiste/UlazDialog.tsx
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { pdf } from '@react-pdf/renderer';
-import type { Dobavljac, PregledCijenaUlaza, Primka, PrimkaStavka, Product } from '@/types';
+import type { Dobavljac, PregledCijenaUlaza, Primka, PrimkaStavka, Product, PromijenjenoOdPregleda } from '@/types';
 import { izBazePrimke, jePloca, m2UKom } from '@/lib/ploca';
 import { localDateStr } from '@/lib/novac';
 import { nedostajeOpis, praznaStavka, redStatus, ulazTotali, uPayload, type UlazRed } from '@/lib/ulaz';
@@ -18,7 +18,7 @@ import { Eyebrow, Key, mod } from '@/components/ui/ledger';
 import { FullDialog, FullDialogContent, FullDialogHeader, FullDialogFooter, FullDialogNotice, FullDialogTitle, FooterBtn, Fact, HeaderBtn, LegendKey } from '@/components/ui/full-dialog';
 import { UlazPdf } from '@/components/UlazPdf';
 import { UlazStavkeEditor, type UlazStavkeHandle } from './UlazStavkeEditor';
-import { PregledCijenaAside, PregledCijenaTabela, imaPromjena } from './PregledCijenaUlaza';
+import { PregledCijenaAside, PregledCijenaTabela, PregledPromijenjen, imaPromjena } from './PregledCijenaUlaza';
 import { Pencil, Trash2, Printer, Download, Save, ChevronUp, ChevronDown, Building2, AlertTriangle, X } from 'lucide-react';
 
 export type UlazStanje = { kind: 'zatvoren' } | { kind: 'pregled'; id: number } | { kind: 'uredi'; id: number } | { kind: 'novi' };
@@ -57,8 +57,13 @@ const payloadForme = (forma: Forma, products: Product[], primka: Primka | null) 
 });
 type PayloadForme = ReturnType<typeof payloadForme>;
 
-/** Pregled cijena za tačno određen payload (ključ = JSON payload-a) — zastario je čim se forma promijeni. */
-type PregledZa = { kljuc: string; pregled: PregledCijenaUlaza } | { kljuc: string; greska: string };
+/**
+ * Pregled cijena za tačno određen payload (ključ = JSON payload-a) — zastario je čim se forma promijeni.
+ * `promijenjeno`: backend je odbio spremanje/brisanje jer se stanje promijenilo od potvrđenog pregleda;
+ * ovo je novi pregled koji korisnik mora ponovo potvrditi.
+ */
+type PregledZa = { kljuc: string; pregled: PregledCijenaUlaza; promijenjeno?: boolean } | { kljuc: string; greska: string };
+const odbijeno = (r: unknown): r is PromijenjenoOdPregleda => !!r && typeof r === 'object' && (r as PromijenjenoOdPregleda).promijenjeno === true;
 
 /** Koliko forma miruje prije nego se backend pita šta bi spremanje uradilo s cijenama. */
 const PREGLED_DEBOUNCE_MS = 350;
@@ -118,8 +123,9 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
   const [notice, setNotice] = useState<Notice | null>(null);
   const [saving, setSaving] = useState(false);
   const [brisiOpen, setBrisiOpen] = useState(false);
-  // Dijalog potvrde prije spremanja: pregled za payload koji se sprema.
-  const [potvrda, setPotvrda] = useState<{ kljuc: string; pregled: PregledCijenaUlaza } | null>(null);
+  // Dijalog potvrde prije spremanja: pregled za payload koji se sprema (promijenjeno = backend je odbio stari).
+  const [potvrda, setPotvrda] = useState<{ kljuc: string; pregled: PregledCijenaUlaza; promijenjeno?: boolean } | null>(null);
+  const [brisem, setBrisem] = useState(false);
   const [pregledCijena, setPregledCijena] = useState<PregledZa | null>(null);
   // Pregled uz dijalog brisanja (null = još se učitava).
   const [pregledBrisanja, setPregledBrisanja] = useState<PregledZa | null>(null);
@@ -227,8 +233,9 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
     if (!edit || !payload || !kljuc || saving) return;
     // Potvrda uvijek za payload koji se sprema: ako forma nije ista kao u
     // prikazanom pregledu, pregled se prvo osvježi.
-    if (potvrda?.kljuc !== kljuc) {
-      let pregled: PregledCijenaUlaza;
+    let pregled: PregledCijenaUlaza;
+    if (potvrda?.kljuc === kljuc) pregled = potvrda.pregled;
+    else {
       if (pregledCijena?.kljuc === kljuc && 'pregled' in pregledCijena) pregled = pregledCijena.pregled;
       else {
         try { pregled = await dohvatiPregled(payload); } catch (e) { greska(e); return; }
@@ -238,9 +245,15 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
     }
     setSaving(true);
     try {
-      let savedId: number;
-      if (primka) { await window.api.updatePrimka(payload); savedId = primka.id; }
-      else { const r = await window.api.createPrimka(payload); savedId = Number(r?.id ?? 0); }
+      // Backend sprema samo ako operacija napravi tačno ovaj pregled; inače
+      // ništa ne upiše i vrati novi — korisnik ga mora ponovo potvrditi.
+      const r = primka ? await window.api.updatePrimka(payload, pregled) : await window.api.createPrimka(payload, pregled);
+      if (odbijeno(r)) {
+        setPregledCijena({ kljuc, pregled: r.pregled });
+        setPotvrda({ kljuc, pregled: r.pregled, promijenjeno: true });
+        return;
+      }
+      const savedId = primka ? primka.id : Number(r?.id ?? 0);
       setPotvrda(null); setEdit(false);
       zadrziPoruku.current = true;
       setNotice({ type: 'success', text: primka ? 'Ulaz izmijenjen' : `Ulaz ${forma.brojPrimke} spremljen` });
@@ -260,10 +273,19 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
     return () => { ziv = false; };
   }, [brisiOpen, primka]);
 
+  // Briše se samo uz pregled koji je korisnik vidio; ako se stanje u
+  // međuvremenu promijenilo, backend ništa ne briše i vrati novi pregled.
+  const potvrdaBrisanja = pregledBrisanja && 'pregled' in pregledBrisanja ? pregledBrisanja : null;
   const obrisi = async () => {
-    if (!primka) return;
-    try { await window.api.deletePrimka(primka.id); setBrisiOpen(false); onDeleted(primka); }
+    if (!primka || !potvrdaBrisanja || brisem) return;
+    setBrisem(true);
+    try {
+      const r = await window.api.deletePrimka(primka.id, potvrdaBrisanja.pregled);
+      if (odbijeno(r)) { setPregledBrisanja({ kljuc: String(primka.id), pregled: r.pregled, promijenjeno: true }); return; }
+      setBrisiOpen(false); onDeleted(primka);
+    }
     catch (e) { greska(e); setBrisiOpen(false); }
+    finally { setBrisem(false); }
   };
 
   const buildPdf = async () => pdf(<UlazPdf primka={primka!} firma={await window.api.getFirmaSettings()} />).toBlob();
@@ -527,16 +549,17 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
 
       {primka && (
         <Dialog open={brisiOpen} onOpenChange={setBrisiOpen}>
-          <DialogContent className={cn(pregledBrisanja && 'pregled' in pregledBrisanja && (pregledBrisanja.pregled.dokumenti.length > 0 || pregledBrisanja.pregled.bezZalihe.length > 0) ? 'sm:max-w-lg' : 'sm:max-w-[420px]')} onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); obrisi(); } }}>
+          <DialogContent className={cn(potvrdaBrisanja && (imaPromjena(potvrdaBrisanja.pregled) || potvrdaBrisanja.promijenjeno) ? 'sm:max-w-lg' : 'sm:max-w-[420px]')} onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); obrisi(); } }}>
             <DialogHeader>
               <DialogTitle>Obrisati ulaz {primka.brojPrimke}?</DialogTitle>
               <DialogDescription>Stanje robe sa ovog ulaza se skida sa skladišta, a prodajna cijena koju je ulaz postavio se vraća. Nivelacija uz ulaz ostaje. Brisanje se ne može poništiti.</DialogDescription>
             </DialogHeader>
+            {potvrdaBrisanja?.promijenjeno && <PregledPromijenjen />}
             {!pregledBrisanja ? (
               <p className="text-[12px] text-slate-400">Provjeravam prodajne cijene…</p>
             ) : 'greska' in pregledBrisanja ? (
               <p className="flex items-center gap-1.5 text-[12px] text-rose-600"><AlertTriangle size={12} /> {pregledBrisanja.greska}</p>
-            ) : pregledBrisanja.pregled.dokumenti.length === 0 && pregledBrisanja.pregled.bezZalihe.length === 0 ? (
+            ) : !imaPromjena(pregledBrisanja.pregled) ? (
               <p className="text-[12px] text-slate-500">Prodajne cijene se ne mijenjaju.</p>
             ) : (
               <>
@@ -548,7 +571,9 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
             )}
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="ghost" onClick={() => setBrisiOpen(false)}>Otkaži</Button>
-              <Button variant="destructive" onClick={obrisi}>Obriši <Key tone="danger">{mod('↵')}</Key></Button>
+              <Button variant="destructive" onClick={obrisi} disabled={!potvrdaBrisanja || brisem}>
+                {potvrdaBrisanja?.promijenjeno ? 'Potvrdi i obriši' : 'Obriši'} <Key tone="danger">{mod('↵')}</Key>
+              </Button>
             </div>
           </DialogContent>
         </Dialog>
@@ -557,13 +582,20 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
       <Dialog open={potvrda != null} onOpenChange={v => { if (!v) setPotvrda(null); }}>
         <DialogContent className="sm:max-w-lg" onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); spremi(); } }}>
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2"><AlertTriangle className="h-5 w-5 text-amber-500" /> Promjena cijena u prodaji</DialogTitle>
-            <DialogDescription>Spremanje ulaza mijenja prodajne cijene robe na zalihi i kreira ove dokumente s današnjim datumom.</DialogDescription>
+            <DialogTitle className="flex items-center gap-2"><AlertTriangle className="h-5 w-5 text-amber-500" /> {potvrda?.promijenjeno ? 'Ulaz nije spremljen' : 'Promjena cijena u prodaji'}</DialogTitle>
+            <DialogDescription>
+              {potvrda?.promijenjeno
+                ? 'Provjerite šta bi spremanje sada uradilo s prodajnim cijenama i potvrdite ponovo.'
+                : 'Spremanje ulaza mijenja prodajne cijene robe na zalihi i kreira ove dokumente s današnjim datumom.'}
+            </DialogDescription>
           </DialogHeader>
+          {potvrda?.promijenjeno && <PregledPromijenjen />}
           {potvrda && <PregledCijenaTabela pregled={potvrda.pregled} />}
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="ghost" onClick={() => setPotvrda(null)}>Otkaži</Button>
-            <Button onClick={spremi} disabled={saving}>{saving ? 'Spremam…' : 'Spremi i niveliši'} <Key tone="dark">{mod('↵')}</Key></Button>
+            <Button onClick={spremi} disabled={saving}>
+              {saving ? 'Spremam…' : potvrda?.promijenjeno ? (potvrda.pregled.dokumenti.length > 0 ? 'Potvrdi i niveliši' : 'Potvrdi i spremi') : 'Spremi i niveliši'} <Key tone="dark">{mod('↵')}</Key>
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

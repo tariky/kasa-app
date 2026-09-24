@@ -43,10 +43,11 @@ contextBridge.exposeInMainWorld('api', {
   // Primke
   getPrimke: () => ipcRenderer.invoke('primka:getAll'),
   getPrimka: (id: number) => ipcRenderer.invoke('primka:get', id),
-  createPrimka: (data: any) => ipcRenderer.invoke('primka:create', data),
+  // Spremanje/brisanje nosi pregled koji je korisnik potvrdio (vidi primka:create u handlers.ts).
+  createPrimka: (data: any, potvrda: unknown) => ipcRenderer.invoke('primka:create', data, potvrda),
   getNextBrojUlaza: () => ipcRenderer.invoke('primka:nextBroj'),
-  updatePrimka: (data: any) => ipcRenderer.invoke('primka:update', data),
-  deletePrimka: (id: number) => ipcRenderer.invoke('primka:delete', id),
+  updatePrimka: (data: any, potvrda: unknown) => ipcRenderer.invoke('primka:update', data, potvrda),
+  deletePrimka: (id: number, potvrda: unknown) => ipcRenderer.invoke('primka:delete', id, potvrda),
   // Šta bi spremanje/brisanje uradilo s cijenama — ništa ne upisuje.
   pregledUnosaPrimke: (data: any) => ipcRenderer.invoke('primka:pregledUnosa', data),
   pregledIzmjenePrimke: (data: any) => ipcRenderer.invoke('primka:pregledIzmjene', data),

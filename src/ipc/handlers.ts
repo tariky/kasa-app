@@ -12,9 +12,9 @@ import {
   collectPriceChanges, upisiCijene, revertPrimkaPrices, zapisiPromjeneCijena, stareCijeneStavki, datumKretanjaPrimke, validirajPrimku,
   isDobavljacUsed, pripremiIzmjenuPrimke, stareCijeneIzmjene, cijenaKasnijeMijenjana, type PriceChange,
   artikliPrimke, cijeneArtikala, promjeneUProdaji, brojeviNivelacijaPrimke, napomenaProtunivelacije,
-  pocetakPregleda, rezultatPregleda, cijeneKojeOstaju,
+  pocetakPregleda, rezultatPregleda, cijeneKojeOstaju, istiPregled,
 } from '../lib/skladiste';
-import type { PregledCijenaUlaza } from '../types';
+import type { PregledCijenaUlaza, PromijenjenoOdPregleda } from '../types';
 import {
   jeArtikalUProizvodnji, nextBrojNaloga, createNalog, createNalogIzPonude, nalogZaPonudu, updateNalog, replaceStavke,
   getNalog, listNalozi, deleteNalog, kalkulacijaNaloga, setStatusNaloga, zavrsiNalog, vratiUIzradu,
@@ -707,38 +707,70 @@ export function registerIpcHandlers(): void {
     db.prepare('DELETE FROM primke WHERE id = ?').run(id);
   }
 
-  handle('primka:create', (data: PrimkaUnos) => db.transaction(() => unesiPrimku(data))());
-  handle('primka:update', (data: PrimkaUnos & { id: number }) => db.transaction(() => izmijeniPrimku(data))());
-  handle('primka:delete', (id: number) => { db.transaction(() => obrisiPrimku(id))(); });
-
   /**
-   * Pokrene operaciju u transakciji i poništi je (rollback): u bazi ne ostaje
-   * ništa — ni dokumenti, ni historija, ni zaliha, ni brojači (sqlite_sequence,
-   * broj nivelacije). Vraća nivelacije i promjene cijena koje je operacija
-   * napravila. Greška operacije (validacija) ide pozivaocu kao i kod prave.
+   * Pokrene operaciju u transakciji i pročita šta je napravila s cijenama
+   * (nivelacije i promjene cijena, vidi rezultatPregleda). `zadrzi` nad tim
+   * pregledom odluči: true → transakcija se potvrdi; false → rollback, u bazi
+   * ne ostaje ništa — ni dokumenti, ni historija, ni zaliha, ni brojači
+   * (sqlite_sequence, broj nivelacije). Greška operacije (validacija) ide
+   * pozivaocu kao i bez pregleda.
    */
-  function bezUpisa(operacija: () => unknown, cijenaOstaje: () => PregledCijenaUlaza['cijenaOstaje'] = () => []): PregledCijenaUlaza {
+  function sPregledom<T>(
+    operacija: () => T,
+    cijenaOstaje: () => PregledCijenaUlaza['cijenaOstaje'],
+    zadrzi: (pregled: PregledCijenaUlaza) => boolean,
+  ): { pregled: PregledCijenaUlaza; upisano: true; rezultat: T } | { pregled: PregledCijenaUlaza; upisano: false } {
     const PONISTI = new Error('pregled: poništi');
-    let rezultat: PregledCijenaUlaza | undefined;
+    let ishod: ReturnType<typeof sPregledom<T>> | undefined;
     try {
       db.transaction(() => {
         const pocetak = pocetakPregleda(db);
         const ostaje = cijenaOstaje();
-        operacija();
-        rezultat = rezultatPregleda(db, pocetak, ostaje);
+        const rezultat = operacija();
+        const pregled = rezultatPregleda(db, pocetak, ostaje);
+        if (zadrzi(pregled)) { ishod = { pregled, upisano: true, rezultat }; return; }
+        ishod = { pregled, upisano: false };
         throw PONISTI;
       })();
     } catch (e) {
       if (e !== PONISTI) throw e;
     }
-    return rezultat!;
+    return ishod!;
   }
 
-  // Pregled promjena cijena prije spremanja/brisanja — ništa ne upisuje, pa
-  // nije u licencnoj blokadi.
+  const bezCijenaKojeOstaju = () => [];
+  const ostajuPriIzmjeni = (data: PrimkaUnos & { id: number }) => () => cijeneKojeOstaju(db, data.id, data.stavke ?? []);
+
+  /**
+   * Spremanje/brisanje ulaza. Ekran šalje pregled koji je korisnik potvrdio;
+   * operacija se izvrši i u ISTOJ transakciji uporedi s njim (istiPregled). Ako
+   * se stanje u međuvremenu promijenilo (prodaja, druga primka, ručna cijena,
+   * ponoć, tuđa nivelacija uzela broj), ništa se ne upisuje i vraća se
+   * { promijenjeno: true, pregled } s novim pregledom za ponovnu potvrdu.
+   * Bez potvrde (stari klijent, skripta) operacija se izvrši bez poređenja.
+   */
+  function spremiPotvrdjeno<T>(operacija: () => T, cijenaOstaje: () => PregledCijenaUlaza['cijenaOstaje'], potvrda: unknown): T | PromijenjenoOdPregleda {
+    if (potvrda === undefined || potvrda === null) return db.transaction(operacija)();
+    const ishod = sPregledom(operacija, cijenaOstaje, pregled => istiPregled(potvrda, pregled));
+    return ishod.upisano ? ishod.rezultat : { promijenjeno: true, pregled: ishod.pregled };
+  }
+
+  handle('primka:create', (data: PrimkaUnos, potvrda?: unknown) =>
+    spremiPotvrdjeno(() => unesiPrimku(data), bezCijenaKojeOstaju, potvrda));
+  handle('primka:update', (data: PrimkaUnos & { id: number }, potvrda?: unknown) =>
+    spremiPotvrdjeno(() => izmijeniPrimku(data), ostajuPriIzmjeni(data), potvrda));
+  // Uspjeh bez povratne vrijednosti (kao i prije); samo odbijanje nosi pregled.
+  handle('primka:delete', (id: number, potvrda?: unknown) => {
+    const r = spremiPotvrdjeno(() => { obrisiPrimku(id); }, bezCijenaKojeOstaju, potvrda);
+    return r ?? undefined;
+  });
+
+  // Pregled promjena cijena prije spremanja/brisanja — ista operacija, uvijek
+  // poništena; ništa ne upisuje, pa nije u licencnoj blokadi.
+  const bezUpisa = (operacija: () => unknown, cijenaOstaje: () => PregledCijenaUlaza['cijenaOstaje'] = bezCijenaKojeOstaju) =>
+    sPregledom(operacija, cijenaOstaje, () => false).pregled;
   handle('primka:pregledUnosa', (data: PrimkaUnos) => bezUpisa(() => unesiPrimku(data)));
-  handle('primka:pregledIzmjene', (data: PrimkaUnos & { id: number }) =>
-    bezUpisa(() => izmijeniPrimku(data), () => cijeneKojeOstaju(db, data.id, data.stavke ?? [])));
+  handle('primka:pregledIzmjene', (data: PrimkaUnos & { id: number }) => bezUpisa(() => izmijeniPrimku(data), ostajuPriIzmjeni(data)));
   handle('primka:pregledBrisanja', (id: number) => bezUpisa(() => obrisiPrimku(id)));
 
   // ─── Nivelacije ──────────────────────────────────────────

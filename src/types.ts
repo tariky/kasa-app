@@ -173,6 +173,16 @@ export interface PregledCijenaUlaza {
   cijenaOstaje: Array<{ productId: number; productNaziv: string; cijena: number }>;
 }
 
+/**
+ * Odgovor primka:create/update/delete kad se stanje promijenilo od pregleda
+ * koji je korisnik potvrdio: ništa nije upisano, `pregled` je novi pregled za
+ * ponovnu potvrdu.
+ */
+export interface PromijenjenoOdPregleda {
+  promijenjeno: true;
+  pregled: PregledCijenaUlaza;
+}
+
 export interface Nivelacija {
   id: number;
   brojNivelacije: string;

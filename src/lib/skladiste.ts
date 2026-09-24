@@ -468,6 +468,42 @@ export function rezultatPregleda(db: SqlDb, pocetak: PocetakPregleda, cijenaOsta
 }
 
 /**
+ * Kanonski otisak pregleda — ono što korisnik potvrđuje pri spremanju ili
+ * brisanju ulaza: svaki dokument (vrsta, broj, datum, napomena, stavke s
+ * artiklom, količinom, starom i novom cijenom i razlikama), promjene cijena
+ * bez dokumenta i cijene koje ostaju. Naziv artikla nije dio otiska: to je
+ * oznaka za prikaz, dokument artikal veže po id-u, pa preimenovanje ne mijenja
+ * ništa što se upisuje. Brojevi se zaokružuju na 6 decimala (šum pri
+ * sabiranju), redoslijed dokumenata ostaje (to je redoslijed brojeva).
+ * Neispravan oblik → null.
+ */
+export function otisakPregleda(p: unknown): string | null {
+  const n = (x: unknown) => { if (typeof x !== 'number' || !Number.isFinite(x)) throw 0; return Math.round(x * 1e6) / 1e6; };
+  const niz = (x: unknown) => { if (!Array.isArray(x)) throw 0; return x as any[]; };
+  const poArtiklu = <T extends { productId: number }>(xs: T[]) => [...xs].sort((a, b) => a.productId - b.productId);
+  try {
+    const q = p as PregledCijenaUlaza;
+    if (!q || typeof q !== 'object') return null;
+    return JSON.stringify({
+      dokumenti: niz(q.dokumenti).map(d => [
+        String(d.vrsta), String(d.brojNivelacije), String(d.datum), d.napomena ?? null,
+        poArtiklu(niz(d.stavke).map(s => ({ productId: n(s.productId), v: [n(s.kolicina), n(s.staraCijena), n(s.novaCijena), n(s.razlika), n(s.ukupnaRazlika)] }))),
+      ]),
+      bezZalihe: poArtiklu(niz(q.bezZalihe).map(s => ({ productId: n(s.productId), v: [n(s.staraCijena), n(s.novaCijena)] }))),
+      cijenaOstaje: poArtiklu(niz(q.cijenaOstaje).map(s => ({ productId: n(s.productId), v: [n(s.cijena)] }))),
+    });
+  } catch {
+    return null;
+  }
+}
+
+/** Da li potvrđeni pregled (s ekrana) opisuje isto što i `pregled` — vidi `otisakPregleda`. */
+export function istiPregled(potvrda: unknown, pregled: PregledCijenaUlaza): boolean {
+  const a = otisakPregleda(potvrda);
+  return a !== null && a === otisakPregleda(pregled);
+}
+
+/**
  * Izmjena primke: artikli kojima korisnik mijenja prodajnu cijenu na primci,
  * a cijenu je poslije ove primke mijenjalo nešto drugo — cijena u prodaji
  * ostaje (vidi `pripremiIzmjenuPrimke`). Poziva se prije izmjene.
