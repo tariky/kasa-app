@@ -7,7 +7,7 @@ import { cn, formatKM, formatDate } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { ActionRow, Eyebrow, LedgerHead, SegmentedFilter } from '@/components/ui/ledger';
+import { ActionRow, Eyebrow, FilterSelect, LedgerHead } from '@/components/ui/ledger';
 import { NalogDialog } from '@/components/proizvodnja/NalogDialog';
 import { StavkeUtroska } from '@/components/proizvodnja/StavkeUtroska';
 import { KalkulacijaPanel } from '@/components/proizvodnja/KalkulacijaPanel';
@@ -158,7 +158,7 @@ export default function ProizvodnjaScreen({ korisnikId, uloga, initialNalogId }:
                 </button>
               ))}
             </div>
-            {tab === 'nalozi' && <SegmentedFilter options={FILTERS} value={filter} onChange={setFilter} counts={counts} />}
+            {tab === 'nalozi' && <FilterSelect label="Status naloga" options={FILTERS} value={filter} onChange={setFilter} counts={counts} />}
           </div>
           {tab === 'nalozi' && (
             <div className="flex items-center gap-2">

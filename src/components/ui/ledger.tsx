@@ -1,4 +1,5 @@
 import { cn } from '@/lib/utils';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 /**
  * Vizuelni jezik "ledger" ekrana — lista dokumenata lijevo, detalj i akcije desno.
@@ -117,6 +118,36 @@ export function SegmentedFilter<T extends string>({
         </button>
       ))}
     </div>
+  );
+}
+
+/** Isti filter kao SegmentedFilter, ali u padajućem meniju — za trake gdje nema mjesta za sve opcije. */
+export function FilterSelect<T extends string>({
+  options, value, onChange, counts, label = 'Filter',
+}: {
+  options: { id: T; label: string }[];
+  value: T;
+  onChange: (id: T) => void;
+  counts?: Record<string, number>;
+  label?: string;
+}) {
+  return (
+    <Select value={value} onValueChange={v => onChange(v as T)}>
+      <SelectTrigger aria-label={label}
+        className="h-8 w-auto min-w-[150px] gap-2 rounded-lg border-slate-200 bg-white px-3 text-[12px] font-medium text-slate-700 shadow-none focus:ring-2 focus:ring-blue-500/50 focus:ring-offset-0">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent className="rounded-lg">
+        {options.map(o => (
+          <SelectItem key={o.id} value={o.id} className="text-[12px]">
+            <span className="flex items-center gap-2">
+              {o.label}
+              {counts && <span className="font-mono text-[10px] tabular-nums text-slate-400">{counts[o.id] ?? 0}</span>}
+            </span>
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }
 
