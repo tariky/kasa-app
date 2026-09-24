@@ -15,22 +15,23 @@ import GeneratorScreen from '@/screens/GeneratorScreen';
 import ProizvodnjaScreen from '@/screens/ProizvodnjaScreen';
 import PendingRacuniDialog from '@/components/PendingRacuniDialog';
 import PologPrompt from '@/components/PologPrompt';
-import { useProizvodnja } from '@/hooks/useProizvodnja';
+import { useModuli } from '@/hooks/useModuli';
+import type { Modul } from '@/lib/moduli';
 import LicencaTraka from '@/components/licenca/LicencaTraka';
 import type { LicencaInfo } from '@/lib/licencaTipovi';
 import { cn } from '@/lib/utils';
 
 type Screen = 'kasa' | 'skladiste' | 'sifarnik' | 'narudzbe' | 'ponude' | 'proizvodnja' | 'izvjestaji' | 'generator' | 'postavke';
 
-const NAV_ITEMS: { id: Screen; label: string; icon: typeof ScanBarcode; adminOnly?: boolean }[] = [
+const NAV_ITEMS: { id: Screen; label: string; icon: typeof ScanBarcode; adminOnly?: boolean; modul?: Modul }[] = [
   { id: 'kasa', label: 'Kasa', icon: ScanBarcode },
-  { id: 'skladiste', label: 'Skladište', icon: Warehouse },
+  { id: 'skladiste', label: 'Skladište', icon: Warehouse, modul: 'skladiste' },
   { id: 'sifarnik', label: 'Šifarnik', icon: NotebookTabs },
   { id: 'narudzbe', label: 'Računi', icon: ReceiptText },
-  { id: 'ponude', label: 'Ponude', icon: FileSignature },
-  { id: 'proizvodnja', label: 'Proizvodnja', icon: Factory },
+  { id: 'ponude', label: 'Ponude', icon: FileSignature, modul: 'ponude' },
+  { id: 'proizvodnja', label: 'Proizvodnja', icon: Factory, modul: 'proizvodnja' },
   { id: 'izvjestaji', label: 'Izvještaji', icon: BarChart3 },
-  { id: 'generator', label: 'Generator', icon: WandSparkles, adminOnly: true },
+  { id: 'generator', label: 'Generator', icon: WandSparkles, adminOnly: true, modul: 'generator' },
   { id: 'postavke', label: 'Postavke', icon: Settings, adminOnly: true },
 ];
 
@@ -48,8 +49,7 @@ interface Props {
 
 export default function MainLayout({ user, licenca, onLogout }: Props) {
   const [screen, setScreen] = useState<Screen>('kasa');
-  const [showGenerator, setShowGenerator] = useState(false);
-  const proizvodnja = useProizvodnja();
+  const moduli = useModuli();
   const [openNalogId, setOpenNalogId] = useState<number | null>(null);
   const [otvoren, setOtvoren] = useState(false);
   const tajmer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -76,21 +76,11 @@ export default function MainLayout({ user, licenca, onLogout }: Props) {
     return () => document.removeEventListener('pointerdown', van);
   }, [otvoren]);
 
+  // Modul isključen (licenca ili postavka) dok je njegov ekran otvoren → nazad na Kasu.
   useEffect(() => {
-    window.api.getSetting('ui.showGenerator').then((v) => setShowGenerator(v === 'true'));
-    // Postavke javljaju promjenu odmah, bez ponovnog ulaska u aplikaciju
-    const onToggle = (e: Event) => {
-      const enabled = Boolean((e as CustomEvent).detail);
-      setShowGenerator(enabled);
-      if (!enabled) setScreen(s => (s === 'generator' ? 'kasa' : s));
-    };
-    window.addEventListener('ui:showGenerator', onToggle);
-    return () => window.removeEventListener('ui:showGenerator', onToggle);
-  }, []);
-
-  useEffect(() => {
-    if (proizvodnja === false) setScreen(s => (s === 'proizvodnja' ? 'kasa' : s));
-  }, [proizvodnja]);
+    const modul = NAV_ITEMS.find(i => i.id === screen)?.modul;
+    if (moduli && modul && !moduli.ukljuceni[modul]) setScreen('kasa');
+  }, [moduli, screen]);
 
   useEffect(() => {
     // Ponude otvaraju nalog na ekranu Proizvodnja — ekrani se ne poznaju međusobno.
@@ -144,8 +134,7 @@ export default function MainLayout({ user, licenca, onLogout }: Props) {
           <nav className="flex-1 px-2 space-y-0.5">
             {NAV_ITEMS.map(item => {
               if (item.adminOnly && user.uloga !== 'admin') return null;
-              if (item.id === 'generator' && !showGenerator) return null;
-              if (item.id === 'proizvodnja' && !proizvodnja) return null;
+              if (item.modul && !moduli?.ukljuceni[item.modul]) return null;
               const Icon = item.icon;
               const active = screen === item.id;
               return (

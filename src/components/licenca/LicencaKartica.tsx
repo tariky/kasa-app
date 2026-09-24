@@ -2,6 +2,7 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { opisLicence, LICENCA_KONTAKT } from '@/lib/licencaTipovi';
 import { useLicenca, otvoriLicencaDialog } from '@/hooks/useLicenca';
+import { opisModula } from '@/lib/moduli';
 import { ShieldCheck, ShieldAlert, KeyRound } from 'lucide-react';
 
 function datum(iso: string): string {
@@ -39,6 +40,8 @@ export default function LicencaKartica() {
               <dd className="text-slate-800 font-medium">{licenca.klijent}</dd>
               <dt className="text-slate-400">Važi do</dt>
               <dd className="text-slate-800">{datum(licenca.vrijediDo)}</dd>
+              <dt className="text-slate-400">Moduli</dt>
+              <dd className="text-slate-800">{opisModula(licenca.moduli)}</dd>
             </>
           )}
           <dt className="text-slate-400">ID računara</dt>
