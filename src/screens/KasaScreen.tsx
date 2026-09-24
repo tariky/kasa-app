@@ -1,8 +1,7 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { Search, Plus, Minus, X, ShoppingCart, User as UserIcon, Banknote, CreditCard, Building, FileCheck, Loader2, Printer, ScanBarcode, Save, FolderOpen, Percent, Trash2, Paperclip } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { Search, Plus, Minus, X, ShoppingCart, User as UserIcon, Banknote, CreditCard, Building, FileCheck, Loader2, Printer, Save, FolderOpen, Percent, Trash2, Paperclip } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Switch } from '@/components/ui/switch';
 import { DecimalInput } from '@/components/ui/decimal-input';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -17,6 +16,7 @@ import { pdf } from '@react-pdf/renderer';
 import { OtpremnicaPdf } from '@/components/OtpremnicaPdf';
 import { PrilogPdf } from '@/components/PrilogPdf';
 import PrilogRacunDialog from '@/components/PrilogRacunDialog';
+import IzborArtikala, { type TipFilter } from '@/components/kasa/IzborArtikala';
 import type { User, Product, CartItem, Kupac } from '@/types';
 import { potvrdi } from '@/lib/dijalog';
 
@@ -62,7 +62,7 @@ export default function KasaScreen({ user }: KasaScreenProps) {
   const [query, setQuery] = useState('');
   const [products, setProducts] = useState<Product[]>([]);
   const [allProducts, setAllProducts] = useState<Product[]>([]);
-  const [tipFilter, setTipFilter] = useState<'svi' | 'proizvodi' | 'usluge'>('svi');
+  const [tipFilter, setTipFilter] = useState<TipFilter>('svi');
   const [cart, setCart] = useState<CartItem[]>([]);
   const [paymentType, setPaymentType] = useState<PaymentType>('Gotovina');
   const [kusurTotal, setKusurTotal] = useState<number | null>(null);
@@ -80,7 +80,6 @@ export default function KasaScreen({ user }: KasaScreenProps) {
   const [kupacPostanskiBroj, setKupacPostanskiBroj] = useState('');
   const [kupacSearch, setKupacSearch] = useState('');
   const [allKupci, setAllKupci] = useState<Kupac[]>([]);
-  const [focusedIndex, setFocusedIndex] = useState(-1);
   const [dailyTotal, setDailyTotal] = useState<number | null>(null);
   const [allowZeroStock, setAllowZeroStock] = useState(false);
   const [kusurEnabled, setKusurEnabled] = useState(true);
@@ -95,7 +94,6 @@ export default function KasaScreen({ user }: KasaScreenProps) {
   const qtyInputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const productListRef = useRef<HTMLDivElement>(null);
 
   // Učitaj sve kupce kad se dialog otvori — filtriranje je lokalno.
   useEffect(() => {
@@ -146,13 +144,11 @@ export default function KasaScreen({ user }: KasaScreenProps) {
   // Debounced product search
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (!query.trim()) { setProducts([]); setFocusedIndex(-1); return; }
+    if (!query.trim()) { setProducts([]); return; }
     debounceRef.current = setTimeout(async () => {
       try {
-        const results = await window.api.searchProducts(query.trim());
-        setProducts(results);
-        setFocusedIndex(-1);
-      } catch { setProducts([]); setFocusedIndex(-1); }
+        setProducts(await window.api.searchProducts(query.trim()));
+      } catch { setProducts([]); }
     }, 200);
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   }, [query]);
@@ -193,10 +189,16 @@ export default function KasaScreen({ user }: KasaScreenProps) {
   useEffect(() => { loadSavedCarts(); }, [loadSavedCarts]);
 
   // Lista koja se prikazuje: rezultati pretrage ili svi artikli, uz tip filter.
-  const baseList = query.trim() ? products : allProducts;
-  const displayedProducts = tipFilter === 'svi'
-    ? baseList
-    : baseList.filter(p => (tipFilter === 'usluge' ? p.tip === 'usluga' : p.tip !== 'usluga'));
+  // Memoizirano: picker resetuje kursor kad se referenca liste promijeni.
+  const displayedProducts = useMemo(() => {
+    const baseList = query.trim() ? products : allProducts;
+    return tipFilter === 'svi'
+      ? baseList
+      : baseList.filter(p => (tipFilter === 'usluge' ? p.tip === 'usluga' : p.tip !== 'usluga'));
+  }, [query, products, allProducts, tipFilter]);
+
+  // Dok je bilo koji dijalog otvoren, prečice kase (F2, F5, Esc, kucanje u pretragu) miruju.
+  const anyDialogOpen = !!qtyProduct || kupacOpen || savedOpen || prilogOpen || rabatTarget !== null || kusurTotal !== null;
 
   const closeKusur = useCallback(() => {
     setKusurTotal(null);
@@ -224,7 +226,6 @@ export default function KasaScreen({ user }: KasaScreenProps) {
     // Očisti pretragu i rezultate pa vrati fokus za sljedeći artikal/sken.
     setQuery('');
     setProducts([]);
-    setFocusedIndex(-1);
     setTimeout(() => searchInputRef.current?.focus(), 50);
   }, [allowZeroStock]);
 
@@ -259,66 +260,6 @@ export default function KasaScreen({ user }: KasaScreenProps) {
         .filter(item => item.kolicina > 0)
     );
   }, [allowZeroStock]);
-
-  const handleSearchKeyDown = useCallback(async (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      if (displayedProducts.length > 0) {
-        const nextIdx = focusedIndex < displayedProducts.length - 1 ? focusedIndex + 1 : 0;
-        setFocusedIndex(nextIdx);
-        // Scroll into view
-        const el = productListRef.current?.children[nextIdx] as HTMLElement;
-        el?.scrollIntoView({ block: 'nearest' });
-      }
-      return;
-    }
-    if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      if (displayedProducts.length > 0) {
-        const nextIdx = focusedIndex > 0 ? focusedIndex - 1 : displayedProducts.length - 1;
-        setFocusedIndex(nextIdx);
-        const el = productListRef.current?.children[nextIdx] as HTMLElement;
-        el?.scrollIntoView({ block: 'nearest' });
-      }
-      return;
-    }
-    if (e.key === 'Escape') {
-      setQuery('');
-      setProducts([]);
-      setFocusedIndex(-1);
-      return;
-    }
-    if (e.key !== 'Enter') return;
-
-    // If an item is focused via arrows, select it
-    if (focusedIndex >= 0 && focusedIndex < displayedProducts.length) {
-      const product = displayedProducts[focusedIndex];
-      const outOfStock = !allowZeroStock && product.tip !== 'usluga' && product.stanje != null && product.stanje <= 0;
-      if (!outOfStock) {
-        promptAddToCart(product);
-        setQuery('');
-        setProducts([]);
-        setFocusedIndex(-1);
-      }
-      return;
-    }
-
-    // Default Enter behavior: exact match or single result
-    const q = query.trim();
-    if (!q) return;
-    const results = await window.api.searchProducts(q);
-    const exact = results.find((p: Product) => p.sifra === q || p.barkod === q);
-    if (exact) {
-      promptAddToCart(exact);
-      setQuery('');
-      setProducts([]);
-    } else if (results.length === 1) {
-      promptAddToCart(results[0]);
-      setQuery('');
-      setProducts([]);
-    }
-    setFocusedIndex(-1);
-  }, [query, displayedProducts, focusedIndex, promptAddToCart, allowZeroStock]);
 
   const removeFromCart = useCallback((productId: number) => {
     setCart(prev => prev.filter(item => item.product.id !== productId));
@@ -391,10 +332,12 @@ export default function KasaScreen({ user }: KasaScreenProps) {
     setTimeout(() => searchInputRef.current?.focus(), 50);
   }, [rabatTarget, rabatValue]);
 
-  // F5 to checkout
+  // F5 naplaćuje — ali ne dok je otvoren dijalog (količina, rabat, kupac…) ili štampa u toku.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'F5') { e.preventDefault(); handleFinalize(); }
+      if (e.key !== 'F5') return;
+      e.preventDefault();
+      if (!anyDialogOpen && !loading) handleFinalize();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
@@ -506,124 +449,20 @@ export default function KasaScreen({ user }: KasaScreenProps) {
 
   return (
     <div className="flex h-full">
-      {/* ─── Left: Search & Products ─── */}
-      <div className="flex-1 flex flex-col min-w-0 bg-[hsl(220,20%,97%)]">
-        {/* Search bar */}
-        <div className="p-5 pb-0">
-          <div className="relative">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
-            <Input
-              ref={searchInputRef}
-              value={query}
-              onChange={e => setQuery(e.target.value)}
-              onKeyDown={handleSearchKeyDown}
-              placeholder="Skeniraj barkod ili pretraži artikle..."
-              className="pl-12 h-14 text-base bg-white border-0 shadow-sm shadow-slate-200/60 rounded-2xl focus-visible:ring-2 focus-visible:ring-blue-500/20 focus-visible:ring-offset-0"
-              autoFocus
-            />
-            {query && (
-              <button
-                onClick={() => { setQuery(''); setProducts([]); }}
-                className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            )}
-          </div>
-
-          {/* Tip filter */}
-          <div className="flex items-center gap-1.5 mt-3">
-            {([['svi', 'Svi'], ['proizvodi', 'Proizvodi'], ['usluge', 'Usluge']] as const).map(([value, label]) => (
-              <button
-                key={value}
-                onClick={() => { setTipFilter(value); setFocusedIndex(-1); }}
-                className={cn(
-                  'px-3.5 py-1.5 rounded-full text-[12px] font-medium transition-all duration-150',
-                  tipFilter === value
-                    ? 'bg-slate-900 text-white shadow-sm'
-                    : 'bg-white text-slate-500 border border-slate-200 hover:border-slate-300 hover:text-slate-700'
-                )}
-              >
-                {label}
-              </button>
-            ))}
-            <label className="ml-auto flex items-center gap-2 cursor-pointer select-none" title="Sken odmah dodaje 1 komad, bez pitanja za količinu">
-              <ScanBarcode className={cn('h-4 w-4', scanMode ? 'text-blue-600' : 'text-slate-400')} />
-              <span className={cn('text-[12px] font-medium', scanMode ? 'text-blue-600' : 'text-slate-500')}>Scan mode</span>
-              <Switch checked={scanMode} onCheckedChange={toggleScanMode} />
-            </label>
-            <span className="text-[11px] font-mono tabular-nums text-slate-400">
-              {formatArtikliCount(displayedProducts.length)}
-            </span>
-          </div>
-        </div>
-
-        {/* Product grid */}
-        <ScrollArea className="flex-1 p-5">
-          {displayedProducts.length === 0 ? (
-            query.trim() ? (
-              <div className="flex flex-col items-center justify-center h-full text-slate-400">
-                <p className="text-sm">Nema rezultata za &ldquo;{query}&rdquo;</p>
-              </div>
-            ) : (
-              <div className="flex flex-col items-center justify-center h-full text-slate-400 select-none">
-                <div className="w-20 h-20 rounded-3xl bg-slate-100 flex items-center justify-center mb-4">
-                  <Search className="h-8 w-8 text-slate-300" />
-                </div>
-                <p className="text-sm font-medium text-slate-500">Nema artikala</p>
-                <p className="text-xs text-slate-400 mt-1">Pretražite, skenirajte barkod ili promijenite filter</p>
-              </div>
-            )
-          ) : (
-            <div className="grid grid-cols-2 xl:grid-cols-3 gap-2" ref={productListRef}>
-              {displayedProducts.map((product, idx) => {
-                const outOfStock = !allowZeroStock && product.tip !== 'usluga' && product.stanje != null && product.stanje <= 0;
-                const isFocused = idx === focusedIndex;
-                return (
-                  <button
-                    key={product.id}
-                    onClick={() => !outOfStock && promptAddToCart(product)}
-                    onMouseEnter={() => setFocusedIndex(idx)}
-                    disabled={outOfStock}
-                    className={cn(
-                      'group flex flex-col text-left rounded-xl bg-white p-3.5 min-h-[86px] transition-all duration-150',
-                      'border border-transparent hover:border-blue-200 hover:bg-blue-50/40 active:bg-blue-50',
-                      isFocused && !outOfStock && 'border-blue-300 bg-blue-50/60 ring-2 ring-blue-500/20',
-                      outOfStock && 'opacity-45 cursor-not-allowed hover:border-transparent hover:bg-white',
-                    )}
-                  >
-                    <div className="flex items-start justify-between gap-2 w-full">
-                      <p className="text-[13px] font-medium text-slate-800 leading-snug truncate">{product.naziv}</p>
-                      {product.tip === 'usluga' && (
-                        <span className="text-[9px] font-semibold text-violet-500 bg-violet-50 px-1.5 py-0.5 rounded-full flex-shrink-0 uppercase tracking-wide">Usl</span>
-                      )}
-                    </div>
-                    <div className="mt-auto pt-2.5 flex items-end justify-between w-full gap-2">
-                      <div className="flex items-center gap-1.5 text-[11px] min-w-0">
-                        <span className="font-mono text-slate-400 truncate">{product.sifra}</span>
-                        {product.tip !== 'usluga' && product.stanje != null && (
-                          <>
-                            <span className="text-slate-300 flex-shrink-0">·</span>
-                            <span className={cn(
-                              'font-mono flex-shrink-0',
-                              product.stanje <= 0 ? 'text-red-400' : product.stanje <= 5 ? 'text-amber-500' : 'text-slate-400'
-                            )}>
-                              {product.stanje} {product.jm}
-                            </span>
-                          </>
-                        )}
-                      </div>
-                      <span className="text-[13px] font-bold font-mono tabular-nums text-blue-600 flex-shrink-0">
-                        {formatKM(product.cijena)}
-                      </span>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </ScrollArea>
-      </div>
+      {/* ─── Lijevo: pretraga i artikli ─── */}
+      <IzborArtikala
+        artikli={displayedProducts}
+        query={query}
+        onQueryChange={setQuery}
+        tipFilter={tipFilter}
+        onTipFilterChange={setTipFilter}
+        brziSken={scanMode}
+        onBrziSkenChange={toggleScanMode}
+        allowZeroStock={allowZeroStock}
+        aktivan={!anyDialogOpen && !loading}
+        onOdaberi={promptAddToCart}
+        searchRef={searchInputRef}
+      />
 
       {/* ─── Right: Cart Panel ─── */}
       <div className="w-[420px] flex-shrink-0 bg-white flex flex-col border-l border-slate-200/80">
