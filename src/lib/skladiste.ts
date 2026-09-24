@@ -124,7 +124,7 @@ function vratiCijeneAkoNepromijenjene(
  * Stari put za primke bez historije cijena (`cijena_historija`); artikli iz
  * `preskoci` su već vraćeni iz historije. Vraća broj vraćenih artikala.
  */
-export function revertNivelacijaPrices(db: SqlDb, primkaId: number, preskoci: Set<number> = new Set()): number {
+export function revertNivelacijaPrices(db: SqlDb, primkaId: number, preskoci: Set<number> = new Set(), samo?: Set<number>): number {
   const oldNivStavke = db.prepare(`
     SELECT ns.productId, ns.staraCijena, ns.novaCijena
     FROM nivelacija_stavke ns
@@ -132,7 +132,7 @@ export function revertNivelacijaPrices(db: SqlDb, primkaId: number, preskoci: Se
     WHERE n.primkaId = ?
   `).all(primkaId) as Array<{ productId: number; staraCijena: number; novaCijena: number }>;
 
-  return vratiCijeneAkoNepromijenjene(db, oldNivStavke.filter(p => !preskoci.has(p.productId)));
+  return vratiCijeneAkoNepromijenjene(db, oldNivStavke.filter(p => !preskoci.has(p.productId) && (!samo || samo.has(p.productId))));
 }
 
 /**
@@ -140,14 +140,14 @@ export function revertNivelacijaPrices(db: SqlDb, primkaId: number, preskoci: Se
  * artiklima bez zalihe (zapamćene u `primka_stavke.staraCijena`). Stavke bez
  * zapamćene cijene (stare primke) se ne diraju.
  */
-export function revertPricesWithoutStock(db: SqlDb, primkaId: number, preskoci: Set<number> = new Set()): number {
+export function revertPricesWithoutStock(db: SqlDb, primkaId: number, preskoci: Set<number> = new Set(), samo?: Set<number>): number {
   const promjene = db.prepare(`
     SELECT productId, staraCijena, cijena AS novaCijena
     FROM primka_stavke
     WHERE primkaId = ? AND staraCijena IS NOT NULL
   `).all(primkaId) as Array<{ productId: number; staraCijena: number; novaCijena: number }>;
 
-  return vratiCijeneAkoNepromijenjene(db, promjene.filter(p => !preskoci.has(p.productId)));
+  return vratiCijeneAkoNepromijenjene(db, promjene.filter(p => !preskoci.has(p.productId) && (!samo || samo.has(p.productId))));
 }
 
 // ── Historija promjena cijena (cijena_historija) ───────────────────────
@@ -176,11 +176,13 @@ export function zapisiPromjeneCijena(
  *  - posljednja je: artikal se vraća na staru cijenu, ali samo ako još stoji
  *    na cijeni ove primke (zaštita od izmjene mimo historije).
  * Vraća artikle koje je historija pokrila (za njih se stari put ne koristi).
+ * `samo` ograniči poništavanje na te artikle (izmjena primke).
  */
-export function ponistiPromjeneCijenaPrimke(db: SqlDb, primkaId: number): Set<number> {
-  const promjene = db.prepare(
+export function ponistiPromjeneCijenaPrimke(db: SqlDb, primkaId: number, samo?: Set<number>): Set<number> {
+  const promjene = (db.prepare(
     "SELECT id, productId, staraCijena, novaCijena FROM cijena_historija WHERE izvor = 'primka' AND izvorId = ? ORDER BY id"
-  ).all(primkaId) as Array<{ id: number; productId: number; staraCijena: number; novaCijena: number }>;
+  ).all(primkaId) as Array<{ id: number; productId: number; staraCijena: number; novaCijena: number }>)
+    .filter(p => !samo || samo.has(p.productId));
 
   const sljedeca = db.prepare('SELECT id FROM cijena_historija WHERE productId = ? AND id > ? ORDER BY id LIMIT 1');
   const premosti = db.prepare('UPDATE cijena_historija SET staraCijena = ? WHERE id = ?');
@@ -204,12 +206,141 @@ export function ponistiPromjeneCijenaPrimke(db: SqlDb, primkaId: number): Set<nu
  * u historiju cijena poništavaju se kroz nju (ispravno i u lancu primki);
  * starije primke bez historije idu starim putem — nivelacija + artikli bez
  * zalihe, vraćanje samo ako artikal još stoji na cijeni primke.
+ * `samo` ograniči poništavanje na te artikle (izmjena primke).
  */
-export function revertPrimkaPrices(db: SqlDb, primkaId: number): number {
-  const pokriveni = ponistiPromjeneCijenaPrimke(db, primkaId);
+export function revertPrimkaPrices(db: SqlDb, primkaId: number, samo?: Set<number>): number {
+  const pokriveni = ponistiPromjeneCijenaPrimke(db, primkaId, samo);
   return pokriveni.size
-    + revertNivelacijaPrices(db, primkaId, pokriveni)
-    + revertPricesWithoutStock(db, primkaId, pokriveni);
+    + revertNivelacijaPrices(db, primkaId, pokriveni, samo)
+    + revertPricesWithoutStock(db, primkaId, pokriveni, samo);
+}
+
+// ── Izmjena primke ─────────────────────────────────────────────────────
+
+/** Promjena cijene artikla koju je primka upisala u historiju (najviše jedna po artiklu). */
+function promjenaCijenePrimke(db: SqlDb, primkaId: number, productId: number) {
+  return db.prepare(
+    "SELECT id, staraCijena, novaCijena FROM cijena_historija WHERE izvor = 'primka' AND izvorId = ? AND productId = ? ORDER BY id DESC LIMIT 1"
+  ).get(primkaId, productId) as { id: number; staraCijena: number; novaCijena: number } | undefined;
+}
+
+function sljedecaPromjena(db: SqlDb, productId: number, id: number) {
+  return db.prepare('SELECT id FROM cijena_historija WHERE productId = ? AND id > ? ORDER BY id LIMIT 1')
+    .get(productId, id) as { id: number } | undefined;
+}
+
+/**
+ * Da li je prodajnu cijenu artikla poslije ove primke mijenjalo nešto drugo
+ * (kasnija primka ili ručna izmjena) — tada ta kasnija promjena određuje
+ * trenutnu cijenu, a izmjena cijene na ovoj primci je ne smije pregaziti.
+ *
+ * Ako je primka mijenjala cijenu, gleda se lanac u historiji. Ako nije (cijena
+ * je bila ista, ili je primka iz vremena prije historije), kasnija je svaka
+ * promjena iz novije primke ili ručna izmjena upisana od unosa ove primke.
+ * Stare primke bez ikakve historije to ne mogu znati — za njih vraća false.
+ */
+export function cijenaKasnijeMijenjana(db: SqlDb, primkaId: number, productId: number): boolean {
+  const h = promjenaCijenePrimke(db, primkaId, productId);
+  if (h) return !!sljedecaPromjena(db, productId, h.id);
+  return !!db.prepare(`
+    SELECT 1 FROM cijena_historija
+    WHERE productId = ? AND (
+      (izvor = 'primka' AND izvorId > ?) OR
+      (izvor = 'rucno' AND createdAt >= (SELECT createdAt FROM primke WHERE id = ?))
+    ) LIMIT 1
+  `).get(productId, primkaId, primkaId);
+}
+
+/** Prodajna cijena po artiklu iz stavki — važi prva stavka artikla, kao u `collectPriceChanges`. */
+function prveCijene<T extends { productId: number; cijena: number }>(stavke: T[]): Map<number, T> {
+  const m = new Map<number, T>();
+  for (const s of stavke) if (!m.has(s.productId)) m.set(s.productId, s);
+  return m;
+}
+
+export interface IzmjenaPrimke {
+  /** Artikli za koje se cijena računa kao kod nove primke (dodani, ili promijenjena cijena u zadnjoj promjeni). */
+  kreiraj: Set<number>;
+  /** Artikli čije su promjene cijena ove primke poništene — njihove nivelacije treba obrisati. */
+  ponisteni: Set<number>;
+  /** Zapamćena stara cijena (`primka_stavke.staraCijena`) artikala čije se promjene zadržavaju. */
+  zadrzaneStareCijene: Map<number, number | null>;
+}
+
+/**
+ * Pripremi cijene za izmjenu primke — poziva se prije brisanja starih stavki.
+ * Cijena artikla se mijenja samo gdje je korisnik stvarno promijenio prodajnu
+ * cijenu (prva stavka artikla), dodao ili uklonio artikal:
+ *  - ista cijena: cijena artikla, historija, nivelacija i zapamćena stara
+ *    cijena ostaju netaknuti;
+ *  - uklonjen artikal: promjena se poništava kao pri brisanju primke;
+ *  - dodan artikal: kao kod nove primke;
+ *  - promijenjena cijena, a primka je zadnja promjena cijene artikla:
+ *    poništi pa upiši kao novu (nova cijena + nivelacija, kao do sada);
+ *  - promijenjena cijena, a poslije je cijenu mijenjalo nešto drugo: trenutna
+ *    cijena ostaje (kasnija promjena je važnija), nema nove nivelacije — samo
+ *    se u lancu ispravi nova cijena ove primke i stara cijena sljedeće
+ *    promjene, pa njeno kasnije poništavanje vodi na ispravljenu cijenu.
+ *    Primka bez zapisa u historiji za taj artikal se ne ubacuje u lanac.
+ */
+export function pripremiIzmjenuPrimke(
+  db: SqlDb,
+  primkaId: number,
+  noveStavke: Array<{ productId: number; cijena: number }>
+): IzmjenaPrimke {
+  const stare = prveCijene(db.prepare(
+    'SELECT productId, cijena, staraCijena FROM primka_stavke WHERE primkaId = ? ORDER BY id'
+  ).all(primkaId) as Array<{ productId: number; cijena: number; staraCijena: number | null }>);
+  const nove = prveCijene(noveStavke);
+
+  const kreiraj = new Set<number>();
+  const ponisti = new Set<number>();
+  const zadrzaneStareCijene = new Map<number, number | null>();
+  const upisiNovu = db.prepare('UPDATE cijena_historija SET novaCijena = ? WHERE id = ?');
+  const upisiStaru = db.prepare('UPDATE cijena_historija SET staraCijena = ? WHERE id = ?');
+
+  for (const productId of stare.keys()) if (!nove.has(productId)) ponisti.add(productId);
+
+  for (const [productId, nova] of nove) {
+    const stara = stare.get(productId);
+    if (!stara) { kreiraj.add(productId); continue; }
+    if (Math.abs(stara.cijena - nova.cijena) > EPS && !cijenaKasnijeMijenjana(db, primkaId, productId)) {
+      ponisti.add(productId);
+      kreiraj.add(productId);
+      continue;
+    }
+    // Zadržava se: ista cijena, ili je kasnija promjena važnija od ove.
+    zadrzaneStareCijene.set(productId, stara.staraCijena);
+    if (Math.abs(stara.cijena - nova.cijena) <= EPS) continue;
+    const h = promjenaCijenePrimke(db, primkaId, productId);
+    const sljedeca = h && sljedecaPromjena(db, productId, h.id);
+    if (h && sljedeca) {
+      upisiNovu.run(nova.cijena, h.id);
+      upisiStaru.run(nova.cijena, sljedeca.id);
+    }
+  }
+
+  if (ponisti.size > 0) revertPrimkaPrices(db, primkaId, ponisti);
+  return { kreiraj, ponisteni: ponisti, zadrzaneStareCijene };
+}
+
+/**
+ * `primka_stavke.staraCijena` pri izmjeni: nove promjene (iz `stareCijeneStavki`)
+ * i zadržane stare vrijednosti — obje samo na prvu stavku artikla.
+ */
+export function stareCijeneIzmjene(
+  stavke: Array<{ productId: number }>,
+  bezZaliha: PriceChange[],
+  zadrzane: Map<number, number | null>
+): Array<number | null> {
+  const nove = stareCijeneStavki(stavke, bezZaliha);
+  const vidjeni = new Set<number>();
+  return stavke.map((s, i) => {
+    const prva = !vidjeni.has(s.productId);
+    vidjeni.add(s.productId);
+    if (nove[i] !== null) return nove[i];
+    return prva ? (zadrzane.get(s.productId) ?? null) : null;
+  });
 }
 
 /**

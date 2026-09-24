@@ -349,14 +349,20 @@ describe('primka:update', () => {
   test('ne vraća cijenu koju je u međuvremenu promijenila kasnija primka', async () => {
     const p = dodajArtikal('E6', 10, { stanje: 5 });
     const prva = (await b.call('primka:create', primka('U-1', [stavka(p, 1, 12)]))).id;
-    await b.call('primka:create', primka('U-2', [stavka(p, 1, 14)]));
+    const druga = (await b.call('primka:create', primka('U-2', [stavka(p, 1, 14)]))).id;
     expect(cijena(p)).toBe(14);
 
     await b.call('primka:update', { id: prva, ...primka('U-1', [stavka(p, 1, 14)]) });
     expect(cijena(p)).toBe(14);
-    // Cijena primke se poklapa sa trenutnom, pa za prvu primku više nema nivelacije.
-    expect(red('SELECT COUNT(*) AS n FROM nivelacije WHERE primkaId = ?', prva).n).toBe(0);
-    expect(broj('nivelacije')).toBe(1);
+    // Cijena u prodaji se ne mijenja, pa nivelacija prve primke (10 → 12, stvarna
+    // promjena u svoje vrijeme) ostaje; ispravlja se samo lanac za poništavanje.
+    expect(red('SELECT COUNT(*) AS n FROM nivelacije WHERE primkaId = ?', prva).n).toBe(1);
+    expect(broj('nivelacije')).toBe(2);
+
+    await b.call('primka:delete', druga);
+    expect(cijena(p)).toBe(14);
+    await b.call('primka:delete', prva);
+    expect(cijena(p)).toBe(10);
   });
 
   test('duplikat broja druge primke: greška i ništa se ne mijenja', async () => {
@@ -854,15 +860,15 @@ describe('primka: lanac promjena cijena', () => {
     expect(cijena(p)).toBe(10);
   });
 
-  test('update koji u sredini lanca mijenja cijenu: nova cijena važi odmah, brisanjem se lanac vraća bez nje', async () => {
+  test('update koji u sredini lanca mijenja cijenu: trenutna cijena ostaje od C, brisanjem se lanac vraća bez B', async () => {
     const p = dodajArtikal('L9', 10);
     const a = await primkaCijene('U-A', p, 12, 'sa');
     const bId = await primkaCijene('U-B', p, 14, 'bez');
     const c = await primkaCijene('U-C', p, 16, 'sa');
 
-    // Izmjena = poništi staru primku pa upiši novu: nova cijena se upisuje sada.
+    // C je kasnija promjena i određuje trenutnu cijenu; B se ispravlja samo u lancu.
     await b.call('primka:update', { id: bId, ...primka('U-B', [stavka(p, 1, 15)]) });
-    expect(cijena(p)).toBe(15);
+    expect(cijena(p)).toBe(16);
     await b.call('primka:delete', bId);
     expect(cijena(p)).toBe(16);
     await b.call('primka:delete', c);
@@ -913,5 +919,252 @@ describe('primka: lanac promjena cijena', () => {
 
     await b.call('primka:delete', a);
     expect(cijena(p)).toBe(10);
+  });
+});
+
+// ─── Izmjena primke: cijena se mijenja samo gdje je korisnik mijenja ─────
+//
+// Izmjena primke ne smije ponovo "nametnuti" njene prodajne cijene. Stavka
+// kojoj prodajna cijena nije promijenjena ne dira cijenu artikla, historiju
+// ni nivelacije. Promijenjena cijena važi odmah samo ako je ova primka zadnja
+// promjena cijene artikla; inače trenutna cijena ostaje, a ispravlja se samo
+// lanac (kasnija promjena dobija novu "staru" cijenu).
+
+/** Nivelacije i historija cijena — dokumenti koje izmjena ne smije dirati bez razloga. */
+function dokumentiCijena() {
+  return {
+    nivelacije: redovi('SELECT * FROM nivelacije ORDER BY id'),
+    stavke: redovi('SELECT * FROM nivelacija_stavke ORDER BY id'),
+    historija: redovi('SELECT id, productId, izvor, izvorId, staraCijena, novaCijena FROM cijena_historija ORDER BY id'),
+  };
+}
+
+describe('primka:update — cijena samo za stavke s promijenjenom cijenom', () => {
+  test.each([['sa' as Zaliha], ['bez' as Zaliha]])('A 12, B 14 (zaliha: %s): na A samo količina → cijena 14, bez nove nivelacije, zaliha ispravna', async (z) => {
+    const p = dodajArtikal('U1', 10);
+    const a = await primkaCijene('U-A', p, 12, z);
+    const bId = await primkaCijene('U-B', p, 14, z);
+    const prije = dokumentiCijena();
+    const stanjePrije = stanje(p);
+
+    const r = await b.call('primka:update', { id: a, ...primka('U-A', [stavka(p, 5, 12)]) });
+    expect(r).toEqual({ id: a, nivelacijaCreated: false });
+    expect(cijena(p)).toBe(14);
+    expect(dokumentiCijena()).toEqual(prije);
+    expect(stanje(p)).toBe(stanjePrije + 4);
+
+    // Lanac je netaknut: brisanje unazad i dalje vraća ispravne cijene.
+    await b.call('primka:delete', bId);
+    expect(cijena(p)).toBe(12);
+    await b.call('primka:delete', a);
+    expect(cijena(p)).toBe(10);
+  });
+
+  test('na A samo zaglavlje (datum, dobavljač, faktura, zavisni troškovi) → cijena i nivelacije netaknute', async () => {
+    const p = dodajArtikal('U2', 10);
+    const a = await primkaCijene('U-A', p, 12, 'sa');
+    await primkaCijene('U-B', p, 14, 'sa');
+    const prije = dokumentiCijena();
+    const stanjePrije = stanje(p);
+
+    await b.call('primka:update', { id: a, ...primka('U-A1', [stavka(p, 1, 12, { zavisniTroskovi: 3, nabavnaCijena: 6 })], {
+      datum: '2026-02-01', dobavljacNaziv: 'Novi dobavljač', brojFakture: 'F-99',
+    }) });
+    expect(cijena(p)).toBe(14);
+    expect(dokumentiCijena()).toEqual(prije);
+    expect(stanje(p)).toBe(stanjePrije);
+    expect(red('SELECT brojPrimke, datum, dobavljacNaziv, brojFakture FROM primke WHERE id = ?', a))
+      .toEqual({ brojPrimke: 'U-A1', datum: '2026-02-01', dobavljacNaziv: 'Novi dobavljač', brojFakture: 'F-99' });
+    expect(red("SELECT createdAt FROM stock_movements WHERE referenceType = 'primka' AND referenceId = ?", a).createdAt)
+      .toBe('2026-02-01 00:00:00');
+    expect(red('SELECT zavisniTroskovi, nabavnaCijena FROM primka_stavke WHERE primkaId = ?', a)).toEqual({ zavisniTroskovi: 3, nabavnaCijena: 6 });
+  });
+
+  test('izmjena zadnje primke bez promjene cijene: ista nivelacija (broj, datum, količina), cijena ista', async () => {
+    const p = dodajArtikal('U3', 10, { stanje: 5 });
+    const { id } = await b.call('primka:create', primka('U-1', [stavka(p, 3, 12)]));
+    const prije = dokumentiCijena();
+
+    const r = await b.call('primka:update', { id, ...primka('U-1', [stavka(p, 7, 12)]) });
+    expect(r.nivelacijaCreated).toBe(false);
+    expect(cijena(p)).toBe(12);
+    expect(dokumentiCijena()).toEqual(prije);
+    expect(stanje(p)).toBe(12);
+
+    await b.call('primka:delete', id);
+    expect(cijena(p)).toBe(10);
+  });
+
+  test('izmjena zadnje primke bez zalihe, bez promjene cijene: zapamćena stara cijena ostaje', async () => {
+    const p = dodajArtikal('U4', 10);
+    const { id } = await b.call('primka:create', primka('U-1', [stavka(p, 3, 12)]));
+
+    await b.call('primka:update', { id, ...primka('U-1', [stavka(p, 4, 12)]) });
+    expect(cijena(p)).toBe(12);
+    expect(red('SELECT staraCijena FROM primka_stavke WHERE primkaId = ?', id).staraCijena).toBe(10);
+
+    await b.call('primka:delete', id);
+    expect(cijena(p)).toBe(10);
+  });
+
+  test('zadnja primka: promijenjena stavka dobija novu nivelaciju, nepromijenjena zadržava staru', async () => {
+    const p = dodajArtikal('U5', 10, { stanje: 5 });
+    const q = dodajArtikal('U6', 20, { stanje: 2 });
+    const { id } = await b.call('primka:create', primka('U-1', [stavka(p, 1, 12), stavka(q, 1, 22)]));
+    const staraNiv = red('SELECT * FROM nivelacije WHERE primkaId = ?', id);
+    const staraQ = red('SELECT * FROM nivelacija_stavke WHERE productId = ?', q);
+
+    const r = await b.call('primka:update', { id, ...primka('U-1', [stavka(p, 1, 15), stavka(q, 4, 22)]) });
+    expect(r.nivelacijaCreated).toBe(true);
+    expect(cijena(p)).toBe(15);
+    expect(cijena(q)).toBe(22);
+    // q: stari dokument ostaje kakav jeste.
+    expect(red('SELECT * FROM nivelacije WHERE id = ?', staraNiv.id)).toEqual(staraNiv);
+    expect(red('SELECT * FROM nivelacija_stavke WHERE productId = ?', q)).toEqual(staraQ);
+    // p: nova nivelacija s današnjim datumom, na zalihi bez ove primke.
+    expect(redovi('SELECT n.datum, ns.kolicina, ns.staraCijena, ns.novaCijena FROM nivelacija_stavke ns JOIN nivelacije n ON n.id = ns.nivelacijaId WHERE ns.productId = ?', p))
+      .toEqual([{ datum: danas(), kolicina: 5, staraCijena: 10, novaCijena: 15 }]);
+
+    await b.call('primka:delete', id);
+    expect(cijena(p)).toBe(10);
+    expect(cijena(q)).toBe(20);
+    expect(broj('nivelacije')).toBe(0);
+  });
+
+  test.each(KOMBINACIJE)('%s: promjena cijene na A (nije zadnja) → cijena ostaje 14; brisanje B vodi na novu cijenu A', async (_, za, zb) => {
+    const p = dodajArtikal('U7', 10);
+    const a = await primkaCijene('U-A', p, 12, za);
+    const bId = await primkaCijene('U-B', p, 14, zb);
+    const prije = dokumentiCijena();
+
+    const r = await b.call('primka:update', { id: a, ...primka('U-A', [stavka(p, 1, 13)]) });
+    expect(r.nivelacijaCreated).toBe(false);
+    expect(cijena(p)).toBe(14);
+    // Cijena u prodaji se ne mijenja: nivelacije ostaju kakve jesu.
+    expect(dokumentiCijena().nivelacije).toEqual(prije.nivelacije);
+    expect(dokumentiCijena().stavke).toEqual(prije.stavke);
+    expect(redovi('SELECT izvorId, staraCijena, novaCijena FROM cijena_historija ORDER BY id'))
+      .toEqual([{ izvorId: a, staraCijena: 10, novaCijena: 13 }, { izvorId: bId, staraCijena: 13, novaCijena: 14 }]);
+
+    await b.call('primka:delete', bId);
+    expect(cijena(p)).toBe(13);
+    await b.call('primka:delete', a);
+    expect(cijena(p)).toBe(10);
+  });
+
+  test('promjena cijene na A u sredini lanca, pa vraćanje na izvornu: lanac je kao na početku', async () => {
+    const p = dodajArtikal('U8', 10);
+    const a = await primkaCijene('U-A', p, 12, 'sa');
+    const bId = await primkaCijene('U-B', p, 14, 'sa');
+
+    await b.call('primka:update', { id: a, ...primka('U-A', [stavka(p, 1, 13)]) });
+    await b.call('primka:update', { id: a, ...primka('U-A', [stavka(p, 1, 12)]) });
+    expect(cijena(p)).toBe(14);
+    await b.call('primka:delete', bId);
+    expect(cijena(p)).toBe(12);
+  });
+
+  test('ručna izmjena poslije primke se ne gazi — ni izmjenom količine ni cijene na primci', async () => {
+    const p = dodajArtikal('U9', 10);
+    const a = await primkaCijene('U-A', p, 12, 'sa');
+    await b.call('product:update', p, { cijena: 13 });
+
+    await b.call('primka:update', { id: a, ...primka('U-A', [stavka(p, 4, 12)]) });
+    expect(cijena(p)).toBe(13);
+    await b.call('primka:update', { id: a, ...primka('U-A', [stavka(p, 4, 15)]) });
+    expect(cijena(p)).toBe(13);
+    expect(red('SELECT COUNT(*) AS n FROM nivelacije WHERE primkaId = ?', a).n).toBe(1);
+
+    await b.call('primka:delete', a);
+    expect(cijena(p)).toBe(13);
+  });
+
+  test('ručna izmjena između primki: izmjena A ne gazi ni ručnu ni B', async () => {
+    const p = dodajArtikal('U10', 10);
+    const a = await primkaCijene('U-A', p, 12, 'bez');
+    await b.call('product:update', p, { cijena: 13 });
+    const bId = await primkaCijene('U-B', p, 14, 'sa');
+
+    await b.call('primka:update', { id: a, ...primka('U-A', [stavka(p, 3, 11)]) });
+    expect(cijena(p)).toBe(14);
+    await b.call('primka:delete', bId);
+    expect(cijena(p)).toBe(13);
+  });
+
+  test('isti artikal više puta: važi prva stavka — promjena cijene kasnije stavke ne dira cijenu', async () => {
+    const p = dodajArtikal('U11', 10, { stanje: 2 });
+    const { id } = await b.call('primka:create', primka('U-1', [stavka(p, 1, 12), stavka(p, 1, 13)]));
+    const prije = dokumentiCijena();
+
+    await b.call('primka:update', { id, ...primka('U-1', [stavka(p, 2, 12), stavka(p, 1, 16)]) });
+    expect(cijena(p)).toBe(12);
+    expect(dokumentiCijena()).toEqual(prije);
+  });
+
+  test('starija primka: dodana stavka novog artikla ide kao create, postojeći artikal ne dira', async () => {
+    const p = dodajArtikal('U12', 10);
+    const q = dodajArtikal('U13', 5, { stanje: 1 });
+    const a = await primkaCijene('U-A', p, 12, 'sa');
+    await primkaCijene('U-B', p, 14, 'sa');
+
+    const r = await b.call('primka:update', { id: a, ...primka('U-A', [stavka(p, 1, 12), stavka(q, 2, 7)]) });
+    expect(r.nivelacijaCreated).toBe(true);
+    expect(cijena(p)).toBe(14);
+    expect(cijena(q)).toBe(7);
+    expect(redovi('SELECT productId, kolicina, staraCijena, novaCijena FROM nivelacija_stavke ORDER BY id').filter(x => x.productId === q))
+      .toEqual([{ productId: q, kolicina: 1, staraCijena: 5, novaCijena: 7 }]);
+    expect(stanje(q)).toBe(3);
+  });
+
+  test('stavka čija cijena nije mijenjala cijenu artikla, a kasnije je to učinila druga primka: promjena cijene ne dira trenutnu', async () => {
+    const p = dodajArtikal('U14', 10, { stanje: 2 });
+    const a = (await b.call('primka:create', primka('U-A', [stavka(p, 1, 10)]))).id;
+    await b.call('primka:create', primka('U-B', [stavka(p, 1, 14)]));
+    const nivPrije = broj('nivelacija_stavke');
+
+    await b.call('primka:update', { id: a, ...primka('U-A', [stavka(p, 1, 12)]) });
+    expect(cijena(p)).toBe(14);
+    expect(broj('nivelacija_stavke')).toBe(nivPrije);
+  });
+
+  test('stara primka bez historije: promjena samo količine ne dira cijenu ni staru nivelaciju', async () => {
+    const p = dodajArtikal('U15', 12, { stanje: 2 });
+    const a = dodajPrimku('U-OLD', '2025-01-10');
+    b.db.prepare("INSERT INTO primka_stavke (primkaId, productId, kolicina, cijena, pdvStopa) VALUES (?, ?, 1, 12, 'E')").run(a, p);
+    b.db.prepare("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'ulaz', 1, 'primka', ?)").run(p, a);
+    const niv = Number(b.db.prepare("INSERT INTO nivelacije (brojNivelacije, datum, primkaId) VALUES ('NIV-OLD', '2025-01-10', ?)").run(a).lastInsertRowid);
+    b.db.prepare("INSERT INTO nivelacija_stavke (nivelacijaId, productId, kolicina, staraCijena, novaCijena, razlika, ukupnaRazlika, pdvStopa) VALUES (?, ?, 1, 10, 12, 2, 2, 'E')").run(niv, p);
+    const prije = dokumentiCijena();
+
+    // Artikal još stoji na cijeni stare primke — ranije bi se vratio na 10 pa ponovo nivelisao na 12.
+    await b.call('primka:update', { id: a, ...primka('U-OLD', [stavka(p, 3, 12)]) });
+    expect(cijena(p)).toBe(12);
+    expect(dokumentiCijena()).toEqual(prije);
+    expect(stanje(p)).toBe(5);
+  });
+
+  test('stara primka bez historije: kasnija primka postavila cijenu — izmjena količine je ne gazi', async () => {
+    const p = dodajArtikal('U16', 12);
+    const a = dodajPrimku('U-OLD', '2025-01-10');
+    b.db.prepare("INSERT INTO primka_stavke (primkaId, productId, kolicina, cijena, pdvStopa, staraCijena) VALUES (?, ?, 1, 12, 'E', 10)").run(a, p);
+    await primkaCijene('U-B', p, 14, 'sa');
+
+    await b.call('primka:update', { id: a, ...primka('U-OLD', [stavka(p, 2, 12)]) });
+    expect(cijena(p)).toBe(14);
+    expect(red('SELECT staraCijena FROM primka_stavke WHERE primkaId = ?', a).staraCijena).toBe(10);
+  });
+});
+
+describe('primka:get — oznaka kasnije promjene cijene', () => {
+  test('stavka starije primke čiju je cijenu kasnije promijenilo nešto drugo je označena', async () => {
+    const p = dodajArtikal('K1', 10);
+    const q = dodajArtikal('K2', 5);
+    const a = (await b.call('primka:create', primka('U-A', [stavka(p, 1, 12), stavka(q, 1, 6)]))).id;
+    const bId = await primkaCijene('U-B', p, 14, 'bez');
+
+    const ga = await b.call('primka:get', a);
+    expect(ga.stavke.map((s: any) => [s.productId, s.cijenaKasnijeMijenjana])).toEqual([[p, true], [q, false]]);
+    const gb = await b.call('primka:get', bId);
+    expect(gb.stavke.map((s: any) => s.cijenaKasnijeMijenjana)).toEqual([false]);
   });
 });

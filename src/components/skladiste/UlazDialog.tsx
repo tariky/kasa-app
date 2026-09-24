@@ -4,7 +4,7 @@ import { pdf } from '@react-pdf/renderer';
 import type { Dobavljac, Primka, PrimkaStavka, Product } from '@/types';
 import { izBazePrimke, jePloca, m2UKom } from '@/lib/ploca';
 import { localDateStr } from '@/lib/novac';
-import { nedostajeOpis, nivelacijaRazlike, praznaStavka, redStatus, ulazTotali, uPayload, type UlazRed, type NivelacijaRazlika } from '@/lib/ulaz';
+import { cijeneBezUcinka, nedostajeOpis, nivelacijaRazlike, praznaStavka, redStatus, ulazTotali, uPayload, type UlazRed, type NivelacijaRazlika } from '@/lib/ulaz';
 import { kalkulacijaPrimke, nabavnaVrijednost, type KalkulacijaPrimke } from '@/lib/kalkulacija';
 import { cn, formatKM, formatDate } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -176,7 +176,10 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
   // ── akcije ────────────────────────────────────────────
   const fali = useMemo(() => nedostajeOpis(forma.rows, products), [forma.rows, products]);
   const totali = useMemo(() => ulazTotali(forma.rows, products, forma.zavisniTroskovi), [forma.rows, products, forma.zavisniTroskovi]);
-  const razlike = useMemo(() => (edit ? nivelacijaRazlike(forma.rows, products) : []), [edit, forma.rows, products]);
+  // Pri izmjeni se cijena mijenja samo gdje je korisnik mijenja, i samo ako je ovaj ulaz i dalje zadnja promjena cijene.
+  const izvorne = useMemo(() => (primka?.stavke ?? []), [primka]);
+  const razlike = useMemo(() => (edit ? nivelacijaRazlike(forma.rows, products, izvorne) : []), [edit, forma.rows, products, izvorne]);
+  const bezUcinka = useMemo(() => (edit && primka ? cijeneBezUcinka(forma.rows, products, izvorne) : []), [edit, primka, forma.rows, products, izvorne]);
 
   const spremi = async () => {
     if (!edit || fali || !forma.brojPrimke.trim() || saving) return;
@@ -407,6 +410,20 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
                     <Eyebrow className="block mb-1">Kalkulacija</Eyebrow>
                     <Kalkulacija k={edit ? totali : pregled} />
                   </section>
+                  {edit && bezUcinka.length > 0 && (
+                    <section className="rounded-xl bg-slate-50 border border-slate-200/70 px-4 py-3" aria-label="Cijene bez promjene u prodaji">
+                      <p className="text-[11.5px] font-semibold text-slate-600">Cijena u prodaji ostaje</p>
+                      <ul className="mt-1.5 space-y-0.5">
+                        {bezUcinka.map(r => (
+                          <li key={r.productId} className="flex items-center justify-between gap-2 text-[11px] text-slate-600">
+                            <span className="truncate">{r.productNaziv}</span>
+                            <span className="font-mono tabular-nums whitespace-nowrap">{formatKM(r.cijena)}</span>
+                          </li>
+                        ))}
+                      </ul>
+                      <p className="mt-1.5 text-[10.5px] text-slate-500">Cijenu je kasnije promijenio drugi ulaz ili ručna izmjena. Nova cijena se pamti na ovom ulazu i važi ako se kasnija promjena poništi.</p>
+                    </section>
+                  )}
                   {edit && razlike.length > 0 && (
                     <section className="rounded-xl bg-amber-50 border border-amber-100 px-4 py-3" aria-label="Nivelacija">
                       <p className="flex items-center gap-1.5 text-[11.5px] font-semibold text-amber-700"><AlertTriangle size={12} /> Spremanje mijenja prodajne cijene</p>

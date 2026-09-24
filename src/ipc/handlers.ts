@@ -10,7 +10,7 @@ import {
 import { round2, localDateStr } from '../lib/novac';
 import {
   collectPriceChanges, applyPricesWithoutStock, revertPrimkaPrices, zapisiPromjeneCijena, stareCijeneStavki, datumKretanjaPrimke, validirajPrimku,
-  isDobavljacUsed, type PriceChange,
+  isDobavljacUsed, pripremiIzmjenuPrimke, stareCijeneIzmjene, cijenaKasnijeMijenjana, type PriceChange,
 } from '../lib/skladiste';
 import {
   jeArtikalUProizvodnji, nextBrojNaloga, createNalog, createNalogIzPonude, nalogZaPonudu, updateNalog, replaceStavke,
@@ -542,6 +542,9 @@ export function registerIpcHandlers(): void {
         WHERE ps.primkaId = ?
       `)
       .all(id);
+    // Stavke čiju je cijenu poslije ove primke mijenjalo nešto drugo: izmjena
+    // njihove cijene na primci ne mijenja cijenu u prodaji (ekran to prikazuje).
+    for (const s of primka.stavke) s.cijenaKasnijeMijenjana = cijenaKasnijeMijenjana(db, id, s.productId);
 
     return primka;
   });
@@ -613,20 +616,23 @@ export function registerIpcHandlers(): void {
       db.prepare('UPDATE primke SET brojPrimke = ?, datum = ?, dobavljacNaziv = ?, dobavljacId = ?, dobavljacAdresa = ?, napomena = ?, brojFakture = ? WHERE id = ?')
         .run(brojPrimke, datum, data.dobavljacNaziv ?? null, data.dobavljacId ?? null, data.dobavljacAdresa ?? null, data.napomena ?? null, data.brojFakture ?? null, data.id);
 
-      // Vrati cijene koje je primka promijenila (nivelacija + artikli bez
-      // zalihe), pa očisti staru nivelaciju. Revert samo ako artikal još uvijek
-      // stoji na cijeni koju je *ova* primka postavila — inače bismo pregazili
-      // kasniju promjenu.
-      revertPrimkaPrices(db, data.id);
+      // Cijene se diraju samo za artikle kojima je korisnik promijenio prodajnu
+      // cijenu (ili ih dodao/uklonio) — vidi pripremiIzmjenuPrimke. Ostalima
+      // ostaju cijena, historija i nivelacija; izmjena količine, datuma ili
+      // dobavljača ne smije ponovo nametnuti cijenu ove primke.
+      const izmjena = pripremiIzmjenuPrimke(db, data.id, data.stavke);
 
-      db.prepare('DELETE FROM nivelacija_stavke WHERE nivelacijaId IN (SELECT id FROM nivelacije WHERE primkaId = ?)').run(data.id);
-      db.prepare('DELETE FROM nivelacije WHERE primkaId = ?').run(data.id);
+      // Nivelacije poništenih promjena se brišu; prazne nivelacije nestaju.
+      if (izmjena.ponisteni.size > 0) {
+        const brisiNivStavke = db.prepare('DELETE FROM nivelacija_stavke WHERE productId = ? AND nivelacijaId IN (SELECT id FROM nivelacije WHERE primkaId = ?)');
+        for (const productId of izmjena.ponisteni) brisiNivStavke.run(productId, data.id);
+      }
+      db.prepare('DELETE FROM nivelacije WHERE primkaId = ? AND NOT EXISTS (SELECT 1 FROM nivelacija_stavke ns WHERE ns.nivelacijaId = nivelacije.id)').run(data.id);
 
       // Delete old stavke and stock movements
       db.prepare('DELETE FROM primka_stavke WHERE primkaId = ?').run(data.id);
       db.prepare("DELETE FROM stock_movements WHERE referenceType = 'primka' AND referenceId = ?").run(data.id);
 
-      // Collect price diffs BEFORE inserting stock, deduplicate by productId
       const insertStavka = db.prepare(
         'INSERT INTO primka_stavke (primkaId, productId, kolicina, cijena, nabavnaCijena, rabat, zavisniTroskovi, pdvStopa, staraCijena) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
       );
@@ -634,11 +640,14 @@ export function registerIpcHandlers(): void {
         "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId, createdAt) VALUES (?, 'ulaz', ?, 'primka', ?, ?)"
       );
 
-      const { nivelacija, bezZaliha } = collectPriceChanges(db, data.stavke);
+      // Collect price diffs BEFORE inserting stock — samo za dodane artikle i
+      // promijenjene cijene koje ova primka i dalje određuje.
+      const { nivelacija, bezZaliha } = collectPriceChanges(db, data.stavke.filter(s => izmjena.kreiraj.has(s.productId)));
 
       // Now insert stavke and stock movements. Artiklima bez zalihe stavka
-      // pamti staru cijenu (nema nivelacije) da je update/delete može vratiti.
-      const stareCijene = stareCijeneStavki(data.stavke, bezZaliha);
+      // pamti staru cijenu (nema nivelacije) da je update/delete može vratiti;
+      // zadržane promjene zadržavaju svoju zapamćenu cijenu.
+      const stareCijene = stareCijeneIzmjene(data.stavke, bezZaliha, izmjena.zadrzaneStareCijene);
       // Ulaz na zalihu nosi datum primke; nivelacija ostaje s današnjim datumom.
       const datumUlaza = datumKretanjaPrimke(datum);
       data.stavke.forEach((stavka, i) => {

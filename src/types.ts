@@ -62,6 +62,8 @@ export interface PrimkaStavka {
   pdvStopa: string;
   /** Prodajna cijena koju je stavka pregazila bez nivelacije (artikal bez zalihe); null inače. */
   staraCijena?: number | null;
+  /** Samo iz `primka:get`: cijenu artikla je poslije ove primke mijenjala druga primka ili ručna izmjena. */
+  cijenaKasnijeMijenjana?: boolean;
   createdAt: string;
   productNaziv?: string;
   productJm?: string;
