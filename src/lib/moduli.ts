@@ -4,6 +4,8 @@
 import katalog from './moduliKatalog.json';
 import type { StanjeLicence } from './licencaTipovi';
 
+// Generator nema svojih kanala (koristi kanale jezgra order:create i
+// tring:printReceipt), pa se blokira samo u UI-ju, ne u backendu.
 export type Modul = 'skladiste' | 'ponude' | 'proizvodnja' | 'generator';
 
 export const LICENCIRANI_MODULI = katalog.moduli as readonly Modul[];

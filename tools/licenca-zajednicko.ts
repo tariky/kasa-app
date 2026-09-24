@@ -5,7 +5,7 @@ import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { izdajLicencu, provjeriLicencu, lokalniDatum, Licenca } from '../src/lib/licenca';
-import type { Modul } from '../src/lib/moduli';
+import { normalizujModule, type Modul } from '../src/lib/moduli';
 
 export const PRIVATNI = process.env.PAZAR_LICENCA_KLJUC ?? join(homedir(), '.pazar-licenca', 'privatni.pem');
 const DNEVNIK = join(dirname(PRIVATNI), 'izdane.jsonl');
@@ -51,7 +51,9 @@ export function izdaj(unos: { klijent: string; vrijediDo: string; uredjaj?: stri
   const r = provjeriLicencu(token, createPublicKey(privatni), { uredjaj: licenca.uredjaj });
   if (!r.ok) throw new Error(r.razlog === 'istekla' ? 'datum važenja je u prošlosti' : `token ne prolazi provjeru (${r.razlog})`);
 
-  const izdana: IzdanaLicenca = { ...licenca, token, vrijeme: new Date().toISOString() };
+  // Dnevnik i ispis dobijaju listu kao u tokenu: redom iz kataloga, bez duplikata.
+  // (izdajLicencu je gore dobio sirovu listu da bi nepoznat modul bacio grešku.)
+  const izdana: IzdanaLicenca = { ...licenca, moduli: normalizujModule(unos.moduli) ?? [], token, vrijeme: new Date().toISOString() };
   appendFileSync(DNEVNIK, JSON.stringify(izdana) + '\n', { mode: 0o600 });
   return izdana;
 }

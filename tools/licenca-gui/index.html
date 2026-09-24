@@ -128,6 +128,7 @@
 const $ = (id) => document.getElementById(id);
 let izdane = [];
 let sviModuli = [];
+let podrazumijevani = [];
 function crtajModule(odabrani) {
   $('moduli').innerHTML = sviModuli.map((m) =>
     `<label style="display:flex;gap:6px;align-items:center;font-weight:400;margin:0"><input type="checkbox" value="${m.id}" style="width:auto" ${odabrani.includes(m.id) ? 'checked' : ''}>${esc(m.naziv)}</label>`).join('');
@@ -200,7 +201,7 @@ async function ucitaj() {
   try {
     const s = await api('/api/stanje');
     izdane = s.izdane;
-    sviModuli = s.moduli; crtajModule(s.podrazumijevani);
+    sviModuli = s.moduli; podrazumijevani = s.podrazumijevani; crtajModule(podrazumijevani);
     $('kljuc-info').textContent = `Ključ: ${s.kljuc}`;
     crtajListu();
   } catch (e) {
@@ -249,7 +250,8 @@ $('lista').addEventListener('click', (e) => {
     const l = izdane.filter((x) => { const q = $('pretraga').value.trim().toLowerCase(); return !q || x.klijent.toLowerCase().includes(q); })[Number(b.dataset.produzi)];
     $('klijent').value = l.klijent;
     $('uredjaj').value = l.uredjaj || '';
-    crtajModule(l.moduli ?? sviModuli.map((m) => m.id));
+    // Stari unos bez liste modula: isti podrazumijevani paket kao za novog klijenta
+    crtajModule(l.moduli ?? podrazumijevani);
     // Nastavlja se od starog isteka ako još važi, inače od danas.
     const pocetak = preostalo(l.vrijediDo) >= 0 ? uDatum(l.vrijediDo) : danas();
     const d = new Date(pocetak); d.setMonth(d.getMonth() + 1);

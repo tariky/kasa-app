@@ -9,7 +9,9 @@ export function useModuli(): StanjeModula | null {
 
   useEffect(() => {
     Promise.all([window.api.getSetting('proizvodnja.enabled'), window.api.getSetting('ui.showGenerator')])
-      .then(([p, g]) => setPostavke({ proizvodnja: p === 'true', generator: g === 'true' }));
+      .then(([p, g]) => setPostavke({ proizvodnja: p === 'true', generator: g === 'true' }))
+      // Neuspjelo čitanje postavki: Proizvodnja i Generator isključeni, ostali moduli i dalje rade
+      .catch(() => setPostavke({ proizvodnja: false, generator: false }));
     // Postavke javljaju promjenu odmah, bez ponovnog ulaska u aplikaciju
     const promjena = (kljuc: keyof PostavkeModula) => (e: Event) =>
       setPostavke(s => s && { ...s, [kljuc]: Boolean((e as CustomEvent).detail) });

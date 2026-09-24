@@ -73,19 +73,19 @@ function izdaj(args: string[]) {
 
   const moduli = (values.moduli === undefined ? PODRAZUMIJEVANI_MODULI : values.moduli.split(',').map(m => m.trim()).filter(Boolean)) as Modul[];
 
-  let token: string;
+  let izdana: ReturnType<typeof izdajLicencu>;
   try {
-    token = izdajLicencu({ klijent: values.klijent, vrijediDo: vrijediDo!, uredjaj: values.uredjaj, moduli }).token;
+    izdana = izdajLicencu({ klijent: values.klijent, vrijediDo: vrijediDo!, uredjaj: values.uredjaj, moduli });
   } catch (e) {
     greska((e as Error).message);
   }
 
   console.error(`Klijent:   ${values.klijent}`);
   console.error(`Važi do:   ${vrijediDo} (uključivo)`);
-  console.error(`Moduli:    ${opisModula(moduli)}`);
+  console.error(`Moduli:    ${opisModula(izdana.moduli)}`);
   if (values.uredjaj) console.error(`Uređaj:    ${values.uredjaj}`);
   console.error('');
-  console.log(token);
+  console.log(izdana.token);
 }
 
 function provjeri(token: string | undefined) {
