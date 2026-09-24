@@ -31,6 +31,9 @@ export async function otvoriRustBackend(): Promise<Backend> {
   mkdirSync(radniFolder);
 
   const proc = Bun.spawn([BINARIJ, userData], {
+    // bun test radi u UTC-u (ili u TZ iz okruženja); backend mora računati
+    // "danas" u istoj zoni kao test.
+    env: { ...process.env, TZ: Intl.DateTimeFormat().resolvedOptions().timeZone },
     stdin: 'pipe',
     stdout: 'pipe',
     stderr: process.env.KASA_UGOVOR_LOG ? 'inherit' : 'ignore',
