@@ -28,7 +28,7 @@ import {
   Plus, Trash2, FileText, Package, Search, Pencil, X,
   ClipboardList, PackagePlus, Hash, Barcode,
   DollarSign, Layers, Ruler, ChevronRight, Printer, Building2, Download,
-  ArrowUpRight, ArrowDownRight, AlertTriangle,
+  ArrowUpRight, ArrowDownRight, AlertTriangle, Lock,
 } from 'lucide-react';
 
 type SkladisteTab = 'artikli' | 'primke';
@@ -1085,13 +1085,13 @@ function ArtikliTab({
               <table className="w-full">
                 <thead className="sticky top-0 bg-slate-50/80 backdrop-blur-sm">
                   <tr className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
-                    <th className="text-left pl-5 pr-2 py-2.5 w-[80px]">Šifra</th>
+                    <th className="text-left pl-5 pr-2 py-2.5 w-[1%] whitespace-nowrap">Šifra</th>
                     <th className="text-left px-2 py-2.5">Naziv</th>
                     <th className="text-left px-2 py-2.5 w-[50px]">JM</th>
                     <th className="text-right px-2 py-2.5 w-[100px]">Cijena</th>
                     <th className="text-center px-2 py-2.5 w-[60px]">PDV</th>
-                    <th className="text-center px-2 py-2.5 w-[80px]">Stanje</th>
-                    <th className="text-right pr-5 pl-2 py-2.5 w-[100px]" />
+                    <th className="text-center px-2 py-2.5 w-[110px]">Stanje</th>
+                    <th className="text-right pr-5 pl-2 py-2.5 w-[1%]" />
                   </tr>
                 </thead>
                 <tbody>
@@ -1101,12 +1101,12 @@ function ArtikliTab({
                       <tr
                         key={p.id}
                         className={cn(
-                          'group border-t border-slate-50 transition-colors hover:bg-slate-50/50',
+                          'group border-t border-slate-100 transition-colors hover:bg-slate-50',
                           p.tip === 'materijal' ? 'cursor-default' : 'cursor-pointer'
                         )}
                         onClick={() => { if (p.tip !== 'materijal') handleEdit(p); }}
                       >
-                        <td className="pl-5 pr-2 py-2.5 text-[12px] font-mono text-slate-400">{p.sifra}</td>
+                        <td className="pl-5 pr-2 py-2.5 text-[12px] font-mono text-slate-400 whitespace-nowrap">{p.sifra}</td>
                         <td className="px-2 py-2.5">
                           <span className="text-[12px] font-medium text-slate-700">{p.naziv}</span>
                           {p.tip === 'materijal' && (
@@ -1132,22 +1132,26 @@ function ArtikliTab({
                         </td>
                         <td className="px-2 py-2.5 text-center">
                           <span className={cn(
-                            'inline-flex items-center justify-center min-w-[36px] h-6 rounded-md px-2 font-mono text-xs font-semibold tabular-nums',
+                            'inline-flex items-center justify-center min-w-[36px] h-6 rounded-md px-2 font-mono text-xs font-semibold tabular-nums whitespace-nowrap',
                             stock > 10
                               ? 'bg-emerald-50 text-emerald-700'
                               : stock > 0
                                 ? 'bg-amber-50 text-amber-700'
                                 : 'bg-red-50 text-red-600'
                           )}>
-                            {jePloca(p)
-                              ? `${stock.toFixed(2)} m² · ≈ ${m2UKom(stock, p.plocaSirina!, p.plocaVisina!)} pl.`
-                              : stock}
+                            {jePloca(p) ? `${stock.toFixed(2).replace('.', ',')} m²` : stock}
                           </span>
+                          {jePloca(p) && (
+                            <span className="block mt-0.5 font-mono text-[10px] tabular-nums text-slate-400 whitespace-nowrap">
+                              ≈ {m2UKom(stock, p.plocaSirina!, p.plocaVisina!)} ploča
+                            </span>
+                          )}
                         </td>
                         <td className="pr-5 pl-2 py-2.5 text-right">
                           {p.tip === 'materijal' ? (
-                            <span className="text-[10.5px] text-slate-400 italic opacity-0 group-hover:opacity-100 transition-opacity">
-                              uredi u Šifarniku → Materijal
+                            <span title="Materijal se uređuje u Šifarniku, na kartici Materijal"
+                              className="inline-flex h-7 items-center gap-1 px-2 whitespace-nowrap text-[11px] text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <Lock className="h-3 w-3" /> Šifarnik
                             </span>
                           ) : (
                             <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
