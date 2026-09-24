@@ -11,7 +11,8 @@
     "make": "electron-forge make",
     "publish": "electron-forge publish",
     "lint": "eslint --ext .ts,.tsx .",
-    "test": "bun test"
+    "test": "bun test",
+    "licence": "bun tools/licenca-gui/server.ts"
   },
   "keywords": [],
   "author": {

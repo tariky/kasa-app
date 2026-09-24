@@ -16,6 +16,8 @@ import ProizvodnjaScreen from '@/screens/ProizvodnjaScreen';
 import PendingRacuniDialog from '@/components/PendingRacuniDialog';
 import PologPrompt from '@/components/PologPrompt';
 import { useProizvodnja } from '@/hooks/useProizvodnja';
+import LicencaTraka from '@/components/licenca/LicencaTraka';
+import type { LicencaInfo } from '@/lib/licencaTipovi';
 
 type Screen = 'kasa' | 'skladiste' | 'sifarnik' | 'narudzbe' | 'ponude' | 'proizvodnja' | 'izvjestaji' | 'generator' | 'postavke';
 
@@ -33,10 +35,11 @@ const NAV_ITEMS: { id: Screen; label: string; icon: typeof ScanBarcode; adminOnl
 
 interface Props {
   user: User;
+  licenca: LicencaInfo;
   onLogout: () => void;
 }
 
-export default function MainLayout({ user, onLogout }: Props) {
+export default function MainLayout({ user, licenca, onLogout }: Props) {
   const [screen, setScreen] = useState<Screen>('kasa');
   const [showGenerator, setShowGenerator] = useState(false);
   const proizvodnja = useProizvodnja();
@@ -135,16 +138,19 @@ export default function MainLayout({ user, onLogout }: Props) {
       </aside>
 
       {/* Main content */}
-      <main className="flex-1 overflow-hidden">
-        {screen === 'kasa' && <KasaScreen user={user} />}
-        {screen === 'skladiste' && <SkladisteScreen />}
-        {screen === 'sifarnik' && <SifarnikScreen />}
-        {screen === 'narudzbe' && <NarudzbeScreen korisnikId={user.id} />}
-        {screen === 'ponude' && <PonudeScreen korisnikId={user.id} />}
-        {screen === 'proizvodnja' && <ProizvodnjaScreen korisnikId={user.id} uloga={user.uloga} initialNalogId={openNalogId} />}
-        {screen === 'izvjestaji' && <IzvjestajiScreen korisnikId={user.id} />}
-        {screen === 'generator' && <GeneratorScreen korisnikId={user.id} />}
-        {screen === 'postavke' && <PostavkeScreen />}
+      <main className="flex-1 overflow-hidden flex flex-col">
+        <LicencaTraka info={licenca} />
+        <div className="flex-1 min-h-0 overflow-hidden">
+          {screen === 'kasa' && <KasaScreen user={user} />}
+          {screen === 'skladiste' && <SkladisteScreen />}
+          {screen === 'sifarnik' && <SifarnikScreen />}
+          {screen === 'narudzbe' && <NarudzbeScreen korisnikId={user.id} />}
+          {screen === 'ponude' && <PonudeScreen korisnikId={user.id} />}
+          {screen === 'proizvodnja' && <ProizvodnjaScreen korisnikId={user.id} uloga={user.uloga} initialNalogId={openNalogId} />}
+          {screen === 'izvjestaji' && <IzvjestajiScreen korisnikId={user.id} />}
+          {screen === 'generator' && <GeneratorScreen korisnikId={user.id} />}
+          {screen === 'postavke' && <PostavkeScreen />}
+        </div>
       </main>
 
       <PendingRacuniDialog korisnikId={user.id} />

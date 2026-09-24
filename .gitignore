@@ -96,3 +96,6 @@ out/
 
 # Claude Code worktrees
 .claude/worktrees/
+
+# Licencni privatni ključ nikad u repo
+*.pem

@@ -14,6 +14,7 @@ import {
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
 import { ZaglavljePrikaz } from '@/components/ZaglavljePrikaz';
+import LicencaKartica from '@/components/licenca/LicencaKartica';
 import { LOGO_VELICINA, kontaktFirme } from '@/lib/firma';
 import { cn } from '@/lib/utils';
 import { User, TringSettings, BankAccount } from '@/types';
@@ -1093,6 +1094,8 @@ export default function PostavkeScreen() {
                         <p className="text-[13px] font-medium text-slate-700">Prikaži dnevni promet</p>
                         <p className="text-[12px] text-slate-400 mt-0.5">Prikazuje ukupan promet za danas na kasa ekranu</p>
                       </div>
+                <LicencaKartica />
+
                       <Switch
                         checked={showDailyTotal}
                         onCheckedChange={async (checked) => {

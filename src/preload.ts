@@ -1,6 +1,15 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('api', {
+  // Licenca
+  getLicenca: () => ipcRenderer.invoke('licenca:stanje'),
+  aktivirajLicencu: (token: string) => ipcRenderer.invoke('licenca:aktiviraj', token),
+  onLicencaBlokirano: (cb: () => void) => {
+    const l = () => cb();
+    ipcRenderer.on('licenca:blokirano', l);
+    return () => { ipcRenderer.removeListener('licenca:blokirano', l); };
+  },
+
   // Users
   login: (pin: string) => ipcRenderer.invoke('user:login', pin),
   getUsers: () => ipcRenderer.invoke('user:getAll'),

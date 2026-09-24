@@ -34,11 +34,13 @@ import { addCashMovement, retryCashMovement, getTodayMovements, getDrawerState, 
 import { logoVelicina } from '../lib/firma';
 import * as Tring from '../services/tring';
 import Database from 'better-sqlite3';
+import { provjeriKanal, stanjeLicence, aktivirajLicencu } from './licenca';
 
 function handle<T>(channel: string, handler: (...args: any[]) => T): void {
   ipcMain.handle(channel, async (_event, ...args) => {
     try {
       // `await` je obavezan: bez njega odbijeni promise async handlera
+      provjeriKanal(channel);
       // promaši catch ispod i renderer dobije neobrađenu Electron grešku.
       return await handler(...args);
     } catch (error: any) {
@@ -104,6 +106,10 @@ function insertCompletedOrder(
 
 export function registerIpcHandlers(): void {
   const db = getDb();
+  // ─── Licenca ───
+  handle('licenca:stanje', () => stanjeLicence());
+  handle('licenca:aktiviraj', (token: string) => aktivirajLicencu(token));
+
 
   // ─── Users ───────────────────────────────────────────────
 

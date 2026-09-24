@@ -8,6 +8,9 @@ declare module '*.ttf' {
 
 interface Window {
   api: {
+    getLicenca: () => Promise<import('./lib/licencaTipovi').LicencaInfo>;
+    aktivirajLicencu: (token: string) => Promise<import('./lib/licencaTipovi').LicencaInfo>;
+    onLicencaBlokirano: (cb: () => void) => () => void;
     login: (pin: string) => Promise<any>;
     getUsers: () => Promise<any[]>;
     verifyAdminPin: (pin: string) => Promise<{ success: boolean; ime: string }>;
