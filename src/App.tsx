@@ -17,7 +17,7 @@ export default function App() {
   if (!licenca) ekran = null;
   else if ((licenca.stanje === 'nema' || licenca.stanje === 'neispravna') && !samoPregled && !user) {
     ekran = <AktivacijaScreen info={licenca} onNastavi={() => setSamoPregled(true)} />;
-  } else if (!user) ekran = <LoginScreen onLogin={setUser} />;
+  } else if (!user) ekran = <LoginScreen licenca={licenca} onLogin={setUser} />;
   else ekran = <MainLayout user={user} licenca={licenca} onLogout={() => setUser(null)} />;
 
   return (
