@@ -67,11 +67,11 @@ app.on('ready', () => {
   }
 
   app.setAboutPanelOptions({
-    applicationName: 'Pazar',
+    applicationName: 'Atlas',
     applicationVersion: '1.0.0',
     version: '1.0.0',
-    copyright: '© 2026 Tarik Caplja / Lunatik',
-    credits: 'Razvio: Tarik Caplja\ntarik@lunatik.ba',
+    copyright: '© 2026 Lunatik d.o.o.',
+    credits: 'ERP za biznise\nIzradio: Lunatik d.o.o.\n+387 60 320 4600 (Viber, WhatsApp)\ntarik@lunatik.ba',
     iconPath,        // Linux
     icon: appIcon,   // macOS (NativeImage)
   } as Electron.AboutPanelOptionsOptions);

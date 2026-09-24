@@ -15,6 +15,7 @@ import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
 import { ZaglavljePrikaz } from '@/components/ZaglavljePrikaz';
 import LicencaKartica from '@/components/licenca/LicencaKartica';
+import { OProgramuKartica } from '@/components/OProgramu';
 import { LOGO_VELICINA, kontaktFirme } from '@/lib/firma';
 import { cn, porukaGreske } from '@/lib/utils';
 import { SKALA_KLJUC, SKALE, procitajSkalu, primijeniSkalu, skalaPodrzana } from '@/lib/skala';
@@ -1458,6 +1459,8 @@ export default function PostavkeScreen() {
                     </p>
                   </div>
                 </div>
+
+                <OProgramuKartica />
 
               </div>
             </div>

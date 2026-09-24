@@ -15,7 +15,7 @@ export default function AktivacijaScreen({ info, onNastavi }: Props) {
       <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-blue-500/5 rounded-full blur-[120px]" />
       <div className="relative z-10 w-[420px]">
         <div className="text-center mb-7">
-          <img src={appIcon} alt="Pazar" className="w-16 h-16 rounded-2xl mb-4 shadow-lg shadow-blue-500/20 mx-auto" />
+          <img src={appIcon} alt="Atlas" className="w-16 h-16 rounded-2xl mb-4 shadow-lg shadow-blue-500/20 mx-auto" />
           <h1 className="text-2xl font-bold text-white tracking-tight">{opis.naslov}</h1>
           <p className="text-sm text-slate-400 mt-1.5">{opis.tekst}</p>
         </div>

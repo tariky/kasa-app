@@ -125,7 +125,8 @@ fn api(app: AppHandle, kanal: String, args: Vec<Value>, odgovor: Channel<Value>)
     });
 }
 
-/// Isti folder kao Electron `app.getPath('userData')` (appData/Pazar), da
+/// Isti folder kao Electron `app.getPath('userData')` (appData/Pazar — stari naziv
+/// programa, ostaje i nakon preimenovanja u Atlas), da
 /// Tauri verzija otvori postojeću bazu i licencu. `PAZAR_USER_DATA` ga
 /// zamijeni (testovi, rad nad kopijom baze).
 fn user_data(app: &AppHandle) -> PathBuf {
@@ -181,7 +182,7 @@ fn novi_prozor(app: &AppHandle, url: tauri::Url, features: tauri::webview::NewWi
 fn glavni_prozor(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     let a = app.clone();
     let prozor = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
-        .title("Pazar")
+        .title("Atlas")
         .inner_size(1280.0, 800.0)
         .min_inner_size(1024.0, 700.0)
         .background_color(tauri::window::Color(0x0f, 0x17, 0x2a, 0xff))
@@ -235,29 +236,24 @@ fn meni(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             &PredefinedMenuItem::select_all(app, None)?,
         ],
     )?;
+    // "O programu" otvara dialog u aplikaciji (src/components/OProgramu.tsx),
+    // isti na macOS-u i Windowsu, umjesto sistemskog About panela.
+    let o_programu = MenuItem::with_id(app, "o-programu", "O programu Atlas", true, None::<&str>)?;
     #[cfg(target_os = "macos")]
     {
-        let o_programu = PredefinedMenuItem::about(
+        let atlas = Submenu::with_items(
             app,
-            Some("O programu Pazar"),
-            Some(tauri::menu::AboutMetadata {
-                name: Some("Pazar".into()),
-                version: Some(app.package_info().version.to_string()),
-                copyright: Some("© 2026 Tarik Caplja / Lunatik".into()),
-                credits: Some("Razvio: Tarik Caplja\ntarik@lunatik.ba".into()),
-                ..Default::default()
-            }),
-        )?;
-        let pazar = Submenu::with_items(
-            app,
-            "Pazar",
+            "Atlas",
             true,
-            &[&o_programu, &PredefinedMenuItem::separator(app)?, &PredefinedMenuItem::hide(app, None)?, &PredefinedMenuItem::quit(app, Some("Zatvori Pazar"))?],
+            &[&o_programu, &PredefinedMenuItem::separator(app)?, &PredefinedMenuItem::hide(app, None)?, &PredefinedMenuItem::quit(app, Some("Zatvori Atlas"))?],
         )?;
-        return Menu::with_items(app, &[&pazar, &datoteka, &uredi]);
+        return Menu::with_items(app, &[&atlas, &datoteka, &uredi]);
     }
     #[allow(unreachable_code)]
-    Menu::with_items(app, &[&datoteka, &uredi])
+    {
+        let pomoc = Submenu::with_items(app, "Pomoć", true, &[&o_programu])?;
+        Menu::with_items(app, &[&datoteka, &uredi, &pomoc])
+    }
 }
 
 pub fn run() {
@@ -270,6 +266,8 @@ pub fn run() {
                 if let Some(w) = app.webview_windows().values().find(|w| w.is_focused().unwrap_or(false)) {
                     let _ = w.print();
                 }
+            } else if e.id() == "o-programu" {
+                let _ = app.emit_to("main", "meni:o-programu", ());
             }
         })
         .setup(|app| {
@@ -284,7 +282,7 @@ pub fn run() {
                     handle
                         .dialog()
                         .message(format!("Baza podataka se ne može otvoriti:\n{}\n\n{}", folder.display(), e))
-                        .title("Pazar")
+                        .title("Atlas")
                         .kind(MessageDialogKind::Error)
                         .blocking_show();
                     std::process::exit(1);
@@ -294,7 +292,7 @@ pub fn run() {
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("greška pri pokretanju Pazara")
+        .expect("greška pri pokretanju Atlasa")
         .run(|app, e| {
             // `before-quit` → closeDb(): WAL se upiše u kasa.db.
             if let RunEvent::Exit = e {

@@ -114,12 +114,14 @@ export default function MainLayout({ user, licenca, onLogout }: Props) {
     <div className="h-screen flex bg-slate-50">
       {/* Sidebar: u toku zauzima samo traku s ikonama; na prelazak mišem se
           širi preko sadržaja, a izbor ekrana ga odmah zatvara. */}
-      <div ref={sidebar} className="relative w-16 shrink-0 no-print">
+      <div ref={sidebar} className="relative z-40 w-16 shrink-0 no-print">
         <aside
           onPointerEnter={(e) => { if (e.pointerType !== 'touch') zakaziOtvaranje(); }}
           onPointerLeave={(e) => { if (e.pointerType !== 'touch') zatvori(); }}
           className={cn(
-            'absolute inset-y-0 left-0 z-40 flex flex-col overflow-hidden bg-[#0f1629] text-white',
+            // transform-gpu: WebKit (Tauri) inače crta sticky zaglavlja tabela s
+            // backdrop-blur preko otvorenog sidebara, bez obzira na z-index.
+            'absolute inset-y-0 left-0 z-40 flex flex-col overflow-hidden bg-[#0f1629] text-white transform-gpu',
             'transition-[width,box-shadow] duration-200 ease-out',
             otvoren ? 'w-56 shadow-2xl shadow-black/40' : 'w-16',
           )}
@@ -131,9 +133,9 @@ export default function MainLayout({ user, licenca, onLogout }: Props) {
             onClick={() => setOtvoren(o => !o)}
             className="flex items-center gap-3 px-[14px] pt-5 pb-4 text-left"
           >
-            <img src={appIcon} alt="Pazar" className="w-9 h-9 shrink-0 rounded-lg shadow-sm shadow-blue-500/20" />
+            <img src={appIcon} alt="Atlas" className="w-9 h-9 shrink-0 rounded-lg shadow-sm shadow-blue-500/20" />
             <div className={cn('whitespace-nowrap transition-opacity duration-150', otvoren ? 'opacity-100' : 'opacity-0')}>
-              <h1 className="text-base font-bold tracking-tight leading-none">Pazar</h1>
+              <h1 className="text-base font-bold tracking-tight leading-none">Atlas</h1>
               <p className="text-[11px] text-slate-500 mt-0.5">{user.ime}</p>
             </div>
           </button>
@@ -189,7 +191,7 @@ export default function MainLayout({ user, licenca, onLogout }: Props) {
       </div>
 
       {/* Main content */}
-      <main className="flex-1 overflow-hidden flex flex-col">
+      <main className="relative z-0 isolate flex-1 overflow-hidden flex flex-col">
         <LicencaTraka info={licenca} />
         <div className="flex-1 min-h-0 overflow-hidden">
           {screen === 'kasa' && <KasaScreen user={user} />}

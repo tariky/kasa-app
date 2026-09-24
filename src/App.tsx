@@ -4,6 +4,7 @@ import LoginScreen from '@/screens/LoginScreen';
 import AktivacijaScreen from '@/screens/AktivacijaScreen';
 import MainLayout from '@/components/MainLayout';
 import LicencaDialog from '@/components/licenca/LicencaDialog';
+import { OProgramuDialog } from '@/components/OProgramu';
 import { useLicenca } from '@/hooks/useLicenca';
 
 export default function App() {
@@ -23,6 +24,7 @@ export default function App() {
     <>
       {ekran}
       <LicencaDialog info={licenca} />
+      <OProgramuDialog />
     </>
   );
 }
