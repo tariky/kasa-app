@@ -1,0 +1,24 @@
+[package]
+name = "pazar-backend"
+version = "1.0.0"
+edition = "2021"
+description = "Pazar backend: IPC kanali (bivši Electron main proces) nad SQLite bazom"
+
+[lib]
+name = "pazar_backend"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ugovor-server"
+path = "src/bin/ugovor_server.rs"
+
+[dependencies]
+rusqlite = { version = "0.40", features = ["bundled"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+chrono = "0.4"
+regex = "1"
+ureq = "3"
+ed25519-dalek = { version = "2", features = ["pkcs8", "pem"] }
+base64 = "0.22"
+sha2 = "0.10"
+hostname = "0.4"

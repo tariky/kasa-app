@@ -3,7 +3,8 @@
 // puštaju nad svakom implementacijom backenda (danas Electron/TS handleri,
 // sutra Rust), pa prolaz testa znači da se nova implementacija ponaša isto.
 //
-// Izbor implementacije: KASA_BACKEND=ts (podrazumijevano).
+// Izbor implementacije: KASA_BACKEND=ts (podrazumijevano) ili KASA_BACKEND=rust
+// (src-tauri/backend, `bun run test:rust`).
 import type { Database } from 'bun:sqlite';
 import type { LaziTring } from './laziTring';
 
@@ -45,5 +46,6 @@ export interface Backend {
 export async function otvoriBackend(): Promise<Backend> {
   const vrsta = process.env.KASA_BACKEND ?? 'ts';
   if (vrsta === 'ts') return (await import('./tsBackend')).otvoriTsBackend();
+  if (vrsta === 'rust') return (await import('./rustBackend')).otvoriRustBackend();
   throw new Error(`Nepoznat KASA_BACKEND: ${vrsta}`);
 }

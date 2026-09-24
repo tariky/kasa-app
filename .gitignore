@@ -99,3 +99,7 @@ out/
 
 # Licencni privatni ključ nikad u repo
 *.pem
+
+# Tauri / Rust
+src-tauri/target/
+src-tauri/gen/schemas/
