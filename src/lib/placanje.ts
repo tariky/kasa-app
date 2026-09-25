@@ -61,3 +61,60 @@ export function pripremiPlacanje(
     : JSON.stringify(Object.fromEntries(vrstePlacanja.map(v => [KLJUC_RASPODJELE[v.oznaka], v.iznos])));
   return { nacinPlacanja, vrstePlacanja };
 }
+
+// ─── Čitanje upisanog načina plaćanja ───────────────────────
+// Jedini parser za `orders.nacinPlacanja` (knjigovođa, ekran računa, PDF-ovi).
+
+export interface Placanja {
+  gotovina: number;
+  kartica: number;
+  virman: number;
+  cek: number;
+}
+
+const VRSTE: Record<string, keyof Placanja> = { gotovina: 'gotovina', kartica: 'kartica', virman: 'virman', cek: 'cek', 'ček': 'cek' };
+const NAZIV_VRSTE: Record<keyof Placanja, string> = { gotovina: 'Gotovina', kartica: 'Kartica', virman: 'Virman', cek: 'Ček' };
+const VRSTE_REDOM: Array<keyof Placanja> = ['gotovina', 'kartica', 'virman', 'cek'];
+export const nulaPlacanja = (): Placanja => ({ gotovina: 0, kartica: 0, virman: 0, cek: 0 });
+const km = (n: number) => n.toFixed(2).replace('.', ',');
+
+/**
+ * Način plaćanja → iznosi po vrsti. Tekst ('Kartica') nosi cijeli iznos,
+ * JSON ({gotovina, kartica…}) je podijeljeno plaćanje (kao `gotovinskiIznos`
+ * u drawer.ts). Nepoznat oblik: sve u gotovinu, `poznat: false` (Kontrola).
+ */
+export function raspodjelaPlacanja(nacin: string, ukupno: number): { iznosi: Placanja; opis: string; poznat: boolean } {
+  const tekst = VRSTE[nacin.trim().toLowerCase()];
+  if (tekst) return { iznosi: { ...nulaPlacanja(), [tekst]: ukupno }, opis: NAZIV_VRSTE[tekst], poznat: true };
+
+  let json: unknown = null;
+  try { json = JSON.parse(nacin); } catch { /* nije JSON */ }
+  if (json && typeof json === 'object' && !Array.isArray(json)) {
+    const iznosi = nulaPlacanja();
+    const opis: string[] = [];
+    let poznat = true;
+    for (const [k, v] of Object.entries(json)) {
+      const vrsta = VRSTE[k.toLowerCase()];
+      if (!vrsta || typeof v !== 'number') { poznat = false; break; }
+      if (v === 0) continue;
+      iznosi[vrsta] = round2(iznosi[vrsta] + v);
+      opis.push(`${NAZIV_VRSTE[vrsta]} ${km(v)}`);
+    }
+    if (poznat && opis.length) return { iznosi, opis: opis.join(' + '), poznat };
+  }
+  return { iznosi: { ...nulaPlacanja(), gotovina: ukupno }, opis: nacin, poznat: false };
+}
+
+/**
+ * Način plaćanja za prikaz (ekran računa, PDF računa, promet): jedna vrsta →
+ * njen naziv; razbijeno → "Gotovina 3,00 KM + Ček 2,00 KM". `nazivi` mijenja
+ * nazive vrsta (npr. engleski PDF). Nepoznat oblik ide kako je upisan.
+ */
+export function opisPlacanja(nacin: string, ukupno: number, nazivi: Partial<Record<keyof Placanja, string>> = {}): string {
+  const { iznosi, poznat } = raspodjelaPlacanja(nacin, ukupno);
+  const dijelovi = VRSTE_REDOM.filter(v => iznosi[v] > 0);
+  if (!poznat || dijelovi.length === 0) return nacin;
+  const naziv = (v: keyof Placanja) => nazivi[v] ?? NAZIV_VRSTE[v];
+  if (dijelovi.length === 1) return naziv(dijelovi[0]);
+  return dijelovi.map(v => `${naziv(v)} ${km(iznosi[v])} KM`).join(' + ');
+}

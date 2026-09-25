@@ -7,6 +7,7 @@ import { iznosStavke } from '@/lib/racun';
 import { prilogKompletan, sumaPriloga } from '@/lib/prilog';
 import { formatDatumValute } from '@/lib/valuta';
 import { gotovinskiIznos } from '@/lib/drawer';
+import { opisPlacanja, raspodjelaPlacanja } from '@/lib/placanje';
 import { round2 } from '@/lib/novac';
 import { LOGO_VELICINA } from '@/lib/firma';
 import { Button } from '@/components/ui/button';
@@ -31,16 +32,10 @@ type Notice = { type: 'success' | 'error'; text: string };
 const TH = 'text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400 pb-2 border-b border-slate-200/80 whitespace-nowrap';
 const TD = 'py-2.5 border-b border-slate-100 align-top';
 
-function placanje(json: string): { label: string; kartica: boolean; gotovina: boolean } {
-  try {
-    const p = JSON.parse(json);
-    if (p.gotovina && p.kartica) return { label: `Gotovina ${formatKM(p.gotovina)}, kartica ${formatKM(p.kartica)}`, kartica: true, gotovina: true };
-    if (p.kartica) return { label: `Kartica ${formatKM(p.kartica)}`, kartica: true, gotovina: false };
-    if (p.gotovina) return { label: `Gotovina ${formatKM(p.gotovina)}`, kartica: false, gotovina: true };
-    return { label: json, kartica: false, gotovina: true };
-  } catch {
-    return { label: json, kartica: false, gotovina: true };
-  }
+/** Način plaćanja za zaglavlje: tekst ili razbijeno plaćanje (lib/placanje.ts), ikone po vrstama. */
+function placanje(nacin: string, ukupno: number): { label: string; kartica: boolean; gotovina: boolean } {
+  const { iznosi } = raspodjelaPlacanja(nacin, ukupno);
+  return { label: opisPlacanja(nacin, ukupno), kartica: iznosi.kartica > 0, gotovina: iznosi.gotovina > 0 };
 }
 
 /** Oznaka na tamnom zaglavlju — status i porijeklo računa. */
@@ -307,7 +302,7 @@ export function RacunDetailDialog({ orderId, redoslijed, uloga, onClose, onNavig
   // Faktura sa dodijeljenim stavkama pokazuje njih; zbirna stavka je samo ono što je otišlo na uređaj.
   const stavkeFakture = imaFakturu && !!fakturaStavke?.length;
   const stavke: any[] = stavkeFakture ? fakturaStavke! : order?.stavke ?? [];
-  const nacin = order ? placanje(order.nacinPlacanja) : null;
+  const nacin = order ? placanje(order.nacinPlacanja, order.ukupno) : null;
   const imaRabat = stavke.some(s => (s.rabat || 0) > 0);
   const kupacAdresa = order ? [order.kupacAdresa, [order.kupacPostanskiBroj, order.kupacGrad].filter(Boolean).join(' ')].filter(Boolean).join(', ') : '';
 

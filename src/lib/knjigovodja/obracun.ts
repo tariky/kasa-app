@@ -6,6 +6,9 @@ import { iznosStavke } from '../racun';
 import { fakturnaVrijednost, rabatIznos, nabavnaVrijednost, pdvStopaPct } from '../kalkulacija';
 import { parseFiskalniBroj, izracunajPraznine, MAX_PRAZNINA } from '../fiskalni';
 import { prikazDatuma } from './period';
+import { raspodjelaPlacanja, nulaPlacanja, type Placanja } from '../placanje';
+
+export { raspodjelaPlacanja, type Placanja };
 import type {
   KnjigovodjaPodaci, IzvozRacun, IzvozStavkaRacuna, IzvozNivelacijaStavka, IzvozKretanjeNovca,
 } from './tipovi';
@@ -20,13 +23,6 @@ export interface Stope {
   pdvE: number;
   iznosK: number;
   ukupno: number;
-}
-
-export interface Placanja {
-  gotovina: number;
-  kartica: number;
-  virman: number;
-  cek: number;
 }
 
 export interface KifRed extends Stope {
@@ -162,37 +158,7 @@ const round4 = (n: number) => Math.round((n + Number.EPSILON) * 10000) / 10000;
 const crtica = (s: string | null | undefined) => (s && s.trim() ? s : '—');
 
 // ── plaćanje ─────────────────────────────────────────────
-
-const VRSTE: Record<string, keyof Placanja> = { gotovina: 'gotovina', kartica: 'kartica', virman: 'virman', cek: 'cek', 'ček': 'cek' };
-const NAZIV_VRSTE: Record<keyof Placanja, string> = { gotovina: 'Gotovina', kartica: 'Kartica', virman: 'Virman', cek: 'Ček' };
-const nulaPlacanja = (): Placanja => ({ gotovina: 0, kartica: 0, virman: 0, cek: 0 });
-
-/**
- * Način plaćanja → iznosi po vrsti. Tekst ('Kartica') nosi cijeli iznos,
- * JSON ({gotovina, kartica…}) je podijeljeno plaćanje (kao `gotovinskiIznos`
- * u drawer.ts). Nepoznat oblik: sve u gotovinu, `poznat: false` (Kontrola).
- */
-export function raspodjelaPlacanja(nacin: string, ukupno: number): { iznosi: Placanja; opis: string; poznat: boolean } {
-  const tekst = VRSTE[nacin.trim().toLowerCase()];
-  if (tekst) return { iznosi: { ...nulaPlacanja(), [tekst]: ukupno }, opis: NAZIV_VRSTE[tekst], poznat: true };
-
-  let json: unknown = null;
-  try { json = JSON.parse(nacin); } catch { /* nije JSON */ }
-  if (json && typeof json === 'object' && !Array.isArray(json)) {
-    const iznosi = nulaPlacanja();
-    const opis: string[] = [];
-    let poznat = true;
-    for (const [k, v] of Object.entries(json)) {
-      const vrsta = VRSTE[k.toLowerCase()];
-      if (!vrsta || typeof v !== 'number') { poznat = false; break; }
-      if (v === 0) continue;
-      iznosi[vrsta] = round2(iznosi[vrsta] + v);
-      opis.push(`${NAZIV_VRSTE[vrsta]} ${km(v)}`);
-    }
-    if (poznat && opis.length) return { iznosi, opis: opis.join(' + '), poznat };
-  }
-  return { iznosi: { ...nulaPlacanja(), gotovina: ukupno }, opis: nacin, poznat: false };
-}
+// Parser načina plaćanja je zajednički s ekranima i PDF-ovima: lib/placanje.ts.
 
 // ── računi ───────────────────────────────────────────────
 
