@@ -6,25 +6,39 @@ import { prikazPerioda } from './period';
 import { NAZIVI_LISTOVA } from './listovi';
 import type { KnjigovodjaIzvjestaj } from './obracun';
 
-type Format = 'km' | 'datum' | 'datumVrijeme' | 'kolicina' | 'cijena';
+type Format = 'km' | 'datum' | 'datumVrijeme' | 'kolicina' | 'cijena' | 'broj';
 type Celija = string | number | Date | null;
+
+/** Zbir kolone koji nije običan SUM; `raspon('Naslov')` → npr. 'E6:E9'. */
+interface PosebanZbir {
+  formula: (raspon: (naslov: string) => string) => string;
+  /** Keširan rezultat — broj iz obracun.ts, da Excel, PDF i ekran budu isti. */
+  rezultat: number;
+}
 
 interface Kolona<T> {
   naslov: string;
   sirina: number;
   v: (r: T) => Celija;
   format?: Format;
-  /** Kolona dobija zbir u redu „Ukupno“. */
-  zbir?: boolean;
+  /** Kolona dobija zbir u redu „Ukupno“: SUM kolone ili poseban zbir. */
+  zbir?: boolean | PosebanZbir;
 }
 
 const FORMATI: Record<Format, string> = {
   km: '#,##0.00',
   cijena: '#,##0.00##',
   kolicina: '#,##0.###',
+  broj: '#,##0',
   datum: 'dd.mm.yyyy',
   datumVrijeme: 'dd.mm.yyyy hh:mm',
 };
+
+/** Količina/procenat: cijeli broj bez decimalne tačke („1“, ne „1.“). */
+function numFmt(format: Format, v: unknown): string {
+  if (format === 'kolicina' && typeof v === 'number' && Number.isInteger(v)) return FORMATI.broj;
+  return FORMATI[format];
+}
 
 const PRVI_RED_PODATAKA = 6;
 
@@ -47,8 +61,18 @@ function zaglavlje(ws: ExcelJS.Worksheet, firma: Pick<FirmaSettings, 'naziv' | '
   ws.getCell('A3').font = { color: { argb: 'FF555555' } };
 }
 
-/** Tabela od reda `start` (naslovi) — vraća prvi slobodan red ispod nje. */
-function tabela<T>(ws: ExcelJS.Worksheet, start: number, kolone: Kolona<T>[], redovi: T[], saZbirom: boolean): number {
+interface Raspored {
+  /** Zadnji red s podacima (red naslova kad podataka nema). */
+  zadnjiRed: number;
+  /** Prvi slobodan red ispod tabele. */
+  sljedeci: number;
+}
+
+/**
+ * Tabela od reda `start` (naslovi). Red zbira (`oznakaZbira`, null = bez
+ * njega) ide iza jednog praznog reda, da ga sort/filter podataka ne zahvati.
+ */
+function tabela<T>(ws: ExcelJS.Worksheet, start: number, kolone: Kolona<T>[], redovi: T[], oznakaZbira: string | null): Raspored {
   const naslovi = ws.getRow(start);
   kolone.forEach((k, i) => {
     const c = naslovi.getCell(i + 1);
@@ -63,42 +87,50 @@ function tabela<T>(ws: ExcelJS.Worksheet, start: number, kolone: Kolona<T>[], re
     const red = ws.getRow(start + 1 + j);
     kolone.forEach((k, i) => {
       const c = red.getCell(i + 1);
-      c.value = k.v(r);
-      if (k.format) c.numFmt = FORMATI[k.format];
+      const v = k.v(r);
+      c.value = v;
+      if (k.format) c.numFmt = numFmt(k.format, v);
     });
   });
 
-  let sljedeci = start + 1 + redovi.length;
-  if (saZbirom) {
-    const red = ws.getRow(sljedeci);
-    red.getCell(1).value = 'Ukupno';
-    red.font = { bold: true };
-    kolone.forEach((k, i) => {
-      if (!k.zbir) return;
-      const slovo = ws.getColumn(i + 1).letter;
-      const rezultat = Math.round(redovi.reduce((a, r) => a + (Number(k.v(r)) || 0), 0) * 100) / 100;
-      const c = red.getCell(i + 1);
-      c.value = redovi.length
-        ? { formula: `SUM(${slovo}${start + 1}:${slovo}${sljedeci - 1})`, result: rezultat }
-        : 0;
-      c.numFmt = FORMATI[k.format ?? 'km'];
-      c.border = { top: { style: 'thin' } };
-    });
-    sljedeci += 1;
-  }
-  return sljedeci;
+  const zadnjiRed = start + redovi.length;
+  if (oznakaZbira === null) return { zadnjiRed, sljedeci: zadnjiRed + 1 };
+
+  const raspon = (naslov: string) => {
+    const i = kolone.findIndex(k => k.naslov === naslov);
+    if (i < 0) throw new Error(`Nema kolone ${naslov}`);
+    const slovo = ws.getColumn(i + 1).letter;
+    return `${slovo}${start + 1}:${slovo}${zadnjiRed}`;
+  };
+  const redZbira = zadnjiRed + 2;
+  const red = ws.getRow(redZbira);
+  red.getCell(1).value = oznakaZbira;
+  red.font = { bold: true };
+  kolone.forEach((k, i) => {
+    if (!k.zbir) return;
+    const rezultat = typeof k.zbir === 'object'
+      ? k.zbir.rezultat
+      : Math.round(redovi.reduce((a, r) => a + (Number(k.v(r)) || 0), 0) * 100) / 100;
+    const formula = typeof k.zbir === 'object' ? k.zbir.formula(raspon) : `SUM(${raspon(k.naslov)})`;
+    const c = red.getCell(i + 1);
+    c.value = redovi.length ? { formula, result: rezultat } : 0;
+    c.numFmt = numFmt(k.format ?? 'km', rezultat);
+    c.border = { top: { style: 'thin' } };
+  });
+  return { zadnjiRed, sljedeci: redZbira + 1 };
 }
 
 function list<T>(
   wb: ExcelJS.Workbook, ime: string, ctx: { firma: Pick<FirmaSettings, 'naziv' | 'idBroj' | 'pdvBroj'>; iz: KnjigovodjaIzvjestaj; izvezeno: Date },
-  kolone: Kolona<T>[], redovi: T[], saZbirom = true,
-): ExcelJS.Worksheet {
+  kolone: Kolona<T>[], redovi: T[], oznakaZbira: string | null = 'Ukupno',
+): { ws: ExcelJS.Worksheet; sljedeci: number } {
   const ws = wb.addWorksheet(ime, { views: [{ state: 'frozen', ySplit: PRVI_RED_PODATAKA - 1 }] });
   zaglavlje(ws, ctx.firma, ctx.iz, ctx.izvezeno, ime);
   kolone.forEach((k, i) => { ws.getColumn(i + 1).width = k.sirina; });
-  tabela(ws, PRVI_RED_PODATAKA - 1, kolone, redovi, saZbirom);
-  ws.autoFilter = { from: { row: PRVI_RED_PODATAKA - 1, column: 1 }, to: { row: PRVI_RED_PODATAKA - 1, column: kolone.length } };
-  return ws;
+  const { zadnjiRed, sljedeci } = tabela(ws, PRVI_RED_PODATAKA - 1, kolone, redovi, oznakaZbira);
+  // Filter samo nad podacima — red „Ukupno“ ostaje van sorta.
+  ws.autoFilter = { from: { row: PRVI_RED_PODATAKA - 1, column: 1 }, to: { row: zadnjiRed, column: kolone.length } };
+  return { ws, sljedeci };
 }
 
 const L = NAZIVI_LISTOVA;
@@ -113,7 +145,7 @@ export async function napraviExcel(
 
   list(wb, L.rekapitulacija, ctx, [
     { naslov: 'Datum', sirina: 12, v: r => datum(r.datum), format: 'datum' },
-    { naslov: 'Broj računa', sirina: 10, v: r => r.brojRacuna, format: 'kolicina', zbir: true },
+    { naslov: 'Broj računa', sirina: 10, v: r => r.brojRacuna, format: 'broj', zbir: true },
     { naslov: 'Osnovica 17%', sirina: 14, v: r => r.osnovicaE, format: 'km', zbir: true },
     { naslov: 'PDV 17%', sirina: 12, v: r => r.pdvE, format: 'km', zbir: true },
     { naslov: 'Oslobođeno (K)', sirina: 14, v: r => r.iznosK, format: 'km', zbir: true },
@@ -209,7 +241,7 @@ export async function napraviExcel(
   ], iz.kretanjaNovca);
 
   if (iz.moduli.proizvodnja) {
-    const ws = list(wb, L.utrosak, ctx, [
+    const { ws, sljedeci } = list(wb, L.utrosak, ctx, [
       { naslov: 'Nalog', sirina: 10, v: r => r.nalog },
       { naslov: 'Završen', sirina: 17, v: r => datum(r.zavrsen), format: 'datumVrijeme' },
       { naslov: 'Opis', sirina: 30, v: r => r.opis },
@@ -220,7 +252,7 @@ export async function napraviExcel(
       { naslov: 'Nabavna cijena', sirina: 12, v: r => r.nabavnaCijena, format: 'cijena' },
       { naslov: 'Vrijednost', sirina: 13, v: r => r.vrijednost, format: 'km', zbir: true },
     ], iz.utrosak);
-    const start = PRVI_RED_PODATAKA + iz.utrosak.length + 2;
+    const start = sljedeci + 1;
     ws.getCell(`A${start}`).value = 'Zbir po materijalu';
     ws.getCell(`A${start}`).font = { bold: true, size: 12 };
     tabela(ws, start + 1, [
@@ -229,7 +261,7 @@ export async function napraviExcel(
       { naslov: 'JM', sirina: 0, v: r => r.jm },
       { naslov: 'Količina', sirina: 0, v: r => r.kolicina, format: 'kolicina' },
       { naslov: 'Vrijednost', sirina: 0, v: r => r.vrijednost, format: 'km', zbir: true },
-    ], iz.utrosakZbir, true);
+    ], iz.utrosakZbir, 'Ukupno');
   }
 
   if (iz.moduli.skladiste) {
@@ -240,10 +272,16 @@ export async function napraviExcel(
       { naslov: 'Vrsta', sirina: 10, v: r => (r.tip === 'materijal' ? 'Materijal' : 'Roba') },
       { naslov: 'Količina', sirina: 10, v: r => r.kolicina, format: 'kolicina' },
       { naslov: 'Prosječna nabavna', sirina: 13, v: r => r.prosjecnaNabavna, format: 'cijena' },
-      { naslov: 'Nabavna vrijednost', sirina: 14, v: r => r.nabavnaVrijednost, format: 'km', zbir: true },
+      {
+        naslov: 'Nabavna vrijednost', sirina: 14, v: r => r.nabavnaVrijednost, format: 'km',
+        zbir: { formula: r => `SUMIF(${r('Količina')},">0",${r('Nabavna vrijednost')})`, rezultat: iz.zbir.zalihe.nabavna },
+      },
       { naslov: 'Prodajna cijena', sirina: 12, v: r => r.prodajnaCijena, format: 'km' },
-      { naslov: 'Prodajna vrijednost', sirina: 14, v: r => r.prodajnaVrijednost, format: 'km', zbir: true },
-    ], iz.zalihe);
+      {
+        naslov: 'Prodajna vrijednost', sirina: 14, v: r => r.prodajnaVrijednost, format: 'km',
+        zbir: { formula: r => `SUMIF(${r('Količina')},">0",${r('Prodajna vrijednost')})`, rezultat: iz.zbir.zalihe.prodajna },
+      },
+    ], iz.zalihe, 'Ukupno (bez minusa)');
   }
 
   const kontrola = iz.upozorenja.length ? iz.upozorenja : [{ vrsta: '', opis: '' }];
@@ -254,7 +292,7 @@ export async function napraviExcel(
   list(wb, L.kontrola, ctx, [
     { naslov: 'Vrsta', sirina: 22, v: r => VRSTE[r.vrsta] ?? r.vrsta },
     { naslov: 'Opis', sirina: 90, v: r => r.opis },
-  ], kontrola, false);
+  ], kontrola, null);
 
   return new Uint8Array(await wb.xlsx.writeBuffer());
 }
