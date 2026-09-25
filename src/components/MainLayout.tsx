@@ -189,7 +189,7 @@ export default function MainLayout({ user, licenca, onLogout }: Props) {
           {screen === 'narudzbe' && <NarudzbeScreen korisnikId={user.id} />}
           {screen === 'ponude' && <PonudeScreen korisnikId={user.id} />}
           {screen === 'proizvodnja' && <ProizvodnjaScreen korisnikId={user.id} uloga={user.uloga} initialNalogId={openNalogId} />}
-          {screen === 'izvjestaji' && <IzvjestajiScreen korisnikId={user.id} />}
+          {screen === 'izvjestaji' && <IzvjestajiScreen korisnikId={user.id} uloga={user.uloga} />}
           {screen === 'generator' && <GeneratorScreen korisnikId={user.id} />}
           {screen === 'postavke' && <PostavkeScreen />}
         </div>

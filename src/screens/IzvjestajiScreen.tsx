@@ -7,9 +7,10 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import {
   Printer, FileText, AlertTriangle, TrendingUp, Package,
   ArrowUpRight, ArrowDownRight, RotateCcw, Calendar, Loader2,
-  ChevronRight, Zap, Clock, BarChart3, Download, Banknote,
+  ChevronRight, Zap, Clock, BarChart3, Download, Banknote, BookOpenCheck,
 } from 'lucide-react';
 import CashMovementDialog from '@/components/CashMovementDialog';
+import KnjigovodjaTab from '@/components/izvjestaji/KnjigovodjaTab';
 import { cn, formatKM, formatDateTime, formatDate } from '@/lib/utils';
 import { nabavnaVrijednost } from '@/lib/kalkulacija';
 import { Order, Primka } from '@/types';
@@ -26,9 +27,9 @@ function fmtDisplay(d: Date): string {
   return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
 }
 
-type Tab = 'promet' | 'primke' | 'nivelacije' | 'fiskalni';
+type Tab = 'promet' | 'primke' | 'nivelacije' | 'fiskalni' | 'knjigovodja';
 
-export default function IzvjestajiScreen({ korisnikId }: { korisnikId: number }) {
+export default function IzvjestajiScreen({ korisnikId, uloga }: { korisnikId: number; uloga: string }) {
   const [dateFrom, setDateFrom] = useState(new Date());
   const [dateTo, setDateTo] = useState(new Date());
   const [fromOpen, setFromOpen] = useState(false);
@@ -257,6 +258,7 @@ export default function IzvjestajiScreen({ korisnikId }: { korisnikId: number })
     { id: 'primke', label: 'Ulaz robe', icon: Package },
     { id: 'nivelacije', label: 'Nivelacije', icon: FileText },
     { id: 'fiskalni', label: 'Fiskalni', icon: Printer },
+    ...(uloga === 'admin' ? [{ id: 'knjigovodja' as Tab, label: 'Knjigovođa', icon: BookOpenCheck }] : []),
   ];
 
   return (
@@ -288,84 +290,86 @@ export default function IzvjestajiScreen({ korisnikId }: { korisnikId: number })
             })}
           </div>
 
-          {/* Date range */}
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2 text-[13px] text-slate-500">
-              <Calendar size={14} />
-              <span>Period:</span>
+          {/* Date range — Knjigovođa ima svoj izbor perioda */}
+          {activeTab !== 'knjigovodja' && (
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 text-[13px] text-slate-500">
+                <Calendar size={14} />
+                <span>Period:</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <Popover open={fromOpen} onOpenChange={setFromOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className="w-[140px] h-9 text-[13px] font-mono bg-slate-50 border-slate-200 justify-start"
+                    >
+                      <Calendar size={13} className="mr-2 text-slate-400" />
+                      {fmtDisplay(dateFrom)}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0" align="start">
+                    <CalendarComponent
+                      mode="single"
+                      selected={dateFrom}
+                      onSelect={(day) => {
+                        if (day) {
+                          setDateFrom(day);
+                          setFromOpen(false);
+                        }
+                      }}
+                    />
+                  </PopoverContent>
+                </Popover>
+                <ChevronRight size={14} className="text-slate-300" />
+                <Popover open={toOpen} onOpenChange={setToOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className="w-[140px] h-9 text-[13px] font-mono bg-slate-50 border-slate-200 justify-start"
+                    >
+                      <Calendar size={13} className="mr-2 text-slate-400" />
+                      {fmtDisplay(dateTo)}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0" align="start">
+                    <CalendarComponent
+                      mode="single"
+                      selected={dateTo}
+                      onSelect={(day) => {
+                        if (day) {
+                          setDateTo(day);
+                          setToOpen(false);
+                        }
+                      }}
+                    />
+                  </PopoverContent>
+                </Popover>
+              </div>
+              {(activeTab === 'promet' || activeTab === 'primke' || activeTab === 'nivelacije') && (
+                <Button
+                  size="sm"
+                  className="h-9 gap-2"
+                  onClick={activeTab === 'promet' ? loadPromet : activeTab === 'primke' ? loadPrimke : loadNivelacije}
+                  disabled={activeTab === 'promet' ? prometLoading : activeTab === 'primke' ? primkeLoading : nivelacijeLoading}
+                >
+                  {(activeTab === 'promet' ? prometLoading : activeTab === 'primke' ? primkeLoading : nivelacijeLoading) ? (
+                    <Loader2 size={14} className="animate-spin" />
+                  ) : (
+                    <BarChart3 size={14} />
+                  )}
+                  Generiši
+                </Button>
+              )}
             </div>
-            <div className="flex items-center gap-1.5">
-              <Popover open={fromOpen} onOpenChange={setFromOpen}>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    className="w-[140px] h-9 text-[13px] font-mono bg-slate-50 border-slate-200 justify-start"
-                  >
-                    <Calendar size={13} className="mr-2 text-slate-400" />
-                    {fmtDisplay(dateFrom)}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0" align="start">
-                  <CalendarComponent
-                    mode="single"
-                    selected={dateFrom}
-                    onSelect={(day) => {
-                      if (day) {
-                        setDateFrom(day);
-                        setFromOpen(false);
-                      }
-                    }}
-                  />
-                </PopoverContent>
-              </Popover>
-              <ChevronRight size={14} className="text-slate-300" />
-              <Popover open={toOpen} onOpenChange={setToOpen}>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    className="w-[140px] h-9 text-[13px] font-mono bg-slate-50 border-slate-200 justify-start"
-                  >
-                    <Calendar size={13} className="mr-2 text-slate-400" />
-                    {fmtDisplay(dateTo)}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0" align="start">
-                  <CalendarComponent
-                    mode="single"
-                    selected={dateTo}
-                    onSelect={(day) => {
-                      if (day) {
-                        setDateTo(day);
-                        setToOpen(false);
-                      }
-                    }}
-                  />
-                </PopoverContent>
-              </Popover>
-            </div>
-            {(activeTab === 'promet' || activeTab === 'primke' || activeTab === 'nivelacije') && (
-              <Button
-                size="sm"
-                className="h-9 gap-2"
-                onClick={activeTab === 'promet' ? loadPromet : activeTab === 'primke' ? loadPrimke : loadNivelacije}
-                disabled={activeTab === 'promet' ? prometLoading : activeTab === 'primke' ? primkeLoading : nivelacijeLoading}
-              >
-                {(activeTab === 'promet' ? prometLoading : activeTab === 'primke' ? primkeLoading : nivelacijeLoading) ? (
-                  <Loader2 size={14} className="animate-spin" />
-                ) : (
-                  <BarChart3 size={14} />
-                )}
-                Generiši
-              </Button>
-            )}
-          </div>
+          )}
         </div>
       </div>
 
       {/* ── Content area ── */}
       <div className="flex-1 min-h-0 overflow-hidden">
 
-        {reportError && (
+        {reportError && activeTab !== 'knjigovodja' && (
           <div className="mx-6 mt-4 flex items-center gap-2 rounded-xl px-4 py-3 text-[12px] font-medium bg-red-50/60 border border-red-100 text-red-600">
             <AlertTriangle size={14} className="flex-shrink-0" />
             {reportError}
@@ -1001,6 +1005,9 @@ export default function IzvjestajiScreen({ korisnikId }: { korisnikId: number })
             />
           </div>
         )}
+
+        {/* ═══ KNJIGOVOĐA TAB ═══ */}
+        {activeTab === 'knjigovodja' && <KnjigovodjaTab />}
       </div>
     </div>
   );

@@ -9,6 +9,15 @@ export function formatKM(amount: number): string {
   return amount.toFixed(2).replace('.', ',') + ' KM';
 }
 
+/** Oblik riječi po broju: mnozina(1, ['red', 'reda', 'redova']) → 'red'; 3 → 'reda'; 5, 12 → 'redova'. */
+export function mnozina(n: number, [jedan, dva, pet]: [string, string, string]): string {
+  const d = n % 10;
+  const s = n % 100;
+  if (d === 1 && s !== 11) return jedan;
+  if (d >= 2 && d <= 4 && (s < 12 || s > 14)) return dva;
+  return pet;
+}
+
 /**
  * Parsira decimalni unos koji može koristiti i zarez i tačku kao separator
  * ("12,50" i "12.50" → 12.5). Vraća NaN za neispravan unos, kao parseFloat.
