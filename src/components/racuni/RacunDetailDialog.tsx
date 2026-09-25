@@ -7,6 +7,7 @@ import { iznosStavke } from '@/lib/racun';
 import { prilogKompletan, sumaPriloga } from '@/lib/prilog';
 import { formatDatumValute } from '@/lib/valuta';
 import { gotovinskiIznos } from '@/lib/drawer';
+import { opisPlacanja, raspodjelaPlacanja } from '@/lib/placanje';
 import { round2 } from '@/lib/novac';
 import { LOGO_VELICINA } from '@/lib/firma';
 import { Button } from '@/components/ui/button';
@@ -31,16 +32,10 @@ type Notice = { type: 'success' | 'error'; text: string };
 const TH = 'text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400 pb-2 border-b border-slate-200/80 whitespace-nowrap';
 const TD = 'py-2.5 border-b border-slate-100 align-top';
 
-function placanje(json: string): { label: string; kartica: boolean; gotovina: boolean } {
-  try {
-    const p = JSON.parse(json);
-    if (p.gotovina && p.kartica) return { label: `Gotovina ${formatKM(p.gotovina)}, kartica ${formatKM(p.kartica)}`, kartica: true, gotovina: true };
-    if (p.kartica) return { label: `Kartica ${formatKM(p.kartica)}`, kartica: true, gotovina: false };
-    if (p.gotovina) return { label: `Gotovina ${formatKM(p.gotovina)}`, kartica: false, gotovina: true };
-    return { label: json, kartica: false, gotovina: true };
-  } catch {
-    return { label: json, kartica: false, gotovina: true };
-  }
+/** Način plaćanja za zaglavlje: tekst ili razbijeno plaćanje (lib/placanje.ts), ikone po vrstama. */
+function placanje(nacin: string, ukupno: number): { label: string; kartica: boolean; gotovina: boolean } {
+  const { iznosi } = raspodjelaPlacanja(nacin, ukupno);
+  return { label: opisPlacanja(nacin, ukupno), kartica: iznosi.kartica > 0, gotovina: iznosi.gotovina > 0 };
 }
 
 /** Oznaka na tamnom zaglavlju — status i porijeklo računa. */
@@ -61,8 +56,8 @@ function HeaderChip({ tone, children }: { tone: 'ok' | 'storno' | 'muted' | 'war
  * i status, tijelo stavke i iznos, podnožje dokumente koji iz računa nastaju. Tastatura:
  * ↑↓ susjedni račun, P štampa, S PDF, O otpremnica, F faktura, V valuta, R reklamacija, esc zatvori.
  */
-export function RacunDetailDialog({ orderId, redoslijed, korisnikId, onClose, onNavigate, onChanged }: {
-  orderId: number | null; redoslijed: number[]; korisnikId: number;
+export function RacunDetailDialog({ orderId, redoslijed, uloga, onClose, onNavigate, onChanged }: {
+  orderId: number | null; redoslijed: number[]; uloga: 'admin' | 'kasir';
   onClose: () => void; onNavigate: (id: number) => void; onChanged: () => void;
 }) {
   const [order, setOrder] = useState<Order | null>(null);
@@ -79,9 +74,8 @@ export function RacunDetailDialog({ orderId, redoslijed, korisnikId, onClose, on
   // svjesno pregaziti stanje (manjak se evidentira kao polog).
   const [overrideManjak, setOverrideManjak] = useState<number | null>(null);
   const [pologOpen, setPologOpen] = useState(false);
-  const [pinOpen, setPinOpen] = useState(false);
+  // Admin PIN za reklamaciju kasira — ide u isti poziv kao storno, provjerava ga main proces.
   const [pinValue, setPinValue] = useState('');
-  const [pinError, setPinError] = useState('');
   const [valutaOpen, setValutaOpen] = useState(false);
   const [valutaDatum, setValutaDatum] = useState('');
   const [valutaError, setValutaError] = useState('');
@@ -183,14 +177,11 @@ export function RacunDetailDialog({ orderId, redoslijed, korisnikId, onClose, on
   };
 
   // ── reklamacija ───────────────────────────────────────
+  const trebaPin = requirePinRefund && uloga !== 'admin';
   const otvoriReklamaciju = () => {
     setNotice(null);
-    if (requirePinRefund) { setPinValue(''); setPinError(''); setPinOpen(true); }
-    else setReklamacijaOpen(true);
-  };
-  const potvrdiPin = async () => {
-    try { await window.api.verifyAdminPin(pinValue); setPinOpen(false); setReklamacijaOpen(true); }
-    catch { setPinError('Neispravan admin PIN'); }
+    setPinValue('');
+    setReklamacijaOpen(true);
   };
 
   // Tring zahtijeva evidentiranu gotovinu prije gotovinske reklamacije —
@@ -211,6 +202,7 @@ export function RacunDetailDialog({ orderId, redoslijed, korisnikId, onClose, on
 
   const reklamiraj = async (dozvoliPolog = false) => {
     if (!order || !order.brojFiskalnogRacuna || reklamacijaLoading) return;
+    if (trebaPin && pinValue.length < 4) { setReklamacijaGreska('Upišite PIN administratora'); return; }
     setReklamacijaLoading(true);
     setReklamacijaGreska(null);
     if (dozvoliPolog) setOverrideManjak(null);
@@ -221,7 +213,7 @@ export function RacunDetailDialog({ orderId, redoslijed, korisnikId, onClose, on
         id: order.id,
         brojReklamacije: reklamacijaBroj.trim() || undefined,
         dozvoliPolog,
-        korisnikId,
+        adminPin: trebaPin ? pinValue : undefined,
       });
       if (!result || !result.success) {
         const details = result?.odgovori ? Object.entries(result.odgovori).map(([k, v]) => `${k}: ${v}`).join(', ') : '';
@@ -242,6 +234,7 @@ export function RacunDetailDialog({ orderId, redoslijed, korisnikId, onClose, on
     } catch (err: any) {
       console.error('Reklamacija error:', err);
       setReklamacijaGreska(err?.message || 'Nepoznata greška');
+      setPinValue('');
     } finally {
       setReklamacijaLoading(false);
     }
@@ -271,7 +264,7 @@ export function RacunDetailDialog({ orderId, redoslijed, korisnikId, onClose, on
     }
   };
 
-  const anySub = reklamacijaOpen || pinOpen || valutaOpen || prilogOpen || pologOpen;
+  const anySub = reklamacijaOpen || valutaOpen || prilogOpen || pologOpen;
 
   // ── tastatura ─────────────────────────────────────────
   // Sluša samo događaje iz ovog dijaloga: ugniježdeni dijalozi su portali izvan njega
@@ -309,7 +302,7 @@ export function RacunDetailDialog({ orderId, redoslijed, korisnikId, onClose, on
   // Faktura sa dodijeljenim stavkama pokazuje njih; zbirna stavka je samo ono što je otišlo na uređaj.
   const stavkeFakture = imaFakturu && !!fakturaStavke?.length;
   const stavke: any[] = stavkeFakture ? fakturaStavke! : order?.stavke ?? [];
-  const nacin = order ? placanje(order.nacinPlacanja) : null;
+  const nacin = order ? placanje(order.nacinPlacanja, order.ukupno) : null;
   const imaRabat = stavke.some(s => (s.rabat || 0) > 0);
   const kupacAdresa = order ? [order.kupacAdresa, [order.kupacPostanskiBroj, order.kupacGrad].filter(Boolean).join(' ')].filter(Boolean).join(', ') : '';
 
@@ -550,6 +543,18 @@ export function RacunDetailDialog({ orderId, redoslijed, korisnikId, onClose, on
                 </div>
               )}
 
+              {trebaPin && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="reklamacija-pin" className="flex items-center gap-1.5 text-[12px] text-slate-600">
+                    <KeyRound size={13} className="text-amber-500" /> PIN administratora
+                  </Label>
+                  <Input id="reklamacija-pin" type="password" value={pinValue} autoFocus maxLength={8} inputMode="numeric" placeholder="PIN"
+                    onChange={e => { setPinValue(e.target.value.replace(/\D/g, '')); setReklamacijaGreska(null); }}
+                    onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); reklamiraj(); } }}
+                    className="font-mono text-center text-lg h-10 tracking-[0.3em]" />
+                </div>
+              )}
+
               <div className="space-y-1.5">
                 <Label htmlFor="reklamacija-broj" className="text-[12px] text-slate-600">Broj fiskalnog za reklamaciju (opcionalno)</Label>
                 <Input id="reklamacija-broj" value={reklamacijaBroj} onChange={e => setReklamacijaBroj(e.target.value)}
@@ -586,25 +591,6 @@ export function RacunDetailDialog({ orderId, redoslijed, korisnikId, onClose, on
             </DialogContent>
           </Dialog>
 
-          {/* ── PIN prije reklamacije ── */}
-          <Dialog open={pinOpen} onOpenChange={setPinOpen}>
-            <DialogContent className="sm:max-w-[360px]">
-              <DialogHeader>
-                <DialogTitle className="flex items-center gap-2"><KeyRound size={16} className="text-amber-500" /> Admin PIN</DialogTitle>
-                <DialogDescription>Reklamacija traži potvrdu administratora.</DialogDescription>
-              </DialogHeader>
-              <Input type="password" value={pinValue} autoFocus maxLength={8} inputMode="numeric" placeholder="PIN" aria-label="Admin PIN"
-                onChange={e => { setPinValue(e.target.value.replace(/\D/g, '')); setPinError(''); }}
-                onKeyDown={e => { if (e.key === 'Enter' && pinValue.length >= 4) potvrdiPin(); }}
-                className="font-mono text-center text-xl h-12 tracking-[0.3em]" />
-              {pinError && <p className="text-[12px] text-rose-600 font-medium text-center">{pinError}</p>}
-              <div className="flex justify-end gap-2 pt-2">
-                <Button variant="ghost" onClick={() => setPinOpen(false)}>Otkaži</Button>
-                <Button onClick={potvrdiPin} disabled={pinValue.length < 4}>Potvrdi <Key tone="dark">↵</Key></Button>
-              </div>
-            </DialogContent>
-          </Dialog>
-
           {/* ── Datum valute ── */}
           <Dialog open={valutaOpen} onOpenChange={setValutaOpen}>
             <DialogContent className="sm:max-w-[380px]">
@@ -634,7 +620,6 @@ export function RacunDetailDialog({ orderId, redoslijed, korisnikId, onClose, on
           <CashMovementDialog
             open={pologOpen}
             tip="polog"
-            korisnikId={korisnikId}
             suggested={drawerWarning ? round2(drawerWarning.potrebno - drawerWarning.stanje) : undefined}
             onClose={() => setPologOpen(false)}
           />

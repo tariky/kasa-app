@@ -48,6 +48,21 @@ const OK = { success: true, vrstaOdgovora: 'OK', odgovori: {}, statusCode: 200 }
 
 const kasaStavka = { sifra: 'A1', naziv: 'Kafa & mlijeko', jm: 'kom', cijena: 2.5, kolicina: 2, rabat: 0, pdvStopa: 'E', plu: 7 };
 
+/** Artikal iz kasaStavka u šifarniku — račun (order:finalize) ga upisuje u stavke. */
+function kasaArtikal() {
+  const productId = Number(b.db.prepare(
+    "INSERT INTO products (sifra, naziv, jm, cijena, pdvStopa, plu) VALUES ('A1', 'Kafa & mlijeko', 'kom', 2.5, 'E', 7)"
+  ).run().lastInsertRowid);
+  return { ...kasaStavka, productId };
+}
+
+/** Sada kao lokalni "YYYY-MM-DD HH:MM:SS". */
+function sada(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
 // ─── tring:init ─────────────────────────────────────────────
 
 describe('tring:init', () => {
@@ -75,13 +90,15 @@ describe('tring:init', () => {
   });
 });
 
-// ─── tring:printReceipt ─────────────────────────────────────
+// ─── Fiskalni račun i reklamacija (XML prema uređaju) ────────
+// Uređaju se računi šalju samo kroz order:finalize i order:refundAndPrint
+// (sirovi tring:printReceipt/printRefund kanali su uklonjeni).
 
-describe('tring:printReceipt', () => {
+describe('order:finalize → /sfr', () => {
   test('štampa račun i vraća broj fiskalnog računa', async () => {
-    const r = await b.call('tring:printReceipt', { stavke: [kasaStavka], ukupno: 5, nacinPlacanja: 'Gotovina' });
+    const r = await b.call('order:finalize', { stavke: [kasaArtikal()], ukupno: 5, pdvIznos: 0.73, nacinPlacanja: 'Gotovina' });
 
-    expect(r).toEqual({ ...OK, odgovori: { BrojFiskalnogRacuna: '101' } });
+    expect(r).toMatchObject({ success: true, brojFiskalnogRacuna: '101', odgovori: { BrojFiskalnogRacuna: '101' } });
     const { putanja, tijelo } = zadnji();
     expect(putanja).toBe('/sfr');
     expect(tag(tijelo, 'VrstaZahtjeva')).toBe('0');
@@ -98,11 +115,12 @@ describe('tring:printReceipt', () => {
   });
 
   test('"Ček" ide uređaju kao Cek, razbijeno plaćanje ide po stavkama, kupac se šalje', async () => {
-    await b.call('tring:printReceipt', { stavke: [kasaStavka], ukupno: 5, nacinPlacanja: 'Ček' });
+    const stavka = kasaArtikal();
+    await b.call('order:finalize', { stavke: [stavka], ukupno: 5, pdvIznos: 0.73, nacinPlacanja: 'Ček' });
     expect(tag(zadnji().tijelo, 'Oznaka')).toBe('Cek');
 
-    await b.call('tring:printReceipt', {
-      stavke: [kasaStavka], ukupno: 5,
+    await b.call('order:finalize', {
+      stavke: [stavka], ukupno: 5, pdvIznos: 0.73, nacinPlacanja: 'Gotovina',
       vrstePlacanja: [{ oznaka: 'Gotovina', iznos: 3 }, { oznaka: 'Kartica', iznos: 2 }],
       kupac: { naziv: 'Firma d.o.o.', idBroj: '4200000000001', grad: 'Sarajevo' },
     });
@@ -116,27 +134,26 @@ describe('tring:printReceipt', () => {
 
   test('greška uređaja se vraća kao rezultat, ne baca', async () => {
     b.tring.greskaNa('/sfr', 'Suma plaćanja', 524);
-    const r = await b.call('tring:printReceipt', { stavke: [kasaStavka], ukupno: 5 });
-    expect(r).toEqual({
-      success: false, vrstaOdgovora: 'Greska', odgovori: {}, statusCode: 200,
-      error: 'Ukupna suma plaćanja veća od sume računa (Suma plaćanja) [524]',
-    });
+    const r = await b.call('order:finalize', { stavke: [kasaArtikal()], ukupno: 5, pdvIznos: 0.73, nacinPlacanja: 'Gotovina' });
+    expect(r).toEqual({ success: false, odgovori: {}, error: 'Ukupna suma plaćanja veća od sume računa (Suma plaćanja) [524]' });
   });
 
   test('nepoznat TFS kod: poruka uređaja i kod', async () => {
     b.tring.greskaNa('/sfr', 'Nema papira', 901);
-    const r = await b.call('tring:printReceipt', { stavke: [kasaStavka], ukupno: 5 });
+    const r = await b.call('order:finalize', { stavke: [kasaArtikal()], ukupno: 5, pdvIznos: 0.73, nacinPlacanja: 'Gotovina' });
     expect(r.error).toBe('Nema papira [901]');
   });
 });
 
-// ─── tring:printRefund ──────────────────────────────────────
-
-describe('tring:printRefund', () => {
+describe('order:refundAndPrint → /srr', () => {
   test('šalje reklamaciju s brojem originalnog računa i Gotovina/0', async () => {
-    const r = await b.call('tring:printRefund', { brojRacuna: ' 101 ', stavke: [kasaStavka] });
+    const stavka = kasaArtikal();
+    const { id } = await b.call('order:createManual', {
+      stavke: [stavka], ukupno: 5, pdvIznos: 0.73, nacinPlacanja: 'Gotovina', brojFiskalnogRacuna: '101', createdAt: sada(),
+    });
+    const r = await b.call('order:refundAndPrint', { id });
 
-    expect(r).toEqual({ ...OK, odgovori: { BrojFiskalnogRacuna: 'R-1' } });
+    expect(r).toMatchObject({ success: true, brojReklamacije: 'R-1' });
     const { putanja, tijelo } = zadnji();
     expect(putanja).toBe('/srr');
     expect(tag(tijelo, 'VrstaZahtjeva')).toBe('2');
@@ -144,14 +161,6 @@ describe('tring:printRefund', () => {
     expect(tag(tijelo, 'Oznaka')).toBe('Gotovina');
     expect(tag(tijelo, 'Iznos')).toBe('0');
     expect(tag(tijelo, 'Sifra')).toBe('A1');
-  });
-
-  test('odbija fiskalni broj koji nije broj i ništa ne šalje', async () => {
-    await expect(b.call('tring:printRefund', { brojRacuna: 'P-12', stavke: [kasaStavka] }))
-      .rejects.toThrow('Fiskalni broj "P-12" nije ispravan broj računa');
-    await expect(b.call('tring:printRefund', { stavke: [kasaStavka] }))
-      .rejects.toThrow('Fiskalni broj "" nije ispravan broj računa');
-    expect(b.tring.zahtjevi).toHaveLength(0);
   });
 });
 
@@ -187,26 +196,9 @@ describe('tring:periodicReport', () => {
   });
 });
 
-// ─── tring:writeArticle ─────────────────────────────────────
-
-describe('tring:writeArticle', () => {
-  test('upisuje artikal na /ua s VrstaZahtjeva 105', async () => {
-    const r = await b.call('tring:writeArticle', { sifra: 'S<1>', naziv: 'Sok', jm: 'l', cijena: 1.2, stopa: 'K', plu: 12 });
-
-    expect(r).toEqual(OK);
-    const { putanja, tijelo } = zadnji();
-    expect(putanja).toBe('/ua');
-    expect(tag(tijelo, 'VrstaZahtjeva')).toBe('105');
-    expect(tag(tijelo, 'Sifra')).toBe('S&lt;1&gt;');
-    expect(tag(tijelo, 'JM')).toBe('l');
-    expect(tag(tijelo, 'Cijena')).toBe('1.2');
-    expect(tag(tijelo, 'Stopa')).toBe('K');
-    expect(tag(tijelo, 'Grupa')).toBe('0');
-    expect(tag(tijelo, 'PLU')).toBe('12');
-  });
-});
-
 // ─── Escape i validacija polja (injekcija u XML) ────────────
+// Stavke/iznosi/PLU se provjeravaju u src/services/tring.validacija.test.ts —
+// tring:printReceipt i tring:writeArticle više nisu IPC kanali.
 
 describe('polja koja idu uređaju', () => {
   const odbijeno = (poruka: string) => ({
@@ -220,50 +212,12 @@ describe('polja koja idu uređaju', () => {
     expect(zadnji().tijelo).toContain('<Lozinka>a&lt;b&gt;&amp;&quot;&apos;&lt;/Lozinka&gt;</Lozinka>');
   });
 
-  test('stopa, cijena, količina, PLU i broj računa se ne ubacuju sirovi — ništa se ne šalje', async () => {
-    const pokusaji: Array<[any, string]> = [
-      [{ ...kasaStavka, pdvStopa: 'E</Stopa><Stopa>K' }, 'neispravna PDV stopa (dozvoljeno E ili K)'],
-      [{ ...kasaStavka, cijena: '1</Cijena><Cijena>0' }, 'neispravna vrijednost polja Cijena (mora biti broj)'],
-      [{ ...kasaStavka, kolicina: '2</Kolicina>' }, 'neispravna vrijednost polja Kolicina (mora biti broj)'],
-      [{ ...kasaStavka, rabat: 'x' }, 'neispravna vrijednost polja Rabat (mora biti broj)'],
-      [{ ...kasaStavka, plu: '7</PLU>' }, 'neispravan PLU (mora biti cijeli broj od 0 do 999999)'],
-      [{ ...kasaStavka, plu: 1.5 }, 'neispravan PLU (mora biti cijeli broj od 0 do 999999)'],
-    ];
-    for (const [stavka, poruka] of pokusaji) {
-      expect(await b.call('tring:printReceipt', { stavke: [stavka], ukupno: 5 })).toEqual(odbijeno(poruka));
-    }
-    expect(await b.call('tring:printReceipt', {
-      stavke: [kasaStavka], vrstePlacanja: [{ oznaka: 'Gotovina', iznos: '5</Iznos>' }],
-    })).toEqual(odbijeno('neispravna vrijednost polja Iznos (mora biti broj)'));
-    expect(await b.call('tring:printReceipt', { stavke: [kasaStavka], ukupno: 5, brojRacuna: '1</BrojRacuna>' }))
-      .toEqual(odbijeno('neispravan BrojRacuna (mora biti cijeli broj od 0 do 999999999)'));
-    expect(b.tring.zahtjevi).toHaveLength(0);
-  });
-
-  test('upis artikla s nevaljanom stopom ili grupom se odbija', async () => {
-    expect(await b.call('tring:writeArticle', { sifra: 'S', naziv: 'Sok', jm: 'l', cijena: 1.2, stopa: 'K</Stopa>' }))
-      .toEqual(odbijeno('neispravna PDV stopa (dozvoljeno E ili K)'));
-    expect(await b.call('tring:writeArticle', { sifra: 'S', naziv: 'Sok', jm: 'l', cijena: 1.2, stopa: 'K', grupa: -1 }))
-      .toEqual(odbijeno('neispravna Grupa (mora biti cijeli broj od 0 do 999999)'));
-    expect(b.tring.zahtjevi).toHaveLength(0);
-  });
-
   test('periodični izvještaj prima samo GGGG-MM-DD', async () => {
     expect(await b.call('tring:periodicReport', '2026</Vrijednost><X>-01-05', '2026-02-10'))
       .toEqual(odbijeno('neispravan datum (očekuje se GGGG-MM-DD)'));
     expect(await b.call('tring:periodicReport', '2026-01-05', 20260210))
       .toEqual(odbijeno('neispravan datum (očekuje se GGGG-MM-DD)'));
     expect(b.tring.zahtjevi).toHaveLength(0);
-  });
-
-  test('brojevi zapisani kao string idu uređaju kao broj', async () => {
-    await b.call('tring:printReceipt', {
-      stavke: [{ ...kasaStavka, cijena: ' 2.50 ', plu: '7' }], vrstePlacanja: [{ oznaka: 'Gotovina', iznos: '5.00' }],
-    });
-    const tijelo = zadnji().tijelo;
-    expect(tag(tijelo, 'Cijena')).toBe('2.5');
-    expect(tag(tijelo, 'PLU')).toBe('7');
-    expect(tag(tijelo, 'Iznos')).toBe('5');
   });
 });
 
@@ -374,10 +328,15 @@ describe('cash:add', () => {
     expect(red('SELECT COUNT(*) AS n FROM cash_movements').n).toBe(0);
   });
 
-  test('nepostojeći korisnikId se odbija prije slanja uređaju', async () => {
-    await expect(b.call('cash:add', { tip: 'polog', iznos: 10, korisnikId: 999 })).rejects.toThrow('Korisnik ne postoji');
-    expect(b.tring.zahtjevi).toHaveLength(0);
-    expect(red('SELECT COUNT(*) AS n FROM cash_movements').n).toBe(0);
+  test('korisnikId iz payload-a se ignoriše; bez prijave se odbija prije slanja uređaju', async () => {
+    const { id } = await b.call('cash:add', { tip: 'polog', iznos: 10, korisnikId: 999 });
+    expect(red('SELECT korisnikId FROM cash_movements WHERE id = ?', id).korisnikId).toBe(ADMIN);
+    expect(b.tring.zahtjevi).toHaveLength(1);
+
+    await b.call('user:logout');
+    await expect(b.call('cash:add', { tip: 'polog', iznos: 10 })).rejects.toThrow('Niste prijavljeni');
+    expect(b.tring.zahtjevi).toHaveLength(1);
+    expect(red('SELECT COUNT(*) AS n FROM cash_movements').n).toBe(1);
   });
 });
 
@@ -541,6 +500,49 @@ describe('dialog:saveFile / fs:writeFile', () => {
   });
 });
 
+describe('dialog:saveFile — ime, ekstenzija i filteri (kao Tauri ljuska)', () => {
+  const pdf = [{ name: 'PDF', extensions: ['pdf'] }];
+
+  test('predloženo ime ostaje samo ime: "/", "\\" i ":" postaju crtice', async () => {
+    for (const [predlog, ime] of [
+      ['Faktura 12/2026.pdf', 'Faktura 12-2026.pdf'],
+      ['/Users/x/Library/LaunchAgents/evil.pdf', '-Users-x-Library-LaunchAgents-evil.pdf'],
+      ['C:\\Windows\\izvoz.zip', 'C--Windows-izvoz.zip'],
+      ['Promet.XLSX', 'Promet.XLSX'],
+    ]) {
+      b.otvoreniDijalozi.length = 0;
+      await b.call('dialog:saveFile', { defaultName: predlog, filters: pdf });
+      expect(b.otvoreniDijalozi.map(d => d.opcije.defaultPath)).toEqual([ime]);
+    }
+  });
+
+  test('nedozvoljena ekstenzija ili skriveno ime: dijalog se ne otvara i vraća null', async () => {
+    b.dijalog.sacuvaj = path.join(b.radniFolder, 'x.pdf');
+    for (const predlog of ['evil.exe', 'x.pdf.sh', '.skriveno.pdf', 'bez-ekstenzije', '', null]) {
+      expect(await b.call('dialog:saveFile', { defaultName: predlog, filters: pdf })).toBeNull();
+    }
+    expect(b.otvoreniDijalozi).toEqual([]);
+    await expect(b.call('fs:writeFile', { path: path.join(b.radniFolder, 'x.pdf'), buffer: [1] }))
+      .rejects.toThrow('Write path not approved by save dialog');
+  });
+
+  test('filteri: ekstenzije van liste pdf, xlsx, csv, db, zip se izbacuju', async () => {
+    await b.call('dialog:saveFile', {
+      defaultName: 'a.zip',
+      filters: [{ name: 'PDF', extensions: ['pdf'] }, { name: 'Sve', extensions: ['exe', 'zip'] }, { name: 'Skripte', extensions: ['sh'] }],
+    });
+    expect(b.otvoreniDijalozi[0].opcije.filters).toEqual([{ name: 'PDF', extensions: ['pdf'] }, { name: 'Sve', extensions: ['zip'] }]);
+  });
+
+  test('odabrana putanja s nedozvoljenom ekstenzijom znači otkazano i ne odobrava upis', async () => {
+    const zlo = path.join(b.radniFolder, 'launch.plist');
+    b.dijalog.sacuvaj = zlo;
+    expect(await b.call('dialog:saveFile', { defaultName: 'a.pdf', filters: pdf })).toBeNull();
+    await expect(b.call('fs:writeFile', { path: zlo, buffer: [1] })).rejects.toThrow('Write path not approved by save dialog');
+    expect(existsSync(zlo)).toBe(false);
+  });
+});
+
 // ─── db:backup ──────────────────────────────────────────────
 
 describe('db:backup', () => {
@@ -591,6 +593,13 @@ describe('db:backup', () => {
     expect(b.otvoreniDijalozi[0].vrsta).toBe('sacuvaj');
     expect(b.otvoreniDijalozi[0].opcije.defaultPath).toMatch(/^kasa-backup-\d{4}-\d{2}-\d{2}\.db$/);
     expect(b.otvoreniDijalozi[0].opcije.filters).toEqual([{ name: 'SQLite Database', extensions: ['db'] }]);
+  });
+
+  test('odabrana putanja s nedozvoljenom ekstenzijom znači otkazano', async () => {
+    const zlo = path.join(b.radniFolder, 'kopija.command');
+    b.dijalog.sacuvaj = zlo;
+    expect(await b.call('db:backup')).toBeNull();
+    expect(readdirSync(b.radniFolder)).toEqual([]);
   });
 
   test('backup ne odobrava fs:writeFile na istu putanju', async () => {
@@ -693,6 +702,26 @@ describe('db:restore', () => {
     await expect(b.call('db:restore'))
       .rejects.toThrow('Neispravan backup fajl: Fajl nije backup Kasa baze (nedostaje: products, orders).');
     expect(sigurnosneKopije()).toEqual([]);
+  });
+
+  test('odbija backup s triggerom, view-om ili tabelom koje nema u shemi — prije potvrde', async () => {
+    for (const [dodatak, poruka] of [
+      ['CREATE TRIGGER t AFTER INSERT ON orders BEGIN DELETE FROM orders; END;', 'Fajl sadrži trigger ili view (trigger t), a Kasa baza ih nema.'],
+      ['CREATE VIEW v AS SELECT 1;', 'Fajl sadrži trigger ili view (view v), a Kasa baza ih nema.'],
+      ['CREATE TABLE tajna (x);', 'Fajl sadrži tabele kojih nema u Kasa bazi: tajna.'],
+    ]) {
+      const backup = await napraviBackup();
+      const t = new Database(backup);
+      t.exec(dodatak);
+      t.close();
+      b.dijalog.otvori = backup;
+      b.dijalog.potvrda = 1;
+      b.otvoreniDijalozi.length = 0;
+      await expect(b.call('db:restore')).rejects.toThrow(`Neispravan backup fajl: ${poruka}`);
+      expect(b.otvoreniDijalozi.map(d => d.vrsta)).toEqual(['otvori']);
+    }
+    expect(sigurnosneKopije()).toEqual([]);
+    expect(b.restartovan()).toBe(false);
   });
 
   test('odbija nepostojeći fajl', async () => {

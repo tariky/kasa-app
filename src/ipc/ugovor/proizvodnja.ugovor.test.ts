@@ -1,13 +1,14 @@
 // Ugovor za kanale nalog:* i normativ:* (proizvodnja) — vidi backend.ts.
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
-import { otvoriBackend, type Backend } from './backend';
+import { otvoriBackend, ADMIN_PIN, type Backend } from './backend';
+import { hesirajPin } from '../../lib/korisnici';
 
 let b: Backend;
 
 beforeEach(async () => { b = await otvoriBackend(); });
 afterEach(async () => { await b.close(); });
 
-const ADMIN = 1; // getDb seeduje admina s PIN-om 0000
+const ADMIN = 1; // seedovani admin; harness mu postavi ADMIN_PIN i prijavi se
 const GODINA = new Date().getFullYear();
 
 // ─── pomoćne funkcije (samo SQL) ────────────────────────────
@@ -176,13 +177,21 @@ describe('nalog:create', () => {
     expect(red('SELECT COUNT(*) AS n FROM radni_nalog_stavke WHERE radniNalogId = ?', id).n).toBe(0);
   });
 
+  test('nalog otvara prijavljeni korisnik; korisnikId iz payload-a se ignoriše', async () => {
+    const kupacId = dodajKupca();
+    const n = await b.call('nalog:create', { vrsta: 'narudzba', kupacId, opis: 'x', korisnikId: 999 });
+    expect(red('SELECT korisnikId FROM radni_nalozi WHERE id = ?', n.id).korisnikId).toBe(ADMIN);
+    await b.call('user:logout');
+    await expect(b.call('nalog:create', { vrsta: 'narudzba', kupacId, opis: 'y' })).rejects.toThrow('Niste prijavljeni');
+    expect(red('SELECT COUNT(*) AS n FROM radni_nalozi').n).toBe(1);
+  });
+
   test('validacije', async () => {
     const kupacId = dodajKupca();
     const artikal = dodajProizvod('A1', 'artikal');
     const mat = dodajProizvod('M1', 'materijal');
     const c = (d: Record<string, unknown>) => b.call('nalog:create', { korisnikId: ADMIN, ...d });
 
-    await expect(b.call('nalog:create', { vrsta: 'narudzba', kupacId, opis: 'x' })).rejects.toThrow('Korisnik nije prijavljen');
     await expect(c({ vrsta: 'narudzba', opis: 'x' })).rejects.toThrow('Kupac je obavezan za nalog po narudžbi');
     await expect(c({ vrsta: 'narudzba', kupacId, opis: '   ' })).rejects.toThrow('Opis je obavezan');
     await expect(c({ vrsta: 'zaliha', kolicina: 1 })).rejects.toThrow('Proizvod je obavezan za nalog za zalihu');
@@ -291,7 +300,9 @@ describe('nalog:createIzPonude', () => {
     const draft = dodajPonudu(kupacId, 'poslana', [{ productId: a, kolicina: 1, cijena: 10 }]);
     const ok = dodajPonudu(kupacId, 'prihvacena', [{ productId: a, kolicina: 1, cijena: 10 }]);
 
-    await expect(b.call('nalog:createIzPonude', ok, 0)).rejects.toThrow('Korisnik nije prijavljen');
+    await b.call('user:logout');
+    await expect(b.call('nalog:createIzPonude', ok)).rejects.toThrow('Niste prijavljeni');
+    await b.call('user:login', ADMIN_PIN);
     await expect(b.call('nalog:createIzPonude', 999, ADMIN)).rejects.toThrow('Ponuda ne postoji');
     await expect(b.call('nalog:createIzPonude', draft, ADMIN))
       .rejects.toThrow('Ponuda mora biti prihvaćena da bi se otvorio radni nalog');
@@ -534,15 +545,18 @@ describe('nalog:setStatus', () => {
   });
 
   test('vrati: samo administrator, samo završen, nikad fakturisan', async () => {
-    const kasir = Number(b.db.prepare("INSERT INTO users (ime, pin, uloga) VALUES ('Kasir', '1111', 'kasir')").run().lastInsertRowid);
+    b.db.prepare("INSERT INTO users (ime, pin, uloga) VALUES ('Kasir', ?, 'kasir')").run(hesirajPin('1111'));
     const otvoren = await narudzba(dodajKupca());
     const z = await zavrsenaNarudzba(100);
 
-    await expect(b.call('nalog:setStatus', { id: z.id, status: 'vrati', korisnikId: kasir }))
+    // Uloga se čita iz sesije: kasir ne može ni kad u payload-u pošalje admina.
+    await b.call('user:login', '1111');
+    await expect(b.call('nalog:setStatus', { id: z.id, status: 'vrati', korisnikId: ADMIN }))
       .rejects.toThrow('Vraćanje naloga u izradu može samo administrator');
-    await expect(b.call('nalog:setStatus', { id: z.id, status: 'vrati', korisnikId: 999 }))
+    await expect(b.call('nalog:setStatus', { id: z.id, status: 'vrati' }))
       .rejects.toThrow('Vraćanje naloga u izradu može samo administrator');
     expect(status(z.id)).toBe('zavrsen');
+    await b.call('user:login', ADMIN_PIN);
 
     await expect(b.call('nalog:setStatus', { id: otvoren, status: 'vrati', korisnikId: ADMIN }))
       .rejects.toThrow('Samo završen nalog se vraća u izradu');
@@ -825,7 +839,7 @@ describe('nalog:izdajRacun', () => {
     expect(red("SELECT COUNT(*) AS n FROM products WHERE sifra = 'NAMJ'").n).toBe(0);
   });
 
-  test('nepostojeći korisnik se odbija prije štampe (samostalni i nalog iz ponude)', async () => {
+  test('bez prijave se odbija prije štampe (samostalni i nalog iz ponude)', async () => {
     const { id } = await zavrsenaNarudzba(100);
     const kupacId = dodajKupca();
     const ponudaId = dodajPonudu(kupacId, 'prihvacena', [{ productId: dodajProizvod('A', 'artikal'), kolicina: 1, cijena: 10 }]);
@@ -833,10 +847,11 @@ describe('nalog:izdajRacun', () => {
     await b.call('nalog:replaceStavke', izPonude, [{ materijalId: dodajProizvod('M', 'materijal'), kolicina: 1 }]);
     await zavrsi(izPonude);
 
+    await b.call('user:logout');
     for (const nalogId of [id, izPonude]) {
-      for (const korisnikId of [0, 999]) {
+      for (const korisnikId of [0, 999, ADMIN]) {
         await expect(b.call('nalog:izdajRacun', { id: nalogId, korisnikId, nacinPlacanja: 'Gotovina' }))
-          .rejects.toThrow('Korisnik nije prijavljen');
+          .rejects.toThrow('Niste prijavljeni');
       }
     }
     expect(b.tring.zahtjevi).toEqual([]);
@@ -850,6 +865,13 @@ describe('nalog:izdajRacun', () => {
     const r = await b.call('nalog:izdajRacun', { id, korisnikId: ADMIN, nacinPlacanja: '' });
     expect(r.success).toBe(true);
     expect(red('SELECT nacinPlacanja FROM orders WHERE id = ?', r.racunId).nacinPlacanja).toBe('Gotovina');
+  });
+
+  test('nepoznat način plaćanja se odbija prije štampe', async () => {
+    const { id } = await zavrsenaNarudzba(100);
+    await expect(b.call('nalog:izdajRacun', { id, nacinPlacanja: 'Bitcoin' })).rejects.toThrow('Nepoznat način plaćanja: "Bitcoin"');
+    expect(b.tring.zahtjevi).toEqual([]);
+    expect(red('SELECT COUNT(*) AS n FROM orders').n).toBe(0);
   });
 
   test('dva istovremena izdavanja za isti nalog: drugo se odbija, štampa se jednom', async () => {

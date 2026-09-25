@@ -13,17 +13,6 @@ import { GrupaZaglavlje, IshodPoruka, Polje, Sekcija } from './dijelovi';
 
 const td = 'py-2.5 border-b border-slate-100';
 
-function maskirajPin(pin: string) {
-  if (pin.length <= 2) return pin;
-  return '•'.repeat(pin.length - 2) + pin.slice(-2);
-}
-
-function datum(iso: string) {
-  const d = new Date(iso);
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()}.`;
-}
-
 export default function KorisniciGrupa({ onPromjena }: { onPromjena: () => void }) {
   const [korisnici, setKorisnici] = useState<User[]>([]);
   const [greska, setGreska] = useState('');
@@ -41,14 +30,17 @@ export default function KorisniciGrupa({ onPromjena }: { onPromjena: () => void 
   const otvori = (u: User | null) => {
     setUredjuje(u);
     setIme(u?.ime ?? '');
-    setPin(u?.pin ?? '');
+    // PIN-ovi se ne čitaju iz baze (tamo je samo heš): pri uređivanju prazno = ostaje stari.
+    setPin('');
     setUloga(u?.uloga ?? 'kasir');
     setGreska('');
     setDialog(true);
   };
 
+  const pinIspravan = uredjuje ? pin.length === 0 || pin.length >= 4 : pin.length >= 4;
+
   const spremi = async () => {
-    if (!ime.trim() || pin.length < 4) return;
+    if (!ime.trim() || !pinIspravan) return;
     try {
       if (uredjuje) await window.api.updateUser(uredjuje.id, { ime, pin, uloga });
       else await window.api.createUser({ ime, pin, uloga });
@@ -106,9 +98,7 @@ export default function KorisniciGrupa({ onPromjena }: { onPromjena: () => void 
           <table className="w-full border-separate border-spacing-0">
             <LedgerHead columns={[
               { label: 'Ime', className: 'text-left pl-5 pr-3' },
-              { label: 'PIN', className: 'text-left px-3 w-[100px]' },
               { label: 'Uloga', className: 'text-left px-3 w-[130px]' },
-              { label: 'Dodan', className: 'text-left px-3 w-[110px] hidden md:table-cell' },
               { label: '', className: 'pr-5 pl-2 w-[1%]' },
             ]} />
             <tbody>
@@ -117,14 +107,12 @@ export default function KorisniciGrupa({ onPromjena }: { onPromjena: () => void 
                   <td className={cn(td, 'pl-5 pr-3 max-w-0')}>
                     <span className="block truncate text-[12.5px] font-medium text-slate-800">{u.ime}</span>
                   </td>
-                  <td className={cn(td, 'px-3 font-mono text-[12px] text-slate-400 whitespace-nowrap')}>{maskirajPin(u.pin)}</td>
                   <td className={cn(td, 'px-3 whitespace-nowrap')}>
                     <span className="flex items-center gap-1.5 text-[12px] leading-5 text-slate-600">
                       <span aria-hidden className={cn('h-1.5 w-1.5 rounded-full', u.uloga === 'admin' ? 'bg-amber-400' : 'bg-slate-300')} />
                       {u.uloga === 'admin' ? 'Administrator' : 'Kasir'}
                     </span>
                   </td>
-                  <td className={cn(td, 'hidden md:table-cell px-3 text-[12px] text-slate-400 tabular-nums whitespace-nowrap')}>{datum(u.createdAt)}</td>
                   <td className={cn(td, 'pr-5 pl-2 text-right')}>
                     <div className="flex items-center justify-end gap-0.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
                       <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-400 hover:text-slate-700"
@@ -165,9 +153,10 @@ export default function KorisniciGrupa({ onPromjena }: { onPromjena: () => void 
               <Input id="user-ime" value={ime} onChange={e => setIme(e.target.value)} placeholder="Ime korisnika"
                 className="h-10 text-[14px] bg-slate-50 border-slate-200" autoFocus />
             </Polje>
-            <Polje label="PIN" htmlFor="user-pin" napomena="Od 4 do 6 cifara.">
-              <Input id="user-pin" value={pin} onChange={e => setPin(e.target.value.replace(/\D/g, ''))}
-                maxLength={6} inputMode="numeric" pattern="[0-9]*" placeholder="••••"
+            <Polje label={uredjuje ? 'Novi PIN' : 'PIN'} htmlFor="user-pin"
+              napomena={uredjuje ? 'Od 4 do 6 cifara. Prazno — PIN ostaje isti.' : 'Od 4 do 6 cifara.'}>
+              <Input id="user-pin" type="password" value={pin} onChange={e => setPin(e.target.value.replace(/\D/g, ''))}
+                maxLength={6} inputMode="numeric" pattern="[0-9]*" placeholder="••••" autoComplete="off"
                 className="font-mono h-10 text-[14px] bg-slate-50 border-slate-200" />
             </Polje>
             <Polje label="Uloga">
@@ -199,7 +188,7 @@ export default function KorisniciGrupa({ onPromjena }: { onPromjena: () => void 
           <div className="border-t bg-slate-50/50 px-6 py-4 flex items-center justify-end gap-3">
             {greska && <span className="mr-auto text-[12px] font-medium text-rose-600">{greska}</span>}
             <Button variant="ghost" onClick={() => setDialog(false)}>Otkaži</Button>
-            <Button onClick={spremi} disabled={!ime.trim() || pin.length < 4}
+            <Button onClick={spremi} disabled={!ime.trim() || !pinIspravan}
               className="min-w-[100px] bg-[#0f1629] hover:bg-[#1b2540]">
               {uredjuje ? 'Spremi izmjene' : 'Dodaj korisnika'}
             </Button>

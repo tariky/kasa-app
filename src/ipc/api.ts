@@ -11,10 +11,12 @@ export function napraviApi(pozovi: Pozovi, naLicencaBlokirano: (cb: () => void) 
     aktivirajLicencu: (token: string) => pozovi('licenca:aktiviraj', token),
     onLicencaBlokirano: naLicencaBlokirano,
 
-    // Users
+    // Users — sesija živi u main procesu (vidi src/ipc/sesija.ts); korisnikId se
+    // nigdje ne šalje, backend ga uzima iz sesije.
     login: (pin: string) => pozovi('user:login', pin),
+    logout: () => pozovi('user:logout'),
+    promijeniSvojPin: (stari: string, novi: string) => pozovi('user:promijeniSvojPin', stari, novi),
     getUsers: () => pozovi('user:getAll'),
-    verifyAdminPin: (pin: string) => pozovi('user:verifyAdminPin', pin),
     createUser: (data: any) => pozovi('user:create', data),
     updateUser: (id: number, data: any) => pozovi('user:update', id, data),
     deleteUser: (id: number) => pozovi('user:delete', id),
@@ -67,12 +69,10 @@ export function napraviApi(pozovi: Pozovi, naLicencaBlokirano: (cb: () => void) 
     // Orders
     getOrders: () => pozovi('order:getAll'),
     getOrder: (id: number) => pozovi('order:get', id),
-    createOrder: (data: any) => pozovi('order:create', data),
     createManualOrder: (data: any) => pozovi('order:createManual', data),
-    updateOrderReklamacija: (id: number, broj: string) => pozovi('order:updateReklamacija', id, broj),
     setOrderDatumValute: (id: number, datum: string | null) => pozovi('order:setDatumValute', id, datum),
-    refundOrder: (id: number, brojReklamacije?: string) => pozovi('order:refund', id, brojReklamacije),
-    refundAndPrintOrder: (data: { id: number; brojReklamacije?: string; dozvoliPolog?: boolean; korisnikId?: number }) => pozovi('order:refundAndPrint', data),
+    // adminPin: kasir uz uključen "PIN za reklamaciju" (provjera u main procesu, prije štampe).
+    refundAndPrintOrder: (data: { id: number; brojReklamacije?: string; dozvoliPolog?: boolean; adminPin?: string }) => pozovi('order:refundAndPrint', data),
     finalizeOrder: (data: any) => pozovi('order:finalize', data),
     finalizePrilogOrder: (data: any) => pozovi('order:finalizePrilog', data),
     getFiskalnaNumeracija: () => pozovi('fiscal:getNumeracija'),
@@ -93,21 +93,21 @@ export function napraviApi(pozovi: Pozovi, naLicencaBlokirano: (cb: () => void) 
     updatePonuda: (id: number, data: any) => pozovi('ponuda:update', id, data),
     setPonudaStatus: (id: number, status: string) => pozovi('ponuda:setStatus', id, status),
     deletePonuda: (id: number) => pozovi('ponuda:delete', id),
-    konvertujPonudu: (data: { id: number; korisnikId: number; nacinPlacanja: string }) => pozovi('ponuda:konvertuj', data),
+    konvertujPonudu: (data: { id: number; nacinPlacanja: string }) => pozovi('ponuda:konvertuj', data),
 
     // Proizvodnja
     getNalozi: (filter?: string) => pozovi('nalog:getAll', filter),
     getNalog: (id: number) => pozovi('nalog:get', id),
     getNextBrojNaloga: () => pozovi('nalog:nextBroj'),
     createNalog: (data: any) => pozovi('nalog:create', data),
-    createNalogIzPonude: (ponudaId: number, korisnikId: number) => pozovi('nalog:createIzPonude', ponudaId, korisnikId),
+    createNalogIzPonude: (ponudaId: number) => pozovi('nalog:createIzPonude', ponudaId),
     getNalogZaPonudu: (ponudaId: number) => pozovi('nalog:zaPonudu', ponudaId),
     updateNalog: (id: number, data: any) => pozovi('nalog:update', id, data),
     saveNalogStavke: (id: number, stavke: any[]) => pozovi('nalog:replaceStavke', id, stavke),
-    setNalogStatus: (data: { id: number; status: string; korisnikId: number }) => pozovi('nalog:setStatus', data),
+    setNalogStatus: (data: { id: number; status: string }) => pozovi('nalog:setStatus', data),
     deleteNalog: (id: number) => pozovi('nalog:delete', id),
     getNalogKalkulacija: (id: number) => pozovi('nalog:kalkulacija', id),
-    izdajRacunZaNalog: (data: { id: number; korisnikId: number; nacinPlacanja: string }) => pozovi('nalog:izdajRacun', data),
+    izdajRacunZaNalog: (data: { id: number; nacinPlacanja: string }) => pozovi('nalog:izdajRacun', data),
     getNormativ: (productId: number) => pozovi('normativ:get', productId),
     saveNormativ: (productId: number, stavke: any[]) => pozovi('normativ:save', productId, stavke),
     searchMaterijal: (query: string) => pozovi('materijal:search', query),
@@ -115,17 +115,14 @@ export function napraviApi(pozovi: Pozovi, naLicencaBlokirano: (cb: () => void) 
 
     // Tring
     tringInit: () => pozovi('tring:init'),
-    tringPrintReceipt: (data: any) => pozovi('tring:printReceipt', data),
-    tringPrintRefund: (data: any) => pozovi('tring:printRefund', data),
     tringXReport: () => pozovi('tring:xReport'),
     tringZReport: () => pozovi('tring:zReport'),
     tringPeriodicReport: (from: string, to: string) => pozovi('tring:periodicReport', from, to),
-    tringWriteArticle: (data: any) => pozovi('tring:writeArticle', data),
     tringGetLogs: () => pozovi('tring:getLogs'),
     tringClearLogs: () => pozovi('tring:clearLogs'),
 
     // Polog / povrat gotovine
-    addCashMovement: (data: { tip: 'polog' | 'povrat'; iznos: number; korisnikId: number; napomena?: string }) =>
+    addCashMovement: (data: { tip: 'polog' | 'povrat'; iznos: number; napomena?: string }) =>
       pozovi('cash:add', data),
     retryCashMovement: (id: number) => pozovi('cash:retry', id),
     getTodayCashMovements: () => pozovi('cash:getToday'),

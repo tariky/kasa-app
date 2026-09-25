@@ -272,3 +272,67 @@ test('pad migracija vraća prethodnu bazu i javlja grešku', () => {
   expect(productNames(dbPath)).toEqual(['TRENUTNI']);
   expect(active).not.toBeNull();
 });
+
+// ─── Samo objekti koje pravi program ─────────────────────────
+// Program ne definiše nijedan trigger ni view (schema.ts, migrations.ts), a
+// tabele su samo one iz sheme. Trigger ili view u tuđem fajlu bi se izvršio
+// nad podacima programa, pa se takav backup odbija prije uvoza.
+
+/** Aktuelna Kasa baza (schema) kojoj `dodatak` doda nešto svoje. */
+function writeBackupSa(filePath: string, dodatak: string): void {
+  const db = new Database(filePath);
+  db.exec(schema);
+  db.exec(dodatak);
+  db.close();
+}
+
+test('odbija backup s triggerom', () => {
+  const backup = path.join(dir, 'trigger.db');
+  writeBackupSa(backup, "CREATE TRIGGER t_storno AFTER INSERT ON orders BEGIN UPDATE orders SET ukupno = 0; END;");
+  expect(() => validateBackup(backup, deps)).toThrow(
+    'Neispravan backup fajl: Fajl sadrži trigger ili view (trigger t_storno), a Kasa baza ih nema.'
+  );
+  expect(() => swapInBackup(backup, dbPath, path.join(dir, 'safety.db'), deps)).toThrow('trigger t_storno');
+  expect(productNames(dbPath)).toEqual(['TRENUTNI']);
+});
+
+test('odbija backup s view-om', () => {
+  const backup = path.join(dir, 'view.db');
+  writeBackupSa(backup, 'CREATE VIEW v_promet AS SELECT SUM(ukupno) AS s FROM orders; CREATE VIEW v2 AS SELECT 1;');
+  expect(() => validateBackup(backup, deps)).toThrow('Fajl sadrži trigger ili view (view v_promet, view v2), a Kasa baza ih nema.');
+});
+
+test('odbija backup s tabelom koje nema u shemi', () => {
+  const backup = path.join(dir, 'tabela.db');
+  writeBackupSa(backup, 'CREATE TABLE skriveno (x TEXT); CREATE VIRTUAL TABLE pretraga USING fts5(tekst);');
+  expect(() => validateBackup(backup, deps)).toThrow(/Fajl sadrži tabele kojih nema u Kasa bazi: .*pretraga.*skriveno/);
+});
+
+test('prihvata interne sqlite_ tabele (brojači, statistika)', () => {
+  const backup = path.join(dir, 'interne.db');
+  writeBackupSa(backup, "INSERT INTO products (sifra, naziv, cijena, pdvStopa) VALUES ('1', 'A', 1, 'E'); ANALYZE;");
+  const db = new Database(backup, { readonly: true });
+  const imena = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'sqlite_%'").all() as { name: string }[]).map(r => r.name);
+  db.close();
+  expect(imena).toContain('sqlite_sequence');
+  expect(imena).toContain('sqlite_stat1');
+  expect(() => validateBackup(backup, deps)).not.toThrow();
+});
+
+test('konekcija za provjeru ima trusted_schema = OFF', () => {
+  const backup = path.join(dir, 'ok.db');
+  writeBackupSa(backup, 'SELECT 1;');
+  const pragme: unknown[] = [];
+  validateBackup(backup, {
+    ...deps,
+    open: (f) => {
+      const db = deps.open(f);
+      return {
+        prepare: (sql: string) => db.prepare(sql),
+        exec: (sql: string) => { if (/trusted_schema/i.test(sql)) pragme.push(sql); return db.exec(sql); },
+        close: () => db.close(),
+      };
+    },
+  });
+  expect(pragme).toEqual(['PRAGMA trusted_schema = OFF']);
+});

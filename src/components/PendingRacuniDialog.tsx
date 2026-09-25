@@ -19,7 +19,7 @@ function nowLocalInput(): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-export default function PendingRacuniDialog({ korisnikId }: { korisnikId: number }) {
+export default function PendingRacuniDialog({ uloga }: { uloga: 'admin' | 'kasir' }) {
   const [rows, setRows] = useState<PendingRow[]>([]);
   const [broj, setBroj] = useState('');
   const [datum, setDatum] = useState(nowLocalInput());
@@ -56,6 +56,8 @@ export default function PendingRacuniDialog({ korisnikId }: { korisnikId: number
     try {
       await window.api.discardPending(current.id);
       await load();
+    } catch (e: any) {
+      setError(e?.message || 'Greška');
     } finally {
       setLoading(false);
     }
@@ -100,7 +102,10 @@ export default function PendingRacuniDialog({ korisnikId }: { korisnikId: number
           {rows.length > 1 && <p className="text-xs text-slate-500">Preostalo nerazriješenih: {rows.length}</p>}
         </div>
         <div className="flex justify-between gap-2 mt-2">
-          <Button variant="outline" onClick={discard} disabled={loading}>Nije odštampan — odbaci</Button>
+          {/* Odbacivanje briše jedini trag računa — samo administrator (provjera je i u main procesu). */}
+          {uloga === 'admin'
+            ? <Button variant="outline" onClick={discard} disabled={loading}>Nije odštampan — odbaci</Button>
+            : <p className="self-center text-xs text-slate-500">Ako račun nije odštampan, odbacuje ga administrator.</p>}
           <Button onClick={resolve} disabled={loading}>Odštampan — sačuvaj</Button>
         </div>
       </DialogContent>

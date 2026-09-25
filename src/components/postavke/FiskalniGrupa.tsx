@@ -29,7 +29,9 @@ function Konekcija({ onSpremljeno }: { onSpremljeno: () => void }) {
   // Port i operator ID se drže kao tekst da prazno polje ne postane 0.
   const [port, setPort] = useState('8085');
   const [operatorId, setOperatorId] = useState('0');
-  const [lozinka, setLozinka] = useState('0');
+  // Lozinka se ne čita iz main procesa — polje je prazno, a prazno pri spremanju znači "ostaje stara".
+  const [lozinka, setLozinka] = useState('');
+  const [imaLozinku, setImaLozinku] = useState(false);
   const [ishod, setIshod] = useState<Ishod>(null);
   const [testiram, setTestiram] = useState(false);
 
@@ -39,7 +41,7 @@ function Konekcija({ onSpremljeno }: { onSpremljeno: () => void }) {
       setHost(s.host || 'localhost');
       setPort(String(s.port ?? 8085));
       setOperatorId(String(s.operatorId ?? 0));
-      setLozinka(s.operatorPassword || '0');
+      setImaLozinku(!!s.imaLozinku);
     }).catch(() => { /* ostaju zadane vrijednosti */ });
   }, []);
 
@@ -51,6 +53,7 @@ function Konekcija({ onSpremljeno }: { onSpremljeno: () => void }) {
     if (!Number.isInteger(op) || op < 0) return setIshod({ ok: false, tekst: 'Operator ID mora biti 0 ili veći broj.' });
     try {
       await window.api.saveTringSettings({ host: host.trim(), port: p, operatorId: op, operatorPassword: lozinka });
+      if (lozinka) { setImaLozinku(true); setLozinka(''); }
       setIshod({ ok: true, tekst: 'Postavke veze su spremljene.' });
       onSpremljeno();
     } catch (err) {
@@ -90,7 +93,9 @@ function Konekcija({ onSpremljeno }: { onSpremljeno: () => void }) {
             className={cn(POLJE, 'font-mono tabular-nums')} />
         </Polje>
         <Polje label="Lozinka" htmlFor="tring-password">
-          <Input id="tring-password" value={lozinka} onChange={e => setLozinka(e.target.value)} className={cn(POLJE, 'font-mono')} />
+          <Input id="tring-password" type="password" value={lozinka} onChange={e => setLozinka(e.target.value)}
+            placeholder={imaLozinku ? 'Upisana — prazno ostavlja staru' : 'Nije upisana'} autoComplete="off"
+            className={cn(POLJE, 'font-mono')} />
         </Polje>
       </SekcijaTijelo>
       <SekcijaPodnozje>

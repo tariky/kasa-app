@@ -15,11 +15,7 @@ const DELAY_SECONDS = 5;
 
 type RacunStatus = 'pending' | 'done' | 'failed';
 
-interface Props {
-  korisnikId: number;
-}
-
-export default function GeneratorScreen({ korisnikId }: Props) {
+export default function GeneratorScreen() {
   const [products, setProducts] = useState<Product[]>([]);
   const [targetInput, setTargetInput] = useState('');
   const [result, setResult] = useState<GenerateResult | null>(null);
@@ -78,7 +74,6 @@ export default function GeneratorScreen({ korisnikId }: Props) {
 
   const finalizeOne = async (r: GeneratedRacun) => {
     return window.api.finalizeOrder({
-      korisnikId,
       ukupno: r.ukupno,
       pdvIznos: r.pdvIznos,
       nacinPlacanja: 'Gotovina',

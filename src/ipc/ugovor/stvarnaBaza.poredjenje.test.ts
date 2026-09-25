@@ -2,9 +2,11 @@
 // samo čitaju (i pregledi primki, koji rade u transakciji koju ponište) moraju
 // vratiti isto. Original se ne dira — svaki backend dobije svoju kopiju.
 //
-//   KASA_STVARNA_BAZA=~/Library/Application\ Support/Pazar/kasa.db \
+//   KASA_STVARNA_BAZA=~/Library/Application\ Support/Pazar/kasa.db KASA_STVARNA_PIN=<admin PIN> \
 //     bun test src/ipc/ugovor/stvarnaBaza.poredjenje.test.ts
 //
+// Kanali traže prijavu (src/ipc/sesija.ts), pa oba backenda prvo prijave
+// administratora PIN-om iz KASA_STVARNA_PIN.
 // Bez KASA_STVARNA_BAZA test se preskače. Rust binarij: vidi rustBackend.ts.
 import { test, expect, describe, beforeAll, afterAll, mock } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -13,6 +15,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 const IZVOR = process.env.KASA_STVARNA_BAZA;
+const PIN = process.env.KASA_STVARNA_PIN ?? '';
 
 type Pozovi = (kanal: string, ...args: unknown[]) => Promise<unknown>;
 
@@ -85,12 +88,14 @@ describe.skipIf(!IZVOR)('stvarna baza: TS i Rust vraćaju isto', () => {
     const [a, b] = [kopija(), kopija()];
     folderi.push(a, b);
     rs = await rustBackend(b);
+    if (!(await rs.pozovi('user:login', PIN))) throw new Error('KASA_STVARNA_PIN nije PIN korisnika u bazi');
     // Harness Rust backenda upiše port lažnog Tring uređaja; TS kopija dobije isti.
     const port = await rs.pozovi('settings:get', 'tring.port');
     const pisi = new Database(path.join(a, 'kasa.db'));
     pisi.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('tring.port', ?)").run(port as string);
     pisi.close();
     ts = await tsBackend(a);
+    if (!(await ts('user:login', PIN))) throw new Error('KASA_STVARNA_PIN nije PIN korisnika u bazi');
     citaj = new Database(path.join(a, 'kasa.db'), { readonly: true });
   });
 

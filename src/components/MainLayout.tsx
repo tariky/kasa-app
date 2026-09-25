@@ -186,21 +186,21 @@ export default function MainLayout({ user, licenca, onLogout }: Props) {
             (1440px + 64px sidebar = 1504px), a sa strane ostaje pozadina. */}
         <div className="flex-1 min-h-0 overflow-hidden bg-slate-100">
           <div className="mx-auto h-full w-full max-w-[1440px] overflow-hidden bg-white min-[1504px]:border-x min-[1504px]:border-slate-200 min-[1504px]:shadow-sm">
-            {screen === 'kasa' && <KasaScreen user={user} />}
+            {screen === 'kasa' && <KasaScreen uloga={user.uloga} />}
             {screen === 'skladiste' && <SkladisteScreen />}
             {screen === 'sifarnik' && <SifarnikScreen />}
-            {screen === 'narudzbe' && <NarudzbeScreen korisnikId={user.id} />}
-            {screen === 'ponude' && <PonudeScreen korisnikId={user.id} />}
-            {screen === 'proizvodnja' && <ProizvodnjaScreen korisnikId={user.id} uloga={user.uloga} initialNalogId={openNalogId} />}
-            {screen === 'izvjestaji' && <IzvjestajiScreen korisnikId={user.id} uloga={user.uloga} />}
-            {screen === 'generator' && <GeneratorScreen korisnikId={user.id} />}
+            {screen === 'narudzbe' && <NarudzbeScreen uloga={user.uloga} />}
+            {screen === 'ponude' && <PonudeScreen uloga={user.uloga} />}
+            {screen === 'proizvodnja' && <ProizvodnjaScreen uloga={user.uloga} initialNalogId={openNalogId} />}
+            {screen === 'izvjestaji' && <IzvjestajiScreen uloga={user.uloga} />}
+            {screen === 'generator' && <GeneratorScreen />}
             {screen === 'postavke' && <PostavkeScreen />}
           </div>
         </div>
       </main>
 
-      <PendingRacuniDialog korisnikId={user.id} />
-      <PologPrompt korisnikId={user.id} />
+      <PendingRacuniDialog uloga={user.uloga} />
+      <PologPrompt />
     </div>
   );
 }

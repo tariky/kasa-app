@@ -75,6 +75,14 @@ export async function otvoriTsBackend(): Promise<Backend> {
     otvoreniDijalozi,
     radniFolder,
     restartovan: () => restart,
+    async kanali() {
+      return [...handleri.keys()].sort();
+    },
+    async ponovoPokreni() {
+      closeDb();
+      handleri.clear();
+      registerIpcHandlers();
+    },
     async call(kanal, ...args) {
       const fn = handleri.get(kanal);
       if (!fn) throw new Error(`Kanal ne postoji: ${kanal}`);

@@ -3,6 +3,7 @@ import { localDateStr, round2 } from './novac';
 import { uNetto } from './pdvUnos';
 import { getProductStock } from './skladiste';
 import { izracunajTotale, upisiRacun } from './racun';
+import { provjeriNacinPlacanja } from './placanje';
 import { buildTringRacun } from './tringRacun';
 import { konvertujPonudu, type KonverzijaDeps, type KonverzijaResult } from './ponuda';
 import type {
@@ -540,7 +541,7 @@ export async function izdajRacunZaNalog(
   const korisnik = data.korisnikId ? db.prepare('SELECT id FROM users WHERE id = ?').get(data.korisnikId) : undefined;
   if (!korisnik) throw new Error('Korisnik nije prijavljen');
   // Štampa bez oznake plaćanja ide kao Gotovina — i u bazu se tako upisuje.
-  const nacinPlacanja = data.nacinPlacanja || 'Gotovina';
+  const nacinPlacanja = provjeriNacinPlacanja(data.nacinPlacanja || 'Gotovina');
 
   izdavanjaUToku.add(nalog.id);
   try {

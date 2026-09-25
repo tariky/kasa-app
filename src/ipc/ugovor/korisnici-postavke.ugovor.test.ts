@@ -1,13 +1,14 @@
 // Ugovor za kanale user:*, settings:*, savedCarts:*, fakturaSkice:* i proizvodnja:setEnabled — vidi backend.ts.
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
-import { otvoriBackend, type Backend } from './backend';
+import { otvoriBackend, prijavi, ADMIN_PIN, type Backend } from './backend';
+import { hesirajPin, provjeriPin } from '../../lib/korisnici';
 
 let b: Backend;
 
 beforeEach(async () => { b = await otvoriBackend(); });
 afterEach(async () => { await b.close(); });
 
-const ADMIN = 1; // getDb seeduje admina s PIN-om 0000
+const ADMIN = 1; // seedovani admin; harness mu postavi ADMIN_PIN i prijavi se
 
 function red(sql: string, ...params: any[]): any {
   return b.db.prepare(sql).get(...params);
@@ -22,8 +23,14 @@ function postavka(key: string): string | null {
 }
 
 function dodajKorisnika(ime: string, pin: string, uloga: 'admin' | 'kasir' = 'kasir'): number {
-  const r = b.db.prepare('INSERT INTO users (ime, pin, uloga) VALUES (?, ?, ?)').run(ime, pin, uloga);
+  const r = b.db.prepare('INSERT INTO users (ime, pin, uloga) VALUES (?, ?, ?)').run(ime, hesirajPin(pin), uloga);
   return Number(r.lastInsertRowid);
+}
+
+/** Korisnik iz baze s PIN-om zamijenjenim oznakom da li heš odgovara `pin`. */
+function korisnikSaPinom(id: number, pin: string) {
+  const r = red('SELECT ime, pin, uloga FROM users WHERE id = ?', id);
+  return { ime: r.ime, uloga: r.uloga, pinOdgovara: provjeriPin(pin, r.pin) };
 }
 
 function dodajRacun(korisnikId: number): number {
@@ -51,10 +58,10 @@ function firma(extra: Record<string, unknown> = {}) {
 // ─── user:login ─────────────────────────────────────────────
 
 describe('user:login', () => {
-  test('vraća korisnika za tačan PIN (uključujući PIN)', async () => {
-    expect(await b.call('user:login', '0000')).toEqual({ id: ADMIN, ime: 'Admin', pin: '0000', uloga: 'admin' });
+  test('vraća korisnika za tačan PIN — bez PIN-a, uz oznaku zadanog PIN-a', async () => {
+    expect(await b.call('user:login', ADMIN_PIN)).toEqual({ id: ADMIN, ime: 'Admin', uloga: 'admin', zadaniPin: false });
     const k = dodajKorisnika('Kasir Ana', '1234');
-    expect(await b.call('user:login', '1234')).toEqual({ id: k, ime: 'Kasir Ana', pin: '1234', uloga: 'kasir' });
+    expect(await b.call('user:login', '1234')).toEqual({ id: k, ime: 'Kasir Ana', uloga: 'kasir', zadaniPin: false });
   });
 
   test('pogrešan PIN vraća null, bez greške', async () => {
@@ -63,31 +70,17 @@ describe('user:login', () => {
   });
 });
 
-// ─── user:verifyAdminPin ────────────────────────────────────
-
-describe('user:verifyAdminPin', () => {
-  test('admin PIN vraća ime admina', async () => {
-    expect(await b.call('user:verifyAdminPin', '0000')).toEqual({ success: true, ime: 'Admin' });
-  });
-
-  test('PIN kasira i nepostojeći PIN se odbijaju', async () => {
-    dodajKorisnika('Kasir', '1234');
-    await expect(b.call('user:verifyAdminPin', '1234')).rejects.toThrow('Neispravan admin PIN');
-    await expect(b.call('user:verifyAdminPin', '5555')).rejects.toThrow('Neispravan admin PIN');
-  });
-});
-
 // ─── user:getAll ────────────────────────────────────────────
 
 describe('user:getAll', () => {
-  test('vraća sve kolone, sortirano po imenu', async () => {
+  test('vraća id, ime i ulogu (nikad PIN ni heš), sortirano po imenu', async () => {
     dodajKorisnika('Zlatan', '2222');
-    dodajKorisnika('Berina', '1111', 'admin');
+    const berina = dodajKorisnika('Berina', '1111', 'admin');
     const svi = await b.call('user:getAll');
     expect(svi.map((u: any) => u.ime)).toEqual(['Admin', 'Berina', 'Zlatan']);
-    expect(Object.keys(svi[0]).sort()).toEqual(['createdAt', 'id', 'ime', 'pin', 'uloga']);
-    expect(svi[0]).toMatchObject({ id: ADMIN, ime: 'Admin', pin: '0000', uloga: 'admin' });
-    expect(typeof svi[0].createdAt).toBe('string');
+    expect(svi[0]).toEqual({ id: ADMIN, ime: 'Admin', uloga: 'admin' });
+    expect(svi[1]).toEqual({ id: berina, ime: 'Berina', uloga: 'admin' });
+    for (const u of svi) expect(Object.keys(u).sort()).toEqual(['id', 'ime', 'uloga']);
   });
 });
 
@@ -98,7 +91,8 @@ describe('user:create', () => {
     const r = await b.call('user:create', { ime: '  Ana  ', pin: '1234', uloga: 'kasir' });
     expect(Object.keys(r)).toEqual(['id']);
     expect(typeof r.id).toBe('number');
-    expect(red('SELECT ime, pin, uloga FROM users WHERE id = ?', r.id)).toEqual({ ime: 'Ana', pin: '1234', uloga: 'kasir' });
+    expect(korisnikSaPinom(r.id, '1234')).toEqual({ ime: 'Ana', uloga: 'kasir', pinOdgovara: true });
+    expect(red('SELECT pin FROM users WHERE id = ?', r.id).pin).toMatch(/^pbkdf2\$100000\$[0-9a-f]{32}\$[0-9a-f]{64}$/);
   });
 
   test('validira ime i PIN', async () => {
@@ -111,8 +105,8 @@ describe('user:create', () => {
   });
 
   test('odbija PIN koji već postoji', async () => {
-    await expect(b.call('user:create', { ime: 'Ana', pin: '0000', uloga: 'kasir' }))
-      .rejects.toThrow('Korisnik sa PIN-om "0000" već postoji');
+    await expect(b.call('user:create', { ime: 'Ana', pin: ADMIN_PIN, uloga: 'kasir' }))
+      .rejects.toThrow(`Korisnik sa PIN-om "${ADMIN_PIN}" već postoji`);
     expect(red('SELECT COUNT(*) AS n FROM users').n).toBe(1);
   });
 
@@ -139,10 +133,19 @@ describe('user:update', () => {
   test('mijenja samo proslijeđena polja i vraća broj izmjena', async () => {
     const k = dodajKorisnika('Ana', '1234');
     expect(await b.call('user:update', k, { ime: '  Ana B.  ' })).toEqual({ changes: 1 });
-    expect(red('SELECT ime, pin, uloga FROM users WHERE id = ?', k)).toEqual({ ime: 'Ana B.', pin: '1234', uloga: 'kasir' });
+    expect(korisnikSaPinom(k, '1234')).toEqual({ ime: 'Ana B.', uloga: 'kasir', pinOdgovara: true });
 
     expect(await b.call('user:update', k, { pin: '5678', uloga: 'admin' })).toEqual({ changes: 1 });
-    expect(red('SELECT ime, pin, uloga FROM users WHERE id = ?', k)).toEqual({ ime: 'Ana B.', pin: '5678', uloga: 'admin' });
+    expect(korisnikSaPinom(k, '5678')).toEqual({ ime: 'Ana B.', uloga: 'admin', pinOdgovara: true });
+  });
+
+  test('prazan ili izostavljen PIN ostavlja stari PIN', async () => {
+    const k = dodajKorisnika('Ana', '1234');
+    const hes = red('SELECT pin FROM users WHERE id = ?', k).pin;
+    expect(await b.call('user:update', k, { ime: 'Ana', pin: '', uloga: 'kasir' })).toEqual({ changes: 1 });
+    expect(await b.call('user:update', k, { ime: 'Ana', pin: null })).toEqual({ changes: 1 });
+    expect(await b.call('user:update', k, { pin: '' })).toEqual({ changes: 0 });
+    expect(red('SELECT pin FROM users WHERE id = ?', k).pin).toBe(hes);
   });
 
   test('prazan objekat ne dira bazu', async () => {
@@ -154,27 +157,26 @@ describe('user:update', () => {
   });
 
   test('korisnik može zadržati svoj PIN', async () => {
-    expect(await b.call('user:update', ADMIN, { pin: '0000' })).toEqual({ changes: 1 });
+    expect(await b.call('user:update', ADMIN, { pin: ADMIN_PIN })).toEqual({ changes: 1 });
   });
 
   test('validira ime, dužinu PIN-a i jedinstvenost PIN-a', async () => {
     const k = dodajKorisnika('Ana', '1234');
     await expect(b.call('user:update', k, { ime: ' ' })).rejects.toThrow('Ime korisnika je obavezno');
     await expect(b.call('user:update', k, { pin: '12' })).rejects.toThrow('PIN mora imati najmanje 4 cifre');
-    await expect(b.call('user:update', k, { pin: '0000' })).rejects.toThrow('Korisnik sa PIN-om "0000" već postoji');
+    await expect(b.call('user:update', k, { pin: ADMIN_PIN })).rejects.toThrow(`Korisnik sa PIN-om "${ADMIN_PIN}" već postoji`);
     // Greška u jednom polju poništava i ostala.
     await expect(b.call('user:update', k, { ime: 'Novo', pin: '1' })).rejects.toThrow('PIN mora imati najmanje 4 cifre');
-    expect(red('SELECT ime, pin FROM users WHERE id = ?', k)).toEqual({ ime: 'Ana', pin: '1234' });
+    expect(korisnikSaPinom(k, '1234')).toEqual({ ime: 'Ana', uloga: 'kasir', pinOdgovara: true });
   });
 
   test('PIN i uloga se validiraju isto kao pri kreiranju', async () => {
     const k = dodajKorisnika('Ana', '1234');
     await expect(b.call('user:update', k, { pin: '    ' })).rejects.toThrow('PIN je obavezan');
-    await expect(b.call('user:update', k, { pin: '' })).rejects.toThrow('PIN je obavezan');
     await expect(b.call('user:update', k, { pin: '12 4' })).rejects.toThrow('PIN smije sadržavati samo cifre');
     await expect(b.call('user:update', k, { pin: 'abcd' })).rejects.toThrow('PIN smije sadržavati samo cifre');
     await expect(b.call('user:update', k, { uloga: 'menadzer' })).rejects.toThrow('Uloga mora biti "admin" ili "kasir"');
-    expect(red('SELECT ime, pin, uloga FROM users WHERE id = ?', k)).toEqual({ ime: 'Ana', pin: '1234', uloga: 'kasir' });
+    expect(korisnikSaPinom(k, '1234')).toEqual({ ime: 'Ana', uloga: 'kasir', pinOdgovara: true });
   });
 
   test('posljednji admin ne može postati kasir', async () => {
@@ -183,12 +185,15 @@ describe('user:update', () => {
     expect(red('SELECT uloga FROM users WHERE id = ?', ADMIN).uloga).toBe('admin');
     // Admin koji zadržava ulogu (UI uvijek šalje ulogu) prolazi.
     expect(await b.call('user:update', ADMIN, { ime: 'Admin', uloga: 'admin' })).toEqual({ changes: 1 });
-    expect(await b.call('user:verifyAdminPin', '0000')).toEqual({ success: true, ime: 'Admin' });
+    expect(await b.call('user:login', ADMIN_PIN)).toMatchObject({ id: ADMIN, uloga: 'admin' });
   });
 
   test('admin može postati kasir kad postoji drugi admin', async () => {
     const drugi = dodajKorisnika('Berina', '1111', 'admin');
     expect(await b.call('user:update', ADMIN, { uloga: 'kasir' })).toEqual({ changes: 1 });
+    // Uloga se čita iz baze pri svakom pozivu: degradirani admin odmah gubi pravo.
+    await expect(b.call('user:update', drugi, { uloga: 'kasir' })).rejects.toThrow('Ovu radnju može izvršiti samo administrator');
+    await prijavi(b, '1111');
     await expect(b.call('user:update', drugi, { uloga: 'kasir' }))
       .rejects.toThrow('Posljednji administrator ne može postati kasir');
   });
@@ -239,6 +244,9 @@ describe('user:delete', () => {
     expect(red('SELECT COUNT(*) AS n FROM users WHERE id = ?', ADMIN).n).toBe(1);
     const drugi = dodajKorisnika('Berina', '1111', 'admin');
     expect(await b.call('user:delete', ADMIN)).toEqual({ changes: 1 });
+    // Obrisani korisnik više nije prijavljen.
+    await expect(b.call('user:getAll')).rejects.toThrow('Niste prijavljeni');
+    await prijavi(b, '1111');
     await expect(b.call('user:delete', drugi)).rejects.toThrow('Posljednji administrator ne može biti obrisan');
   });
 });
@@ -246,14 +254,14 @@ describe('user:delete', () => {
 // ─── settings:getTring / settings:saveTring ─────────────────
 
 describe('settings:getTring', () => {
-  test('vraća postavke s brojevima kao brojevima', async () => {
+  test('vraća postavke s brojevima kao brojevima; lozinku ne vraća, samo da li postoji', async () => {
     const t = await b.call('settings:getTring');
-    expect(t).toEqual({ host: 'localhost', port: b.tring.port, operatorId: 0, operatorPassword: '0' });
+    expect(t).toEqual({ host: 'localhost', port: b.tring.port, operatorId: 0, imaLozinku: true });
   });
 
   test('bez redova u bazi vraća podrazumijevane vrijednosti', async () => {
     b.db.prepare("DELETE FROM settings WHERE key LIKE 'tring.%'").run();
-    expect(await b.call('settings:getTring')).toEqual({ host: 'localhost', port: 8085, operatorId: 0, operatorPassword: '0' });
+    expect(await b.call('settings:getTring')).toEqual({ host: 'localhost', port: 8085, operatorId: 0, imaLozinku: false });
   });
 });
 
@@ -267,8 +275,17 @@ describe('settings:saveTring', () => {
       { key: 'tring.operatorPassword', value: 'tajna' },
       { key: 'tring.port', value: '9000' },
     ]);
-    expect(await b.call('settings:getTring')).toEqual({ host: '192.168.1.50', port: 9000, operatorId: 3, operatorPassword: 'tajna' });
+    expect(await b.call('settings:getTring')).toEqual({ host: '192.168.1.50', port: 9000, operatorId: 3, imaLozinku: true });
     expect(b.tring.zahtjevi).toEqual([]);
+  });
+
+  test('prazna ili izostavljena lozinka zadržava staru', async () => {
+    await b.call('settings:saveTring', { host: 'h', port: 9000, operatorId: 1, operatorPassword: 'tajna' });
+    await b.call('settings:saveTring', { host: 'h2', port: 9001, operatorId: 2, operatorPassword: '' });
+    expect(postavka('tring.operatorPassword')).toBe('tajna');
+    await b.call('settings:saveTring', { host: 'h3', port: 9002, operatorId: 3 });
+    expect(postavka('tring.operatorPassword')).toBe('tajna');
+    expect(postavka('tring.host')).toBe('h3');
   });
 
   test('validira host, port i operator ID', async () => {
@@ -289,7 +306,7 @@ describe('settings:saveTring', () => {
     expect(postavka('tring.port')).toBe('1');
     await b.call('settings:saveTring', { host: 'h', port: 65535, operatorId: 0, operatorPassword: '' });
     expect(postavka('tring.port')).toBe('65535');
-    expect(postavka('tring.operatorPassword')).toBe('');
+    expect(postavka('tring.operatorPassword')).toBe('0');
   });
 });
 
@@ -401,11 +418,16 @@ describe('settings:saveFirma', () => {
 
 describe('settings:get / settings:set', () => {
   test('set upisuje i prepisuje vrijednost, get je čita', async () => {
-    expect(await b.call('settings:set', 'kasa.nesto', 'a')).toEqual({ success: true });
-    expect(await b.call('settings:get', 'kasa.nesto')).toBe('a');
-    await b.call('settings:set', 'kasa.nesto', 'b');
-    expect(await b.call('settings:get', 'kasa.nesto')).toBe('b');
-    expect(red("SELECT COUNT(*) AS n FROM settings WHERE key = 'kasa.nesto'").n).toBe(1);
+    expect(await b.call('settings:set', 'kasa.showDailyTotal', 'true')).toEqual({ success: true });
+    expect(await b.call('settings:get', 'kasa.showDailyTotal')).toBe('true');
+    await b.call('settings:set', 'kasa.showDailyTotal', 'false');
+    expect(await b.call('settings:get', 'kasa.showDailyTotal')).toBe('false');
+    expect(red("SELECT COUNT(*) AS n FROM settings WHERE key = 'kasa.showDailyTotal'").n).toBe(1);
+  });
+
+  test('get ne vraća lozinku Tring operatera', async () => {
+    expect(postavka('tring.operatorPassword')).toBe('0');
+    expect(await b.call('settings:get', 'tring.operatorPassword')).toBeNull();
   });
 
   test('nepostojeći ključ daje null', async () => {
@@ -417,8 +439,8 @@ describe('settings:get / settings:set', () => {
   });
 
   test('prazan string se čuva kao prazan string, ne null', async () => {
-    await b.call('settings:set', 'kasa.prazno', '');
-    expect(await b.call('settings:get', 'kasa.prazno')).toBe('');
+    await b.call('settings:set', 'racun.napomena', '');
+    expect(await b.call('settings:get', 'racun.napomena')).toBe('');
   });
 });
 

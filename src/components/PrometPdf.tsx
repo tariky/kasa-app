@@ -3,6 +3,7 @@ import { Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
 import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
 import { POTPIS_AUTORA } from '@/lib/brend';
 import { kontaktFirme } from '@/lib/firma';
+import { opisPlacanja } from '@/lib/placanje';
 
 export interface PrometPdfProps {
   orders: any[];
@@ -138,7 +139,7 @@ export function PrometPdf({ orders, dateFrom, dateTo, firma }: PrometPdfProps) {
                 <Text style={[s.tCellLeft, s.cDatum, isRefunded ? s.refunded : {}]}>{fmtDate(order.createdAt)}</Text>
                 <Text style={[s.tCellLeft, s.cKasir, isRefunded ? s.refunded : {}]}>{order.korisnikIme || '—'}</Text>
                 <Text style={[s.tCell, s.cFisk, { textAlign: 'center' }, isRefunded ? s.refunded : {}]}>{order.brojFiskalnogRacuna || '—'}</Text>
-                <Text style={[s.tCellLeft, s.cPlacanje, isRefunded ? s.refunded : {}]}>{order.nacinPlacanja || '—'}</Text>
+                <Text style={[s.tCellLeft, s.cPlacanje, isRefunded ? s.refunded : {}]}>{order.nacinPlacanja ? opisPlacanja(order.nacinPlacanja, order.ukupno) : '—'}</Text>
                 <Text style={[s.tCell, s.cOsnovica, isRefunded ? s.refunded : {}]}>{fmt(order.ukupno - order.pdvIznos)}</Text>
                 <Text style={[s.tCell, s.cPdv, isRefunded ? s.refunded : {}]}>{fmt(order.pdvIznos)}</Text>
                 <Text style={[s.tCell, s.cUkupno, isRefunded ? s.refunded : {}]}>{fmt(order.ukupno)}</Text>

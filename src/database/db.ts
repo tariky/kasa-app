@@ -3,6 +3,8 @@ import { app } from 'electron';
 import path from 'node:path';
 import { schema } from './schema';
 import { runMigrations } from './migrations';
+import { podesiKonekciju } from './konekcija';
+import { hesirajStarePinove, osigurajZadanogAdmina } from '../lib/korisnici';
 
 let db: Database.Database | null = null;
 
@@ -12,13 +14,14 @@ export function getDb(): Database.Database {
   const dbPath = path.join(app.getPath('userData'), 'kasa.db');
   db = new Database(dbPath);
 
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
+  podesiKonekciju(db);
 
   db.exec(schema);
 
   // Migrations for existing databases
   runMigrations(db);
+  // PIN-ovi iz starijih verzija (i uvezenih backup-a) su bili čist tekst.
+  hesirajStarePinove(db);
 
   seedDefaults(db);
 
@@ -26,16 +29,9 @@ export function getDb(): Database.Database {
 }
 
 function seedDefaults(database: Database.Database): void {
-  // Seed default admin user
-  const adminExists = database
-    .prepare("SELECT id FROM users WHERE pin = '0000'")
-    .get();
-
-  if (!adminExists) {
-    database
-      .prepare("INSERT INTO users (ime, pin, uloga) VALUES ('Admin', '0000', 'admin')")
-      .run();
-  }
+  // Zadani Admin/0000 samo u praznoj bazi — inače bi se vraćao pri svakom
+  // pokretanju i nakon što ga korisnik obriše ili mu promijeni PIN.
+  osigurajZadanogAdmina(database);
 
   // Seed default Tring settings
   const defaults: Record<string, string> = {

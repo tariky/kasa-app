@@ -4,6 +4,7 @@ import { Order, OrderItem, BankAccount } from '@/types';
 import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
 import { POTPIS_AUTORA, POTPIS_AUTORA_EN } from '@/lib/brend';
 import { pdvStavke, iznosStavke } from '@/lib/racun';
+import { opisPlacanja } from '@/lib/placanje';
 import { uNetto } from '@/lib/pdvUnos';
 import { formatDatumValute } from '@/lib/valuta';
 import { logoVelicina, kontaktFirme } from '@/lib/firma';
@@ -57,7 +58,6 @@ const translations = {
     dateTimeSep: 'u',
     paymentCash: 'Gotovina',
     paymentCard: 'Kartica',
-    paymentBoth: 'Gotovina + Kartica',
     bankAccounts: 'Žiro računi',
     signatureIssuer: 'Potpis izdavaoca',
     signatureRecipient: 'Potpis primaoca',
@@ -90,7 +90,6 @@ const translations = {
     dateTimeSep: 'at',
     paymentCash: 'Cash',
     paymentCard: 'Card',
-    paymentBoth: 'Cash + Card',
     bankAccounts: 'Bank accounts',
     signatureIssuer: 'Issuer signature',
     signatureRecipient: 'Recipient signature',
@@ -424,17 +423,9 @@ export function RacunPdf({ order, firma, lang = 'bs' }: RacunPdfProps) {
 
   const datumValute = formatDatumValute(order.datumValute);
 
-  const parseNacinPlacanja = (json: string): string => {
-    try {
-      const parsed = JSON.parse(json);
-      if (parsed.gotovina && parsed.kartica) return t.paymentBoth;
-      if (parsed.gotovina) return t.paymentCash;
-      if (parsed.kartica) return t.paymentCard;
-      return json;
-    } catch {
-      return json;
-    }
-  };
+  // Tekst ('Kartica') ili razbijeno plaćanje (JSON) — zajednički parser, nazivi po jeziku.
+  const parseNacinPlacanja = (nacin: string): string =>
+    opisPlacanja(nacin, order.ukupno, { gotovina: t.paymentCash, kartica: t.paymentCard });
 
   const hasKupac = order.kupacNaziv || order.kupacIdBroj;
   const isRefunded = order.status === 'refunded';

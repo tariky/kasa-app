@@ -8,7 +8,8 @@ import { PROGRAM } from '@/lib/brend';
 import { opisLicence, type LicencaInfo, type TonLicence } from '@/lib/licencaTipovi';
 import { useModuli } from '@/hooks/useModuli';
 import type { Modul } from '@/lib/moduli';
-import { cn } from '@/lib/utils';
+import { cn, porukaGreske } from '@/lib/utils';
+import PromjenaZadanogPina from '@/components/PromjenaZadanogPina';
 
 interface LoginScreenProps {
   licenca: LicencaInfo;
@@ -60,6 +61,8 @@ export default function LoginScreen({ licenca, onLogin }: LoginScreenProps) {
   const [error, setError] = useState('');
   const [shaking, setShaking] = useState(false);
   const [firma, setFirma] = useState('');
+  // Prijava zadanim PIN-om: korisnik ulazi tek kad postavi svoj PIN.
+  const [zadani, setZadani] = useState<{ user: User; pin: string } | null>(null);
   const moduli = useModuli();
 
   useEffect(() => {
@@ -87,14 +90,24 @@ export default function LoginScreen({ licenca, onLogin }: LoginScreenProps) {
       const user = await window.api.login(pin);
       if (user) {
         setError('');
-        onLogin(user);
+        const { zadaniPin, ...korisnik } = user;
+        if (zadaniPin) setZadani({ user: korisnik, pin });
+        else onLogin(korisnik);
       } else odbij('Pogrešan PIN. Pokušajte ponovo.');
-    } catch {
-      odbij('Prijava nije uspjela. Pokušajte ponovo.');
+    } catch (err) {
+      // Npr. blokada nakon previše pogrešnih pokušaja — poruka kaže koliko čekati.
+      odbij(porukaGreske(err) || 'Prijava nije uspjela. Pokušajte ponovo.');
     }
   }, [pin, onLogin]);
 
+  const odustaniOdZadanog = () => {
+    setZadani(null);
+    setPin('');
+    window.api.logout().catch(() => { /* sesija se ionako gasi pri sljedećoj prijavi */ });
+  };
+
   useEffect(() => {
+    if (zadani) return; // dijalog za novi PIN ima svoja polja
     const handler = (e: KeyboardEvent) => {
       if (e.key >= '0' && e.key <= '9') handleDigit(e.key);
       else if (e.key === 'Backspace') handleDelete();
@@ -102,7 +115,7 @@ export default function LoginScreen({ licenca, onLogin }: LoginScreenProps) {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [pin, handleSubmit]);
+  }, [pin, handleSubmit, zadani]);
 
   const opis = opisLicence(licenca);
   const klijent = 'licenca' in licenca ? licenca.licenca.klijent : '';
@@ -229,6 +242,13 @@ export default function LoginScreen({ licenca, onLogin }: LoginScreenProps) {
           </div>
         </div>
       </main>
+
+      <PromjenaZadanogPina
+        open={zadani !== null}
+        stariPin={zadani?.pin ?? ''}
+        onPromijenjen={() => { if (zadani) onLogin(zadani.user); }}
+        onOdustani={odustaniOdZadanog}
+      />
 
       <style>{`
         @keyframes pin-shake {

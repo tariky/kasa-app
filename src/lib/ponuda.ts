@@ -3,6 +3,8 @@ import type { SqlDb } from './sqldb';
 import { izracunajTotale, upisiRacun } from './racun';
 import { localDateStr } from './novac';
 import { buildTringRacun } from './tringRacun';
+import { provjeriStavke } from './provjeraRacuna';
+import { provjeriNacinPlacanja } from './placanje';
 
 export interface PonudaStavka {
   productId: number;
@@ -67,12 +69,13 @@ export function createPonuda(
     throw new Error('Ponuda mora imati najmanje jednu stavku');
   }
   if (!data.kupacId) throw new Error('Kupac je obavezan');
+  const stavke = provjeriStavke(db, data.stavke);
 
   const datum = data.datum || localDateStr();
   const godina = Number(datum.slice(0, 4));
   const broj = nextBrojPonude(db, godina);
   const vaziDo = data.vaziDo || plusDana(datum, DEFAULT_ROK_DANA);
-  const { ukupno, pdvIznos } = izracunajTotale(data.stavke);
+  const { ukupno, pdvIznos } = izracunajTotale(stavke);
 
   const result = db.prepare(`
     INSERT INTO ponude (broj, godina, kupacId, korisnikId, datum, vaziDo, napomena, ukupno, pdvIznos)
@@ -84,7 +87,7 @@ export function createPonuda(
   const insertStavka = db.prepare(
     'INSERT INTO ponuda_stavke (ponudaId, productId, kolicina, cijena, rabat, pdvStopa) VALUES (?, ?, ?, ?, ?, ?)'
   );
-  for (const s of data.stavke) {
+  for (const s of stavke) {
     insertStavka.run(id, s.productId, s.kolicina, s.cijena, s.rabat, s.pdvStopa);
   }
 
@@ -167,8 +170,9 @@ export function updatePonuda(
     .get(id) as { id: number; status: string; kupacId: number; datum: string; vaziDo: string } | undefined;
   if (!ponuda) throw new Error('Ponuda ne postoji');
   if (ponuda.status === 'konvertovana') throw new Error('Konvertovana ponuda se ne može mijenjati');
+  const stavke = provjeriStavke(db, data.stavke);
 
-  const { ukupno, pdvIznos } = izracunajTotale(data.stavke);
+  const { ukupno, pdvIznos } = izracunajTotale(stavke);
 
   db.prepare(`
     UPDATE ponude SET kupacId = ?, datum = ?, vaziDo = ?, napomena = COALESCE(?, napomena),
@@ -183,7 +187,7 @@ export function updatePonuda(
   const insertStavka = db.prepare(
     'INSERT INTO ponuda_stavke (ponudaId, productId, kolicina, cijena, rabat, pdvStopa) VALUES (?, ?, ?, ?, ?, ?)'
   );
-  for (const s of data.stavke) {
+  for (const s of stavke) {
     insertStavka.run(id, s.productId, s.kolicina, s.cijena, s.rabat, s.pdvStopa);
   }
 }
@@ -204,8 +208,7 @@ export interface KonverzijaResult {
   odgovori?: Record<string, string>;
 }
 
-/** Načini plaćanja koje nude ekrani (u bazi se čuva "Ček" s kvačicom). */
-export const NACINI_PLACANJA = ['Gotovina', 'Kartica', 'Virman', 'Ček'] as const;
+export { NACINI_PLACANJA } from './placanje';
 
 /** Ponude kojima se konverzija trenutno štampa — zaštita od dvoklika. */
 const konverzijeInFlight = new Set<number>();
@@ -234,11 +237,7 @@ export async function konvertujPonudu(
     : undefined;
   if (!korisnik) throw new Error('Korisnik nije prijavljen');
 
-  const nacinPlacanja = typeof data.nacinPlacanja === 'string' ? data.nacinPlacanja.trim() : '';
-  if (!nacinPlacanja) throw new Error('Način plaćanja je obavezan');
-  if (!(NACINI_PLACANJA as readonly string[]).includes(nacinPlacanja)) {
-    throw new Error(`Nepoznat način plaćanja: "${nacinPlacanja}"`);
-  }
+  const nacinPlacanja = provjeriNacinPlacanja(data.nacinPlacanja);
 
   const ponuda = db.prepare('SELECT * FROM ponude WHERE id = ?').get(id) as any;
   if (!ponuda) throw new Error('Ponuda ne postoji');

@@ -128,7 +128,8 @@ const izIso = (iso: string) => { const [y, m, d] = iso.split('-').map(Number); r
 interface FakturaDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  korisnikId: number;
+  /** Posljednji fiskalni broj (kad ga baza ne zna) upisuje samo administrator. */
+  uloga: 'admin' | 'kasir';
   /** Faktura po ponudi — preskače izbor firme. */
   pocetno?: FakturaPocetno | null;
   /** Nastavak spremljene skice; ima prednost pred `pocetno`. */
@@ -149,7 +150,7 @@ interface FakturaDialogProps {
  * stvarne stavke idu na fakturu koja nosi isti broj. Tok ima dva koraka — prvo
  * firma (uvijek obavezna), pa stavke ili ručni iznos i način plaćanja.
  */
-export default function FakturaDialog({ open, onOpenChange, korisnikId, pocetno, skica, onSkicePromijenjene, onSuccess }: FakturaDialogProps) {
+export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skica, onSkicePromijenjene, onSuccess }: FakturaDialogProps) {
   const [korak, setKorak] = useState<Korak>('firma');
   const [firma, setFirma] = useState<Firma | null>(null);
   /** Ručni unos / uređivanje firme; null = pretraga šifarnika. */
@@ -282,7 +283,7 @@ export default function FakturaDialog({ open, onOpenChange, korisnikId, pocetno,
   const primijeniRabatSve = () => {
     const n = parseFloat(rabatSve.replace(',', '.'));
     const rabat = isNaN(n) ? 0 : n;
-    if (!(rabat >= 0 && rabat < 100)) { setObavijest('Rabat mora biti između 0 i 100 %.'); return; }
+    if (!(rabat >= 0 && rabat <= 100)) { setObavijest('Rabat mora biti od 0 do 100 %.'); return; }
     setObavijest(null);
     setStavke(prev => prev.map(s => ({ ...s, rabat })));
     setRabatSve('');
@@ -323,8 +324,8 @@ export default function FakturaDialog({ open, onOpenChange, korisnikId, pocetno,
       setError('Svaka stavka mora imati količinu veću od 0.');
       return;
     }
-    if (mode === 'stavke' && stavke.some(s => !(s.rabat >= 0 && s.rabat < 100))) {
-      setError('Rabat mora biti između 0 i 100 %.');
+    if (mode === 'stavke' && stavke.some(s => !(s.rabat >= 0 && s.rabat <= 100))) {
+      setError('Rabat mora biti od 0 do 100 %.');
       return;
     }
     if (mode === 'stavke' && zabranjene.length > 0) {
@@ -339,7 +340,6 @@ export default function FakturaDialog({ open, onOpenChange, korisnikId, pocetno,
     setBusy(true);
     try {
       const res = await window.api.finalizePrilogOrder({
-        korisnikId,
         nacinPlacanja,
         ...(mode === 'stavke'
           ? { stavke: stavke.map(s => ({ productId: s.productId, kolicina: s.kolicina, cijena: s.cijena, rabat: s.rabat, pdvStopa: s.pdvStopa })) }
@@ -377,7 +377,7 @@ export default function FakturaDialog({ open, onOpenChange, korisnikId, pocetno,
     } finally {
       setBusy(false);
     }
-  }, [firma, iznos, mode, stavke, zabranjene, rokNeispravan, datumValute, napomena, ponuda, skicaId, korisnikId, nacinPlacanja, opis, vezaZaSlanje, onSuccess, onOpenChange, onSkicePromijenjene]);
+  }, [firma, iznos, mode, stavke, zabranjene, rokNeispravan, datumValute, napomena, ponuda, skicaId, nacinPlacanja, opis, vezaZaSlanje, onSuccess, onOpenChange, onSkicePromijenjene]);
 
   const imaSadrzaja = !!firma || stavke.length > 0 || (rucniIznos ?? 0) > 0;
 
@@ -572,7 +572,7 @@ export default function FakturaDialog({ open, onOpenChange, korisnikId, pocetno,
                                   className={cn(
                                     'h-9 w-[72px] rounded-lg text-center font-mono text-sm tabular-nums',
                                     s.rabat === 0 && 'text-slate-400',
-                                    !(s.rabat >= 0 && s.rabat < 100) && 'border-rose-300 bg-rose-50',
+                                    !(s.rabat >= 0 && s.rabat <= 100) && 'border-rose-300 bg-rose-50',
                                   )}
                                 />
                                 <span className="w-28 text-right font-mono tabular-nums">
@@ -667,24 +667,30 @@ export default function FakturaDialog({ open, onOpenChange, korisnikId, pocetno,
                   <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5">
                     <p className="text-[12px] font-medium text-amber-800">Nepoznat broj sljedećeg isječka</p>
                     <p className="mt-0.5 text-[11.5px] leading-snug text-amber-700">
-                      U bazi nema fiskalizovanih računa. Upišite posljednji broj sa uređaja.
+                      {uloga === 'admin'
+                        ? 'U bazi nema fiskalizovanih računa. Upišite posljednji broj sa uređaja.'
+                        : 'U bazi nema fiskalizovanih računa. Posljednji broj sa uređaja upisuje administrator (Postavke → Fiskalni uređaj).'}
                     </p>
-                    <div className="mt-2 flex items-center gap-2">
-                      <Input
-                        value={zadnjiBrojUnos}
-                        onChange={e => setZadnjiBrojUnos(e.target.value.replace(/\D/g, ''))}
-                        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); spremiZadnjiBroj(); } }}
-                        inputMode="numeric"
-                        maxLength={9}
-                        placeholder="npr. 127"
-                        aria-label="Posljednji izdati fiskalni broj"
-                        className="h-8 w-28 rounded-lg border-amber-200 bg-white px-2 font-mono text-[13px] tabular-nums"
-                      />
-                      <Button size="sm" variant="outline" className="h-8 text-[12px]" disabled={!zadnjiBrojUnos} onClick={spremiZadnjiBroj}>
-                        Sačuvaj broj
-                      </Button>
-                    </div>
-                    {zadnjiBrojGreska && <p className="mt-1.5 text-[11px] text-red-600">{zadnjiBrojGreska}</p>}
+                    {uloga === 'admin' && (
+                      <>
+                        <div className="mt-2 flex items-center gap-2">
+                          <Input
+                            value={zadnjiBrojUnos}
+                            onChange={e => setZadnjiBrojUnos(e.target.value.replace(/\D/g, ''))}
+                            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); spremiZadnjiBroj(); } }}
+                            inputMode="numeric"
+                            maxLength={9}
+                            placeholder="npr. 127"
+                            aria-label="Posljednji izdati fiskalni broj"
+                            className="h-8 w-28 rounded-lg border-amber-200 bg-white px-2 font-mono text-[13px] tabular-nums"
+                          />
+                          <Button size="sm" variant="outline" className="h-8 text-[12px]" disabled={!zadnjiBrojUnos} onClick={spremiZadnjiBroj}>
+                            Sačuvaj broj
+                          </Button>
+                        </div>
+                        {zadnjiBrojGreska && <p className="mt-1.5 text-[11px] text-red-600">{zadnjiBrojGreska}</p>}
+                      </>
+                    )}
                   </div>
                 )}
 

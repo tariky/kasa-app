@@ -7,6 +7,13 @@
 // (src-tauri/backend, `bun run test:rust`).
 import type { Database } from 'bun:sqlite';
 import type { LaziTring } from './laziTring';
+import { hesirajPin } from '../../lib/korisnici';
+
+/**
+ * PIN seedovanog admina (id 1) u testovima koji se prijave automatski. Zadani
+ * PIN 0000 bi otvorio sesiju koja smije samo promijeniti PIN (vidi sesija.ts).
+ */
+export const ADMIN_PIN = '2580';
 
 export interface OdgovoriDijaloga {
   /** Putanja koju vrati dijalog za spremanje. */
@@ -40,12 +47,45 @@ export interface Backend {
   radniFolder: string;
   /** Da li je backend zatražio restart aplikacije (npr. nakon uvoza backup-a). */
   restartovan(): boolean;
+  /**
+   * Novo pokretanje backenda nad istom bazom (kao ponovno otvaranje programa):
+   * shema, migracije i seed se ponove, sesija i ograničenje pokušaja počinju
+   * iz početka — niko nije prijavljen.
+   */
+  ponovoPokreni(): Promise<void>;
+  /** Svi registrovani kanali backenda (za provjeru da ugovorni testovi pokrivaju svaki). */
+  kanali(): Promise<string[]>;
   close(): Promise<void>;
 }
 
-export async function otvoriBackend(): Promise<Backend> {
+export interface OpcijeBackenda {
+  /**
+   * PIN kojim se harness prijavi odmah nakon otvaranja (kanali traže
+   * prijavljenog korisnika — vidi src/ipc/sesija.ts). Podrazumijevano: seedovani
+   * admin (id 1) dobije ADMIN_PIN direktno u bazi i prijavi se njime.
+   * `null` = baza ostaje netaknuta (Admin/0000) i niko nije prijavljen.
+   */
+  prijava?: string | null;
+}
+
+export async function otvoriBackend(opcije: OpcijeBackenda = {}): Promise<Backend> {
   const vrsta = process.env.KASA_BACKEND ?? 'ts';
-  if (vrsta === 'ts') return (await import('./tsBackend')).otvoriTsBackend();
-  if (vrsta === 'rust') return (await import('./rustBackend')).otvoriRustBackend();
-  throw new Error(`Nepoznat KASA_BACKEND: ${vrsta}`);
+  let b: Backend;
+  if (vrsta === 'ts') b = await (await import('./tsBackend')).otvoriTsBackend();
+  else if (vrsta === 'rust') b = await (await import('./rustBackend')).otvoriRustBackend();
+  else throw new Error(`Nepoznat KASA_BACKEND: ${vrsta}`);
+  if (opcije.prijava === undefined) {
+    b.db.prepare('UPDATE users SET pin = ? WHERE id = 1').run(hesirajPin(ADMIN_PIN));
+    await prijavi(b, ADMIN_PIN);
+  } else if (opcije.prijava !== null) {
+    await prijavi(b, opcije.prijava);
+  }
+  return b;
+}
+
+/** Prijava kao iz LoginScreena; baca ako PIN ne pripada nikome. Vraća user:login rezultat. */
+export async function prijavi(b: Backend, pin: string): Promise<{ id: number; ime: string; uloga: string; zadaniPin: boolean }> {
+  const u = await b.call('user:login', pin);
+  if (!u) throw new Error(`Prijava PIN-om ${pin} nije uspjela`);
+  return u;
 }
