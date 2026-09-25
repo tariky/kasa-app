@@ -92,8 +92,8 @@ fn insert_completed_order(db: &Db, data: &Value) -> R<i64> {
     let sql = format!(
         "
       INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, status,
-        kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj, isManual{}, prilogBroj, prilogNaziv)
-      VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?{}, ?, ?)
+        kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj, isManual{}, prilogBroj, prilogNaziv, datumValute, napomena)
+      VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?{}, ?, ?, ?, ?)
     ",
         if has_created_at { ", createdAt" } else { "" },
         if has_created_at { ", ?" } else { "" },
@@ -116,6 +116,9 @@ fn insert_completed_order(db: &Db, data: &Value) -> R<i64> {
     }
     params.push(data["prilogBroj"].clone());
     params.push(data["prilogNaziv"].clone());
+    // Faktura: rok plaćanja i napomena putuju kroz snapshot.
+    params.push(data["datumValute"].clone());
+    params.push(data["napomena"].clone());
     let order_id = db.run(&sql, &params)?.last_insert_rowid;
 
     for item in niz(&data["stavke"], "data.stavke")? {
@@ -176,7 +179,7 @@ pub fn prilog_naziv(broj: &Value, opis: &Value, veza: &Value) -> String {
 
 /// Zbir stavki priloga — zaokruživanje po stavci kao na fiskalnom uređaju.
 pub fn suma_priloga(stavke: &[Value]) -> f64 {
-    round2(stavke.iter().fold(0.0, |sum, s| sum + racun::iznos_stavke(&spoji(s, vec![("rabat", json!(0))]))))
+    round2(stavke.iter().fold(0.0, |sum, s| sum + racun::iznos_stavke(&spoji(s, vec![("rabat", js::nn(&s["rabat"], &json!(0)).clone())]))))
 }
 
 /// Provjeri stavke priloga i vrati tip proizvoda po id-u (usluge ne diraju
@@ -190,6 +193,10 @@ pub fn validiraj_prilog_stavke(db: &Db, stavke: &[Value]) -> R<HashMap<String, V
         }
         if to_number(&s["cijena"]) < 0.0 {
             baci!("Cijena ne može biti negativna");
+        }
+        let rabat = to_number(js::nn(&s["rabat"], &json!(0)));
+        if !(rabat >= 0.0 && rabat < 100.0) {
+            baci!("Rabat mora biti između 0 i 100 %");
         }
         if s["pdvStopa"] != "E" {
             baci!("U prilog smiju samo stavke sa PDV stopom E (zbirna stavka je fiskalizovana sa E)");
@@ -211,7 +218,7 @@ pub fn validiraj_prilog_stavke(db: &Db, stavke: &[Value]) -> R<HashMap<String, V
 /// Sve provjere idu prije prvog upisa da poziv bez transakcije (testovi) ne
 /// ostavi pola stavki u bazi.
 pub fn save_prilog_stavke_in_transaction(db: &Db, order_id: &Value, stavke: &Value) -> R<()> {
-    let Some(order) = db.get("SELECT prilogBroj, status FROM orders WHERE id = ?", p![order_id])? else {
+    let Some(order) = db.get("SELECT prilogBroj, status, ukupno FROM orders WHERE id = ?", p![order_id])? else {
         baci!("Račun ne postoji");
     };
     if order["prilogBroj"].is_null() {
@@ -219,6 +226,11 @@ pub fn save_prilog_stavke_in_transaction(db: &Db, order_id: &Value, stavke: &Val
     }
     if order["status"] != "completed" {
         baci!("Račun je storniran — prilog se ne može mijenjati");
+    }
+    // Stavke se dodjeljuju dok se ne poklope s fiskalnim iznosom; tad je faktura završena.
+    let postojece = db.all("SELECT kolicina, cijena, rabat, pdvStopa FROM prilog_stavke WHERE orderId = ?", p![order_id])?;
+    if !postojece.is_empty() && suma_priloga(&postojece) == round2(to_number(&order["ukupno"])) {
+        baci!("Faktura je završena — stavke se ne mogu mijenjati");
     }
 
     let stavke = niz(stavke, "stavke")?;
@@ -229,8 +241,8 @@ pub fn save_prilog_stavke_in_transaction(db: &Db, order_id: &Value, stavke: &Val
 
     for s in stavke {
         db.run(
-            "INSERT INTO prilog_stavke (orderId, productId, kolicina, cijena, pdvStopa) VALUES (?, ?, ?, ?, ?)",
-            p![order_id, s["productId"], s["kolicina"], s["cijena"], s["pdvStopa"]],
+            "INSERT INTO prilog_stavke (orderId, productId, kolicina, cijena, rabat, pdvStopa) VALUES (?, ?, ?, ?, ?, ?)",
+            p![order_id, s["productId"], s["kolicina"], s["cijena"], js::nn(&s["rabat"], &json!(0)), s["pdvStopa"]],
         )?;
         if tipovi.get(&js::stringify(&s["productId"])).map_or(true, |t| t != "usluga") {
             db.run(
@@ -258,6 +270,46 @@ pub fn build_prilog_fiskalna_stavka(prilog_broj: &Value, iznos: f64, naziv: &Val
     })
 }
 
+/// Napomena na fakturi — stane u nekoliko redova ispod stavki.
+pub const FAKTURA_NAPOMENA_MAX: usize = 500;
+
+/// Datum valute, napomena i ponuda se provjeravaju prije štampe — greška poslije
+/// štampe znači papir bez zapisa. Vraća normalizovane vrijednosti za upis
+/// `(datumValute, napomena, ponudaId)`.
+pub fn provjeri_dodatke_fakture(db: &Db, data: &Value) -> R<(Value, Value, Value)> {
+    // `x?.trim() || null`
+    let ocisti = |v: &Value| js::trim(v).filter(|s| !s.is_empty()).map(Value::from).unwrap_or(Value::Null);
+    let datum_valute = ocisti(&data["datumValute"]);
+    if let Some(d) = datum_valute.as_str() {
+        if !validan_datum_valute(d) {
+            baci!("Neispravan datum valute: {d}");
+        }
+    }
+    let napomena = ocisti(&data["napomena"]);
+    if js::length(&napomena).is_some_and(|n| n > FAKTURA_NAPOMENA_MAX) {
+        baci!("Napomena može imati najviše {FAKTURA_NAPOMENA_MAX} znakova");
+    }
+    let ponuda_id = data["ponudaId"].clone();
+    if !ponuda_id.is_null() {
+        let Some(ponuda) = db.get("SELECT status FROM ponude WHERE id = ?", p![ponuda_id])? else {
+            baci!("Ponuda ne postoji");
+        };
+        if ponuda["status"] == "konvertovana" {
+            baci!("Ponuda je već konvertovana u račun");
+        }
+        if ponuda["status"] == "odbijena" {
+            baci!("Odbijena ponuda se ne može pretvoriti u fakturu — ako kupac ipak prihvata, prvo promijenite status");
+        }
+    }
+    Ok((datum_valute, napomena, ponuda_id))
+}
+
+/// Ponuda po kojoj je izdana faktura — isto stanje kao nakon konverzije u račun.
+pub fn oznaci_ponudu_fakturisanom(db: &Db, ponuda_id: &Value, order_id: &Value) -> R<()> {
+    db.run("UPDATE ponude SET status = 'konvertovana', racunId = ? WHERE id = ?", p![order_id, ponuda_id])?;
+    Ok(())
+}
+
 /// Fiskalizuje račun po prilogu: jedna zbirna stavka na uređaju.
 ///
 /// Iznos dolazi na dva načina — ručno ukucan, ili izveden iz stavki koje je
@@ -283,6 +335,7 @@ fn finalize_prilog_and_print(b: &Backend, data: &Value) -> R<Value> {
     if !(iznos > 0.0) {
         baci!("Iznos mora biti veći od 0");
     }
+    let (datum_valute, napomena, ponuda_id) = provjeri_dodatke_fakture(db, data)?;
 
     // Naziv stavke mora nositi broj isječka na koji se kuca, a njega uređaj vrati
     // tek nakon štampe — zato predviđanje iz fiskalnog niza. Poslije štampe se
@@ -315,6 +368,9 @@ fn finalize_prilog_and_print(b: &Backend, data: &Value) -> R<Value> {
     snapshot.insert("prilogBroj".into(), json!(predvidjeni_broj));
     snapshot.insert("prilogNaziv".into(), json!(naziv));
     snapshot.insert("prilogStavke".into(), stavke_v.clone());
+    snapshot.insert("datumValute".into(), datum_valute.clone());
+    snapshot.insert("napomena".into(), napomena.clone());
+    snapshot.insert("ponudaId".into(), ponuda_id.clone());
     let pending_id = db
         .run(
             "INSERT INTO pending_receipts (korisnikId, snapshot) VALUES (?, ?)",
@@ -362,18 +418,23 @@ fn finalize_prilog_and_print(b: &Backend, data: &Value) -> R<Value> {
         let r = db.run(
             "
         INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, status,
-          kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj, isManual, prilogBroj, prilogNaziv)
-        VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, 0, ?, ?)
+          kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj, isManual, prilogBroj, prilogNaziv,
+          datumValute, napomena)
+        VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
       ",
             p![
                 data["korisnikId"], js::f(ukupno), js::f(pdv_iznos), data["nacinPlacanja"], broj_fiskalnog_racuna,
                 kupac_polje(data, "naziv"), kupac_polje(data, "idBroj"), kupac_polje(data, "adresa"),
-                kupac_polje(data, "grad"), kupac_polje(data, "postanskiBroj"), prilog_broj, naziv
+                kupac_polje(data, "grad"), kupac_polje(data, "postanskiBroj"), prilog_broj, naziv,
+                datum_valute, napomena
             ],
         )?;
         let order_id = r.last_insert_rowid;
         if !stavke.is_empty() {
             save_prilog_stavke_in_transaction(db, &json!(order_id), &stavke_v)?;
+        }
+        if !ponuda_id.is_null() {
+            oznaci_ponudu_fakturisanom(db, &ponuda_id, &json!(order_id))?;
         }
         db.run("DELETE FROM pending_receipts WHERE id = ?", p![pending_id])?;
         Ok(order_id)
@@ -920,6 +981,13 @@ fn pending_resolve(db: &Db, data: &Value) -> R<Value> {
         // Prilog račun: stvarne stavke žive u snapshotu odvojeno od order_items.
         if snap["prilogStavke"].as_array().is_some_and(|a| !a.is_empty()) {
             save_prilog_stavke_in_transaction(db, &json!(order_id), &snap["prilogStavke"])?;
+        }
+        // Faktura iz ponude: ponuda se veže tek kad račun stvarno postoji u bazi.
+        if !snap["ponudaId"].is_null() {
+            let ponuda = db.get("SELECT status FROM ponude WHERE id = ?", p![snap["ponudaId"]])?;
+            if ponuda.is_some_and(|p| p["status"] != "konvertovana") {
+                oznaci_ponudu_fakturisanom(db, &snap["ponudaId"], &json!(order_id))?;
+            }
         }
         db.run("DELETE FROM pending_receipts WHERE id = ?", p![data["id"]])?;
         Ok(order_id)

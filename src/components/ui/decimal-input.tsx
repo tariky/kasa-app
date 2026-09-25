@@ -14,6 +14,8 @@ interface DecimalInputProps
   onValueChange: (text: string, value: number) => void;
   /** Maksimalan broj decimala (default 2). */
   maxDecimals?: number;
+  /** Fokus (i klikom) označi cijeli sadržaj, pa kucanje zamijeni vrijednost. */
+  selectOnFocus?: boolean;
 }
 
 function sanitize(raw: string, maxDecimals: number): string {
@@ -38,10 +40,12 @@ function sanitize(raw: string, maxDecimals: number): string {
  * kucanja, a dozvoljen je samo jedan separator.
  */
 const DecimalInput = React.forwardRef<HTMLInputElement, DecimalInputProps>(
-  ({ value, onValueChange, maxDecimals = 2, onBlur, ...props }, ref) => {
+  ({ value, onValueChange, maxDecimals = 2, selectOnFocus = false, onBlur, onFocus, onMouseUp, ...props }, ref) => {
     // Dok korisnik kuca, prikazuje se njegov tekst (draft) — inače bi
     // roditelj koji drži broj u state-u obrisao "12," na "12".
     const [draft, setDraft] = React.useState<string | null>(null);
+    // Klik fokusira pa na mouseup postavi kursor — to bi poništilo označavanje.
+    const upravoFokusiran = React.useRef(false);
 
     // Ako roditelj promijeni vrijednost mimo drafta (npr. klampovanje
     // rabata na 100), draft se odbacuje da prikaz ne ostane desinhronizovan.
@@ -74,7 +78,22 @@ const DecimalInput = React.forwardRef<HTMLInputElement, DecimalInputProps>(
           setDraft(text);
           onValueChange(text, parseDecimal(text));
         }}
+        onFocus={(e) => {
+          if (selectOnFocus) {
+            e.currentTarget.select();
+            upravoFokusiran.current = true;
+          }
+          onFocus?.(e);
+        }}
+        onMouseUp={(e) => {
+          if (upravoFokusiran.current) {
+            upravoFokusiran.current = false;
+            e.preventDefault();
+          }
+          onMouseUp?.(e);
+        }}
         onBlur={(e) => {
+          upravoFokusiran.current = false;
           setDraft(null);
           onBlur?.(e);
         }}

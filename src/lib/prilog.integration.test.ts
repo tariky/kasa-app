@@ -295,7 +295,7 @@ test('neispravna stavka se odbija prije štampe', async () => {
   expect(db.prepare('SELECT * FROM pending_receipts').all().length).toBe(0);
 });
 
-test('cijeli tok: fiskalizacija → dodjela stavki → skladište → storno → uređivanje blokirano', async () => {
+test('cijeli tok: fiskalizacija → dodjela stavki → kompletna zaključana → skladište → storno', async () => {
   db.prepare("INSERT INTO products (id, sifra, naziv, jm, cijena, pdvStopa, tip) VALUES (1, 'A1', 'Artikal', 'kom', 30, 'E', 'artikal')").run();
   db.prepare("INSERT INTO products (id, sifra, naziv, jm, cijena, pdvStopa, tip) VALUES (2, 'U1', 'Usluga', 'kom', 90, 'E', 'usluga')").run();
   db.prepare("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (1, 'ulaz', 100, 'test', 0)").run();
@@ -305,7 +305,14 @@ test('cijeli tok: fiskalizacija → dodjela stavki → skladište → storno →
   expect(res.success).toBe(true);
   const orderId = res.id!;
 
-  // 2. Računi: dodijeli 2×30 (artikal) + 1×90 (usluga) = 150.
+  // 2. Računi: prvi, nekompletan dio stavki (1×30 + 1×90 = 120).
+  db.transaction(() => savePrilogStavkeInTransaction(db, orderId, [
+    { productId: 1, kolicina: 1, cijena: 30, pdvStopa: 'E' },
+    { productId: 2, kolicina: 1, cijena: 90, pdvStopa: 'E' },
+  ]))();
+  expect(getProductStock(db, 1)).toBe(99);
+
+  // 3. Dopuna do 150 ne skida duplo (količina 1 → 2).
   const stavke = [
     { productId: 1, kolicina: 2, cijena: 30, pdvStopa: 'E' },
     { productId: 2, kolicina: 1, cijena: 90, pdvStopa: 'E' },
@@ -314,11 +321,11 @@ test('cijeli tok: fiskalizacija → dodjela stavki → skladište → storno →
   db.transaction(() => savePrilogStavkeInTransaction(db, orderId, stavke))();
   expect(getProductStock(db, 1)).toBe(98);
 
-  // 3. Ponovno uređivanje ne skida duplo (količina 2 → 3).
-  db.transaction(() => savePrilogStavkeInTransaction(db, orderId, [
+  // 3b. Kompletna faktura je zaključana.
+  expect(() => db.transaction(() => savePrilogStavkeInTransaction(db, orderId, [
     { productId: 1, kolicina: 3, cijena: 30, pdvStopa: 'E' },
-  ]))();
-  expect(getProductStock(db, 1)).toBe(97);
+  ]))()).toThrow(/završena/);
+  expect(getProductStock(db, 1)).toBe(98);
 
   // 4. Storno vraća zalihu po stavkama priloga.
   const storno = await refundAndPrint(
@@ -333,3 +340,90 @@ test('cijeli tok: fiskalizacija → dodjela stavki → skladište → storno →
     { productId: 1, kolicina: 1, cijena: 30, pdvStopa: 'E' },
   ])).toThrow(/storniran/);
 }, 30000);
+
+test('rabat po stavci smanjuje iznos zbirne stavke i pamti se uz stavku', async () => {
+  db.prepare("INSERT INTO products (id, sifra, naziv, jm, cijena, pdvStopa, tip) VALUES (1, 'A1', 'Artikal', 'kom', 30, 'E', 'artikal')").run();
+
+  let poslato: any = null;
+  const res = await finalizePrilogAndPrint(
+    { ...deps(), print: printSaBrojem('1', r => { poslato = r; }) },
+    {
+      korisnikId: 1, nacinPlacanja: 'Virman',
+      stavke: [{ productId: 1, kolicina: 3, cijena: 30, rabat: 10, pdvStopa: 'E' }],
+    }
+  );
+
+  expect(res.success).toBe(true);
+  expect(poslato.stavke[0].artikal.cijena).toBe(81);
+  const stavka = db.prepare('SELECT rabat FROM prilog_stavke WHERE orderId = ?').get(res.id!) as any;
+  expect(stavka.rabat).toBe(10);
+  expect(prilogKompletan(81, [{ productId: 1, kolicina: 3, cijena: 30, rabat: 10, pdvStopa: 'E' }])).toBe(true);
+});
+
+test('rabat van 0–100 se odbija prije štampe', async () => {
+  db.prepare("INSERT INTO products (id, sifra, naziv, jm, cijena, pdvStopa, tip) VALUES (1, 'A1', 'Artikal', 'kom', 30, 'E', 'artikal')").run();
+  let stampano = false;
+  await expect(finalizePrilogAndPrint(
+    { ...deps(), print: async () => { stampano = true; return null; } },
+    { korisnikId: 1, nacinPlacanja: 'Virman', stavke: [{ productId: 1, kolicina: 1, cijena: 30, rabat: 100, pdvStopa: 'E' }] }
+  )).rejects.toThrow(/Rabat/);
+  expect(stampano).toBe(false);
+});
+
+test('datum valute i napomena se upisuju na fakturu i nose u snapshotu', async () => {
+  let snapTokomStampe: any = null;
+  const res = await finalizePrilogAndPrint(
+    {
+      ...deps(),
+      print: async () => {
+        snapTokomStampe = JSON.parse((db.prepare('SELECT snapshot FROM pending_receipts').get() as any).snapshot);
+        return { success: true, vrstaOdgovora: 'OK', odgovori: { BrojFiskalnogRacuna: '1' } } as any;
+      },
+    },
+    { korisnikId: 1, iznos: 100, nacinPlacanja: 'Virman', datumValute: '2026-10-15', napomena: '  Isporuka na gradilište  ' }
+  );
+
+  const order = db.prepare('SELECT datumValute, napomena FROM orders WHERE id = ?').get(res.id!) as any;
+  expect(order).toEqual({ datumValute: '2026-10-15', napomena: 'Isporuka na gradilište' });
+  expect(snapTokomStampe.datumValute).toBe('2026-10-15');
+  expect(snapTokomStampe.napomena).toBe('Isporuka na gradilište');
+});
+
+test('neispravan datum valute se odbija prije štampe', async () => {
+  let stampano = false;
+  await expect(finalizePrilogAndPrint(
+    { ...deps(), print: async () => { stampano = true; return null; } },
+    { korisnikId: 1, iznos: 100, nacinPlacanja: 'Virman', datumValute: '2026-02-30' }
+  )).rejects.toThrow(/datum valute/);
+  expect(stampano).toBe(false);
+});
+
+function ponuda(status = 'draft'): number {
+  db.prepare("INSERT INTO kupci (id, naziv, idBroj) VALUES (1, 'Firma', '4200000000001')").run();
+  return Number(db.prepare(`
+    INSERT INTO ponude (broj, godina, kupacId, korisnikId, datum, vaziDo, ukupno, pdvIznos, status)
+    VALUES (1, 2026, 1, 1, '2026-09-01', '2026-09-30', 100, 14.53, ?)
+  `).run(status).lastInsertRowid);
+}
+
+test('faktura iz ponude označava ponudu konvertovanom', async () => {
+  const id = ponuda();
+  const res = await finalizePrilogAndPrint(
+    { ...deps(), print: printSaBrojem('1') },
+    { korisnikId: 1, iznos: 100, nacinPlacanja: 'Virman', ponudaId: id }
+  );
+  const p = db.prepare('SELECT status, racunId FROM ponude WHERE id = ?').get(id) as any;
+  expect(p).toEqual({ status: 'konvertovana', racunId: res.id! });
+});
+
+test('konvertovana ili odbijena ponuda ne može u fakturu — ništa se ne štampa', async () => {
+  const id = ponuda('odbijena');
+  let stampano = false;
+  const print = async () => { stampano = true; return null; };
+  await expect(finalizePrilogAndPrint({ ...deps(), print }, { korisnikId: 1, iznos: 100, nacinPlacanja: 'Virman', ponudaId: id }))
+    .rejects.toThrow(/Odbijena/);
+  db.prepare("UPDATE ponude SET status = 'konvertovana' WHERE id = ?").run(id);
+  await expect(finalizePrilogAndPrint({ ...deps(), print }, { korisnikId: 1, iznos: 100, nacinPlacanja: 'Virman', ponudaId: id }))
+    .rejects.toThrow(/već konvertovana/);
+  expect(stampano).toBe(false);
+});

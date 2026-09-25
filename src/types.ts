@@ -97,6 +97,8 @@ export interface Order {
   prilogNaziv?: string | null;
   /** Datum valute (rok plaćanja), `YYYY-MM-DD`; upisuje se naknadno. */
   datumValute?: string | null;
+  /** Napomena ispod stavki fakture. */
+  napomena?: string | null;
   createdAt: string;
   stavke?: OrderItem[];
   korisnikIme?: string;

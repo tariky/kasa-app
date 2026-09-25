@@ -11,14 +11,15 @@ import {
 } from '@/components/ui/select';
 import { DecimalInput } from '@/components/ui/decimal-input';
 import { DatePicker } from '@/components/ui/date-picker';
-import { ActionRow, Eyebrow, Key, LedgerHead, SegmentedFilter } from '@/components/ui/ledger';
+import { ActionRow, Eyebrow, FilterSelect, Key, LedgerHead, SegmentedFilter } from '@/components/ui/ledger';
 import {
   RefreshCw, FileText, AlertTriangle, Printer, Download, Plus, Trash2, Pencil,
   Receipt, X, Banknote, CreditCard, Building, FileCheck, Hammer,
-  Send, Check, Ban, CornerDownLeft, ChevronsUpDown, ChevronsLeftRight,
+  Send, Check, Ban, Search, Paperclip,
 } from 'lucide-react';
 import { pdf } from '@react-pdf/renderer';
 import { PonudaPdf } from '@/components/PonudaPdf';
+import { filtriraj, type PoljaPretrage } from '@/lib/pretraga';
 import { formatBrojPonude, efektivniStatus, plusDana, danaIzmedju, DEFAULT_ROK_DANA } from '@/lib/ponuda';
 import { izracunajTotale, pdvStavke } from '@/lib/racun';
 import { localDateStr } from '@/lib/novac';
@@ -28,6 +29,8 @@ import { formatBrojNaloga } from '@/lib/proizvodnja';
 import { LOGO_VELICINA } from '@/lib/firma';
 import { PretragaProizvoda } from '@/components/PretragaProizvoda';
 import type { Product } from '@/types';
+import FakturaDialog, { type FakturaPocetno } from '@/components/FakturaDialog';
+import { otvoriFakturuZaStampu } from '@/components/stampaFakture';
 
 /** "8 dana od datuma ponude" — bosanska množina: 1/21/31 dan, ostalo dana. */
 function opisRoka(dana: number): string {
@@ -64,13 +67,13 @@ interface FormStavka {
   pdvStopa: string;
 }
 
-const STATUS_META: Record<string, { label: string; cls: string }> = {
-  draft: { label: 'Draft', cls: 'bg-slate-50 text-slate-500 border-slate-200' },
-  poslana: { label: 'Poslana', cls: 'bg-blue-50 text-blue-600 border-blue-100' },
-  prihvacena: { label: 'Prihvaćena', cls: 'bg-emerald-50 text-emerald-600 border-emerald-100' },
-  odbijena: { label: 'Odbijena', cls: 'bg-rose-50 text-rose-600 border-rose-100' },
-  istekla: { label: 'Istekla', cls: 'bg-amber-50 text-amber-600 border-amber-100' },
-  konvertovana: { label: 'Račun izdat', cls: 'bg-violet-50 text-violet-600 border-violet-100' },
+const STATUS_META: Record<string, { label: string; dot: string; text: string }> = {
+  draft: { label: 'Draft', dot: 'bg-slate-300', text: 'text-slate-500' },
+  poslana: { label: 'Poslana', dot: 'bg-blue-500', text: 'text-blue-600' },
+  prihvacena: { label: 'Prihvaćena', dot: 'bg-emerald-500', text: 'text-emerald-600' },
+  odbijena: { label: 'Odbijena', dot: 'bg-rose-500', text: 'text-rose-600' },
+  istekla: { label: 'Istekla', dot: 'bg-amber-400', text: 'text-amber-600' },
+  konvertovana: { label: 'Račun izdat', dot: 'bg-violet-500', text: 'text-violet-600' },
 };
 
 type Filter = 'sve' | 'draft' | 'poslana' | 'prihvacena' | 'odbijena' | 'istekla' | 'konvertovana';
@@ -94,17 +97,19 @@ const PAYMENTS: { type: PaymentType; icon: React.ReactNode }[] = [
   { type: 'Ček', icon: <FileCheck size={14} /> },
 ];
 
-function StatusChip({ status, size = 'sm' }: { status: string; size?: 'sm' | 'md' }) {
+/**
+ * Status kao tačka + tekst — isti jezik kao stanje zalihe na listi artikala.
+ * `compact` ostavlja samo tačku (uska lista pored panela); labela ide u title.
+ */
+function StatusDot({ status, size = 'sm', compact = false }: { status: string; size?: 'sm' | 'md'; compact?: boolean }) {
   const meta = STATUS_META[status] ?? STATUS_META.draft;
   return (
     <span
-      className={cn(
-        'inline-flex items-center gap-1 rounded-full font-semibold border text-[10px]',
-        size === 'sm' ? 'px-2 py-0.5' : 'px-2.5 py-1',
-        meta.cls,
-      )}
+      title={meta.label}
+      className={cn('flex items-center gap-1.5 font-medium leading-5 whitespace-nowrap', size === 'sm' ? 'text-[11.5px]' : 'text-[12px]')}
     >
-      {meta.label}
+      <span aria-hidden className={cn('rounded-full', size === 'sm' ? 'h-1.5 w-1.5' : 'h-2 w-2', meta.dot)} />
+      <span className={cn(meta.text, compact && 'sr-only lg:not-sr-only lg:whitespace-nowrap')}>{meta.label}</span>
     </span>
   );
 }
@@ -124,10 +129,18 @@ function rokOznaka(p: PonudaRow, danas: string): { text: string; cls: string } |
   return null;
 }
 
+/** Pretraga ponuda: kupac, broj ponude ("12/2026") i ko je izdao. */
+const poljaPonude = (p: PonudaRow): PoljaPretrage => ({
+  naziv: p.kupacNaziv ?? '',
+  sifra: formatBrojPonude(p),
+  dodatno: [formatBrojPonude(p), p.korisnikIme].join(' '),
+});
+
 export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
   const [ponude, setPonude] = useState<PonudaRow[]>([]);
   const [selected, setSelected] = useState<PonudaRow | null>(null);
   const [filter, setFilter] = useState<Filter>('sve');
+  const [search, setSearch] = useState('');
   const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Forma (nova / uredi)
@@ -148,6 +161,10 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
   const [converting, setConverting] = useState(false);
   const [konvertujMsg, setKonvertujMsg] = useState<string | null>(null);
 
+  // Faktura po ponudi — isti dijalog kao na kasi, s popunjenom firmom i stavkama
+  const [faktura, setFaktura] = useState<FakturaPocetno | null>(null);
+  const [fakturaOpen, setFakturaOpen] = useState(false);
+
   // Brisanje — vlastiti dijalog umjesto nativnog confirm-a
   const [brisiOpen, setBrisiOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -159,6 +176,7 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
   const [nalogZaPonudu, setNalogZaPonudu] = useState<{ id: number; broj: number; godina: number } | null>(null);
 
   const rowRefs = useRef<(HTMLTableRowElement | null)[]>([]);
+  const searchRef = useRef<HTMLInputElement>(null);
   const danas = localDateStr();
 
   useEffect(() => { loadPonude(); }, []);
@@ -182,20 +200,23 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
     setSelected(await window.api.getPonuda(p.id));
   };
 
-  const visible = useMemo(() => {
-    if (filter === 'sve') return ponude;
-    return ponude.filter(p => efektivniStatus(p, danas) === filter);
-  }, [ponude, filter, danas]);
+  const trazene = useMemo(() => filtriraj(ponude, search, poljaPonude), [ponude, search]);
 
+  const visible = useMemo(() => {
+    if (filter === 'sve') return trazene;
+    return trazene.filter(p => efektivniStatus(p, danas) === filter);
+  }, [trazene, filter, danas]);
+
+  // Brojači idu po pretrazi, da se vidi ima li šta iza filtera.
   const counts = useMemo(() => {
-    const c: Record<string, number> = { sve: ponude.length };
+    const c: Record<string, number> = { sve: trazene.length };
     for (const f of FILTERS) if (f.id !== 'sve') c[f.id] = 0;
-    for (const p of ponude) {
+    for (const p of trazene) {
       const st = efektivniStatus(p, danas);
       if (st in c) c[st] += 1;
     }
     return c;
-  }, [ponude, danas]);
+  }, [trazene, danas]);
 
   const formTotali = useMemo(
     () => izracunajTotale(stavke.map(s => ({ cijena: s.cijena || 0, kolicina: s.kolicina || 0, rabat: s.rabat || 0, pdvStopa: s.pdvStopa }))),
@@ -356,6 +377,30 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
     }
   };
 
+  /** Ponuda se čita svježa — firma i stavke idu u dijalog fakture kakve su sada u bazi. */
+  const otvoriFakturu = async () => {
+    if (!selected) return;
+    try {
+      const p = await window.api.getPonuda(selected.id);
+      setFaktura({
+        ponudaId: p.id,
+        ponudaOznaka: formatBrojPonude(p),
+        firma: {
+          naziv: p.kupacNaziv ?? '', idBroj: p.kupacIdBroj ?? '', adresa: p.kupacAdresa ?? '',
+          grad: p.kupacGrad ?? '', postanskiBroj: p.kupacPostanskiBroj ?? '',
+        },
+        stavke: (p.stavke ?? []).map((s: any) => ({
+          productId: s.productId, naziv: s.productNaziv ?? `#${s.productId}`, jm: s.productJm || 'kom',
+          sifra: s.productSifra ?? '', tip: 'artikal', kolicina: s.kolicina, cijena: s.cijena,
+          rabat: s.rabat ?? 0, pdvStopa: s.pdvStopa, stanje: null,
+        })),
+      });
+      setFakturaOpen(true);
+    } catch (err: any) {
+      setMsg({ type: 'error', text: err?.message || 'Nepoznata greška' });
+    }
+  };
+
   // ── PDF ────────────────────────────────────────────────────
 
   const loadFirma = async () => {
@@ -439,7 +484,7 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
     }
   };
 
-  const anyDialogOpen = formOpen || konvertujOpen || brisiOpen;
+  const anyDialogOpen = formOpen || konvertujOpen || brisiOpen || fakturaOpen;
 
   /**
    * Prečice ekrana. Filteri idu na zagrade jer su cifre rezervisane za promjenu
@@ -451,7 +496,15 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) {
+        if (t === searchRef.current) {
+          if (e.key === 'Escape') { setSearch(''); t.blur(); }
+          // ↓ iz pretrage vodi pravo na prvu pronađenu ponudu.
+          if (e.key === 'ArrowDown' && visible.length > 0) { e.preventDefault(); focusRow(0); }
+        }
+        return;
+      }
+      if (e.key === '/') { e.preventDefault(); searchRef.current?.focus(); return; }
 
       const cycleFilter = (step: number) => {
         e.preventDefault();
@@ -482,6 +535,9 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
             setKonvertujOpen(true);
           }
           break;
+        case 'f':
+          if (selKonvertibilna && !nalogZaPonudu) { e.preventDefault(); otvoriFakturu(); }
+          break;
         case 'd':
           if (selEditable) { e.preventDefault(); setBrisiOpen(true); }
           break;
@@ -493,38 +549,57 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selected, selEditable, selKonvertibilna, filter, anyDialogOpen, openNova, openUredi, nalogZaPonudu]);
+  }, [selected, selEditable, selKonvertibilna, filter, anyDialogOpen, openNova, openUredi, nalogZaPonudu, visible.length, focusRow]);
 
   /** ⌘↵ potvrđuje dijalog s bilo kojeg polja. */
   const submitOnMeta = (fn: () => void) => (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); fn(); }
   };
 
+  const td = 'py-2.5 border-b border-slate-100';
+
   return (
-    <div className="flex flex-col h-full bg-[#f4f6f9]">
-      {/* ── Top bar ── */}
-      <div className="flex-shrink-0 bg-white border-b border-slate-200/80 px-6 py-3.5">
-        <div className="flex items-center justify-between gap-4">
-          <div className="flex items-center gap-4">
-            <h2 className="text-[15px] font-semibold text-slate-800 tracking-tight">Ponude</h2>
-            <SegmentedFilter options={FILTERS} value={filter} onChange={setFilter} counts={counts} />
-          </div>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={loadPonude} className="h-8 gap-1.5 text-[12px]">
-              <RefreshCw className="h-3.5 w-3.5" />
-              Osvježi
-            </Button>
-            <Button size="sm" onClick={openNova} className="h-8 gap-1.5 text-[12px]">
-              <Plus className="h-3.5 w-3.5" />
-              Nova ponuda
-            </Button>
-          </div>
+    <div className="flex flex-col h-full bg-white">
+      {/* ── Traka: pretraga, filter, akcije ── */}
+      <div className="flex-shrink-0 flex flex-wrap items-center gap-x-3 gap-y-2 px-6 py-3 border-b border-slate-200/80">
+        <h2 className="text-[15px] font-semibold text-slate-800 tracking-tight mr-1">Ponude</h2>
+        <div className="relative w-full sm:w-auto sm:flex-1 sm:min-w-[220px] sm:max-w-sm">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+          <Input
+            ref={searchRef}
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Broj ponude, kupac ili sastavio…"
+            aria-label="Pretraga ponuda"
+            className="pl-9 pr-9 h-8 text-[12.5px] bg-slate-50 border-slate-200"
+          />
+          {search
+            ? <button onClick={() => setSearch('')} aria-label="Obriši pretragu" className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"><X className="h-3.5 w-3.5" /></button>
+            : <Key className="absolute right-2.5 top-1/2 -translate-y-1/2 ml-0">/</Key>}
+        </div>
+
+        {/* Sedam statusa ne stane u traku na užem ekranu — tamo isti filter ide u padajući meni. */}
+        <div className="hidden xl:block">
+          <SegmentedFilter options={FILTERS} value={filter} onChange={setFilter} counts={counts} />
+        </div>
+        <div className="xl:hidden">
+          <FilterSelect options={FILTERS} value={filter} onChange={setFilter} counts={counts} label="Status ponude" />
+        </div>
+
+        <div className="ml-auto flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={loadPonude} className="h-8 gap-1.5 text-[12px]">
+            <RefreshCw className="h-3.5 w-3.5" />
+            Osvježi
+          </Button>
+          <Button size="sm" onClick={openNova} className="h-8 gap-1.5 pl-3 pr-2 text-[12px]">
+            <Plus className="h-3.5 w-3.5" /> Nova ponuda <Key tone="dark">N</Key>
+          </Button>
         </div>
       </div>
 
       {msg && (
         <div className={cn(
-          'mx-5 mt-4 flex items-center gap-2 rounded-xl border px-4 py-2.5 text-[12px] font-medium',
+          'flex-shrink-0 flex items-center gap-2 border-b px-6 py-2.5 text-[12px] font-medium',
           msg.type === 'error'
             ? 'bg-rose-50/70 border-rose-200 text-rose-700'
             : 'bg-emerald-50/70 border-emerald-200 text-emerald-700',
@@ -537,22 +612,25 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
         </div>
       )}
 
-      {/* ── Content ── */}
-      <div className="flex-1 min-h-0 flex gap-4 p-5 overflow-hidden">
+      {/* ── Sadržaj: lista lijevo, detalj desno ── */}
+      <div className="flex-1 min-h-0 flex overflow-hidden">
 
         {/* ── Ledger ── */}
-        <div className="flex-1 min-w-0">
-          <div className="bg-white rounded-2xl border border-slate-200/70 shadow-sm shadow-slate-200/40 h-full flex flex-col overflow-hidden">
+        <div className="flex-1 min-w-0 flex flex-col">
             {visible.length === 0 ? (
               <div className="flex-1 flex flex-col items-center justify-center text-slate-400 select-none">
                 <div className="w-12 h-12 rounded-2xl bg-slate-50 flex items-center justify-center mb-3">
                   <FileText size={20} className="text-slate-300" strokeWidth={1.5} />
                 </div>
                 <p className="text-[13px] font-medium text-slate-500">
-                  {filter === 'sve' ? 'Još nema ponuda' : 'Nema ponuda u ovom filteru'}
+                  {search.trim() ? 'Nema rezultata pretrage' : filter === 'sve' ? 'Još nema ponuda' : 'Nema ponuda u ovom filteru'}
                 </p>
                 <p className="text-[12px] text-slate-400 mt-0.5">
-                  {filter === 'sve' ? 'Kreirajte ponudu za kupca.' : 'Promijenite filter da vidite ostale.'}
+                  {search.trim()
+                    ? 'Pokušaj drugi broj ili naziv kupca.'
+                    : filter === 'sve'
+                      ? <>Prvu ponudu dodaješ tipkom <Key className="ml-0 mx-0.5">N</Key>.</>
+                      : 'Promijeni filter da vidiš ostale.'}
                 </p>
               </div>
             ) : (
@@ -561,12 +639,12 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
                   <table className="w-full border-separate border-spacing-0">
                     <LedgerHead
                       columns={[
-                        { label: 'Broj', className: 'text-left pl-5 pr-2 w-[80px]' },
-                        { label: 'Datum', className: 'text-left px-2' },
-                        { label: 'Kupac', className: 'text-left px-2' },
-                        { label: 'Ukupno', className: 'text-right px-2' },
-                        { label: 'Važi do', className: 'text-left px-2' },
-                        { label: 'Status', className: 'text-right pr-5 pl-2 w-[110px]' },
+                        { label: 'Broj', className: 'text-left pl-6 pr-3 w-[1%] whitespace-nowrap' },
+                        { label: 'Datum', className: 'text-left px-3 w-[1%] whitespace-nowrap hidden xl:table-cell' },
+                        { label: 'Kupac', className: 'text-left px-3' },
+                        { label: 'Ukupno', className: 'text-right px-3 w-[1%] whitespace-nowrap' },
+                        { label: 'Važi do', className: 'text-left px-3 w-[1%] whitespace-nowrap hidden xl:table-cell' },
+                        { label: 'Status', className: 'text-left pl-3 pr-6 w-[1%] whitespace-nowrap' },
                       ]}
                     />
                     <tbody onKeyDown={handleListKeyDown}>
@@ -581,44 +659,49 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
                             tabIndex={isSel || (selIndex < 0 && i === 0) ? 0 : -1}
                             aria-selected={isSel}
                             className={cn(
-                              'cursor-pointer transition-colors duration-100 group',
+                              'group cursor-pointer transition-colors',
                               'focus:outline focus:outline-2 focus:-outline-offset-2 focus:outline-blue-500',
-                              isSel
-                                ? 'bg-blue-50/80'
-                                : st === 'istekla'
-                                  ? 'bg-amber-50/30 hover:bg-amber-50/60'
-                                  : 'hover:bg-slate-50',
+                              isSel ? 'bg-blue-50/80' : 'hover:bg-slate-50',
                             )}
                             onClick={() => { selectPonuda(p); rowRefs.current[i]?.focus(); }}
                           >
                             <td
                               className={cn(
-                                'pl-5 pr-2 py-2.5 border-b border-slate-100 font-mono text-[11.5px] font-semibold tabular-nums',
-                                // Šina lijevo označava isključivo izabrani red — status ide kroz čip.
-                                isSel ? 'text-blue-600 shadow-[inset_3px_0_0_0_#2563eb]' : 'text-slate-500',
+                                td, 'pl-6 pr-3 font-mono text-[12px] tabular-nums whitespace-nowrap',
+                                // Šina lijevo označava isključivo izabrani red — status ide kroz tačku.
+                                isSel ? 'text-blue-600 shadow-[inset_3px_0_0_0_#2563eb]' : 'text-slate-400',
                               )}
                             >
                               {formatBrojPonude(p)}
                             </td>
-                            <td className={cn('px-2 py-2.5 border-b border-slate-100 text-[12px] tabular-nums', isSel ? 'text-slate-700' : 'text-slate-500')}>
+                            <td className={cn(td, 'hidden xl:table-cell px-3 text-[12px] tabular-nums whitespace-nowrap', isSel ? 'text-slate-700' : 'text-slate-500')}>
                               {formatDate(p.datum)}
                             </td>
-                            <td className={cn('px-2 py-2.5 border-b border-slate-100 text-[12px] truncate max-w-[220px]', isSel ? 'text-slate-700' : 'text-slate-500')}>
-                              {p.kupacNaziv || '—'}
+                            <td className={cn(td, 'px-3 max-w-0')}>
+                              {p.kupacNaziv
+                                ? <span className="block truncate text-[12.5px] font-medium text-slate-800">{p.kupacNaziv}</span>
+                                : <span className="text-slate-200">—</span>}
+                              {/* Uža lista: datum i rok idu ispod kupca umjesto u svoje kolone. */}
+                              <span className="xl:hidden block truncate text-[10.5px] tabular-nums text-slate-400">
+                                {rok && <span className={cn('font-medium', rok.cls)}>{rok.text} · </span>}
+                                važi do {formatDate(p.vaziDo)} · {formatDate(p.datum)}
+                              </span>
                             </td>
-                            <td className="px-2 py-2.5 border-b border-slate-100 text-right font-mono text-[12.5px] font-semibold tabular-nums text-slate-800">
+                            <td className={cn(td, 'px-3 text-right font-mono text-[12.5px] font-semibold tabular-nums text-slate-800 whitespace-nowrap')}>
                               {formatKM(p.ukupno)}
                             </td>
-                            <td className="px-2 py-2.5 border-b border-slate-100">
-                              <span className={cn('text-[12px] tabular-nums', isSel ? 'text-slate-600' : 'text-slate-400')}>
-                                {formatDate(p.vaziDo)}
+                            <td className={cn(td, 'hidden xl:table-cell px-3 whitespace-nowrap')}>
+                              <span className="flex items-baseline leading-5">
+                                <span className={cn('text-[12px] tabular-nums', isSel ? 'text-slate-600' : 'text-slate-400')}>
+                                  {formatDate(p.vaziDo)}
+                                </span>
+                                {rok && (
+                                  <span className={cn('ml-1.5 text-[11px] font-medium', rok.cls)}>· {rok.text}</span>
+                                )}
                               </span>
-                              {rok && (
-                                <span className={cn('ml-1.5 text-[11px] font-medium', rok.cls)}>· {rok.text}</span>
-                              )}
                             </td>
-                            <td className="pr-5 pl-2 py-2.5 border-b border-slate-100 text-right">
-                              <StatusChip status={st} />
+                            <td className={cn(td, 'pl-3 pr-6')}>
+                              <StatusDot status={st} compact />
                             </td>
                           </tr>
                         );
@@ -628,29 +711,24 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
                 </ScrollArea>
 
                 {/* Legenda prečica — tastatura je vidljiva, ne skrivena funkcija */}
-                <div className="flex-shrink-0 flex items-center gap-4 border-t border-slate-100 px-5 py-2 text-[10.5px] text-slate-400">
-                  <span className="flex items-center gap-1.5">
-                    <ChevronsUpDown size={11} /> kretanje kroz listu
-                  </span>
-                  <span className="flex items-center gap-1.5">
-                    <CornerDownLeft size={11} /> štampa ponudu
-                  </span>
-                  <span className="flex items-center gap-1.5">
-                    <ChevronsLeftRight size={11} /> filteri
-                  </span>
-                  <span className="ml-auto font-mono tabular-nums">
-                    {selIndex >= 0 ? `${selIndex + 1} / ${visible.length}` : `${visible.length}`}
+                <div className="flex-shrink-0 border-t border-slate-200/80 px-6 h-9 flex items-center gap-3 text-[10.5px] text-slate-400 select-none">
+                  <span className="font-mono tabular-nums">{selIndex >= 0 ? `${selIndex + 1} / ${visible.length}` : `${visible.length}`}</span>
+                  <span className="text-slate-300">·</span>
+                  <span className="hidden sm:flex items-center gap-3 min-w-0 overflow-hidden">
+                    <span className="flex items-center gap-1"><Key className="ml-0">↑↓</Key> odaberi</span>
+                    <span className="flex items-center gap-1"><Key className="ml-0">↵</Key> štampa</span>
+                    <span className="flex items-center gap-1"><Key className="ml-0">←→</Key> filter</span>
+                    <span className="hidden lg:flex items-center gap-1"><Key className="ml-0">/</Key> pretraga</span>
                   </span>
                 </div>
               </>
             )}
-          </div>
         </div>
 
         {/* ── Detail / actions panel ── */}
-        <div className="w-[380px] flex-shrink-0">
+        <div className="w-[340px] xl:w-[380px] flex-shrink-0 border-l border-slate-200/80 bg-white">
           {selected ? (
-            <div className="bg-white rounded-2xl border border-slate-200/70 shadow-sm shadow-slate-200/40 h-full flex flex-col overflow-hidden">
+            <div className="h-full flex flex-col overflow-hidden">
 
               {/* Zaglavlje */}
               <div className="flex-shrink-0 px-5 pt-5 pb-4">
@@ -664,7 +742,7 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
                       {formatDate(selected.datum)} · važi do {formatDate(selected.vaziDo)}
                     </p>
                   </div>
-                  <StatusChip status={selStatus} size="md" />
+                  <StatusDot status={selStatus} size="md" />
                 </div>
               </div>
 
@@ -827,6 +905,9 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
                           tone="primary"
                           onClick={() => { setKonvertujMsg(null); setPaymentType('Gotovina'); setKonvertujOpen(true); }}
                         />
+                        <div className="mt-1.5">
+                          <ActionRow icon={Paperclip} label="Faktura po ponudi" hint="F" onClick={otvoriFakturu} />
+                        </div>
                       </div>
                     )}
                     {!selKonvertibilna && (
@@ -845,7 +926,7 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
               </div>
             </div>
           ) : (
-            <div className="bg-white rounded-2xl border border-slate-200/70 shadow-sm shadow-slate-200/40 h-full flex flex-col items-center justify-center px-8 text-center select-none">
+            <div className="h-full flex flex-col items-center justify-center px-8 text-center select-none">
               <div className="w-12 h-12 rounded-2xl bg-slate-50 flex items-center justify-center mb-3">
                 <FileText size={20} className="text-slate-300" strokeWidth={1.5} />
               </div>
@@ -1024,6 +1105,30 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
           </div>
         </DialogContent>
       </Dialog>
+
+      <FakturaDialog
+        open={fakturaOpen}
+        onOpenChange={setFakturaOpen}
+        korisnikId={korisnikId}
+        pocetno={faktura}
+        onSkicePromijenjene={(spremljena) => {
+          if (spremljena) setMsg({ type: 'success', text: `Faktura po ponudi ${faktura?.ponudaOznaka ?? ''} spremljena kao skica — nastavite je na Kasi, u Spremljenim.` });
+        }}
+        onSuccess={async (res) => {
+          const ponudaId = faktura?.ponudaId;
+          setMsg(res.upozorenje
+            ? { type: 'error', text: res.upozorenje }
+            : { type: 'success', text: `Faktura br. ${res.prilogBroj} (BF ${res.brojFiskalnogRacuna ?? '?'}) izdana po ponudi ${faktura?.ponudaOznaka ?? ''}` });
+          await loadPonude();
+          if (ponudaId) setSelected(await window.api.getPonuda(ponudaId));
+          if (res.brojStavki > 0) {
+            otvoriFakturuZaStampu(res.id).catch((err: any) => setMsg({
+              type: 'error',
+              text: `Faktura je fiskalizovana, ali se nije otvorila za štampu: ${err?.message || 'Nepoznata greška'}. Štampajte je u sekciji Računi.`,
+            }));
+          }
+        }}
+      />
 
       {/* ── Konvertuj u račun ── */}
       <Dialog open={konvertujOpen} onOpenChange={setKonvertujOpen}>

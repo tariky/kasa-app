@@ -22,6 +22,8 @@ interface StavkaRed {
   tip: string;
   kolicina: number;
   cijena: number;
+  /** Postotak 0–100. */
+  rabat: number;
   pdvStopa: string;
 }
 
@@ -35,19 +37,26 @@ interface PrilogStavkeDialogProps {
 /**
  * Dodjela stvarnih stavki fiskalizovanom računu po prilogu. Suma stavki mora
  * na kraju pasti tačno na fiskalni iznos, ali se smije spremati i nekompletna
- * (rad u više navrata) — štampa priloga je ono što je zaključano.
+ * (rad u više navrata). Kad se suma poklopi, faktura je završena i više se ne mijenja.
  */
 export default function PrilogStavkeDialog({ open, onOpenChange, order, onSaved }: PrilogStavkeDialogProps) {
   const [stavke, setStavke] = useState<StavkaRed[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const readOnly = order.status !== 'completed';
+  /** Faktura kojoj su stavke već kompletne je završena — samo pregled. */
+  const [zavrsena, setZavrsena] = useState(false);
+  const storniran = order.status !== 'completed';
+  const readOnly = storniran || zavrsena;
 
   useEffect(() => {
     if (!open) return;
-    setError(null); setBusy(false);
+    setError(null); setBusy(false); setZavrsena(false);
     window.api.getPrilogStavke(order.id)
+      .then(rows => {
+        setZavrsena(rows.length > 0 && prilogKompletan(order.ukupno, rows as any));
+        return rows;
+      })
       .then(rows => setStavke(rows.map((r: any) => ({
         productId: r.productId,
         naziv: r.productNaziv || `#${r.productId}`,
@@ -56,6 +65,7 @@ export default function PrilogStavkeDialog({ open, onOpenChange, order, onSaved 
         tip: r.productTip || 'artikal',
         kolicina: r.kolicina,
         cijena: r.cijena,
+        rabat: r.rabat ?? 0,
         pdvStopa: r.pdvStopa,
       }))))
       .catch((err: any) => { setStavke([]); setError(err?.message || 'Greška pri čitanju stavki'); });
@@ -72,7 +82,7 @@ export default function PrilogStavkeDialog({ open, onOpenChange, order, onSaved 
       if (existing) return prev.map(s => s.productId === p.id ? { ...s, kolicina: Math.round((s.kolicina + k) * 1000) / 1000 } : s);
       return [...prev, {
         productId: p.id, naziv: p.naziv, jm: p.jm || 'kom', sifra: p.sifra, tip: p.tip,
-        kolicina: k, cijena: p.cijena, pdvStopa: p.pdvStopa,
+        kolicina: k, cijena: p.cijena, rabat: 0, pdvStopa: p.pdvStopa,
       }];
     });
   };
@@ -87,7 +97,7 @@ export default function PrilogStavkeDialog({ open, onOpenChange, order, onSaved 
     setBusy(true);
     try {
       await window.api.savePrilogStavke(order.id, stavke.map(s => ({
-        productId: s.productId, kolicina: s.kolicina, cijena: s.cijena, pdvStopa: s.pdvStopa,
+        productId: s.productId, kolicina: s.kolicina, cijena: s.cijena, rabat: s.rabat, pdvStopa: s.pdvStopa,
       })));
       onSaved();
       onOpenChange(false);
@@ -107,7 +117,7 @@ export default function PrilogStavkeDialog({ open, onOpenChange, order, onSaved 
           </DialogTitle>
           <DialogDescription className="text-sm text-slate-500">
             {readOnly
-              ? 'Račun je storniran — faktura se ne može mijenjati.'
+              ? (storniran ? 'Račun je storniran — faktura se ne može mijenjati.' : 'Faktura je završena — stavke se ne mogu mijenjati.')
               : 'Dodajte stavke tako da njihova suma bude jednaka fiskalnom iznosu računa.'}
           </DialogDescription>
         </DialogHeader>
@@ -135,19 +145,27 @@ export default function PrilogStavkeDialog({ open, onOpenChange, order, onSaved 
                   <div className="flex items-center gap-1">
                     <Label className="text-xs text-slate-400">Kol</Label>
                     <DecimalInput
-                      value={s.kolicina} maxDecimals={3} className="w-16 h-8" disabled={readOnly}
+                      value={s.kolicina} maxDecimals={3} className="w-16 h-8" disabled={readOnly} selectOnFocus
                       onValueChange={(_, n) => updateStavka(s.productId, { kolicina: isNaN(n) ? 0 : n })}
                     />
                   </div>
                   <div className="flex items-center gap-1">
                     <Label className="text-xs text-slate-400">Cijena</Label>
                     <DecimalInput
-                      value={s.cijena} className="w-20 h-8" disabled={readOnly}
+                      value={s.cijena} className="w-20 h-8" disabled={readOnly} selectOnFocus
                       onValueChange={(_, n) => updateStavka(s.productId, { cijena: isNaN(n) ? 0 : n })}
                     />
                   </div>
+                  <div className="flex items-center gap-1">
+                    <Label className="text-xs text-slate-400">Rabat %</Label>
+                    <DecimalInput
+                      value={s.rabat} maxDecimals={2} className="w-14 h-8" disabled={readOnly} selectOnFocus
+                      aria-label={`Rabat, ${s.naziv}`}
+                      onValueChange={(_, n) => updateStavka(s.productId, { rabat: isNaN(n) ? 0 : n })}
+                    />
+                  </div>
                   <div className="w-24 text-right font-mono tabular-nums">
-                    {formatKM(iznosStavke({ cijena: s.cijena, kolicina: s.kolicina, rabat: 0, pdvStopa: s.pdvStopa }))}
+                    {formatKM(iznosStavke({ cijena: s.cijena, kolicina: s.kolicina, rabat: s.rabat, pdvStopa: s.pdvStopa }))}
                   </div>
                   {!readOnly && (
                     <Button type="button" variant="ghost" size="icon" onClick={() => removeStavka(s.productId)}>

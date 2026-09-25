@@ -173,3 +173,13 @@ export function pretrazi<T extends object>(
   out.sort((a, b) => b.skor - a.skor || polja(a.stavka).naziv.localeCompare(polja(b.stavka).naziv, 'bs'));
   return opcije.max ? out.slice(0, opcije.max) : out;
 }
+
+/**
+ * Filter liste (tabele računa, ponuda, šifarnika) istim fuzzy pravilima kao PretragaStavki,
+ * ali bez preslagivanja: pogođeni redovi ostaju redom kojim su došli (npr. po datumu).
+ */
+export function filtriraj<T extends object>(stavke: readonly T[], upit: string, polja: (s: T) => PoljaPretrage): T[] {
+  if (!upit.trim()) return [...stavke];
+  const pogodjeni = new Set(pretrazi(stavke, upit, polja).map(p => p.stavka));
+  return stavke.filter(s => pogodjeni.has(s));
+}

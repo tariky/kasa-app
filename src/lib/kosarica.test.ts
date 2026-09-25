@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test';
-import { dodajUKosaricu, dodajSlobodnuStavku, restoreCart, postaviRabat, postaviRabatNaSve } from './kosarica';
+import { dodajUKosaricu, dodajSlobodnuStavku, restoreCart, postaviRabat, postaviRabatNaSve, postaviKolicinu } from './kosarica';
 import type { Product, CartItem } from '@/types';
 
 function artikal(overrides: Partial<Product> = {}): Product {
@@ -166,4 +166,31 @@ test('ista slobodna stavka po drugoj cijeni se odbija — red na računu ostaje 
   const r = dodajSlobodnuStavku(cart, { ...p, cijena: 12 }, 1);
   expect(r.cart).toBe(cart);
   expect(r.greska).toBe('„Popravak“ je već na računu po cijeni 10,00 KM. Promijenite naziv ili uklonite postojeću stavku.');
+});
+
+// --- postaviKolicinu ---
+
+test('postavlja tačnu količinu stavke', () => {
+  const p = artikal();
+  const cart = postaviKolicinu([{ product: p, kolicina: 1, rabat: 5 }], p.id, 3, false);
+  expect(cart).toEqual([{ product: p, kolicina: 3, rabat: 5 }]);
+});
+
+test('količina se steže na stanje bez allowZeroStock', () => {
+  const p = artikal({ stanje: 4 });
+  const cart = postaviKolicinu([{ product: p, kolicina: 1, rabat: 0 }], p.id, 9, false);
+  expect(cart[0].kolicina).toBe(4);
+});
+
+test('usluga i allowZeroStock ne gledaju stanje', () => {
+  const u = artikal({ id: 2, tip: 'usluga', stanje: 0 });
+  const a = artikal({ stanje: 1 });
+  const cart = postaviKolicinu(postaviKolicinu(
+    [{ product: u, kolicina: 1, rabat: 0 }, { product: a, kolicina: 1, rabat: 0 }], u.id, 7, false), a.id, 6, true);
+  expect(cart.map(i => i.kolicina)).toEqual([7, 6]);
+});
+
+test('količina 0 ili manje uklanja stavku', () => {
+  const p = artikal();
+  expect(postaviKolicinu([{ product: p, kolicina: 2, rabat: 0 }], p.id, 0, false)).toEqual([]);
 });

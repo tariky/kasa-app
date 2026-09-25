@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { normalizuj, parsirajUpit, pretrazi, uvecajKolicinu, type PoljaPretrage } from './pretraga';
+import { filtriraj, normalizuj, parsirajUpit, pretrazi, uvecajKolicinu, type PoljaPretrage } from './pretraga';
 
 interface S { id: number; naziv: string; sifra: string; barkod?: string; dodatno?: string }
 const polja = (s: S): PoljaPretrage => ({ naziv: s.naziv, sifra: s.sifra, barkod: s.barkod, dodatno: s.dodatno });
@@ -117,5 +117,28 @@ describe('uvecajKolicinu', () => {
     expect(uvecajKolicinu('2,5', 3)).toBe('5,5');
     expect(uvecajKolicinu('', 2)).toBe('2');
     expect(uvecajKolicinu('0,1', 0.2)).toBe('0,3');
+  });
+});
+
+describe('filtriraj', () => {
+  const fIds = (upit: string) => filtriraj(KATALOG, upit, polja).map(s => s.id);
+
+  test('prazan upit vraća sve, novi niz', () => {
+    const sve = filtriraj(KATALOG, '  ', polja);
+    expect(sve.map(s => s.id)).toEqual(KATALOG.map(s => s.id));
+    expect(sve).not.toBe(KATALOG);
+  });
+
+  test('zadržava originalni redoslijed, ne skor', () => {
+    // pretrazi stavlja kraći naziv (2) prvi; filter ostaje redom liste
+    expect(ids('sarka')).toEqual([2, 1]);
+    expect(fIds('sarka')).toEqual([1, 2]);
+    expect(fIds('hrast sonoma')).toEqual([3, 4]);
+  });
+
+  test('bez kvačica, s greškom u kucanju i po dodatnom polju', () => {
+    expect(fIds('ladicar')).toEqual([4]);
+    expect(fIds('mljeko')).toEqual([5]);
+    expect(fIds('88104')).toEqual([8]);
   });
 });

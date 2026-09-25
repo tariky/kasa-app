@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Product } from '@/types';
 import { cn } from '@/lib/utils';
 import { jePloca, m2PoPloci, m2UKom, JM_PLOCA } from '@/lib/ploca';
@@ -10,9 +10,10 @@ import {
 } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Badge } from '@/components/ui/badge';
+import { Key, LedgerHead, SegmentedFilter } from '@/components/ui/ledger';
 import { Plus, Trash2, Search, Pencil, X, Layers } from 'lucide-react';
 import { potvrdi } from '@/lib/dijalog';
+import { filtriraj, type PoljaPretrage } from '@/lib/pretraga';
 
 const JEDINICE = [JM_PLOCA, 'kom', 'm', 'kg', 'l', 'pak'] as const;
 
@@ -104,15 +105,33 @@ function MaterijalDialog({ open, onOpenChange, product, onSave }: {
   );
 }
 
+type StanjeFilter = 'svi' | 'nema';
+
+const STANJE_FILTERI: { id: StanjeFilter; label: string }[] = [
+  { id: 'svi', label: 'Svi' },
+  { id: 'nema', label: 'Nema na stanju' },
+];
+
+/** Materijal se traži po nazivu i šifri. */
+const poljaMaterijala = (p: Product): PoljaPretrage => ({ naziv: p.naziv, sifra: p.sifra });
+
 export function MaterijalTab({ materijali, onReload }: { materijali: Product[]; onReload: () => void }) {
   const [search, setSearch] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [edit, setEdit] = useState<Product | null>(null);
   const [msg, setMsg] = useState('');
+  const [filter, setFilter] = useState<StanjeFilter>('svi');
+  const searchRef = useRef<HTMLInputElement>(null);
 
-  const filtered = materijali
-    .filter(p => !search || p.naziv.toLowerCase().includes(search.toLowerCase()) || p.sifra.toLowerCase().includes(search.toLowerCase()))
+  const trazeni = filtriraj(materijali, search, poljaMaterijala);
+  // Brojači idu po pretrazi, kao na listi artikala.
+  const counts: Record<StanjeFilter, number> = { svi: trazeni.length, nema: trazeni.filter(p => (p.stanje ?? 0) <= 0).length };
+  const filtered = trazeni
+    .filter(p => filter === 'svi' || (p.stanje ?? 0) <= 0)
     .sort((a, b) => a.naziv.localeCompare(b.naziv));
+
+  const handleNew = () => { setEdit(null); setDialogOpen(true); };
+  const handleEdit = (p: Product) => { setEdit(p); setDialogOpen(true); };
 
   const handleSave = async (data: any) => {
     if (edit) await window.api.updateProduct(edit.id, { ...data, tip: 'materijal' });
@@ -126,79 +145,121 @@ export function MaterijalTab({ materijali, onReload }: { materijali: Product[]; 
     catch (e: any) { setMsg(e?.message || 'Greška'); }
   };
 
-  const prikazStanja = (p: Product) => {
-    const st = p.stanje ?? 0;
-    if (jePloca(p)) return `${st.toFixed(2)} m² (≈ ${m2UKom(st, p.plocaSirina!, p.plocaVisina!)} pl.)`;
-    return `${st} ${p.jm}`;
-  };
+  // "/" pretraga, "N" novi materijal — isto kao na listi artikala.
+  useEffect(() => {
+    if (dialogOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) {
+        if (t === searchRef.current && e.key === 'Escape') { setSearch(''); t.blur(); }
+        return;
+      }
+      if (e.key === '/') { e.preventDefault(); searchRef.current?.focus(); return; }
+      if (e.key.toLowerCase() === 'n') { e.preventDefault(); handleNew(); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [dialogOpen]);
+
+  const td = 'py-2.5 border-b border-slate-100';
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex-1 min-h-0 px-6 py-5">
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm shadow-slate-200/50 h-full flex flex-col overflow-hidden">
-          <div className="flex items-center gap-3 px-5 py-3 border-b border-slate-100">
-            <div className="relative flex-1 max-w-sm">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-              <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Pretraži materijal..." className="pl-9 h-8 text-[13px] bg-slate-50 border-slate-200" />
-              {search && (
-                <button onClick={() => setSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"><X className="h-3.5 w-3.5" /></button>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-[13px] font-semibold text-slate-700">Materijal</span>
-              {materijali.length > 0 && <Badge variant="secondary" className="text-[10px] font-mono px-1.5 py-0 h-5">{materijali.length}</Badge>}
-            </div>
-            <Button size="sm" onClick={() => { setEdit(null); setDialogOpen(true); }} className="ml-auto h-8 gap-1.5 text-[12px]">
-              <Plus className="h-3.5 w-3.5" /> Novi materijal
-            </Button>
-          </div>
-          {msg && <p className="px-5 py-2 text-[12px] text-rose-600 bg-rose-50 border-b border-rose-100">{msg}</p>}
+    <div className="flex flex-col h-full bg-white">
+      <div className="flex-shrink-0 flex flex-wrap items-center gap-x-3 gap-y-2 px-6 py-3 border-b border-slate-200/80">
+        <div className="relative w-full sm:w-auto sm:flex-1 sm:min-w-[220px] sm:max-w-sm">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+          <Input
+            ref={searchRef}
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Naziv ili šifra materijala…"
+            aria-label="Pretraga materijala"
+            className="pl-9 pr-9 h-8 text-[12.5px] bg-slate-50 border-slate-200"
+          />
+          {search
+            ? <button onClick={() => setSearch('')} aria-label="Obriši pretragu" className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"><X className="h-3.5 w-3.5" /></button>
+            : <Key className="absolute right-2.5 top-1/2 -translate-y-1/2 ml-0">/</Key>}
+        </div>
 
-          {filtered.length === 0 ? (
-            <div className="flex-1 flex flex-col items-center justify-center text-slate-400 select-none">
-              <div className="w-14 h-14 rounded-2xl bg-slate-50 flex items-center justify-center mb-3"><Layers size={24} className="text-slate-300" /></div>
-              <p className="text-[13px] font-medium text-slate-500">{search ? 'Nema rezultata' : 'Nema materijala'}</p>
-              {!search && <p className="text-[12px] text-slate-400 mt-0.5">Dodajte ploče, kant traku, okove…</p>}
-            </div>
-          ) : (
-            <ScrollArea className="flex-1">
-              <table className="w-full">
-                <thead className="sticky top-0 bg-slate-50/80 backdrop-blur-sm">
-                  <tr className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
-                    <th className="text-left pl-5 pr-2 py-2.5 w-[90px]">Šifra</th>
-                    <th className="text-left px-2 py-2.5">Naziv</th>
-                    <th className="text-left px-2 py-2.5 w-[60px]">JM</th>
-                    <th className="text-left px-2 py-2.5 w-[120px]">Ploča</th>
-                    <th className="text-right px-2 py-2.5 w-[170px]">Stanje</th>
-                    <th className="text-right pr-5 pl-2 py-2.5 w-[100px]" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map(p => (
-                    <tr key={p.id} className="group border-t border-slate-50 hover:bg-slate-50/50 cursor-pointer" onClick={() => { setEdit(p); setDialogOpen(true); }}>
-                      <td className="pl-5 pr-2 py-2.5 text-[12px] font-mono text-slate-400">{p.sifra}</td>
-                      <td className="px-2 py-2.5 text-[12px] font-medium text-slate-700">{p.naziv}</td>
-                      <td className="px-2 py-2.5 text-[12px] text-slate-500">{p.jm}</td>
-                      <td className="px-2 py-2.5 text-[11px] font-mono text-slate-400">
-                        {jePloca(p) ? `${p.plocaSirina}×${p.plocaVisina}` : '—'}
-                      </td>
-                      <td className={cn('px-2 py-2.5 text-[12px] font-mono text-right tabular-nums', (p.stanje ?? 0) <= 0 ? 'text-rose-500' : 'text-slate-700')}>
-                        {prikazStanja(p)}
-                      </td>
-                      <td className="pr-5 pl-2 py-2.5 text-right">
-                        <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100">
-                          <Button variant="ghost" size="sm" className="h-7 text-xs px-2" onClick={e => { e.stopPropagation(); setEdit(p); setDialogOpen(true); }}><Pencil className="h-3 w-3 mr-1" /> Uredi</Button>
-                          <Button variant="ghost" size="sm" className="h-7 text-xs px-2 text-red-500 hover:text-red-600 hover:bg-red-50" onClick={e => { e.stopPropagation(); handleDelete(p); }}><Trash2 className="h-3 w-3" /></Button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </ScrollArea>
+        <SegmentedFilter options={STANJE_FILTERI} value={filter} onChange={setFilter} counts={counts} />
+
+        <Button size="sm" onClick={handleNew} className="ml-auto h-8 gap-1.5 pl-3 pr-2 text-[12px]">
+          <Plus className="h-3.5 w-3.5" /> Novi materijal <Key tone="dark">N</Key>
+        </Button>
+      </div>
+      {msg && <p className="flex-shrink-0 px-6 py-2 text-[12px] text-rose-600 bg-rose-50 border-b border-rose-100">{msg}</p>}
+
+      {filtered.length === 0 ? (
+        <div className="flex-1 flex flex-col items-center justify-center text-slate-400 select-none">
+          <div className="w-12 h-12 rounded-2xl bg-slate-50 flex items-center justify-center mb-3"><Layers size={20} className="text-slate-300" /></div>
+          <p className="text-[13px] font-medium text-slate-500">
+            {search ? 'Nema rezultata pretrage' : filter !== 'svi' ? 'Nema materijala u ovom filteru' : 'Nema materijala'}
+          </p>
+          {!search && filter === 'svi' && (
+            <p className="text-[12px] text-slate-400 mt-0.5">Ploče, kant traku i okove dodaješ tipkom <Key className="ml-0 mx-0.5">N</Key>.</p>
           )}
         </div>
-      </div>
+      ) : (
+        <ScrollArea className="flex-1">
+          <table className="w-full border-separate border-spacing-0">
+            <LedgerHead columns={[
+              { label: 'Šifra', className: 'text-left pl-6 pr-3 w-[1%] whitespace-nowrap' },
+              { label: 'Naziv', className: 'text-left px-3' },
+              { label: 'JM', className: 'text-left px-3 w-[70px] hidden lg:table-cell' },
+              { label: 'Ploča', className: 'text-left px-3 w-[130px] hidden xl:table-cell' },
+              { label: 'Stanje', className: 'text-right px-3 w-[150px]' },
+              { label: '', className: 'pr-6 pl-2 w-[1%]' },
+            ]} />
+            <tbody>
+              {filtered.map(p => {
+                const stanje = p.stanje ?? 0;
+                const nema = stanje <= 0;
+                const ploca = jePloca(p);
+                return (
+                  <tr key={p.id} className="group transition-colors hover:bg-slate-50 cursor-pointer" onClick={() => handleEdit(p)}>
+                    <td className={cn(td, 'pl-6 pr-3 font-mono text-[12px] text-slate-400 whitespace-nowrap')}>{p.sifra}</td>
+                    <td className={cn(td, 'px-3 max-w-0')}>
+                      <span className="block truncate text-[12.5px] font-medium text-slate-800">{p.naziv}</span>
+                      {ploca && <span className="xl:hidden block font-mono text-[10.5px] text-slate-400 truncate">{p.plocaSirina}×{p.plocaVisina} mm</span>}
+                    </td>
+                    <td className={cn(td, 'hidden lg:table-cell px-3 text-[12px] text-slate-500 whitespace-nowrap')}>{p.jm}</td>
+                    <td className={cn(td, 'hidden xl:table-cell px-3 font-mono text-[11.5px] text-slate-400 whitespace-nowrap')}>
+                      {ploca ? `${p.plocaSirina}×${p.plocaVisina}` : <span className="text-slate-200">—</span>}
+                    </td>
+                    <td className={cn(td, 'px-3 text-right whitespace-nowrap')}>
+                      <span className="flex items-baseline justify-end gap-1.5 font-mono text-[12.5px] tabular-nums leading-5">
+                        <span aria-hidden className={cn('h-1.5 w-1.5 rounded-full self-center', nema ? 'bg-rose-500' : 'bg-emerald-500')} />
+                        <span className={cn('font-semibold', nema ? 'text-rose-600' : 'text-slate-800')}>
+                          {ploca ? stanje.toFixed(2).replace('.', ',') : stanje}
+                        </span>
+                        <span className="text-[11px] text-slate-400">{p.jm}</span>
+                      </span>
+                      {ploca && (
+                        <span className="block font-mono text-[10px] tabular-nums text-slate-400">
+                          ≈ {m2UKom(stanje, p.plocaSirina!, p.plocaVisina!)} ploča
+                        </span>
+                      )}
+                    </td>
+                    <td className={cn(td, 'pr-6 pl-2 text-right')}>
+                      <div className="flex items-center justify-end gap-0.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
+                        <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-400 hover:text-slate-700" title="Uredi" aria-label={`Uredi ${p.naziv}`}
+                          onClick={e => { e.stopPropagation(); handleEdit(p); }}>
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-400 hover:text-red-600 hover:bg-red-50" title="Obriši" aria-label={`Obriši ${p.naziv}`}
+                          onClick={e => { e.stopPropagation(); handleDelete(p); }}>
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </ScrollArea>
+      )}
       <MaterijalDialog key={edit?.id ?? 'new'} open={dialogOpen} onOpenChange={v => { setDialogOpen(v); if (!v) setEdit(null); }} product={edit} onSave={handleSave} />
     </div>
   );

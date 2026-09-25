@@ -8,12 +8,15 @@ import { DecimalInput } from '@/components/ui/decimal-input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Eyebrow } from '@/components/ui/ledger';
 import { PretragaProizvoda } from '@/components/PretragaProizvoda';
-import { uvecajKolicinu } from '@/lib/pretraga';
+import { filtriraj, uvecajKolicinu, type PoljaPretrage } from '@/lib/pretraga';
 import { Search, X, Save, ClipboardList, AlertTriangle } from 'lucide-react';
 
 interface Red { materijalId: number; naziv: string; sifra: string; jm: string; kolicina: string; napomena: string }
 
 /** Normativ = utrošak materijala za 1 kom standardnog proizvoda; predložak za nalog za zalihu. */
+/** Lista artikala za normativ se traži po nazivu i šifri. */
+const poljaArtikla = (a: Product): PoljaPretrage => ({ naziv: a.naziv, sifra: a.sifra });
+
 export function NormativiTab() {
   const [artikli, setArtikli] = useState<Product[]>([]);
   const [filter, setFilter] = useState('');
@@ -53,7 +56,7 @@ export function NormativiTab() {
     } catch (e: any) { setMsg({ type: 'error', text: e?.message || 'Greška' }); }
   };
 
-  const listaArtikala = artikli.filter(a => !filter || a.naziv.toLowerCase().includes(filter.toLowerCase()) || a.sifra.toLowerCase().includes(filter.toLowerCase()));
+  const listaArtikala = filtriraj(artikli, filter, poljaArtikla);
   const odabrani = artikli.find(a => a.id === productId);
 
   return (

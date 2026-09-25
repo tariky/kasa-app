@@ -11,7 +11,7 @@ pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> R<Value> {
     let r = match domena {
         "licenca" => licenca::obradi(b, kanal, a),
         "user" => korisnici::obradi(b, kanal, a),
-        "settings" | "savedCarts" | "proizvodnja" => postavke::obradi(b, kanal, a),
+        "settings" | "savedCarts" | "fakturaSkice" | "proizvodnja" => postavke::obradi(b, kanal, a),
         "product" | "materijal" | "dobavljac" | "kupac" => katalog::obradi(b, kanal, a),
         "primka" | "nivelacija" | "report" => skladiste::obradi(b, kanal, a),
         "order" | "pending" | "prilog" | "fiscal" => racuni::obradi(b, kanal, a),

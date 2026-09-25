@@ -67,8 +67,9 @@ interface Window {
     finalizeOrder: (data: any) => Promise<{ success: boolean; id?: number; brojFiskalnogRacuna?: string | null; error?: string; odgovori?: Record<string, string> }>;
     finalizePrilogOrder: (data: {
       korisnikId: number; iznos?: number; nacinPlacanja: string; kupac?: any;
-      stavke?: Array<{ productId: number; kolicina: number; cijena: number; pdvStopa: string }>;
+      stavke?: Array<{ productId: number; kolicina: number; cijena: number; rabat?: number; pdvStopa: string }>;
       prilogOpis?: string; prilogVeza?: string;
+      datumValute?: string | null; napomena?: string | null; ponudaId?: number | null;
     }) => Promise<{
       success: boolean; id?: number; prilogBroj?: number; brojFiskalnogRacuna?: string | null;
       upozorenje?: string; error?: string; odgovori?: Record<string, string>;
@@ -78,7 +79,7 @@ interface Window {
     }>;
     setZadnjiFiskalniBroj: (broj: number) => Promise<{ success: boolean; predvidjeni: number | null }>;
     getPrilogStavke: (orderId: number) => Promise<any[]>;
-    savePrilogStavke: (orderId: number, stavke: Array<{ productId: number; kolicina: number; cijena: number; pdvStopa: string }>) => Promise<{ success: boolean }>;
+    savePrilogStavke: (orderId: number, stavke: Array<{ productId: number; kolicina: number; cijena: number; rabat?: number; pdvStopa: string }>) => Promise<{ success: boolean }>;
     listPending: () => Promise<Array<{ id: number; korisnikId: number; createdAt: string; snapshot: any }>>;
     resolvePending: (data: { id: number; brojFiskalnogRacuna: string; createdAt: string }) => Promise<{ id: number }>;
     discardPending: (id: number) => Promise<{ success: boolean }>;
@@ -134,6 +135,10 @@ interface Window {
     listSavedCarts: () => Promise<Array<{ id: number; naziv: string; items: string; ukupno: number; createdAt: string }>>;
     saveCart: (naziv: string, items: Array<{ productId: number; kolicina: number; rabat: number }>, ukupno: number) => Promise<number>;
     deleteSavedCart: (id: number) => Promise<any>;
+    listSkiceFaktura: () => Promise<Array<{ id: number; naziv: string; podaci: string; ukupno: number; spremljeno: string }>>;
+    /** Bez id-a (ili s id-em obrisane skice) sprema novu; vraća id skice. */
+    spremiSkicuFakture: (id: number | null, naziv: string, podaci: unknown, ukupno: number) => Promise<number>;
+    obrisiSkicuFakture: (id: number) => Promise<any>;
     getSetting: (key: string) => Promise<string | null>;
     setSetting: (key: string, value: string) => Promise<any>;
     getTringSettings: () => Promise<any>;

@@ -13,6 +13,8 @@ export interface PrilogPdfStavka {
   productId: number;
   kolicina: number;
   cijena: number;
+  /** Postotak; stari zapisi ga nemaju. */
+  rabat?: number | null;
   pdvStopa: string;
   productNaziv?: string;
   productJm?: string;
@@ -107,6 +109,14 @@ const s = StyleSheet.create({
   colCijena: { width: '14%', textAlign: 'right' },
   colPdv: { width: '12%', textAlign: 'right' },
   colIznos: { width: '14%', textAlign: 'right' },
+  /** Kolona rabata postoji samo kad ga ima — uzima širinu od naziva. */
+  colRabat: { width: '6%', textAlign: 'right' },
+  colNazivUzRabat: { width: '25%', paddingRight: 10 },
+
+  /* ── Napomena ── */
+  napomenaBox: { marginTop: 14 },
+  napomenaLabel: { fontSize: 7.5, fontFamily: FB, fontWeight: 700, color: '#000', marginBottom: 3 },
+  napomenaText: { fontSize: 8.5, color: '#000', lineHeight: 1.4 },
 
   /* ── Totals ── */
   totalsWrap: { flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 10 },
@@ -173,10 +183,14 @@ export function PrilogPdf({ order, firma, stavke }: PrilogPdfProps) {
   // cijena bez PDV-a izlučuje iz bruto cijene po stopi stavke.
   const linije = stavke.map(si => ({
     ...si,
+    rabat: si.rabat ?? 0,
     cijenaBezPdv: si.pdvStopa === 'E' ? round2(si.cijena / 1.17) : round2(si.cijena),
-    iznos: iznosStavke({ cijena: si.cijena, kolicina: si.kolicina, rabat: 0, pdvStopa: si.pdvStopa }),
-    pdv: pdvStavke({ cijena: si.cijena, kolicina: si.kolicina, rabat: 0, pdvStopa: si.pdvStopa }),
+    iznos: iznosStavke({ cijena: si.cijena, kolicina: si.kolicina, rabat: si.rabat ?? 0, pdvStopa: si.pdvStopa }),
+    pdv: pdvStavke({ cijena: si.cijena, kolicina: si.kolicina, rabat: si.rabat ?? 0, pdvStopa: si.pdvStopa }),
   }));
+  const imaRabat = linije.some(l => l.rabat > 0);
+  const colNaziv = imaRabat ? s.colNazivUzRabat : s.colNaziv;
+  const fmtRabat = (r: number) => `${String(round2(r)).replace('.', ',')}%`;
   const ukupno = round2(linije.reduce((sum, l) => sum + l.iznos, 0));
   const pdvIznos = round2(linije.reduce((sum, l) => sum + l.pdv, 0));
   const osnovica = round2(ukupno - pdvIznos);
@@ -267,10 +281,11 @@ export function PrilogPdf({ order, firma, stavke }: PrilogPdfProps) {
           <View style={s.tHeaderRow}>
             <Text style={[s.tHeaderCell, s.colRb]}>#</Text>
             <Text style={[s.tHeaderCell, s.colSifra]}>Šifra</Text>
-            <Text style={[s.tHeaderCell, s.colNaziv]}>Naziv</Text>
+            <Text style={[s.tHeaderCell, colNaziv]}>Naziv</Text>
             <Text style={[s.tHeaderCell, s.colJm]}>JM</Text>
             <Text style={[s.tHeaderCell, s.colKol]}>Kol.</Text>
             <Text style={[s.tHeaderCell, s.colCijena]}>Cijena bez PDV</Text>
+            {imaRabat && <Text style={[s.tHeaderCell, s.colRabat]}>Rabat</Text>}
             <Text style={[s.tHeaderCell, s.colPdv]}>PDV</Text>
             <Text style={[s.tHeaderCell, s.tHeaderCellLast, s.colIznos]}>Ukupno</Text>
           </View>
@@ -279,10 +294,11 @@ export function PrilogPdf({ order, firma, stavke }: PrilogPdfProps) {
             <View key={`${l.productId}-${i}`} style={s.tRow}>
               <Text style={[s.tCell, s.colRb]}>{i + 1}</Text>
               <Text style={[s.tCell, s.colSifra]}>{l.productSifra ?? ''}</Text>
-              <Text style={[s.tCellBold, s.colNaziv]}>{l.productNaziv ?? `#${l.productId}`}</Text>
+              <Text style={[s.tCellBold, colNaziv]}>{l.productNaziv ?? `#${l.productId}`}</Text>
               <Text style={[s.tCell, s.colJm]}>{l.productJm ?? ''}</Text>
               <Text style={[s.tCell, s.colKol]}>{formatKol(l.kolicina)}</Text>
               <Text style={[s.tCell, s.colCijena]}>{formatKM(l.cijenaBezPdv)}</Text>
+              {imaRabat && <Text style={[s.tCell, s.colRabat]}>{l.rabat > 0 ? fmtRabat(l.rabat) : '—'}</Text>}
               <Text style={[s.tCell, s.colPdv]}>{formatKM(round2(l.pdv))}</Text>
               <Text style={[s.tCellBold, s.tCellLast, s.colIznos]}>{formatKM(l.iznos)}</Text>
             </View>
@@ -306,6 +322,13 @@ export function PrilogPdf({ order, firma, stavke }: PrilogPdfProps) {
             </View>
           </View>
         </View>
+
+        {order.napomena ? (
+          <View style={s.napomenaBox} wrap={false}>
+            <Text style={s.napomenaLabel}>Napomena</Text>
+            <Text style={s.napomenaText}>{order.napomena}</Text>
+          </View>
+        ) : null}
 
         {/* ── Veza sa fiskalnim računom — bez nje je ovo samo papir ── */}
         <View style={s.vezaBox} wrap={false}>

@@ -10,19 +10,22 @@
     --card-foreground: 220 20% 10%;
     --popover: 0 0% 100%;
     --popover-foreground: 220 20% 10%;
-    --primary: 217 91% 60%;
+    /* blue-600: bijeli tekst ima 5,2:1 (blue-500 je bio 3,7:1). */
+    --primary: 221 83% 53%;
     --primary-foreground: 0 0% 100%;
     --secondary: 220 14% 96%;
     --secondary-foreground: 220 9% 46%;
     --muted: 220 14% 96%;
     --muted-foreground: 220 9% 46%;
-    --accent: 217 91% 60%;
-    --accent-foreground: 0 0% 100%;
-    --destructive: 0 84% 60%;
+    /* Hover ghost/outline dugmadi i istaknuta stavka u listama: tiha siva, ne primarna plava —
+       inače crvena ikona (brisanje) dobije plavu podlogu. */
+    --accent: 220 14% 94%;
+    --accent-foreground: 220 20% 10%;
+    --destructive: 0 72% 51%;
     --destructive-foreground: 0 0% 98%;
     --border: 220 13% 91%;
     --input: 220 13% 91%;
-    --ring: 217 91% 60%;
+    --ring: 221 83% 53%;
     --radius: 0.5rem;
   }
 

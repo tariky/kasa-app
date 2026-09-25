@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
@@ -8,13 +8,14 @@ import { DecimalInput } from '@/components/ui/decimal-input';
 import { DateTimePicker } from '@/components/ui/date-time-picker';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
-  Trash2, Search, Banknote, CreditCard, Landmark, FileCheck,
+  Trash2, Banknote, CreditCard, Landmark, FileCheck,
   ChevronRight, Building2, AlertTriangle, PackageOpen, CornerDownLeft, X,
 } from 'lucide-react';
 import { Kupac, Product } from '@/types';
 import { izracunajTotale, iznosStavke } from '@/lib/racun';
 import { cn, formatKM } from '@/lib/utils';
 import { PretragaProizvoda } from '@/components/PretragaProizvoda';
+import { PretragaStavki } from '@/components/ui/pretraga-stavki';
 
 interface StavkaUnos {
   product: Product;
@@ -57,82 +58,7 @@ function Eyebrow({ children, className }: { children: React.ReactNode; className
   );
 }
 
-function Key({ children }: { children: React.ReactNode }) {
-  return (
-    <kbd className="inline-flex h-[16px] min-w-[16px] items-center justify-center rounded border border-slate-200 bg-white px-[3px] font-mono text-[9px] font-semibold leading-none text-slate-400">
-      {children}
-    </kbd>
-  );
-}
-
-function ComboHint({ verb }: { verb: string }) {
-  return (
-    <span className="flex items-center gap-1.5 text-[10px] text-slate-400">
-      <Key>↑</Key><Key>↓</Key> izbor <Key>↵</Key> {verb}
-    </span>
-  );
-}
-
-interface ComboProps<T> {
-  items: T[];
-  activeIdx: number;
-  setActiveIdx: (i: number) => void;
-  onPick: (item: T) => void;
-  refs: React.MutableRefObject<(HTMLButtonElement | null)[]>;
-}
-
-/** Strelice biraju, Enter potvrđuje. Escape hvata onEscapeKeyDown na dijalogu. */
-function comboKeyHandler<T>({ items, activeIdx, setActiveIdx, onPick, refs }: ComboProps<T>) {
-  return (e: React.KeyboardEvent<HTMLInputElement>) => {
-    // Ctrl+Enter je prečica za snimanje — ne smije usput odabrati i stavku.
-    if (e.ctrlKey || e.metaKey || e.altKey) return;
-    if (items.length === 0) return;
-    const last = items.length - 1;
-    const go = (i: number) => {
-      e.preventDefault();
-      const next = Math.max(0, Math.min(last, i));
-      setActiveIdx(next);
-      refs.current[next]?.scrollIntoView({ block: 'nearest' });
-    };
-    switch (e.key) {
-      case 'ArrowDown': return go(activeIdx + 1);
-      case 'ArrowUp': return go(activeIdx - 1);
-      case 'Home': return go(0);
-      case 'End': return go(last);
-      case 'Enter':
-        e.preventDefault();
-        onPick(items[activeIdx]);
-        return;
-      default:
-    }
-  };
-}
-
-/** Rezultati stoje u toku, ne apsolutno — apsolutni sloj bi ScrollArea odsjekla. */
-function ComboList<T>({ items, activeIdx, setActiveIdx, onPick, refs, render }: ComboProps<T> & {
-  render: (item: T) => React.ReactNode;
-}) {
-  if (items.length === 0) return null;
-  return (
-    <div className="mt-1.5 max-h-56 overflow-auto rounded-lg border border-slate-200 bg-white shadow-sm">
-      {items.map((item, i) => (
-        <button
-          key={i}
-          ref={el => { refs.current[i] = el; }}
-          type="button"
-          onMouseEnter={() => setActiveIdx(i)}
-          onClick={() => onPick(item)}
-          className={cn(
-            'w-full flex items-center gap-3 px-3 py-2 text-left transition-colors',
-            i === activeIdx ? 'bg-blue-50' : 'hover:bg-slate-50',
-          )}
-        >
-          {render(item)}
-        </button>
-      ))}
-    </div>
-  );
-}
+const poljaKupca = (k: Kupac) => ({ naziv: k.naziv, sifra: k.idBroj, dodatno: [k.adresa, k.grad].filter(Boolean).join(' ') });
 
 export default function DodajRacunDialog({ open, onOpenChange, korisnikId, onSaved, prefillBroj }: Props) {
   const [brojFiskalnog, setBrojFiskalnog] = useState('');
@@ -140,9 +66,7 @@ export default function DodajRacunDialog({ open, onOpenChange, korisnikId, onSav
   const [nacinPlacanja, setNacinPlacanja] = useState<PaymentType>('Gotovina');
   const [stavke, setStavke] = useState<StavkaUnos[]>([]);
   const [kupacOpen, setKupacOpen] = useState(false);
-  const [kupacQuery, setKupacQuery] = useState('');
-  const [kupacResults, setKupacResults] = useState<Kupac[]>([]);
-  const [kupacActiveIdx, setKupacActiveIdx] = useState(0);
+  const [allKupci, setAllKupci] = useState<Kupac[] | null>(null);
   const [kupacIzSifarnika, setKupacIzSifarnika] = useState(false);
   const [kupacNaziv, setKupacNaziv] = useState('');
   const [kupacIdBroj, setKupacIdBroj] = useState('');
@@ -152,11 +76,15 @@ export default function DodajRacunDialog({ open, onOpenChange, korisnikId, onSav
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const kupacRefs = useRef<(HTMLButtonElement | null)[]>([]);
-
   useEffect(() => {
     if (open && prefillBroj) setBrojFiskalnog(prefillBroj);
   }, [open, prefillBroj]);
+
+  // Šifarnik kupaca se učitava tek kad se sekcija otvori — većina ručnih računa je bez kupca.
+  useEffect(() => {
+    if (!kupacOpen) return;
+    window.api.getKupci().then(setAllKupci).catch(() => setAllKupci([]));
+  }, [kupacOpen]);
 
   const { ukupno, pdvIznos } = useMemo(
     () => izracunajTotale(stavke.map(s => ({
@@ -179,14 +107,6 @@ export default function DodajRacunDialog({ open, onOpenChange, korisnikId, onSav
   };
   const removeStavka = (id: number) => setStavke(prev => prev.filter(s => s.product.id !== id));
 
-  const searchKupac = async (q: string) => {
-    setKupacQuery(q);
-    setKupacActiveIdx(0);
-    if (!q.trim()) { setKupacResults([]); return; }
-    const found = await window.api.searchKupci(q);
-    setKupacResults(found as Kupac[]);
-  };
-
   const pickKupac = (k: Kupac) => {
     setKupacIdBroj(k.idBroj || '');
     setKupacNaziv(k.naziv || '');
@@ -194,21 +114,19 @@ export default function DodajRacunDialog({ open, onOpenChange, korisnikId, onSav
     setKupacGrad(k.grad || '');
     setKupacPostanskiBroj(k.postanskiBroj || '');
     setKupacIzSifarnika(true);
-    setKupacQuery(''); setKupacResults([]); setKupacActiveIdx(0);
   };
 
   const clearKupac = () => {
     setKupacIdBroj(''); setKupacNaziv(''); setKupacAdresa('');
     setKupacGrad(''); setKupacPostanskiBroj('');
     setKupacIzSifarnika(false);
-    setKupacQuery(''); setKupacResults([]); setKupacActiveIdx(0);
   };
 
   const reset = () => {
     setBrojFiskalnog(''); setDatum(nowLocalInput()); setNacinPlacanja('Gotovina');
     setStavke([]);
     setKupacOpen(false);
-    setKupacQuery(''); setKupacResults([]); setKupacActiveIdx(0); setKupacIzSifarnika(false);
+    setKupacIzSifarnika(false);
     setKupacNaziv(''); setKupacIdBroj(''); setKupacAdresa(''); setKupacGrad(''); setKupacPostanskiBroj('');
     setError('');
   };
@@ -249,14 +167,6 @@ export default function DodajRacunDialog({ open, onOpenChange, korisnikId, onSav
     <Dialog open={open} onOpenChange={(v) => { if (!v) reset(); onOpenChange(v); }}>
       <DialogContent
         className="max-w-3xl max-h-[92vh] p-0 gap-0 overflow-hidden flex flex-col"
-        onEscapeKeyDown={(e) => {
-          // Prvi Escape zatvara otvorenu listu kupaca, tek drugi zatvara dijalog
-          // (lista artikala je Radix sloj iznad dijaloga i sama hvata Escape).
-          if (kupacResults.length > 0) {
-            e.preventDefault();
-            setKupacResults([]);
-          }
-        }}
         onKeyDown={(e) => {
           if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !loading) {
             e.preventDefault();
@@ -424,43 +334,22 @@ export default function DodajRacunDialog({ open, onOpenChange, korisnikId, onSav
               </button>
               {kupacOpen && (
                 <div className="border-t border-slate-100 px-3 py-3">
-                  <div className="flex items-center justify-between mb-2">
-                    <Eyebrow>Iz šifarnika</Eyebrow>
-                    {kupacResults.length > 0 && <ComboHint verb="odaberi" />}
-                  </div>
-                  <div className="relative">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400 pointer-events-none" />
-                    <Input
-                      className="pl-9 h-9 text-[12.5px]"
-                      value={kupacQuery}
-                      onChange={e => searchKupac(e.target.value)}
-                      onKeyDown={comboKeyHandler({
-                        items: kupacResults,
-                        activeIdx: kupacActiveIdx,
-                        setActiveIdx: setKupacActiveIdx,
-                        onPick: pickKupac,
-                        refs: kupacRefs,
-                      })}
-                      placeholder="Pretraži kupca po nazivu, JIB-u ili kontaktu…"
-                    />
-                  </div>
-                  <ComboList
-                    items={kupacResults}
-                    activeIdx={kupacActiveIdx}
-                    setActiveIdx={setKupacActiveIdx}
-                    onPick={pickKupac}
-                    refs={kupacRefs}
-                    render={(k) => (
-                      <>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-[12.5px] font-medium text-slate-700 truncate">{k.naziv}</p>
-                          <p className="text-[10px] text-slate-400 mt-0.5 truncate">
-                            <span className="font-mono">{k.idBroj}</span>
-                            {k.grad && <span className="ml-1.5">{k.grad}</span>}
-                          </p>
-                        </div>
-                      </>
-                    )}
+                  <Eyebrow className="mb-2 block">Iz šifarnika</Eyebrow>
+                  <PretragaStavki<Kupac>
+                    stavke={allKupci}
+                    polja={poljaKupca}
+                    kljuc={k => k.id}
+                    onIzaberi={pickKupac}
+                    sifre={false}
+                    kolicine={false}
+                    nedavnoKljuc="kupci-rucni-racun"
+                    naslovSvih="Svi kupci"
+                    oznaka={k => (k.adresa || k.grad) ? [k.adresa, k.grad].filter(Boolean).join(', ') : null}
+                    meta={k => <span className="font-mono text-[11px] tabular-nums text-slate-400">{k.idBroj}</span>}
+                    placeholder="Pretraži kupca po nazivu, JIB-u ili gradu…"
+                    ariaLabel="Pretraga kupaca"
+                    akcija="odaberi"
+                    velicina="sm"
                   />
 
                   {kupacIzSifarnika && (

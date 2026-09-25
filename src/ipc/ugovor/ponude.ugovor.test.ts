@@ -535,7 +535,7 @@ describe('prilog:getStavke', () => {
     const s: any[] = await b.call('prilog:getStavke', id);
     expect(s).toHaveLength(2);
     expect(Object.keys(s[0]).sort()).toEqual(
-      ['cijena', 'id', 'kolicina', 'orderId', 'pdvStopa', 'productId', 'productJm', 'productNaziv', 'productSifra', 'productTip'].sort()
+      ['cijena', 'id', 'kolicina', 'orderId', 'pdvStopa', 'productId', 'rabat', 'productJm', 'productNaziv', 'productSifra', 'productTip'].sort()
     );
     expect(s.map(x => x.productId)).toEqual([u, a]);
     expect(s[0]).toMatchObject({
@@ -548,6 +548,16 @@ describe('prilog:getStavke', () => {
 // ─── prilog:saveStavke ──────────────────────────────────────
 
 describe('prilog:saveStavke', () => {
+  test('rabat se pamti po stavci, a bez njega je 0', async () => {
+    const id = prilogRacun(60);
+    const a = dodajArtikal('R1', 10);
+    const c = dodajArtikal('R2', 5);
+    await b.call('prilog:saveStavke', id, [{ ...prilogStavka(a, 5, 10), rabat: 10 }, prilogStavka(c, 1, 5)]);
+    expect((await b.call('prilog:getStavke', id)).map((s: any) => [s.productId, s.rabat])).toEqual([[a, 10], [c, 0]]);
+    await expect(b.call('prilog:saveStavke', id, [{ ...prilogStavka(a, 1, 10), rabat: -1 }]))
+      .rejects.toThrow('Rabat mora biti između 0 i 100 %');
+  });
+
   test('upisuje stavke i razdužuje skladište, usluge ne', async () => {
     const id = prilogRacun(50);
     const a = dodajArtikal('S1', 5, { stanje: 10 });
@@ -616,6 +626,23 @@ describe('prilog:saveStavke', () => {
     }
     expect((await b.call('prilog:getStavke', id)).map((s: any) => s.kolicina)).toEqual([2]);
     expect(stanje(a)).toBe(8);
+  });
+
+  test('kompletna faktura je zaključana: stavke i zaliha ostaju kakve jesu', async () => {
+    const id = prilogRacun(50);
+    const a = dodajArtikal('S9', 5, { stanje: 20 });
+    // Nekompletan set se smije mijenjati više puta…
+    await b.call('prilog:saveStavke', id, [prilogStavka(a, 4, 5)]);
+    await b.call('prilog:saveStavke', id, [prilogStavka(a, 10, 5)]);
+    expect(stanje(a)).toBe(10);
+
+    // …a kad se suma poklopi s fiskalnim iznosom, faktura je završena.
+    for (const novi of [[prilogStavka(a, 1, 50)], []]) {
+      await expect(b.call('prilog:saveStavke', id, novi))
+        .rejects.toThrow('Faktura je završena — stavke se ne mogu mijenjati');
+    }
+    expect((await b.call('prilog:getStavke', id)).map((s: any) => s.kolicina)).toEqual([10]);
+    expect(stanje(a)).toBe(10);
   });
 
   test('storniran račun: prilog je zaključan, storno je vratio zalihu po stavkama priloga', async () => {

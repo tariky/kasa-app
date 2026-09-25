@@ -4,6 +4,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { LedgerHead } from '@/components/ui/ledger';
 import { Separator } from '@/components/ui/separator';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -491,59 +492,47 @@ export default function PostavkeScreen() {
                   </div>
                 ) : (
                   <ScrollArea className="flex-1">
-                    <table className="w-full">
-                      <thead className="sticky top-0 bg-slate-50/80 backdrop-blur-sm">
-                        <tr className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
-                          <th className="text-left pl-5 pr-2 py-2.5">Ime</th>
-                          <th className="text-left px-2 py-2.5 w-[100px]">PIN</th>
-                          <th className="text-left px-2 py-2.5 w-[100px]">Uloga</th>
-                          <th className="text-left px-2 py-2.5 w-[120px]">Kreiran</th>
-                          <th className="text-right pr-5 pl-2 py-2.5 w-[120px]" />
-                        </tr>
-                      </thead>
+                    <table className="w-full border-separate border-spacing-0">
+                      <LedgerHead columns={[
+                        { label: 'Ime', className: 'text-left pl-5 pr-3' },
+                        { label: 'PIN', className: 'text-left px-3 w-[100px]' },
+                        { label: 'Uloga', className: 'text-left px-3 w-[110px]' },
+                        { label: 'Kreiran', className: 'text-left px-3 w-[120px] hidden md:table-cell' },
+                        { label: '', className: 'pr-5 pl-2 w-[1%]' },
+                      ]} />
                       <tbody>
                         {users.map(user => (
                           <tr
                             key={user.id}
-                            className="group border-t border-slate-50 transition-colors hover:bg-slate-50/50"
+                            className="group transition-colors hover:bg-slate-50"
                           >
-                            <td className="pl-5 pr-2 py-2.5 text-[12px] font-medium text-slate-700">{user.ime}</td>
-                            <td className="px-2 py-2.5 text-[12px] font-mono text-slate-400">
+                            <td className="pl-5 pr-3 py-2.5 border-b border-slate-100 max-w-0">
+                              <span className="block truncate text-[12.5px] font-medium text-slate-800">{user.ime}</span>
+                            </td>
+                            <td className="px-3 py-2.5 border-b border-slate-100 font-mono text-[12px] text-slate-400 whitespace-nowrap">
                               {maskPin(user.pin)}
                             </td>
-                            <td className="px-2 py-2.5">
-                              <span className={cn(
-                                'inline-flex items-center gap-1 text-[10px] font-semibold rounded-full px-2 py-0.5',
-                                user.uloga === 'admin'
-                                  ? 'bg-amber-50 text-amber-700 border border-amber-100'
-                                  : 'bg-slate-50 text-slate-500 border border-slate-100'
-                              )}>
-                                {user.uloga === 'admin' && <Shield size={10} />}
+                            <td className="px-3 py-2.5 border-b border-slate-100 whitespace-nowrap">
+                              <span className="flex items-center gap-1.5 text-[12px] leading-5 text-slate-600">
+                                <span aria-hidden className={cn('h-1.5 w-1.5 rounded-full', user.uloga === 'admin' ? 'bg-amber-400' : 'bg-slate-300')} />
                                 {user.uloga}
                               </span>
                             </td>
-                            <td className="px-2 py-2.5 text-[12px] text-slate-400 tabular-nums">
+                            <td className="hidden md:table-cell px-3 py-2.5 border-b border-slate-100 text-[12px] text-slate-400 tabular-nums whitespace-nowrap">
                               {formatDate(user.createdAt)}
                             </td>
-                            <td className="pr-5 pl-2 py-2.5 text-right">
-                              <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-7 text-xs px-2"
-                                  onClick={() => openEditUserDialog(user)}
-                                >
-                                  <Pencil className="h-3 w-3 mr-1" />
-                                  Uredi
+                            <td className="pr-5 pl-2 py-2.5 border-b border-slate-100 text-right">
+                              <div className="flex items-center justify-end gap-0.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
+                                <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-400 hover:text-slate-700"
+                                  title="Uredi" aria-label={`Uredi ${user.ime}`}
+                                  onClick={() => openEditUserDialog(user)}>
+                                  <Pencil className="h-3.5 w-3.5" />
                                 </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-7 text-xs px-2 text-red-500 hover:text-red-600 hover:bg-red-50"
+                                <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-400 hover:text-red-600 hover:bg-red-50"
+                                  title="Obriši" aria-label={`Obriši ${user.ime}`}
                                   onClick={() => handleDeleteUser(user)}
-                                  disabled={user.uloga === 'admin' && adminCount <= 1}
-                                >
-                                  <Trash2 className="h-3 w-3" />
+                                  disabled={user.uloga === 'admin' && adminCount <= 1}>
+                                  <Trash2 className="h-3.5 w-3.5" />
                                 </Button>
                               </div>
                             </td>
@@ -1370,7 +1359,7 @@ export default function PostavkeScreen() {
                       <div>
                         <h3 className="text-[15px] font-semibold text-slate-800">Posljednji fiskalni broj</h3>
                         <p className="text-[12px] text-slate-400 mt-0.5">
-                          Račun po prilogu kuca broj isječka u naziv stavke, pa ga mora znati unaprijed — upišite posljednji broj sa uređaja ako u bazi još nema fiskalizovanih računa
+                          Faktura kuca broj isječka u naziv stavke, pa ga mora znati unaprijed — upišite posljednji broj sa uređaja ako u bazi još nema fiskalizovanih računa
                         </p>
                       </div>
                     </div>
@@ -1411,7 +1400,7 @@ export default function PostavkeScreen() {
                       {fiskalnaNumeracija == null
                         ? 'Učitavanje…'
                         : fiskalnaNumeracija.predvidjeni == null
-                          ? 'U bazi nema fiskalizovanih računa i broj nije upisan — račun po prilogu se ne može odštampati dok ga ne unesete.'
+                          ? 'U bazi nema fiskalizovanih računa i broj nije upisan — faktura se ne može odštampati dok ga ne unesete.'
                           : `Sljedeći isječak se očekuje pod br. ${fiskalnaNumeracija.predvidjeni}.`
                             + (fiskalnaNumeracija.zadnjiUBazi != null
                               ? ` Posljednji fiskalizovan račun u bazi nosi br. ${fiskalnaNumeracija.zadnjiUBazi}.`

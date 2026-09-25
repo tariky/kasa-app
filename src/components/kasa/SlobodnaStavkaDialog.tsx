@@ -23,16 +23,20 @@ interface Props {
   onClose: () => void;
   /** Artikal je već upisan (ili pronađen) u bazi; roditelj ga stavlja u košaricu ili vrati razlog odbijanja. */
   onDodaj: (product: Product, kolicina: number) => string | undefined;
+  /** Dozvoljene stope; jedna stopa sakriva izbor (faktura prima samo E). */
+  stope?: Array<'E' | 'K'>;
 }
 
 /**
  * Stavka bez šifre: kasir upiše naziv, cijenu i stopu, a backend napravi
  * (ili ponovo iskoristi) skriveni artikal s automatskom šifrom.
  */
-export default function SlobodnaStavkaDialog({ open, onClose, onDodaj }: Props) {
+export default function SlobodnaStavkaDialog({ open, onClose, onDodaj, stope }: Props) {
+  const ponudjene = stope ? STOPE.filter(s => stope.includes(s.value)) : STOPE;
   const [naziv, setNaziv] = useState('');
   const [kolicina, setKolicina] = useState('1');
-  const [stopa, setStopa] = useState<'E' | 'K'>('E');
+  const [izabrana, setStopa] = useState<'E' | 'K'>('E');
+  const stopa = ponudjene.some(s => s.value === izabrana) ? izabrana : ponudjene[0].value;
   // Režim "sa/bez PDV-a" svako otvaranje kreće od postavke cijene.unosBezPdv.
   const cijena = useCijenaUnos(open, null, stopa);
   const [jm, setJm] = useState('kom');
@@ -137,10 +141,15 @@ export default function SlobodnaStavkaDialog({ open, onClose, onDodaj }: Props) 
               </label>
             </div>
 
+            {ponudjene.length === 1 ? (
+              <p className="text-[12px] text-slate-500">
+                PDV stopa <span className="font-mono font-medium text-slate-700">{ponudjene[0].label}</span>
+              </p>
+            ) : (
             <div>
               <span className="block text-[12px] font-medium text-slate-600 mb-1.5">PDV stopa</span>
               <div className="inline-flex rounded-xl border border-slate-200 bg-white p-0.5" role="radiogroup" aria-label="PDV stopa">
-                {STOPE.map(s => (
+                {ponudjene.map(s => (
                   <button
                     key={s.value}
                     type="button"
@@ -158,6 +167,7 @@ export default function SlobodnaStavkaDialog({ open, onClose, onDodaj }: Props) 
                 ))}
               </div>
             </div>
+            )}
 
             {greska && (
               <p role="alert" className="text-[12.5px] text-rose-700 bg-rose-50 border border-rose-100 rounded-lg px-3 py-2">

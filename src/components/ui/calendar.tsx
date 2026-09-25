@@ -5,6 +5,7 @@ import {
   ChevronRightIcon,
 } from "lucide-react"
 import { DayButton, DayPicker, getDefaultClassNames } from "react-day-picker"
+import { bs } from "react-day-picker/locale"
 
 import { cn } from "@/lib/utils"
 import { Button, buttonVariants } from "@/components/ui/button"
@@ -25,6 +26,8 @@ function Calendar({
 
   return (
     <DayPicker
+      // Lokalni nazivi mjeseci i dana, sedmica od ponedjeljka.
+      locale={bs}
       showOutsideDays={showOutsideDays}
       className={cn(
         "bg-background group/calendar p-3 [--cell-size:2rem] [[data-slot=card-content]_&]:bg-transparent [[data-slot=popover-content]_&]:bg-transparent",
@@ -35,7 +38,7 @@ function Calendar({
       captionLayout={captionLayout}
       formatters={{
         formatMonthDropdown: (date) =>
-          date.toLocaleString("default", { month: "short" }),
+          date.toLocaleString("bs", { month: "short" }),
         ...formatters,
       }}
       classNames={{
@@ -107,9 +110,7 @@ function Calendar({
         ),
         range_middle: cn("rounded-none", defaultClassNames.range_middle),
         range_end: cn("bg-accent rounded-r-md", defaultClassNames.range_end),
-        // Danas je natuknica, ne izbor: obris umjesto pune podloge. Stock
-        // shadcn ovdje koristi bg-accent, ali --accent je u ovoj temi ista
-        // plava kao --primary, pa bi današnji dan izgledao kao odabrani.
+        // Danas je natuknica, ne izbor: obris umjesto pune podloge.
         today: cn(
           "ring-primary/40 rounded-md font-semibold ring-1 ring-inset data-[selected=true]:ring-0",
           defaultClassNames.today

@@ -1,5 +1,5 @@
-//! Kanali `settings:*`, `savedCarts:*` i `proizvodnja:setEnabled` (handlers.ts,
-//! `lib/savedCarts.ts`, `lib/firma.ts`).
+//! Kanali `settings:*`, `savedCarts:*`, `fakturaSkice:*` i `proizvodnja:setEnabled`
+//! (handlers.ts, `lib/savedCarts.ts`, `lib/fakturaSkice.ts`, `lib/firma.ts`).
 
 use serde_json::{json, Map, Value};
 
@@ -116,6 +116,25 @@ fn save_cart(db: &Db, naziv: &Value, items: &Value, ukupno: &Value) -> R<Value> 
     Ok(json!(r.last_insert_rowid))
 }
 
+/// `spremiSkicuFakture`: s id-em prepisuje skicu, a ako je obrisana, nastaje nova.
+fn spremi_skicu_fakture(db: &Db, id: &Value, naziv: &Value, podaci: &Value, ukupno: &Value) -> R<Value> {
+    if !podaci.is_object() {
+        baci!("Skica je prazna");
+    }
+    let json = js::stringify(podaci);
+    if !id.is_null() {
+        let r = db.run(
+            "UPDATE faktura_skice SET naziv = ?, podaci = ?, ukupno = ?, spremljeno = datetime('now','localtime') WHERE id = ?",
+            p![naziv, json.clone(), ukupno, id],
+        )?;
+        if r.changes > 0 {
+            return Ok(id.clone());
+        }
+    }
+    let r = db.run("INSERT INTO faktura_skice (naziv, podaci, ukupno) VALUES (?, ?, ?)", p![naziv, json, ukupno])?;
+    Ok(json!(r.last_insert_rowid))
+}
+
 pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
     let db = match b.db() {
         Ok(db) => db,
@@ -131,6 +150,9 @@ pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
         "savedCarts:list" => db.all("SELECT * FROM saved_carts ORDER BY id DESC", p![]).map(Value::from),
         "savedCarts:save" => save_cart(db, &a[0], &a[1], &a[2]),
         "savedCarts:delete" => db.run("DELETE FROM saved_carts WHERE id = ?", p![a[0]]).map(|_| json!({ "success": true })),
+        "fakturaSkice:list" => db.all("SELECT * FROM faktura_skice ORDER BY spremljeno DESC, id DESC", p![]).map(Value::from),
+        "fakturaSkice:save" => spremi_skicu_fakture(db, &a[0], &a[1], &a[2], &a[3]),
+        "fakturaSkice:delete" => db.run("DELETE FROM faktura_skice WHERE id = ?", p![a[0]]).map(|_| json!({ "success": true })),
         "proizvodnja:setEnabled" => (|| {
             db.run(UPSERT, p!["proizvodnja.enabled", to_string(&a[0])])?;
             if js::truthy(&a[0]) {

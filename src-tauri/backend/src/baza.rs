@@ -142,6 +142,16 @@ pub fn run_migrations(db: &Db) -> R<()> {
     )?;
     db.exec("CREATE INDEX IF NOT EXISTS idx_prilog_stavke_orderId ON prilog_stavke(orderId)")?;
 
+    // Rabat po stavci fakture (postotak, kao na order_items)
+    if !ima(&kolone(db, "prilog_stavke")?, "rabat") {
+        db.exec("ALTER TABLE prilog_stavke ADD COLUMN rabat REAL NOT NULL DEFAULT 0")?;
+    }
+
+    // Napomena ispod stavki fakture
+    if !ima(&orders, "napomena") {
+        db.exec("ALTER TABLE orders ADD COLUMN napomena TEXT")?;
+    }
+
     db.exec(
         "CREATE TABLE IF NOT EXISTS pending_receipts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

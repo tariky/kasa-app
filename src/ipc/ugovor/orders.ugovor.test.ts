@@ -207,6 +207,56 @@ describe('order:finalizePrilog', () => {
     expect(o.stavke).toHaveLength(1);
     expect(o.stavke[0]).toMatchObject({ kolicina: 1, cijena: 50, pdvStopa: 'E' });
   });
+
+  test('stavke s rabatom, valuta i napomena idu na fakturu', async () => {
+    await b.call('fiscal:setZadnjiBroj', 100);
+    const p = dodajArtikal('F1', 20, { stanje: 10 });
+    const r = await b.call('order:finalizePrilog', {
+      korisnikId: ADMIN, nacinPlacanja: 'Virman', prilogVeza: 'fakturi',
+      stavke: [{ productId: p, kolicina: 3, cijena: 20, rabat: 25, pdvStopa: 'E' }],
+      datumValute: '2026-10-01', napomena: ' Isporuka petkom ',
+    });
+
+    expect(red('SELECT ukupno, datumValute, napomena, prilogNaziv FROM orders WHERE id = ?', r.id))
+      .toEqual({ ukupno: 45, datumValute: '2026-10-01', napomena: 'Isporuka petkom', prilogNaziv: 'Stavke po fakturi br. 101' });
+    expect(red('SELECT kolicina, cijena, rabat FROM prilog_stavke WHERE orderId = ?', r.id))
+      .toEqual({ kolicina: 3, cijena: 20, rabat: 25 });
+    expect(stanje(p)).toBe(7);
+  });
+
+  test('neispravan datum valute, predugačka napomena i rabat se odbijaju prije štampe', async () => {
+    await b.call('fiscal:setZadnjiBroj', 100);
+    const p = dodajArtikal('F2', 20);
+    const osnova = { korisnikId: ADMIN, nacinPlacanja: 'Virman', iznos: 10 };
+    await expect(b.call('order:finalizePrilog', { ...osnova, datumValute: '2026-13-01' }))
+      .rejects.toThrow('Neispravan datum valute: 2026-13-01');
+    await expect(b.call('order:finalizePrilog', { ...osnova, napomena: 'x'.repeat(501) }))
+      .rejects.toThrow('Napomena može imati najviše 500 znakova');
+    await expect(b.call('order:finalizePrilog', { ...osnova, stavke: [{ productId: p, kolicina: 1, cijena: 20, rabat: 100, pdvStopa: 'E' }] }))
+      .rejects.toThrow('Rabat mora biti između 0 i 100 %');
+    expect(b.tring.zahtjevi).toEqual([]);
+  });
+
+  test('faktura iz ponude konvertuje ponudu; odbijena i konvertovana se odbijaju', async () => {
+    await b.call('fiscal:setZadnjiBroj', 100);
+    const kupac = Number(b.db.prepare("INSERT INTO kupci (naziv, idBroj) VALUES ('Firma', '4200000000001')").run().lastInsertRowid);
+    const ponuda = (status: string) => Number(b.db.prepare(`
+      INSERT INTO ponude (broj, godina, kupacId, korisnikId, datum, vaziDo, ukupno, pdvIznos, status)
+      VALUES (?, 2026, ?, ?, '2026-09-01', '2026-09-30', 10, 1.45, ?)
+    `).run(Math.floor(Math.random() * 1e6), kupac, ADMIN, status).lastInsertRowid);
+    const osnova = { korisnikId: ADMIN, nacinPlacanja: 'Virman', iznos: 10 };
+
+    const odbijena = ponuda('odbijena');
+    await expect(b.call('order:finalizePrilog', { ...osnova, ponudaId: odbijena })).rejects.toThrow('Odbijena ponuda');
+    await expect(b.call('order:finalizePrilog', { ...osnova, ponudaId: 999 })).rejects.toThrow('Ponuda ne postoji');
+    expect(b.tring.zahtjevi).toEqual([]);
+
+    const prihvacena = ponuda('prihvacena');
+    const r = await b.call('order:finalizePrilog', { ...osnova, ponudaId: prihvacena });
+    expect(red('SELECT status, racunId FROM ponude WHERE id = ?', prihvacena)).toEqual({ status: 'konvertovana', racunId: r.id });
+    await expect(b.call('order:finalizePrilog', { ...osnova, ponudaId: prihvacena }))
+      .rejects.toThrow('Ponuda je već konvertovana u račun');
+  });
 });
 
 // ─── order:updateReklamacija / order:setDatumValute ─────────
@@ -356,6 +406,25 @@ describe('pending:*', () => {
     await expect(b.call('pending:resolve', { id: 999, brojFiskalnogRacuna: '301', createdAt: '2026-03-03' }))
       .rejects.toThrow('Zapis više ne postoji');
     expect(await b.call('pending:list')).toHaveLength(1);
+  });
+
+  test('resolve fakture nosi valutu i napomenu i veže ponudu', async () => {
+    const kupac = Number(b.db.prepare("INSERT INTO kupci (naziv, idBroj) VALUES ('Firma', '4200000000001')").run().lastInsertRowid);
+    const ponudaId = Number(b.db.prepare(`
+      INSERT INTO ponude (broj, godina, kupacId, korisnikId, datum, vaziDo, ukupno, pdvIznos, status)
+      VALUES (7, 2026, ?, ?, '2026-09-01', '2026-09-30', 10, 1.45, 'poslana')
+    `).run(kupac, ADMIN).lastInsertRowid);
+    const id = dodajPending({
+      korisnikId: ADMIN, ukupno: 10, pdvIznos: 1.45, nacinPlacanja: 'Virman', stavke: [],
+      prilogBroj: 5, prilogNaziv: 'Stavke po fakturi br. 5', prilogStavke: [],
+      datumValute: '2026-10-10', napomena: 'Hitno', ponudaId,
+    });
+
+    const r = await b.call('pending:resolve', { id, brojFiskalnogRacuna: '6', createdAt: '2026-09-02 10:00:00' });
+
+    expect(red('SELECT prilogBroj, datumValute, napomena FROM orders WHERE id = ?', r.id))
+      .toEqual({ prilogBroj: 6, datumValute: '2026-10-10', napomena: 'Hitno' });
+    expect(red('SELECT status, racunId FROM ponude WHERE id = ?', ponudaId)).toEqual({ status: 'konvertovana', racunId: r.id });
   });
 
   test('discard briše zapis', async () => {

@@ -109,6 +109,7 @@ export const schema = `
     prilogBroj INTEGER,
     prilogNaziv TEXT,
     datumValute TEXT,
+    napomena TEXT,
     refundedAt TEXT,
     createdAt TEXT DEFAULT (datetime('now','localtime')),
     FOREIGN KEY (korisnikId) REFERENCES users(id)
@@ -132,6 +133,7 @@ export const schema = `
     productId INTEGER NOT NULL,
     kolicina REAL NOT NULL,
     cijena REAL NOT NULL,
+    rabat REAL NOT NULL DEFAULT 0,
     pdvStopa TEXT NOT NULL,
     FOREIGN KEY (orderId) REFERENCES orders(id),
     FOREIGN KEY (productId) REFERENCES products(id)
@@ -151,6 +153,14 @@ export const schema = `
     items TEXT NOT NULL,
     ukupno REAL NOT NULL,
     createdAt TEXT DEFAULT (datetime('now','localtime'))
+  );
+
+  CREATE TABLE IF NOT EXISTS faktura_skice (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    naziv TEXT NOT NULL,
+    podaci TEXT NOT NULL,
+    ukupno REAL NOT NULL,
+    spremljeno TEXT DEFAULT (datetime('now','localtime'))
   );
 
   CREATE TABLE IF NOT EXISTS stock_movements (

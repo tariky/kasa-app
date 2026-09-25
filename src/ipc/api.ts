@@ -137,6 +137,10 @@ export function napraviApi(pozovi: Pozovi, naLicencaBlokirano: (cb: () => void) 
     saveCart: (naziv: string, items: Array<{ productId: number; kolicina: number; rabat: number }>, ukupno: number) =>
       pozovi('savedCarts:save', naziv, items, ukupno),
     deleteSavedCart: (id: number) => pozovi('savedCarts:delete', id),
+    listSkiceFaktura: () => pozovi('fakturaSkice:list'),
+    spremiSkicuFakture: (id: number | null, naziv: string, podaci: unknown, ukupno: number) =>
+      pozovi('fakturaSkice:save', id, naziv, podaci, ukupno),
+    obrisiSkicuFakture: (id: number) => pozovi('fakturaSkice:delete', id),
 
     // Settings
     getSetting: (key: string) => pozovi('settings:get', key),

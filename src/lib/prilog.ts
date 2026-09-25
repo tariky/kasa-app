@@ -1,6 +1,7 @@
 import type * as Tring from '@/services/tring';
 import type { SqlDb } from './sqldb';
 import { parseFiskalniBroj, predvidjeniFiskalniBroj } from './fiskalni';
+import { validanDatumValute } from './valuta';
 import { round2 } from './novac';
 import { iznosStavke, izracunajTotale } from './racun';
 import { buildTringRacun } from './tringRacun';
@@ -16,6 +17,12 @@ export const PRILOG_SIFRA = 'PRILOG';
 /** Zadani dijelovi naziva zbirne stavke — „Stavke po računu br. 5". */
 export const PRILOG_OPIS_DEFAULT = 'Stavke';
 export const PRILOG_VEZA_DEFAULT = 'računu';
+/**
+ * Veza koju dijalog Faktura nudi — „Stavke po fakturi br. 5". Zadana vrijednost
+ * iznad ostaje „računu" jer stari računi bez sačuvanog naziva njome rekonstruišu
+ * tekst koji je stvarno otišao na uređaj (storno, kopija).
+ */
+export const FAKTURA_VEZA = 'fakturi';
 
 /** Fiskalni uređaj ima kratko polje naziva stavke — dijelovi se ograničavaju već na unosu. */
 export const PRILOG_OPIS_MAX = 24;
@@ -39,12 +46,17 @@ export interface PrilogStavkaUnos {
   productId: number;
   kolicina: number;
   cijena: number;
+  /** Postotak 0–100; stari snapshoti i pozivi ga nemaju pa znači 0. */
+  rabat?: number;
   pdvStopa: string;
 }
 
+/** Napomena na fakturi — stane u nekoliko redova ispod stavki. */
+export const FAKTURA_NAPOMENA_MAX = 500;
+
 /** Zbir stavki priloga — zaokruživanje po stavci kao na fiskalnom uređaju. */
 export function sumaPriloga(stavke: PrilogStavkaUnos[]): number {
-  return round2(stavke.reduce((sum, s) => sum + iznosStavke({ ...s, rabat: 0 }), 0));
+  return round2(stavke.reduce((sum, s) => sum + iznosStavke({ ...s, rabat: s.rabat ?? 0 }), 0));
 }
 
 /** Prilog je kompletan tek kad se suma stavki poklopi sa fiskalnim iznosom. */
@@ -62,6 +74,8 @@ export function validirajPrilogStavke(db: SqlDb, stavke: PrilogStavkaUnos[]): Ma
   for (const s of stavke) {
     if (!(s.kolicina > 0)) throw new Error('Količina mora biti veća od 0');
     if (s.cijena < 0) throw new Error('Cijena ne može biti negativna');
+    const rabat = s.rabat ?? 0;
+    if (!(rabat >= 0 && rabat < 100)) throw new Error('Rabat mora biti između 0 i 100 %');
     if (s.pdvStopa !== 'E') {
       throw new Error('U prilog smiju samo stavke sa PDV stopom E (zbirna stavka je fiskalizovana sa E)');
     }
@@ -87,11 +101,17 @@ export function savePrilogStavkeInTransaction(
   orderId: number,
   stavke: PrilogStavkaUnos[]
 ): void {
-  const order = db.prepare('SELECT prilogBroj, status FROM orders WHERE id = ?').get(orderId) as
-    { prilogBroj: number | null; status: string } | undefined;
+  const order = db.prepare('SELECT prilogBroj, status, ukupno FROM orders WHERE id = ?').get(orderId) as
+    { prilogBroj: number | null; status: string; ukupno: number } | undefined;
   if (!order) throw new Error('Račun ne postoji');
   if (order.prilogBroj == null) throw new Error('Ovo nije račun po prilogu');
   if (order.status !== 'completed') throw new Error('Račun je storniran — prilog se ne može mijenjati');
+  // Stavke se dodjeljuju dok se ne poklope s fiskalnim iznosom; tad je faktura završena.
+  const postojece = db.prepare('SELECT kolicina, cijena, rabat, pdvStopa FROM prilog_stavke WHERE orderId = ?')
+    .all(orderId) as PrilogStavkaUnos[];
+  if (postojece.length > 0 && prilogKompletan(order.ukupno, postojece)) {
+    throw new Error('Faktura je završena — stavke se ne mogu mijenjati');
+  }
 
   const tipovi = validirajPrilogStavke(db, stavke);
 
@@ -99,14 +119,14 @@ export function savePrilogStavkeInTransaction(
   db.prepare("DELETE FROM stock_movements WHERE referenceType = 'prilog' AND referenceId = ?").run(orderId);
 
   const insertStavka = db.prepare(
-    'INSERT INTO prilog_stavke (orderId, productId, kolicina, cijena, pdvStopa) VALUES (?, ?, ?, ?, ?)'
+    'INSERT INTO prilog_stavke (orderId, productId, kolicina, cijena, rabat, pdvStopa) VALUES (?, ?, ?, ?, ?, ?)'
   );
   const insertStock = db.prepare(
     "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'izlaz', ?, 'prilog', ?)"
   );
 
   for (const s of stavke) {
-    insertStavka.run(orderId, s.productId, s.kolicina, s.cijena, s.pdvStopa);
+    insertStavka.run(orderId, s.productId, s.kolicina, s.cijena, s.rabat ?? 0, s.pdvStopa);
     if (tipovi.get(s.productId) !== 'usluga') insertStock.run(s.productId, s.kolicina, orderId);
   }
 }
@@ -124,6 +144,39 @@ export function buildPrilogFiskalnaStavka(prilogBroj: number | null, iznos: numb
     rabat: 0,
     pdvStopa: 'E',
   };
+}
+
+/**
+ * Datum valute, napomena i ponuda se provjeravaju prije štampe — greška poslije
+ * štampe znači papir bez zapisa. Vraća normalizovane vrijednosti za upis.
+ */
+export function provjeriDodatkeFakture(
+  db: SqlDb,
+  data: { datumValute?: string | null; napomena?: string | null; ponudaId?: number | null },
+): { datumValute: string | null; napomena: string | null; ponudaId: number | null } {
+  const datumValute = data.datumValute?.trim() || null;
+  if (datumValute !== null && !validanDatumValute(datumValute)) {
+    throw new Error(`Neispravan datum valute: ${datumValute}`);
+  }
+  const napomena = data.napomena?.trim() || null;
+  if (napomena !== null && napomena.length > FAKTURA_NAPOMENA_MAX) {
+    throw new Error(`Napomena može imati najviše ${FAKTURA_NAPOMENA_MAX} znakova`);
+  }
+  const ponudaId = data.ponudaId ?? null;
+  if (ponudaId !== null) {
+    const ponuda = db.prepare('SELECT status FROM ponude WHERE id = ?').get(ponudaId) as { status: string } | undefined;
+    if (!ponuda) throw new Error('Ponuda ne postoji');
+    if (ponuda.status === 'konvertovana') throw new Error('Ponuda je već konvertovana u račun');
+    if (ponuda.status === 'odbijena') {
+      throw new Error('Odbijena ponuda se ne može pretvoriti u fakturu — ako kupac ipak prihvata, prvo promijenite status');
+    }
+  }
+  return { datumValute, napomena, ponudaId };
+}
+
+/** Ponuda po kojoj je izdana faktura — isto stanje kao nakon konverzije u račun. */
+export function oznaciPonuduFakturisanom(db: SqlDb, ponudaId: number, orderId: number): void {
+  db.prepare("UPDATE ponude SET status = 'konvertovana', racunId = ? WHERE id = ?").run(orderId, ponudaId);
 }
 
 export interface FinalizePrilogDeps {
@@ -170,6 +223,12 @@ export async function finalizePrilogAndPrint(
     prilogOpis?: string;
     /** Veza u nazivu ("fakturi"); prazno = "računu". */
     prilogVeza?: string;
+    /** Rok plaćanja, YYYY-MM-DD; prazno = bez valute. */
+    datumValute?: string | null;
+    /** Slobodan tekst ispod stavki fakture. */
+    napomena?: string | null;
+    /** Ponuda iz koje je faktura nastala — označava se konvertovanom u istoj transakciji. */
+    ponudaId?: number | null;
   }
 ): Promise<FinalizePrilogResult> {
   const { db, print, transaction } = deps;
@@ -180,6 +239,7 @@ export async function finalizePrilogAndPrint(
   if (stavke.length > 0) validirajPrilogStavke(db, stavke);
   const iznos = stavke.length > 0 ? sumaPriloga(stavke) : (data.iznos ?? 0);
   if (!(iznos > 0)) throw new Error('Iznos mora biti veći od 0');
+  const { datumValute, napomena, ponudaId } = provjeriDodatkeFakture(db, data);
 
   // Naziv stavke mora nositi broj isječka na koji se kuca, a njega uređaj vrati
   // tek nakon štampe — zato predviđanje iz fiskalnog niza. Poslije štampe se
@@ -203,6 +263,7 @@ export async function finalizePrilogAndPrint(
     korisnikId: data.korisnikId, ukupno, pdvIznos,
     nacinPlacanja: data.nacinPlacanja, kupac: data.kupac,
     stavke: [], prilogBroj: predvidjeniBroj, prilogNaziv: naziv, prilogStavke: stavke,
+    datumValute, napomena, ponudaId,
   };
   const pending = db
     .prepare('INSERT INTO pending_receipts (korisnikId, snapshot) VALUES (?, ?)')
@@ -243,15 +304,18 @@ export async function finalizePrilogAndPrint(
     transaction(() => {
       const r = db.prepare(`
         INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, status,
-          kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj, isManual, prilogBroj, prilogNaziv)
-        VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, 0, ?, ?)
+          kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj, isManual, prilogBroj, prilogNaziv,
+          datumValute, napomena)
+        VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
       `).run(
         data.korisnikId, ukupno, pdvIznos, data.nacinPlacanja, brojFiskalnogRacuna,
         data.kupac?.naziv || null, data.kupac?.idBroj || null, data.kupac?.adresa || null,
-        data.kupac?.grad || null, data.kupac?.postanskiBroj || null, prilogBroj, naziv
+        data.kupac?.grad || null, data.kupac?.postanskiBroj || null, prilogBroj, naziv,
+        datumValute, napomena
       );
       orderId = Number(r.lastInsertRowid);
       if (stavke.length > 0) savePrilogStavkeInTransaction(db, orderId, stavke);
+      if (ponudaId != null) oznaciPonuduFakturisanom(db, ponudaId, orderId);
       db.prepare('DELETE FROM pending_receipts WHERE id = ?').run(pendingId);
     })();
   } catch (err: any) {

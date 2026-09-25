@@ -23,10 +23,11 @@ import {
 import { refundOrderInTransaction, refundAndPrint } from '../lib/refund';
 import { postaviDatumValute } from '../lib/valuta';
 import {
-  savePrilogStavkeInTransaction, finalizePrilogAndPrint,
+  savePrilogStavkeInTransaction, finalizePrilogAndPrint, oznaciPonuduFakturisanom,
   PRILOG_SIFRA, prilogNaziv, type PrilogStavkaUnos,
 } from '../lib/prilog';
 import { saveCart, listSavedCarts, deleteSavedCart } from '../lib/savedCarts';
+import { spremiSkicuFakture, listSkiceFaktura, obrisiSkicuFakture } from '../lib/fakturaSkice';
 import { validirajPin, validirajUlogu, VEZE_KORISNIKA } from '../lib/korisnici';
 import type { SavedCartItem } from '../lib/kosarica';
 import {
@@ -74,6 +75,9 @@ function insertCompletedOrder(
     // Račun po prilogu: nema stavki, nosi interni broj priloga i naziv zbirne stavke.
     prilogBroj?: number | null;
     prilogNaziv?: string | null;
+    // Faktura: rok plaćanja i napomena putuju kroz snapshot.
+    datumValute?: string | null;
+    napomena?: string | null;
   }
 ): number {
   const isManual = data.isManual ?? 0;
@@ -82,8 +86,8 @@ function insertCompletedOrder(
   const result = db
     .prepare(`
       INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, status,
-        kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj, isManual${hasCreatedAt ? ', createdAt' : ''}, prilogBroj, prilogNaziv)
-      VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?${hasCreatedAt ? ', ?' : ''}, ?, ?)
+        kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj, isManual${hasCreatedAt ? ', createdAt' : ''}, prilogBroj, prilogNaziv, datumValute, napomena)
+      VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?${hasCreatedAt ? ', ?' : ''}, ?, ?, ?, ?)
     `)
     .run(
       data.korisnikId, data.ukupno, data.pdvIznos, data.nacinPlacanja, data.brojFiskalnogRacuna,
@@ -91,7 +95,9 @@ function insertCompletedOrder(
       data.kupac?.grad || null, data.kupac?.postanskiBroj || null, isManual,
       ...(hasCreatedAt ? [data.createdAt] : []),
       data.prilogBroj ?? null,
-      data.prilogNaziv ?? null
+      data.prilogNaziv ?? null,
+      data.datumValute ?? null,
+      data.napomena ?? null
     );
 
   const orderId = result.lastInsertRowid as number;
@@ -1134,6 +1140,7 @@ export function registerIpcHandlers(): void {
     kupac?: { naziv?: string; idBroj?: string; adresa?: string; grad?: string; postanskiBroj?: string };
     stavke?: PrilogStavkaUnos[];
     prilogOpis?: string; prilogVeza?: string;
+    datumValute?: string | null; napomena?: string | null; ponudaId?: number | null;
   }) => {
     loadTringConfig();
     return finalizePrilogAndPrint({
@@ -1265,6 +1272,11 @@ export function registerIpcHandlers(): void {
       // Prilog račun: stvarne stavke žive u snapshotu odvojeno od order_items.
       if (Array.isArray(snap.prilogStavke) && snap.prilogStavke.length > 0) {
         savePrilogStavkeInTransaction(db, orderId, snap.prilogStavke);
+      }
+      // Faktura iz ponude: ponuda se veže tek kad račun stvarno postoji u bazi.
+      if (snap.ponudaId != null) {
+        const ponuda = db.prepare('SELECT status FROM ponude WHERE id = ?').get(snap.ponudaId) as { status: string } | undefined;
+        if (ponuda && ponuda.status !== 'konvertovana') oznaciPonuduFakturisanom(db, snap.ponudaId, orderId);
       }
       db.prepare('DELETE FROM pending_receipts WHERE id = ?').run(data.id);
       return orderId;
@@ -1560,6 +1572,18 @@ export function registerIpcHandlers(): void {
 
   handle('savedCarts:delete', (id: number) => {
     deleteSavedCart(db, id);
+    return { success: true };
+  });
+
+  // ─── Skice faktura ───────────────────────────────────────
+
+  handle('fakturaSkice:list', () => listSkiceFaktura(db));
+
+  handle('fakturaSkice:save', (id: number | null, naziv: string, podaci: unknown, ukupno: number) =>
+    spremiSkicuFakture(db, id, naziv, podaci, ukupno));
+
+  handle('fakturaSkice:delete', (id: number) => {
+    obrisiSkicuFakture(db, id);
     return { success: true };
   });
 

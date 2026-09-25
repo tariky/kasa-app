@@ -55,6 +55,33 @@ export function dodajSlobodnuStavku(
   return { cart: dodajUKosaricu(cart, product, qty, true) };
 }
 
+/**
+ * Postavlja tačnu količinu stavke (npr. ispravka u redu računa). Bez allowZeroStock
+ * količina artikla se steže na stanje; 0 ili manje uklanja stavku.
+ */
+export function postaviKolicinu(
+  cart: CartItem[],
+  productId: number,
+  qty: number,
+  allowZeroStock: boolean
+): CartItem[] {
+  if (qty <= 0) return cart.filter(item => item.product.id !== productId);
+  return cart.map(item => {
+    if (item.product.id !== productId) return item;
+    const skipStock = item.product.tip === 'usluga' || allowZeroStock;
+    const kolicina = skipStock ? qty : Math.min(qty, item.product.stanje ?? 0);
+    return kolicina > 0 ? { ...item, kolicina } : item;
+  });
+}
+
+/** Bosanski plural za "stavka": 1 stavka, 2–4 stavke, 5+ stavki (21 stavka, 12 stavki). */
+export function stavkeTekst(n: number): string {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return `${n} stavka`;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return `${n} stavke`;
+  return `${n} stavki`;
+}
+
 /** Rabat je postotak — sve van 0–100 se steže na granice. */
 function clampRabat(rabat: number): number {
   return Math.min(100, Math.max(0, rabat));

@@ -39,14 +39,20 @@ export interface PretragaStavkiProps<T extends object> {
   onOtvori?: () => void;
   placeholder?: string;
   ariaLabel?: string;
+  /** Podnožje nudi "3*" za količinu; isključi gdje količina nema smisla (npr. kupci). */
+  kolicine?: boolean;
   /** Glagol u podnožju uz Enter. */
   akcija?: string;
   debounceMs?: number;
-  velicina?: 'md' | 'sm';
+  velicina?: 'lg' | 'md' | 'sm';
+  /** Fokus otvara listu; isključi kad roditelj stalno vraća fokus u polje (kasa) — lista se tada otvara kucanjem, klikom ili ↓. */
+  otvoriNaFokus?: boolean;
   /** Tipka koju roditelj hvata za fokus (samo se prikazuje). */
   precica?: string;
   /** Lista je barem ovoliko široka i kad je polje uže (npr. u ćeliji tabele). */
   minSirinaListe?: number;
+  /** Kolona sa šifrom lijevo; isključi za liste bez šifri (npr. kupci). */
+  sifre?: boolean;
   /** Dodatne klase na okviru polja (npr. označavanje obaveznog polja). */
   poljeClassName?: string;
   className?: string;
@@ -79,8 +85,8 @@ const fmtKol = (n: number) => String(Math.round(n * 1000) / 1000).replace('.', '
 export function PretragaStavki<T extends object>(props: PretragaStavkiProps<T>) {
   const {
     stavke, kljuc, onIzaberi, meta, oznaka, grupa, naslovSvih = 'Sve, abecedno', onNova, novaLabel = 'Nova stavka',
-    nedavnoKljuc, onOtvori, placeholder, ariaLabel, akcija = 'dodaj', debounceMs = 120, velicina = 'md', precica,
-    minSirinaListe = 0, poljeClassName, className, autoFocus, disabled, inputRef, ref,
+    nedavnoKljuc, onOtvori, placeholder, ariaLabel, akcija = 'dodaj', debounceMs = 120, kolicine = true, velicina = 'md', otvoriNaFokus = true, precica,
+    minSirinaListe = 0, sifre = true, poljeClassName, className, autoFocus, disabled, inputRef, ref,
   } = props;
   const polja = useRef(props.polja); polja.current = props.polja;
   const bonus = useRef(props.bonus); bonus.current = props.bonus;
@@ -263,6 +269,7 @@ export function PretragaStavki<T extends object>(props: PretragaStavkiProps<T>) 
   };
 
   const sm = velicina === 'sm';
+  const lg = velicina === 'lg';
 
   return (
     <PopoverPrimitive.Root open={open && !disabled}>
@@ -273,19 +280,19 @@ export function PretragaStavki<T extends object>(props: PretragaStavkiProps<T>) 
             'group/ps relative flex items-center rounded-lg border border-slate-200 bg-slate-50',
             'transition-[background-color,border-color,box-shadow] duration-150 motion-reduce:transition-none',
             'focus-within:bg-white focus-within:border-blue-400/70 focus-within:ring-[3px] focus-within:ring-blue-500/10',
-            sm ? 'h-8' : 'h-10',
+            sm ? 'h-8' : lg ? 'h-12 rounded-xl' : 'h-10',
             disabled && 'opacity-50 pointer-events-none',
             poljeClassName, className,
           )}
         >
-          <Search className={cn('absolute pointer-events-none text-slate-400 transition-colors group-focus-within/ps:text-blue-500', sm ? 'left-2.5 h-3.5 w-3.5' : 'left-3 h-4 w-4')} />
+          <Search className={cn('absolute pointer-events-none text-slate-400 transition-colors group-focus-within/ps:text-blue-500', sm ? 'left-2.5 h-3.5 w-3.5' : lg ? 'left-4 h-[18px] w-[18px]' : 'left-3 h-4 w-4')} />
           <input
             ref={setInput}
             value={tekst}
             onChange={e => promijeni(e.target.value)}
             onKeyDown={onKeyDown}
-            onFocus={otvori}
-            onMouseDown={() => { if (document.activeElement === inputEl.current) otvori(); }}
+            onFocus={otvoriNaFokus ? otvori : undefined}
+            onMouseDown={() => { if (!otvoriNaFokus || document.activeElement === inputEl.current) otvori(); }}
             onBlur={() => setTimeout(() => { if (document.activeElement !== inputEl.current) zatvori(); }, 0)}
             placeholder={placeholder}
             aria-label={ariaLabel ?? placeholder}
@@ -300,10 +307,10 @@ export function PretragaStavki<T extends object>(props: PretragaStavkiProps<T>) 
             aria-activedescendant={open && izbor[active] ? `${listId}-${active}` : undefined}
             className={cn(
               'h-full min-w-0 flex-1 bg-transparent text-slate-800 outline-none placeholder:text-slate-400',
-              sm ? 'pl-8 pr-1 text-[12.5px]' : 'pl-9 pr-2 text-[13px]',
+              sm ? 'pl-8 pr-1 text-[12.5px]' : lg ? 'pl-11 pr-2 text-[15px]' : 'pl-9 pr-2 text-[13px]',
             )}
           />
-          <div className={cn('flex items-center gap-1', sm ? 'pr-1' : 'pr-1.5')}>
+          <div className={cn('flex items-center gap-1', sm ? 'pr-1' : lg ? 'pr-2.5' : 'pr-1.5')}>
             {kolicina != null && (
               <span className="inline-flex h-5 items-center rounded-md bg-blue-50 px-1.5 font-mono text-[11px] font-semibold tabular-nums text-blue-700 animate-in zoom-in-75 fade-in-0 duration-150">
                 × {fmtKol(kolicina)}
@@ -382,6 +389,7 @@ export function PretragaStavki<T extends object>(props: PretragaStavkiProps<T>) 
                 meta={meta?.(r.p.stavka)}
                 oznaka={oznaka?.(r.p.stavka)}
                 sm={sm}
+                sifre={sifre}
                 refEl={el => { if (el) redEl.current.set(r.i, el); else redEl.current.delete(r.i); }}
                 onHover={() => { if (r.i !== active) setActive(r.i); }}
                 onClick={() => izaberi(r.p.stavka)}
@@ -391,7 +399,7 @@ export function PretragaStavki<T extends object>(props: PretragaStavkiProps<T>) 
           <div className="flex flex-wrap items-center gap-x-3.5 gap-y-1 border-t border-slate-100 bg-slate-50/80 px-3 py-2 text-[11px] text-slate-500">
             <span className="inline-flex items-center gap-1"><Key className="ml-0">↑</Key><Key className="ml-0">↓</Key> biranje</span>
             <span className="inline-flex items-center gap-1"><Key className="ml-0">↵</Key> {akcija}</span>
-            <span className="inline-flex items-center gap-1"><Key className="ml-0">3*</Key> količina</span>
+            {kolicine && <span className="inline-flex items-center gap-1"><Key className="ml-0">3*</Key> količina</span>}
             <span className="inline-flex items-center gap-1"><Key className="ml-0">esc</Key> zatvori</span>
             <span className="ml-auto font-mono tabular-nums text-slate-400">
               {q ? `${ukupno} od ${stavke?.length ?? 0}` : ukupno > izbor.length ? `${izbor.length} od ${ukupno}, kucajte za više` : `${ukupno}`}
@@ -420,9 +428,9 @@ function Oznaceno({ tekst, idx }: { tekst: string; idx: number[] }) {
   return <>{dijelovi}</>;
 }
 
-function Opcija<T>({ id, p, polja, aktivna, nova, kasnjenje, meta, oznaka, sm, refEl, onHover, onClick }: {
+function Opcija<T>({ id, p, polja, aktivna, nova, kasnjenje, meta, oznaka, sm, sifre, refEl, onHover, onClick }: {
   id: string; p: Pogodak<T>; polja: PoljaPretrage; aktivna: boolean; nova: boolean; kasnjenje: number;
-  meta?: ReactNode; oznaka?: ReactNode; sm: boolean;
+  meta?: ReactNode; oznaka?: ReactNode; sm: boolean; sifre: boolean;
   refEl: (el: HTMLLIElement | null) => void; onHover: () => void; onClick: () => void;
 }) {
   return (
@@ -431,14 +439,17 @@ function Opcija<T>({ id, p, polja, aktivna, nova, kasnjenje, meta, oznaka, sm, r
       onMouseMove={onHover} onClick={onClick}
       style={nova ? { animationDelay: `${kasnjenje}ms` } : undefined}
       className={cn(
-        'relative grid cursor-pointer select-none grid-cols-[64px_minmax(0,1fr)_auto] items-center gap-3 rounded-lg px-2.5',
+        'relative grid cursor-pointer select-none items-center gap-3 rounded-lg px-2.5',
+        sifre ? 'grid-cols-[64px_minmax(0,1fr)_auto]' : 'grid-cols-[minmax(0,1fr)_auto]',
         sm ? 'min-h-[38px] py-1' : 'min-h-[42px] py-1.5',
         nova && 'animate-in fade-in-0 slide-in-from-bottom-[3px] duration-200 fill-mode-both motion-reduce:animate-none',
       )}
     >
-      <span className="truncate font-mono text-[11px] text-slate-400">
-        {p.sifraPogodak ? <mark className="bg-transparent font-semibold text-blue-700">{polja.sifra}</mark> : polja.sifra}
-      </span>
+      {sifre && (
+        <span className="truncate font-mono text-[11px] text-slate-400">
+          {p.sifraPogodak ? <mark className="bg-transparent font-semibold text-blue-700">{polja.sifra}</mark> : polja.sifra}
+        </span>
+      )}
       <span className="min-w-0">
         <span className={cn('block truncate text-[13px] transition-colors', aktivna ? 'text-slate-900' : 'text-slate-700')}>
           <Oznaceno tekst={polja.naziv} idx={p.nazivIdx} />

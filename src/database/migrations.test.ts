@@ -89,6 +89,7 @@ const ADDED_COLUMNS: Array<[string, string]> = [
   ['orders', 'refundedAt'],
   ['orders', 'prilogBroj'],
   ['orders', 'datumValute'],
+  ['orders', 'napomena'],
   ['products', 'plocaSirina'],
   ['products', 'plocaVisina'],
 ];

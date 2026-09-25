@@ -42,7 +42,7 @@ export function DobavljacSifreEditor({ redovi, onChange, dobavljaci }: {
             value={r.sifra}
             onChange={e => izmijeni(i, { sifra: e.target.value })}
           />
-          <Button type="button" variant="ghost" size="icon" className="h-9 w-8 text-slate-400 hover:text-red-600"
+          <Button type="button" variant="ghost" size="icon" className="h-9 w-8 text-slate-400 hover:text-rose-600 hover:bg-rose-50"
             aria-label="Ukloni" onClick={() => onChange(redovi.filter((_, j) => j !== i))}>
             <X className="h-4 w-4" />
           </Button>

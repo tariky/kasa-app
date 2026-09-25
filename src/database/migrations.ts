@@ -120,6 +120,17 @@ export function runMigrations(database: Database.Database): void {
   `);
   database.exec('CREATE INDEX IF NOT EXISTS idx_prilog_stavke_orderId ON prilog_stavke(orderId)');
 
+  // Rabat po stavci fakture (postotak, kao na order_items)
+  const prilogCols = database.prepare("PRAGMA table_info(prilog_stavke)").all() as Array<{ name: string }>;
+  if (!prilogCols.find(c => c.name === 'rabat')) {
+    database.exec("ALTER TABLE prilog_stavke ADD COLUMN rabat REAL NOT NULL DEFAULT 0");
+  }
+
+  // Napomena ispod stavki fakture
+  if (!orderCols.find(c => c.name === 'napomena')) {
+    database.exec("ALTER TABLE orders ADD COLUMN napomena TEXT");
+  }
+
   // Create pending_receipts table if missing (write-ahead intent log)
   database.exec(`
     CREATE TABLE IF NOT EXISTS pending_receipts (

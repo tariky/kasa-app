@@ -1,14 +1,15 @@
 import { useState, useEffect, Fragment } from 'react';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Calendar as CalendarComponent } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { LedgerHead } from '@/components/ui/ledger';
+import { Stat } from '@/components/ui/stat';
 import {
   Printer, FileText, AlertTriangle, TrendingUp, Package,
-  ArrowUpRight, ArrowDownRight, RotateCcw, Calendar, Loader2,
-  ChevronRight, Zap, Clock, BarChart3, Download, Banknote,
+  Calendar, Loader2, ChevronRight, Zap, Clock, BarChart3, Download, Banknote, Boxes,
 } from 'lucide-react';
+import { VrijednostZalihe } from '@/components/skladiste/VrijednostZalihe';
 import CashMovementDialog from '@/components/CashMovementDialog';
 import { cn, formatKM, formatDateTime, formatDate } from '@/lib/utils';
 import { nabavnaVrijednost } from '@/lib/kalkulacija';
@@ -26,7 +27,66 @@ function fmtDisplay(d: Date): string {
   return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
 }
 
-type Tab = 'promet' | 'primke' | 'nivelacije' | 'fiskalni';
+type Tab = 'promet' | 'primke' | 'nivelacije' | 'zaliha' | 'fiskalni';
+
+/** Ćelija izvještajne tabele — ista mjera kao lista artikala. */
+const td = 'py-2.5 border-b border-slate-100';
+
+/** Prazna vrijednost u ćeliji. */
+function Prazno() {
+  return <span className="text-slate-200">—</span>;
+}
+
+/** Status reda: tačka + tekst, bez obojene pilule. */
+function StatusTacka({ tone, children }: { tone: 'emerald' | 'amber' | 'rose'; children: React.ReactNode }) {
+  return (
+    <span className={cn('flex items-center gap-1.5 text-[12px] font-medium leading-5',
+      tone === 'rose' ? 'text-rose-600' : tone === 'amber' ? 'text-amber-700' : 'text-slate-600')}>
+      <span aria-hidden className={cn('h-1.5 w-1.5 rounded-full',
+        tone === 'rose' ? 'bg-rose-500' : tone === 'amber' ? 'bg-amber-400' : 'bg-emerald-500')} />
+      {children}
+    </span>
+  );
+}
+
+function PdfDugme({ onClick, disabled }: { onClick: () => void; disabled?: boolean }) {
+  return (
+    <Button variant="outline" size="sm" onClick={onClick} disabled={disabled} className="h-8 gap-1.5 text-[12px]">
+      <Download className="h-3.5 w-3.5" /> PDF
+    </Button>
+  );
+}
+
+function PraznoStanje({ ikona: Ikona }: { ikona: React.ComponentType<{ size?: number; className?: string }> }) {
+  return (
+    <div className="flex-1 flex flex-col items-center justify-center text-slate-400 select-none">
+      <div className="w-12 h-12 rounded-2xl bg-slate-50 flex items-center justify-center mb-3"><Ikona size={20} className="text-slate-300" /></div>
+      <p className="text-[13px] font-medium text-slate-500">Nema podataka za period</p>
+      <p className="text-[12px] text-slate-400 mt-0.5">Odaberi period i klikni Generiši.</p>
+    </div>
+  );
+}
+
+/** Bijela kartica izvještajne tabele — ista kao na tabu Zaliha. */
+function IzvjestajKartica({ naslov, broj, akcije, children }: {
+  naslov: string;
+  broj: number;
+  akcije?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex-1 min-h-0 px-6 pb-5">
+      <div className="bg-white rounded-2xl border border-slate-200/70 shadow-sm shadow-slate-200/40 h-full flex flex-col overflow-hidden">
+        <div className="flex-shrink-0 flex items-center gap-3 px-5 py-3 border-b border-slate-100">
+          <span className="text-[13px] font-semibold text-slate-700">{naslov}</span>
+          {broj > 0 && <span className="font-mono text-[12px] text-slate-400 tabular-nums">{broj}</span>}
+          {akcije && <div className="ml-auto flex items-center gap-2">{akcije}</div>}
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
 
 export default function IzvjestajiScreen({ korisnikId }: { korisnikId: number }) {
   const [dateFrom, setDateFrom] = useState(new Date());
@@ -256,6 +316,7 @@ export default function IzvjestajiScreen({ korisnikId }: { korisnikId: number })
     { id: 'promet', label: 'Promet', icon: TrendingUp },
     { id: 'primke', label: 'Ulaz robe', icon: Package },
     { id: 'nivelacije', label: 'Nivelacije', icon: FileText },
+    { id: 'zaliha', label: 'Zaliha', icon: Boxes },
     { id: 'fiskalni', label: 'Fiskalni', icon: Printer },
   ];
 
@@ -288,8 +349,8 @@ export default function IzvjestajiScreen({ korisnikId }: { korisnikId: number })
             })}
           </div>
 
-          {/* Date range */}
-          <div className="flex items-center gap-3">
+          {/* Date range — zaliha je stanje na danas, period joj ne treba */}
+          {activeTab !== 'zaliha' && <div className="flex items-center gap-3">
             <div className="flex items-center gap-2 text-[13px] text-slate-500">
               <Calendar size={14} />
               <span>Period:</span>
@@ -358,7 +419,7 @@ export default function IzvjestajiScreen({ korisnikId }: { korisnikId: number })
                 Generiši
               </Button>
             )}
-          </div>
+          </div>}
         </div>
       </div>
 
@@ -372,459 +433,271 @@ export default function IzvjestajiScreen({ korisnikId }: { korisnikId: number })
           </div>
         )}
 
+        {activeTab === 'zaliha' && <VrijednostZalihe />}
+
         {/* ═══ PROMET TAB ═══ */}
         {activeTab === 'promet' && (
           <div className="flex flex-col h-full">
-            {/* Metric cards */}
             <div className="flex-shrink-0 px-6 pt-5 pb-4">
-              <div className="grid grid-cols-4 gap-4">
-                {/* Prodaja */}
-                <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm shadow-slate-200/50">
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Prodaja</span>
-                    <div className="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center">
-                      <ArrowUpRight size={16} className="text-emerald-500" />
-                    </div>
-                  </div>
-                  <p className="text-[22px] font-bold font-mono tracking-tight text-slate-900 leading-none">
-                    {formatKM(ukupnaProdaja)}
-                  </p>
-                  <p className="text-[11px] text-slate-400 mt-2 font-mono">{brojRacuna} računa</p>
-                </div>
-
-                {/* Osnovica */}
-                <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm shadow-slate-200/50">
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Osnovica</span>
-                    <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center">
-                      <FileText size={16} className="text-blue-500" />
-                    </div>
-                  </div>
-                  <p className="text-[22px] font-bold font-mono tracking-tight text-slate-900 leading-none">
-                    {formatKM(ukupnaOsnovica)}
-                  </p>
-                  <p className="text-[11px] text-slate-400 mt-2">Bez PDV-a</p>
-                </div>
-
-                {/* PDV */}
-                <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm shadow-slate-200/50">
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">PDV (17%)</span>
-                    <div className="w-8 h-8 rounded-lg bg-amber-50 flex items-center justify-center">
-                      <BarChart3 size={16} className="text-amber-500" />
-                    </div>
-                  </div>
-                  <p className="text-[22px] font-bold font-mono tracking-tight text-slate-900 leading-none">
-                    {formatKM(ukupniPDV)}
-                  </p>
-                  <p className="text-[11px] text-slate-400 mt-2">Obračunati porez</p>
-                </div>
-
-                {/* Reklamacije */}
-                <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm shadow-slate-200/50">
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Reklamacije</span>
-                    <div className="w-8 h-8 rounded-lg bg-red-50 flex items-center justify-center">
-                      <ArrowDownRight size={16} className="text-red-500" />
-                    </div>
-                  </div>
-                  <p className={cn(
-                    'text-[22px] font-bold font-mono tracking-tight leading-none',
-                    ukupneReklamacije > 0 ? 'text-red-500' : 'text-slate-900'
-                  )}>
-                    {formatKM(ukupneReklamacije)}
-                  </p>
-                  <p className="text-[11px] text-slate-400 mt-2 font-mono">{refundedOrders.length} storniranih</p>
-                </div>
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <Stat label="Prodaja" value={formatKM(ukupnaProdaja)} note={`${brojRacuna} računa`} strong />
+                <Stat label="Osnovica" value={formatKM(ukupnaOsnovica)} note="bez PDV-a" />
+                <Stat label="PDV (17%)" value={formatKM(ukupniPDV)} />
+                <Stat label="Reklamacije" value={formatKM(ukupneReklamacije)} note={`${refundedOrders.length} storniranih`}
+                  tone={ukupneReklamacije > 0 ? 'negative' : 'default'} />
               </div>
             </div>
 
-            {/* Table */}
-            <div className="flex-1 min-h-0 px-6 pb-5">
-              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm shadow-slate-200/50 h-full flex flex-col overflow-hidden">
-                {/* Table header bar */}
-                <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[13px] font-semibold text-slate-700">Računi</span>
-                    {prometData.length > 0 && (
-                      <Badge variant="secondary" className="text-[10px] font-mono px-1.5 py-0 h-5">
-                        {prometData.length}
-                      </Badge>
-                    )}
-                  </div>
-                  <Button variant="ghost" size="sm" className="h-7 gap-1.5 text-[12px] text-slate-500" onClick={exportPrometPdf} disabled={prometData.length === 0}>
-                    <Download size={13} />
-                    PDF
-                  </Button>
-                </div>
-
-                {prometData.length === 0 ? (
-                  <div className="flex-1 flex flex-col items-center justify-center text-slate-400 select-none">
-                    <div className="w-14 h-14 rounded-2xl bg-slate-50 flex items-center justify-center mb-3">
-                      <TrendingUp size={24} className="text-slate-300" />
-                    </div>
-                    <p className="text-[13px] font-medium text-slate-500">Nema podataka</p>
-                    <p className="text-[12px] text-slate-400 mt-0.5">Odaberite period i kliknite Generiši</p>
-                  </div>
-                ) : (
-                  <ScrollArea className="flex-1">
-                    <table className="w-full">
-                      <thead className="sticky top-0 bg-slate-50/80 backdrop-blur-sm">
-                        <tr className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
-                          <th className="text-left pl-5 pr-2 py-2.5 w-[50px]">#</th>
-                          <th className="text-left px-2 py-2.5">Datum</th>
-                          <th className="text-left px-2 py-2.5">Kasir</th>
-                          <th className="text-left px-2 py-2.5">Fiskalni br.</th>
-                          <th className="text-right px-2 py-2.5">Osnovica</th>
-                          <th className="text-right px-2 py-2.5">PDV</th>
-                          <th className="text-right px-2 py-2.5">Ukupno</th>
-                          <th className="text-center pr-5 pl-2 py-2.5 w-[100px]">Status</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {prometData.map((order) => {
-                          const isRefunded = order.status === 'refunded';
-                          return (
-                            <tr
-                              key={order.id}
-                              className={cn(
-                                'border-t border-slate-50 transition-colors hover:bg-slate-50/50',
-                                isRefunded && 'bg-red-50/30',
-                              )}
-                            >
-                              <td className="pl-5 pr-2 py-2.5 text-[12px] font-mono text-slate-400">{order.id}</td>
-                              <td className="px-2 py-2.5 text-[12px] text-slate-600 tabular-nums">{formatDateTime(order.createdAt)}</td>
-                              <td className="px-2 py-2.5 text-[12px] text-slate-600">{order.korisnikIme || '—'}</td>
-                              <td className="px-2 py-2.5 text-[12px] font-mono text-slate-500">{order.brojFiskalnogRacuna || '—'}</td>
-                              <td className="px-2 py-2.5 text-[12px] font-mono text-right tabular-nums text-slate-600">
-                                {formatKM(order.ukupno - order.pdvIznos)}
-                              </td>
-                              <td className="px-2 py-2.5 text-[12px] font-mono text-right tabular-nums text-slate-400">
-                                {formatKM(order.pdvIznos)}
-                              </td>
-                              <td className="px-2 py-2.5 text-[13px] font-mono font-semibold text-right tabular-nums text-slate-800">
-                                {formatKM(order.ukupno)}
-                              </td>
-                              <td className="pr-5 pl-2 py-2.5 text-center">
-                                {isRefunded ? (
-                                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-red-500 bg-red-50 border border-red-100 rounded-full px-2 py-0.5">
-                                    <RotateCcw size={10} />
-                                    Storno
-                                  </span>
-                                ) : (
-                                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-600 bg-emerald-50 border border-emerald-100 rounded-full px-2 py-0.5">
-                                    OK
-                                  </span>
-                                )}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </ScrollArea>
-                )}
-              </div>
-            </div>
+            <IzvjestajKartica
+              naslov="Računi"
+              broj={prometData.length}
+              akcije={<PdfDugme onClick={exportPrometPdf} disabled={prometData.length === 0} />}
+            >
+              {prometData.length === 0 ? (
+                <PraznoStanje ikona={TrendingUp} />
+              ) : (
+                <ScrollArea className="flex-1">
+                  <table className="w-full border-separate border-spacing-0">
+                    <LedgerHead columns={[
+                      { label: '#', className: 'text-left pl-5 pr-2 w-[1%] whitespace-nowrap' },
+                      { label: 'Datum', className: 'text-left px-2' },
+                      { label: 'Kasir', className: 'text-left px-2 hidden lg:table-cell' },
+                      { label: 'Fiskalni br.', className: 'text-left px-2 w-[1%] whitespace-nowrap' },
+                      { label: 'Osnovica', className: 'text-right px-2 w-[120px] hidden xl:table-cell' },
+                      { label: 'PDV', className: 'text-right px-2 w-[110px] hidden lg:table-cell' },
+                      { label: 'Ukupno', className: 'text-right px-2 w-[130px]' },
+                      { label: 'Status', className: 'text-left pl-2 pr-5 w-[100px]' },
+                    ]} />
+                    <tbody>
+                      {prometData.map((order) => {
+                        const isRefunded = order.status === 'refunded';
+                        return (
+                          <tr key={order.id} className="transition-colors hover:bg-slate-50">
+                            <td className={cn(td, 'pl-5 pr-2 font-mono text-[12px] text-slate-400 whitespace-nowrap')}>{order.id}</td>
+                            <td className={cn(td, 'px-2 max-w-0')}>
+                              <span className="block truncate text-[12.5px] font-medium tabular-nums text-slate-800">{formatDateTime(order.createdAt)}</span>
+                              {order.korisnikIme && <span className="lg:hidden block text-[11px] text-slate-400 truncate">{order.korisnikIme}</span>}
+                            </td>
+                            <td className={cn(td, 'hidden lg:table-cell px-2 text-[12px] text-slate-600 max-w-0 truncate')}>
+                              {order.korisnikIme || <Prazno />}
+                            </td>
+                            <td className={cn(td, 'px-2 font-mono text-[12px] text-slate-400 whitespace-nowrap')}>
+                              {order.brojFiskalnogRacuna || <Prazno />}
+                            </td>
+                            <td className={cn(td, 'hidden xl:table-cell px-2 text-right font-mono text-[12px] tabular-nums text-slate-500 whitespace-nowrap')}>
+                              {formatKM(order.ukupno - order.pdvIznos)}
+                            </td>
+                            <td className={cn(td, 'hidden lg:table-cell px-2 text-right font-mono text-[12px] tabular-nums text-slate-400 whitespace-nowrap')}>
+                              {formatKM(order.pdvIznos)}
+                            </td>
+                            <td className={cn(td, 'px-2 text-right font-mono text-[12.5px] font-semibold tabular-nums whitespace-nowrap',
+                              isRefunded ? 'text-rose-600' : 'text-slate-800')}>
+                              {formatKM(order.ukupno)}
+                            </td>
+                            <td className={cn(td, 'pl-2 pr-5 whitespace-nowrap')}>
+                              <StatusTacka tone={isRefunded ? 'rose' : 'emerald'}>{isRefunded ? 'Storno' : 'OK'}</StatusTacka>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </ScrollArea>
+              )}
+            </IzvjestajKartica>
           </div>
         )}
 
         {/* ═══ PRIMKE TAB ═══ */}
         {activeTab === 'primke' && (
           <div className="flex flex-col h-full">
-            {/* Summary strip */}
             <div className="flex-shrink-0 px-6 pt-5 pb-4">
-              <div className="grid grid-cols-3 gap-4">
-                <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm shadow-slate-200/50">
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Broj primki</span>
-                    <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center">
-                      <Package size={16} className="text-blue-500" />
-                    </div>
-                  </div>
-                  <p className="text-[22px] font-bold font-mono tracking-tight text-slate-900 leading-none">
-                    {primkeData.length}
-                  </p>
-                </div>
-                <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm shadow-slate-200/50">
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Nabavna vrijed.</span>
-                    <div className="w-8 h-8 rounded-lg bg-amber-50 flex items-center justify-center">
-                      <ArrowDownRight size={16} className="text-amber-500" />
-                    </div>
-                  </div>
-                  <p className="text-[22px] font-bold font-mono tracking-tight text-slate-900 leading-none">
-                    {formatKM(primkeNabavna)}
-                  </p>
-                </div>
-                <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm shadow-slate-200/50">
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Prodajna vrijed.</span>
-                    <div className="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center">
-                      <ArrowUpRight size={16} className="text-emerald-500" />
-                    </div>
-                  </div>
-                  <p className="text-[22px] font-bold font-mono tracking-tight text-slate-900 leading-none">
-                    {formatKM(primkeProdajna)}
-                  </p>
-                  {primkeNabavna > 0 && (
-                    <p className="text-[11px] text-emerald-500 mt-2 font-mono font-medium">
-                      +{((primkeProdajna - primkeNabavna) / primkeNabavna * 100).toFixed(1).replace('.', ',')}% marža
-                    </p>
-                  )}
-                </div>
+              <div className="grid grid-cols-3 gap-3">
+                <Stat label="Broj primki" value={String(primkeData.length)} />
+                <Stat label="Nabavna vrijednost" value={formatKM(primkeNabavna)} />
+                <Stat label="Prodajna vrijednost" value={formatKM(primkeProdajna)} strong
+                  note={primkeNabavna > 0
+                    ? `+${((primkeProdajna - primkeNabavna) / primkeNabavna * 100).toFixed(1).replace('.', ',')}% marža`
+                    : undefined} />
               </div>
             </div>
 
-            {/* Table */}
-            <div className="flex-1 min-h-0 px-6 pb-5">
-              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm shadow-slate-200/50 h-full flex flex-col overflow-hidden">
-                <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[13px] font-semibold text-slate-700">Primke</span>
-                    {primkeData.length > 0 && (
-                      <Badge variant="secondary" className="text-[10px] font-mono px-1.5 py-0 h-5">
-                        {primkeData.length}
-                      </Badge>
-                    )}
-                  </div>
-                  <Button variant="ghost" size="sm" className="h-7 gap-1.5 text-[12px] text-slate-500" onClick={exportPrimkePdf} disabled={primkeData.length === 0}>
-                    <Download size={13} />
-                    PDF
-                  </Button>
-                </div>
-
-                {primkeData.length === 0 ? (
-                  <div className="flex-1 flex flex-col items-center justify-center text-slate-400 select-none">
-                    <div className="w-14 h-14 rounded-2xl bg-slate-50 flex items-center justify-center mb-3">
-                      <Package size={24} className="text-slate-300" />
-                    </div>
-                    <p className="text-[13px] font-medium text-slate-500">Nema podataka</p>
-                    <p className="text-[12px] text-slate-400 mt-0.5">Odaberite period i kliknite Generiši</p>
-                  </div>
-                ) : (
-                  <ScrollArea className="flex-1">
-                    <table className="w-full">
-                      <thead className="sticky top-0 bg-slate-50/80 backdrop-blur-sm">
-                        <tr className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
-                          <th className="text-left pl-5 pr-2 py-2.5">Broj primke</th>
-                          <th className="text-left px-2 py-2.5">Datum</th>
-                          <th className="text-left px-2 py-2.5">Dobavljač</th>
-                          <th className="text-left px-2 py-2.5">Faktura</th>
-                          <th className="text-right px-2 py-2.5">Stavki</th>
-                          <th className="text-right px-2 py-2.5">Nabavna</th>
-                          <th className="text-right px-2 py-2.5">Prodajna</th>
-                          <th className="text-right pr-5 pl-2 py-2.5">Marža</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {primkeData.map((primka) => {
-                          const nab = (primka.stavke || []).reduce((s, st) => s + nabavnaVrijednost(st), 0);
-                          const prod = (primka.stavke || []).reduce((s, st) => s + st.cijena * st.kolicina, 0);
-                          const marzaPct = nab > 0 ? ((prod - nab) / nab * 100) : 0;
-                          return (
-                            <tr key={primka.id} className="border-t border-slate-50 transition-colors hover:bg-slate-50/50">
-                              <td className="pl-5 pr-2 py-2.5 text-[12px] font-mono font-semibold text-slate-700">{primka.brojPrimke}</td>
-                              <td className="px-2 py-2.5 text-[12px] tabular-nums text-slate-600">
-                                {formatDate(primka.datum || primka.createdAt)}
-                              </td>
-                              <td className="px-2 py-2.5 text-[12px] text-slate-600">{primka.dobavljacNaziv || '—'}</td>
-                              <td className="px-2 py-2.5 text-[12px] font-mono text-slate-500">{primka.brojFakture || '—'}</td>
-                              <td className="px-2 py-2.5 text-[12px] font-mono text-right tabular-nums text-slate-500">
-                                {primka.stavke?.length ?? 0}
-                              </td>
-                              <td className="px-2 py-2.5 text-[12px] font-mono text-right tabular-nums text-slate-600">
-                                {formatKM(nab)}
-                              </td>
-                              <td className="px-2 py-2.5 text-[13px] font-mono font-semibold text-right tabular-nums text-slate-800">
-                                {formatKM(prod)}
-                              </td>
-                              <td className="pr-5 pl-2 py-2.5 text-[12px] font-mono text-right tabular-nums">
-                                <span className={cn(
-                                  'font-medium',
-                                  marzaPct > 0 ? 'text-emerald-500' : 'text-slate-400',
-                                )}>
-                                  {marzaPct > 0 ? '+' : ''}{marzaPct.toFixed(1).replace('.', ',')}%
-                                </span>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </ScrollArea>
-                )}
-              </div>
-            </div>
+            <IzvjestajKartica
+              naslov="Primke"
+              broj={primkeData.length}
+              akcije={<PdfDugme onClick={exportPrimkePdf} disabled={primkeData.length === 0} />}
+            >
+              {primkeData.length === 0 ? (
+                <PraznoStanje ikona={Package} />
+              ) : (
+                <ScrollArea className="flex-1">
+                  <table className="w-full border-separate border-spacing-0">
+                    <LedgerHead columns={[
+                      { label: 'Broj primke', className: 'text-left pl-5 pr-2 w-[1%] whitespace-nowrap' },
+                      { label: 'Datum', className: 'text-left px-2 w-[1%] whitespace-nowrap' },
+                      { label: 'Dobavljač', className: 'text-left px-2' },
+                      { label: 'Faktura', className: 'text-left px-2 w-[140px] hidden lg:table-cell' },
+                      { label: 'Stavki', className: 'text-right px-2 w-[70px] hidden xl:table-cell' },
+                      { label: 'Nabavna', className: 'text-right px-2 w-[120px]' },
+                      { label: 'Prodajna', className: 'text-right px-2 w-[120px]' },
+                      { label: 'Marža', className: 'text-right pl-2 pr-5 w-[80px]' },
+                    ]} />
+                    <tbody>
+                      {primkeData.map((primka) => {
+                        const nab = (primka.stavke || []).reduce((s, st) => s + nabavnaVrijednost(st), 0);
+                        const prod = (primka.stavke || []).reduce((s, st) => s + st.cijena * st.kolicina, 0);
+                        const marzaPct = nab > 0 ? ((prod - nab) / nab * 100) : 0;
+                        return (
+                          <tr key={primka.id} className="transition-colors hover:bg-slate-50">
+                            <td className={cn(td, 'pl-5 pr-2 font-mono text-[12px] text-slate-400 whitespace-nowrap')}>{primka.brojPrimke}</td>
+                            <td className={cn(td, 'px-2 text-[12px] tabular-nums text-slate-600 whitespace-nowrap')}>
+                              {formatDate(primka.datum || primka.createdAt)}
+                            </td>
+                            <td className={cn(td, 'px-2 max-w-0')}>
+                              <span className="block truncate text-[12.5px] font-medium text-slate-800">
+                                {primka.dobavljacNaziv || <Prazno />}
+                              </span>
+                              {primka.brojFakture && <span className="lg:hidden block font-mono text-[10.5px] text-slate-400 truncate">{primka.brojFakture}</span>}
+                            </td>
+                            <td className={cn(td, 'hidden lg:table-cell px-2 font-mono text-[12px] text-slate-400 max-w-0 truncate')}>
+                              {primka.brojFakture || <Prazno />}
+                            </td>
+                            <td className={cn(td, 'hidden xl:table-cell px-2 text-right font-mono text-[12px] tabular-nums text-slate-400')}>
+                              {primka.stavke?.length ?? 0}
+                            </td>
+                            <td className={cn(td, 'px-2 text-right font-mono text-[12px] tabular-nums text-slate-500 whitespace-nowrap')}>
+                              {formatKM(nab)}
+                            </td>
+                            <td className={cn(td, 'px-2 text-right font-mono text-[12.5px] font-semibold tabular-nums text-slate-800 whitespace-nowrap')}>
+                              {formatKM(prod)}
+                            </td>
+                            <td className={cn(td, 'pl-2 pr-5 text-right font-mono text-[12px] font-medium tabular-nums whitespace-nowrap',
+                              marzaPct > 0 ? 'text-emerald-600' : 'text-slate-400')}>
+                              {marzaPct > 0 ? '+' : ''}{marzaPct.toFixed(1).replace('.', ',')}%
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </ScrollArea>
+              )}
+            </IzvjestajKartica>
           </div>
         )}
 
         {/* ═══ NIVELACIJE TAB ═══ */}
         {activeTab === 'nivelacije' && (
           <div className="flex flex-col h-full">
-            {/* Summary cards */}
             <div className="flex-shrink-0 px-6 pt-5 pb-4">
-              <div className="grid grid-cols-3 gap-4">
-                <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm shadow-slate-200/50">
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Broj nivelacija</span>
-                    <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center">
-                      <FileText size={16} className="text-blue-500" />
-                    </div>
-                  </div>
-                  <p className="text-[22px] font-bold font-mono tracking-tight text-slate-900 leading-none">
-                    {nivelacijeData.length}
-                  </p>
-                </div>
-                <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm shadow-slate-200/50">
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Pozitivna razlika</span>
-                    <div className="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center">
-                      <ArrowUpRight size={16} className="text-emerald-500" />
-                    </div>
-                  </div>
-                  <p className="text-[22px] font-bold font-mono tracking-tight text-emerald-600 leading-none">
-                    {formatKM(nivelacijeData.filter(n => (n.ukupnaRazlika ?? 0) > 0).reduce((s, n) => s + (n.ukupnaRazlika ?? 0), 0))}
-                  </p>
-                </div>
-                <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm shadow-slate-200/50">
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Negativna razlika</span>
-                    <div className="w-8 h-8 rounded-lg bg-red-50 flex items-center justify-center">
-                      <ArrowDownRight size={16} className="text-red-500" />
-                    </div>
-                  </div>
-                  <p className="text-[22px] font-bold font-mono tracking-tight text-red-500 leading-none">
-                    {formatKM(nivelacijeData.filter(n => (n.ukupnaRazlika ?? 0) < 0).reduce((s, n) => s + (n.ukupnaRazlika ?? 0), 0))}
-                  </p>
-                </div>
+              <div className="grid grid-cols-3 gap-3">
+                <Stat label="Broj nivelacija" value={String(nivelacijeData.length)} />
+                <Stat label="Pozitivna razlika" tone="positive"
+                  value={formatKM(nivelacijeData.filter(n => (n.ukupnaRazlika ?? 0) > 0).reduce((s, n) => s + (n.ukupnaRazlika ?? 0), 0))} />
+                <Stat label="Negativna razlika" tone="negative"
+                  value={formatKM(nivelacijeData.filter(n => (n.ukupnaRazlika ?? 0) < 0).reduce((s, n) => s + (n.ukupnaRazlika ?? 0), 0))} />
               </div>
             </div>
 
-            {/* Table */}
-            <div className="flex-1 min-h-0 px-6 pb-5">
-              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm shadow-slate-200/50 h-full flex flex-col overflow-hidden">
-                <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[13px] font-semibold text-slate-700">Nivelacije</span>
-                    {nivelacijeData.length > 0 && (
-                      <Badge variant="secondary" className="text-[10px] font-mono px-1.5 py-0 h-5">
-                        {nivelacijeData.length}
-                      </Badge>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-1">
-                    {nivelacijeData.length > 0 && expandedNivId && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 gap-1.5 text-[12px] text-slate-500"
-                        onClick={() => exportNivelacijaPdf(expandedNivId)}
-                      >
-                        <Download size={13} />
-                        PDF
-                      </Button>
-                    )}
-                  </div>
-                </div>
-
-                {nivelacijeData.length === 0 ? (
-                  <div className="flex-1 flex flex-col items-center justify-center text-slate-400 select-none">
-                    <div className="w-14 h-14 rounded-2xl bg-slate-50 flex items-center justify-center mb-3">
-                      <FileText size={24} className="text-slate-300" />
-                    </div>
-                    <p className="text-[13px] font-medium text-slate-500">Nema podataka</p>
-                    <p className="text-[12px] text-slate-400 mt-0.5">Odaberite period i kliknite Generiši</p>
-                  </div>
-                ) : (
-                  <ScrollArea className="flex-1">
-                    <table className="w-full">
-                      <thead className="sticky top-0 bg-slate-50/80 backdrop-blur-sm">
-                        <tr className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
-                          <th className="text-left pl-5 pr-2 py-2.5">Broj</th>
-                          <th className="text-left px-2 py-2.5">Datum</th>
-                          <th className="text-left px-2 py-2.5">Primka</th>
-                          <th className="text-right px-2 py-2.5">Stavki</th>
-                          <th className="text-right pr-5 pl-2 py-2.5">Ukupna razlika</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {nivelacijeData.map((niv) => (
+            <IzvjestajKartica
+              naslov="Nivelacije"
+              broj={nivelacijeData.length}
+              akcije={nivelacijeData.length > 0 && expandedNivId
+                ? <PdfDugme onClick={() => exportNivelacijaPdf(expandedNivId)} />
+                : undefined}
+            >
+              {nivelacijeData.length === 0 ? (
+                <PraznoStanje ikona={FileText} />
+              ) : (
+                <ScrollArea className="flex-1">
+                  <table className="w-full border-separate border-spacing-0">
+                    <LedgerHead columns={[
+                      { label: 'Broj', className: 'text-left pl-5 pr-2 w-[1%] whitespace-nowrap' },
+                      { label: 'Datum', className: 'text-left px-2 w-[1%] whitespace-nowrap' },
+                      { label: 'Primka / napomena', className: 'text-left px-2' },
+                      { label: 'Stavki', className: 'text-right px-2 w-[70px] hidden lg:table-cell' },
+                      { label: 'Ukupna razlika', className: 'text-right px-2 w-[150px]' },
+                      { label: '', className: 'pl-1 pr-5 w-[1%]' },
+                    ]} />
+                    <tbody>
+                      {nivelacijeData.map((niv) => {
+                        const otvorena = expandedNivId === niv.id;
+                        const razlika = niv.ukupnaRazlika ?? 0;
+                        return (
                           <Fragment key={niv.id}>
                             <tr
-                              className="border-t border-slate-50 transition-colors hover:bg-slate-50/50 cursor-pointer"
+                              className={cn('group transition-colors hover:bg-slate-50 cursor-pointer', otvorena && 'bg-slate-50')}
                               onClick={() => loadNivelacijaDetail(niv.id)}
+                              aria-expanded={otvorena}
                             >
-                              <td className="pl-5 pr-2 py-2.5 text-[12px] font-mono font-semibold text-slate-700">
-                                {niv.brojNivelacije}
-                              </td>
-                              <td className="px-2 py-2.5 text-[12px] tabular-nums text-slate-600">
-                                {formatDate(niv.datum)}
-                              </td>
-                              <td className="px-2 py-2.5 text-[12px] font-mono text-slate-500">
-                                {niv.primkaBroj || (niv.napomena ? '' : '—')}
+                              <td className={cn(td, 'pl-5 pr-2 font-mono text-[12px] text-slate-400 whitespace-nowrap')}>{niv.brojNivelacije}</td>
+                              <td className={cn(td, 'px-2 text-[12px] tabular-nums text-slate-600 whitespace-nowrap')}>{formatDate(niv.datum)}</td>
+                              <td className={cn(td, 'px-2 max-w-0')}>
+                                {niv.primkaBroj
+                                  ? <span className="block truncate font-mono text-[12px] font-medium text-slate-800">{niv.primkaBroj}</span>
+                                  : !niv.napomena && <Prazno />}
                                 {niv.napomena && (
-                                  <div className="font-sans text-[11px] text-slate-400">{niv.napomena}</div>
+                                  <span className={cn('block truncate', niv.primkaBroj ? 'text-[11px] text-slate-400' : 'text-[12.5px] font-medium text-slate-800')}>
+                                    {niv.napomena}
+                                  </span>
                                 )}
                               </td>
-                              <td className="px-2 py-2.5 text-[12px] font-mono text-right tabular-nums text-slate-500">
+                              <td className={cn(td, 'hidden lg:table-cell px-2 text-right font-mono text-[12px] tabular-nums text-slate-400')}>
                                 {niv.stavkiCount ?? 0}
                               </td>
-                              <td className={cn(
-                                "pr-5 pl-2 py-2.5 text-[13px] font-mono font-semibold text-right tabular-nums",
-                                (niv.ukupnaRazlika ?? 0) >= 0 ? 'text-emerald-600' : 'text-red-500'
-                              )}>
-                                {(niv.ukupnaRazlika ?? 0) >= 0 ? '+' : ''}{formatKM(niv.ukupnaRazlika ?? 0)}
+                              <td className={cn(td, 'px-2 text-right font-mono text-[12.5px] font-semibold tabular-nums whitespace-nowrap',
+                                razlika >= 0 ? 'text-emerald-600' : 'text-rose-600')}>
+                                {razlika >= 0 ? '+' : ''}{formatKM(razlika)}
+                              </td>
+                              <td className={cn(td, 'pl-1 pr-5 text-right')}>
+                                <ChevronRight aria-hidden
+                                  className={cn('inline h-3.5 w-3.5 text-slate-400 transition-transform group-hover:text-slate-600', otvorena && 'rotate-90')} />
                               </td>
                             </tr>
-                            {expandedNivId === niv.id && (
+                            {otvorena && (
                               <tr>
-                                <td colSpan={5} className="px-5 py-3 bg-slate-50/50">
-                                  <table className="w-full text-[12px]">
+                                <td colSpan={6} className="pl-5 pr-5 pt-1 pb-3 bg-slate-50 border-b border-slate-200/80">
+                                  <table className="w-full border-separate border-spacing-0">
                                     <thead>
-                                      <tr className="text-[10px] text-slate-400 uppercase">
-                                        <th className="text-left py-1">Artikal</th>
-                                        <th className="text-right py-1">Količina</th>
-                                        <th className="text-right py-1">Stara cijena</th>
-                                        <th className="text-right py-1">Nova cijena</th>
-                                        <th className="text-right py-1">Razlika/jed</th>
-                                        <th className="text-right py-1">Ukupna razlika</th>
+                                      <tr className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                                        <th className="text-left py-2 pr-2 border-b border-slate-200/80">Artikal</th>
+                                        <th className="text-right py-2 px-2 w-[90px] border-b border-slate-200/80">Količina</th>
+                                        <th className="text-right py-2 px-2 w-[110px] border-b border-slate-200/80 hidden lg:table-cell">Stara cijena</th>
+                                        <th className="text-right py-2 px-2 w-[110px] border-b border-slate-200/80">Nova cijena</th>
+                                        <th className="text-right py-2 px-2 w-[110px] border-b border-slate-200/80 hidden xl:table-cell">Razlika/jed</th>
+                                        <th className="text-right py-2 pl-2 w-[130px] border-b border-slate-200/80">Ukupna razlika</th>
                                       </tr>
                                     </thead>
                                     <tbody>
                                       {expandedNivStavke.map((s: any) => (
-                                        <tr key={s.id} className="border-t border-slate-100">
-                                          <td className="py-1.5 text-slate-700">{s.productNaziv}</td>
-                                          <td className="py-1.5 text-right font-mono text-slate-500">{s.kolicina}</td>
-                                          <td className="py-1.5 text-right font-mono text-slate-500">{formatKM(s.staraCijena)}</td>
-                                          <td className="py-1.5 text-right font-mono text-slate-700">{formatKM(s.novaCijena)}</td>
-                                          <td className={cn(
-                                            "py-1.5 text-right font-mono",
-                                            s.razlika >= 0 ? 'text-emerald-600' : 'text-red-500'
-                                          )}>
+                                        <tr key={s.id}>
+                                          <td className="py-1.5 pr-2 border-b border-slate-200/50 text-[12px] font-medium text-slate-700 max-w-0 truncate">{s.productNaziv}</td>
+                                          <td className="py-1.5 px-2 border-b border-slate-200/50 text-right font-mono text-[12px] tabular-nums text-slate-500">{s.kolicina}</td>
+                                          <td className="py-1.5 px-2 border-b border-slate-200/50 text-right font-mono text-[12px] tabular-nums text-slate-400 whitespace-nowrap hidden lg:table-cell">{formatKM(s.staraCijena)}</td>
+                                          <td className="py-1.5 px-2 border-b border-slate-200/50 text-right font-mono text-[12px] tabular-nums text-slate-700 whitespace-nowrap">{formatKM(s.novaCijena)}</td>
+                                          <td className={cn('py-1.5 px-2 border-b border-slate-200/50 text-right font-mono text-[12px] tabular-nums whitespace-nowrap hidden xl:table-cell',
+                                            s.razlika >= 0 ? 'text-emerald-600' : 'text-rose-600')}>
                                             {s.razlika >= 0 ? '+' : ''}{formatKM(s.razlika)}
                                           </td>
-                                          <td className={cn(
-                                            "py-1.5 text-right font-mono font-medium",
-                                            s.ukupnaRazlika >= 0 ? 'text-emerald-600' : 'text-red-500'
-                                          )}>
+                                          <td className={cn('py-1.5 pl-2 border-b border-slate-200/50 text-right font-mono text-[12px] font-semibold tabular-nums whitespace-nowrap',
+                                            s.ukupnaRazlika >= 0 ? 'text-emerald-600' : 'text-rose-600')}>
                                             {s.ukupnaRazlika >= 0 ? '+' : ''}{formatKM(s.ukupnaRazlika)}
                                           </td>
                                         </tr>
                                       ))}
                                     </tbody>
                                   </table>
-                                  <div className="flex justify-end mt-2">
+                                  <div className="flex justify-end mt-2.5">
                                     <Button
                                       variant="outline"
                                       size="sm"
-                                      className="h-7 gap-1.5 text-[12px]"
+                                      className="h-8 gap-1.5 text-[12px] bg-white"
                                       onClick={(e) => {
                                         e.stopPropagation();
                                         exportNivelacijaPdf(niv.id);
                                       }}
                                     >
-                                      <Download size={13} />
+                                      <Download className="h-3.5 w-3.5" />
                                       Exportuj PDF
                                     </Button>
                                   </div>
@@ -832,13 +705,13 @@ export default function IzvjestajiScreen({ korisnikId }: { korisnikId: number })
                               </tr>
                             )}
                           </Fragment>
-                        ))}
-                      </tbody>
-                    </table>
-                  </ScrollArea>
-                )}
-              </div>
-            </div>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </ScrollArea>
+              )}
+            </IzvjestajKartica>
           </div>
         )}
 
@@ -945,45 +818,39 @@ export default function IzvjestajiScreen({ korisnikId }: { korisnikId: number })
                 </div>
 
                 {ladica && (
-                  <div className="grid grid-cols-5 gap-3 mb-4">
-                    {[
-                      { label: 'Polozi', value: ladica.polozi },
-                      { label: 'Gotovinski promet', value: ladica.gotovinskiPromet },
-                      { label: 'Povrati', value: -ladica.povrati },
-                      { label: 'Reklamacije', value: -ladica.gotovinskeReklamacije },
-                      { label: 'Očekivano u ladici', value: ladica.ocekivanoStanje, naglasi: true },
-                    ].map(({ label, value, naglasi }) => (
-                      <div key={label} className={cn('rounded-xl px-3 py-2.5', naglasi ? 'bg-emerald-50 border border-emerald-100' : 'bg-slate-50')}>
-                        <p className="text-[11px] text-slate-400">{label}</p>
-                        <p className={cn('text-[15px] font-semibold font-mono tabular-nums', naglasi ? 'text-emerald-700' : 'text-slate-700')}>
-                          {formatKM(value)}
-                        </p>
-                      </div>
-                    ))}
+                  <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
+                    <Stat label="Polozi" value={formatKM(ladica.polozi)} />
+                    <Stat label="Gotovinski promet" value={formatKM(ladica.gotovinskiPromet)} />
+                    <Stat label="Povrati" value={formatKM(-ladica.povrati)} />
+                    <Stat label="Reklamacije" value={formatKM(-ladica.gotovinskeReklamacije)} />
+                    <Stat label="Očekivano u ladici" value={formatKM(ladica.ocekivanoStanje)} strong
+                      className="col-span-2 lg:col-span-1 border-emerald-200 bg-emerald-50/50" />
                   </div>
                 )}
 
                 {kretanja.length > 0 && (
-                  <div className="space-y-1.5">
+                  <div className="border-t border-slate-100">
                     {kretanja.map(k => (
-                      <div key={k.id} className="flex items-center justify-between text-[12px] rounded-lg bg-slate-50 px-3 py-2">
-                        <span className="text-slate-600">
-                          {k.createdAt.slice(11, 16)} · {k.tip === 'polog' ? 'Polog' : 'Povrat'} · {k.korisnikIme}
-                          {k.napomena ? ` · ${k.napomena}` : ''}
+                      <div key={k.id} className="flex items-center gap-3 py-2.5 border-b border-slate-100 text-[12px]">
+                        <span className="font-mono text-[12px] text-slate-400 tabular-nums">{k.createdAt.slice(11, 16)}</span>
+                        <span className="flex items-center gap-1.5 text-slate-600">
+                          <span aria-hidden className={cn('h-1.5 w-1.5 rounded-full', k.tip === 'polog' ? 'bg-emerald-500' : 'bg-rose-500')} />
+                          {k.tip === 'polog' ? 'Polog' : 'Povrat'}
                         </span>
-                        <span className="flex items-center gap-2">
-                          <span className={cn('font-mono tabular-nums font-semibold', k.tip === 'polog' ? 'text-emerald-600' : 'text-red-500')}>
-                            {k.tip === 'polog' ? '+' : '−'}{formatKM(k.iznos)}
-                          </span>
-                          {k.tringStatus === 'error' && (
-                            <Button
-                              variant="outline" size="sm" className="h-6 px-2 text-[11px] text-red-600 border-red-200"
-                              disabled={retryingId === k.id}
-                              onClick={() => retryCash(k.id)}
-                            >
-                              {retryingId === k.id ? 'Slanje…' : 'Nije poslano — ponovi'}
-                            </Button>
-                          )}
+                        <span className="min-w-0 flex-1 truncate text-slate-500">
+                          {k.korisnikIme}{k.napomena ? <span className="text-slate-400"> · {k.napomena}</span> : null}
+                        </span>
+                        {k.tringStatus === 'error' && (
+                          <Button
+                            variant="outline" size="sm" className="h-7 px-2 text-[11px] text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700"
+                            disabled={retryingId === k.id}
+                            onClick={() => retryCash(k.id)}
+                          >
+                            {retryingId === k.id ? 'Slanje…' : 'Nije poslano — ponovi'}
+                          </Button>
+                        )}
+                        <span className={cn('font-mono text-[12.5px] font-semibold tabular-nums whitespace-nowrap', k.tip === 'polog' ? 'text-emerald-600' : 'text-rose-600')}>
+                          {k.tip === 'polog' ? '+' : '−'}{formatKM(k.iznos)}
                         </span>
                       </div>
                     ))}

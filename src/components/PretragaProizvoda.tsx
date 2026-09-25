@@ -41,11 +41,13 @@ type Proslijedi = Omit<PretragaStavkiProps<Product>, 'stavke' | 'polja' | 'kljuc
  * PretragaStavki nad katalogom proizvoda. Bez `stavke` sama učitava katalog i osvježava ga
  * (stanje!) pri svakom otvaranju liste; `tipovi` i `filter` sužavaju šta se nudi.
  */
-export function PretragaProizvoda({ stavke, tipovi, filter, onOtvori, ...props }: Proslijedi & {
+export function PretragaProizvoda({ stavke, tipovi, filter, nedostupno, onOtvori, ...props }: Proslijedi & {
   /** Katalog koji roditelj već ima; tada se ništa ne učitava. */
   stavke?: Product[];
   tipovi?: ProductTip[];
   filter?: (p: Product) => boolean;
+  /** Kratak razlog zašto se artikal ne može izabrati (npr. „stopa K“) — red ostaje vidljiv s oznakom. */
+  nedostupno?: (p: Product) => string | null;
 }) {
   const vlastiti = useKatalog(!stavke);
   const izvor = stavke ?? vlastiti;
@@ -79,6 +81,9 @@ export function PretragaProizvoda({ stavke, tipovi, filter, onOtvori, ...props }
       ) : null}
       meta={p => (
         <>
+          {nedostupno?.(p) && (
+            <span className="rounded bg-rose-50 px-1.5 text-[10.5px] font-medium text-rose-600">{nedostupno(p)}</span>
+          )}
           {p.tip !== 'usluga' && p.stanje != null && (
             <span className={cn('min-w-[64px] text-right font-mono tabular-nums',
               p.stanje <= 0 ? 'text-rose-500' : p.stanje <= 3 ? 'text-amber-600' : 'text-slate-400')}>

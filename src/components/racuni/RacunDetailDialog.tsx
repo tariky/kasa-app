@@ -86,6 +86,8 @@ export function RacunDetailDialog({ orderId, redoslijed, korisnikId, onClose, on
   const [valutaDatum, setValutaDatum] = useState('');
   const [valutaError, setValutaError] = useState('');
   const [prilogOpen, setPrilogOpen] = useState(false);
+  /** Dodijeljene stavke fakture; null = nije faktura ili se još čita. */
+  const [fakturaStavke, setFakturaStavke] = useState<any[] | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
 
   const open = orderId != null;
@@ -96,11 +98,16 @@ export function RacunDetailDialog({ orderId, redoslijed, korisnikId, onClose, on
   }, []);
 
   const load = useCallback(async (id: number) => {
-    try { setOrder(await window.api.getOrder(id)); }
+    try {
+      const o: Order = await window.api.getOrder(id);
+      setOrder(o);
+      setFakturaStavke(o.prilogBroj != null ? await window.api.getPrilogStavke(id) : null);
+    }
     catch (e) { greska(e); }
   }, []);
 
   useEffect(() => {
+    setFakturaStavke(null);
     if (orderId == null) { setOrder(null); return; }
     setNotice(null);
     load(orderId);
@@ -118,6 +125,9 @@ export function RacunDetailDialog({ orderId, redoslijed, korisnikId, onClose, on
   const refunded = order?.status === 'refunded';
   const mozeReklamaciju = order?.status === 'completed' && !!order.brojFiskalnogRacuna;
   const imaFakturu = order?.prilogBroj != null;
+  // Kompletna faktura je završena: stavke se više ne mijenjaju, samo štampaju.
+  const fakturaZavrsena = !!order && imaFakturu && !!fakturaStavke?.length && prilogKompletan(order.ukupno, fakturaStavke);
+  const mozeUreditiFakturu = imaFakturu && !fakturaZavrsena && !refunded;
 
   // ── dokumenti ─────────────────────────────────────────
   const loadFirma = async () => {
@@ -284,7 +294,10 @@ export function RacunDetailDialog({ orderId, redoslijed, korisnikId, onClose, on
         case 's': e.preventDefault(); spremiRacun(); break;
         case 'o': e.preventDefault(); stampajOtpremnicu(); break;
         case 'v': e.preventDefault(); otvoriValutu(); break;
-        case 'f': if (imaFakturu) { e.preventDefault(); setPrilogOpen(true); } break;
+        case 'f':
+          if (fakturaZavrsena) { e.preventDefault(); stampajFakturu(); }
+          else if (mozeUreditiFakturu) { e.preventDefault(); setPrilogOpen(true); }
+          break;
         case 'r': if (mozeReklamaciju) { e.preventDefault(); otvoriReklamaciju(); } break;
         default:
       }
@@ -293,7 +306,9 @@ export function RacunDetailDialog({ orderId, redoslijed, korisnikId, onClose, on
     return () => window.removeEventListener('keydown', onKey);
   });
 
-  const stavke = order?.stavke ?? [];
+  // Faktura sa dodijeljenim stavkama pokazuje njih; zbirna stavka je samo ono što je otišlo na uređaj.
+  const stavkeFakture = imaFakturu && !!fakturaStavke?.length;
+  const stavke: any[] = stavkeFakture ? fakturaStavke! : order?.stavke ?? [];
   const nacin = order ? placanje(order.nacinPlacanja) : null;
   const imaRabat = stavke.some(s => (s.rabat || 0) > 0);
   const kupacAdresa = order ? [order.kupacAdresa, [order.kupacPostanskiBroj, order.kupacGrad].filter(Boolean).join(' ')].filter(Boolean).join(', ') : '';
@@ -363,15 +378,39 @@ export function RacunDetailDialog({ orderId, redoslijed, korisnikId, onClose, on
                     )}
                   </div>
 
+                  {imaFakturu && fakturaStavke && (
+                    <section aria-label="Faktura" className="flex flex-wrap items-center gap-4 rounded-xl border border-slate-200 bg-slate-50/70 px-5 py-4">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[13px] font-semibold text-slate-800">Faktura br. {order.prilogBroj}</p>
+                        <p className="mt-0.5 text-[12px] text-slate-500">
+                          {fakturaZavrsena
+                            ? `${fakturaStavke.length} ${fakturaStavke.length === 1 ? 'stavka' : fakturaStavke.length < 5 ? 'stavke' : 'stavki'} · završena, ne može se mijenjati`
+                            : refunded
+                              ? 'Račun je storniran — faktura se ne može mijenjati.'
+                              : `Dodijeljeno ${formatKM(sumaPriloga(fakturaStavke))} od ${formatKM(order.ukupno)} — dopunite stavke prije štampe.`}
+                        </p>
+                      </div>
+                      {fakturaZavrsena ? (
+                        <Button onClick={stampajFakturu} className="h-12 gap-2.5 rounded-xl px-6 text-[14px]">
+                          <Printer className="h-4 w-4" /> Štampaj fakturu <Key tone="dark">F</Key>
+                        </Button>
+                      ) : mozeUreditiFakturu && (
+                        <Button variant="outline" onClick={() => setPrilogOpen(true)} className="h-12 gap-2.5 rounded-xl bg-white px-6 text-[14px]">
+                          <Paperclip className="h-4 w-4" /> Dodijeli stavke <Key>F</Key>
+                        </Button>
+                      )}
+                    </section>
+                  )}
+
                   <section aria-label="Stavke računa">
                     <div className="flex items-center gap-2.5 h-9">
-                      <Eyebrow>Stavke</Eyebrow>
+                      <Eyebrow>{stavkeFakture ? 'Stavke fakture' : 'Stavke'}</Eyebrow>
                       <span className="font-mono text-[10.5px] tabular-nums text-slate-400">{stavke.length}</span>
                     </div>
                     {stavke.length === 0 ? (
                       <div className="rounded-xl border border-dashed border-slate-200 px-5 py-8 text-center">
                         <p className="text-[12.5px] text-slate-500">Račun nema zapisanih stavki.</p>
-                        {imaFakturu && <p className="text-[11.5px] text-slate-400 mt-0.5">Stavke fakture dodjeljujete kroz „Uredi fakturu“ — tipka <Key className="ml-0 mx-0.5">F</Key>.</p>}
+                        {mozeUreditiFakturu && <p className="text-[11.5px] text-slate-400 mt-0.5">Stavke fakture dodjeljujete kroz „Dodijeli stavke“ — tipka <Key className="ml-0 mx-0.5">F</Key>.</p>}
                       </div>
                     ) : (
                       <div className="overflow-x-auto -mx-1 px-1">
@@ -466,12 +505,6 @@ export function RacunDetailDialog({ orderId, redoslijed, korisnikId, onClose, on
                 <LegendKey k="esc">zatvori</LegendKey>
               </>}>
                 {mozeReklamaciju && <FooterBtn icon={Undo2} label="Reklamacija" hint="R" tone="danger" onClick={otvoriReklamaciju} />}
-                {imaFakturu && (
-                  <div className="flex items-center gap-1.5">
-                    <FooterBtn icon={Paperclip} label="Uredi fakturu" hint="F" onClick={() => setPrilogOpen(true)} />
-                    <FooterBtn icon={Printer} title="Štampaj A4 fakturu" onClick={stampajFakturu} />
-                  </div>
-                )}
                 <div className="flex items-center gap-1.5">
                   <FooterBtn icon={Truck} label="Otpremnica" hint="O" onClick={stampajOtpremnicu} />
                   <FooterBtn icon={Download} title="Sačuvaj otpremnicu kao PDF" onClick={spremiOtpremnicu} />
@@ -508,10 +541,10 @@ export function RacunDetailDialog({ orderId, redoslijed, korisnikId, onClose, on
                     evidentira kao polog i storno prolazi.
                   </p>
                   <div className="flex flex-wrap items-center gap-2 mt-2">
-                    <Button variant="outline" size="sm" className="h-7 text-[11px] border-amber-200 text-amber-700" onClick={() => setPologOpen(true)}>
+                    <Button variant="outline" size="sm" className="h-7 text-[11px] border-amber-200 text-amber-700 hover:bg-amber-50 hover:text-amber-800" onClick={() => setPologOpen(true)}>
                       Unesi polog
                     </Button>
-                    <Button variant="outline" size="sm" className="h-7 text-[11px] border-amber-300 text-amber-700" disabled={reklamacijaLoading} onClick={() => reklamiraj(true)}>
+                    <Button variant="outline" size="sm" className="h-7 text-[11px] border-amber-300 text-amber-700 hover:bg-amber-50 hover:text-amber-800" disabled={reklamacijaLoading} onClick={() => reklamiraj(true)}>
                       Reklamiraj uz polog {formatKM(round2(drawerWarning.potrebno - drawerWarning.stanje))}
                     </Button>
                   </div>
@@ -539,7 +572,7 @@ export function RacunDetailDialog({ orderId, redoslijed, korisnikId, onClose, on
                     će biti evidentiran kao polog (i na printeru i u evidenciji ladice), pa se
                     reklamacija odmah ponovo štampa.
                   </p>
-                  <Button variant="outline" size="sm" className="h-7 mt-2 text-[11px] border-amber-300 text-amber-700" disabled={reklamacijaLoading} onClick={() => reklamiraj(true)}>
+                  <Button variant="outline" size="sm" className="h-7 mt-2 text-[11px] border-amber-300 text-amber-700 hover:bg-amber-50 hover:text-amber-800" disabled={reklamacijaLoading} onClick={() => reklamiraj(true)}>
                     Ipak reklamiraj (polog {formatKM(overrideManjak)})
                   </Button>
                 </div>
@@ -585,7 +618,7 @@ export function RacunDetailDialog({ orderId, redoslijed, korisnikId, onClose, on
               <DatePicker value={valutaDatum} onChange={v => { setValutaDatum(v); setValutaError(''); }} className="h-9 text-[13px] w-full" />
               {valutaError && <p className="text-[11.5px] text-rose-600">{valutaError}</p>}
               <div className="flex justify-between items-center gap-2 pt-2">
-                <Button variant="ghost" className="text-slate-500 hover:text-rose-600" disabled={!order.datumValute} onClick={() => spremiValutu(null)}>Ukloni</Button>
+                <Button variant="ghost" className="text-slate-500 hover:text-rose-600 hover:bg-rose-50" disabled={!order.datumValute} onClick={() => spremiValutu(null)}>Ukloni</Button>
                 <div className="flex gap-2">
                   <Button variant="ghost" onClick={() => setValutaOpen(false)}>Otkaži</Button>
                   <Button disabled={!valutaDatum} onClick={() => spremiValutu(valutaDatum)}>Spremi</Button>
@@ -594,7 +627,7 @@ export function RacunDetailDialog({ orderId, redoslijed, korisnikId, onClose, on
             </DialogContent>
           </Dialog>
 
-          {imaFakturu && (
+          {mozeUreditiFakturu && (
             <PrilogStavkeDialog open={prilogOpen} onOpenChange={setPrilogOpen} order={order} onSaved={reload} />
           )}
 

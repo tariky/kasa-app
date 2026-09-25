@@ -1,4 +1,4 @@
-// Ugovor za kanale user:*, settings:*, savedCarts:* i proizvodnja:setEnabled — vidi backend.ts.
+// Ugovor za kanale user:*, settings:*, savedCarts:*, fakturaSkice:* i proizvodnja:setEnabled — vidi backend.ts.
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
 import { otvoriBackend, type Backend } from './backend';
 
@@ -464,6 +464,72 @@ describe('savedCarts:delete', () => {
     expect(await b.call('savedCarts:delete', id)).toEqual({ success: true });
     expect(red('SELECT COUNT(*) AS n FROM saved_carts').n).toBe(0);
     expect(await b.call('savedCarts:delete', 999)).toEqual({ success: true });
+  });
+});
+
+// ─── fakturaSkice:* ─────────────────────────────────────────
+
+const SKICA = { firma: { naziv: 'Firma d.o.o.', idBroj: '4200000000001' }, stavke: [{ productId: 1, kolicina: 2, cijena: 5 }] };
+
+describe('fakturaSkice:save', () => {
+  test('bez id-a sprema novu skicu kao JSON i vraća goli id', async () => {
+    const id = await b.call('fakturaSkice:save', null, 'Firma d.o.o.', SKICA, 10);
+    expect(typeof id).toBe('number');
+    const r = red('SELECT naziv, podaci, ukupno, spremljeno FROM faktura_skice WHERE id = ?', id);
+    expect(r.naziv).toBe('Firma d.o.o.');
+    expect(JSON.parse(r.podaci)).toEqual(SKICA);
+    expect(r.ukupno).toBe(10);
+    expect(typeof r.spremljeno).toBe('string');
+  });
+
+  test('sa id-em prepisuje postojeću skicu umjesto nove', async () => {
+    const id = await b.call('fakturaSkice:save', null, 'Prva', SKICA, 10);
+    b.db.prepare("UPDATE faktura_skice SET spremljeno = '2020-01-01 00:00:00' WHERE id = ?").run(id);
+    const izmjena = { ...SKICA, napomena: 'hitno' };
+    expect(await b.call('fakturaSkice:save', id, 'Druga', izmjena, 25)).toBe(id);
+    expect(red('SELECT COUNT(*) AS n FROM faktura_skice').n).toBe(1);
+    const r = red('SELECT naziv, podaci, ukupno, spremljeno FROM faktura_skice WHERE id = ?', id);
+    expect(r).toMatchObject({ naziv: 'Druga', ukupno: 25 });
+    expect(JSON.parse(r.podaci)).toEqual(izmjena);
+    expect(r.spremljeno).not.toBe('2020-01-01 00:00:00');
+  });
+
+  test('id obrisane skice sprema novu', async () => {
+    const id = await b.call('fakturaSkice:save', 999, 'Prva', SKICA, 10);
+    expect(id).not.toBe(999);
+    expect(red('SELECT COUNT(*) AS n FROM faktura_skice').n).toBe(1);
+  });
+
+  test('odbija skicu bez podataka', async () => {
+    await expect(b.call('fakturaSkice:save', null, 'X', null, 0)).rejects.toThrow('Skica je prazna');
+    await expect(b.call('fakturaSkice:save', null, 'X', [], 0)).rejects.toThrow('Skica je prazna');
+    expect(red('SELECT COUNT(*) AS n FROM faktura_skice').n).toBe(0);
+  });
+});
+
+describe('fakturaSkice:list', () => {
+  test('prazna lista bez skica', async () => {
+    expect(await b.call('fakturaSkice:list')).toEqual([]);
+  });
+
+  test('vraća redove zadnje spremljene prvo, podaci kao JSON string', async () => {
+    const prva = await b.call('fakturaSkice:save', null, 'Prva', SKICA, 5);
+    const druga = await b.call('fakturaSkice:save', null, 'Druga', SKICA, 15);
+    b.db.prepare("UPDATE faktura_skice SET spremljeno = '2020-01-01 00:00:00' WHERE id = ?").run(druga);
+    const lista = await b.call('fakturaSkice:list');
+    expect(lista.map((s: any) => s.id)).toEqual([prva, druga]);
+    expect(Object.keys(lista[0]).sort()).toEqual(['id', 'naziv', 'podaci', 'spremljeno', 'ukupno']);
+    expect(lista[0]).toMatchObject({ naziv: 'Prva', ukupno: 5 });
+    expect(JSON.parse(lista[0].podaci)).toEqual(SKICA);
+  });
+});
+
+describe('fakturaSkice:delete', () => {
+  test('briše skicu; nepostojeći id je tih uspjeh', async () => {
+    const id = await b.call('fakturaSkice:save', null, 'Prva', SKICA, 5);
+    expect(await b.call('fakturaSkice:delete', id)).toEqual({ success: true });
+    expect(red('SELECT COUNT(*) AS n FROM faktura_skice').n).toBe(0);
+    expect(await b.call('fakturaSkice:delete', 999)).toEqual({ success: true });
   });
 });
 
