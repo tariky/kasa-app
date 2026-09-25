@@ -497,6 +497,17 @@ fn reklamirani_racun_objekat(racun: &Value) -> Xml {
     racun_objekat(racun, &placanja, &racun["brojRacuna"])
 }
 
+/// Provjera reklamacije bez slanja (isti sastavljač kao `stampati_reklamirani_racun`):
+/// `Err` nosi poruku kakvu bi vratio neuspjeh ("Zahtjev nije poslan fiskalnom
+/// uređaju: ..."). Storno je zove prije ikakvog unosa novca na uređaj.
+/// TS: `provjeriReklamaciju` u services/tring.ts.
+pub fn provjeri_reklamaciju(racun: &Value) -> Result<(), String> {
+    match reklamirani_racun_objekat(racun) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(to_string(&odbijeno(&e)["error"])),
+    }
+}
+
 fn novac_xml(broj_zahtjeva: i64, vrsta_zahtjeva: i64, iznos: f64, oznaka: &str) -> Xml {
     let iznos = broj(&js::f(js::round2(iznos)), "Iznos")?;
     Ok(format!(
@@ -541,6 +552,26 @@ mod tests {
         assert_eq!(r["error"], "Nedovoljno novca u kasi (Nema para) [535]");
         let r = parse_response("<RacunOdgovor><VrstaOdgovora>OK</VrstaOdgovora><Odgovor><Naziv>BrojFiskalnogRacuna</Naziv><Vrijednost xsi:type=\"x\">101</Vrijednost></Odgovor><Odgovor><Naziv>Prazno</Naziv><Vrijednost /></Odgovor></RacunOdgovor>");
         assert_eq!(r, json!({"success": true, "vrstaOdgovora": "OK", "odgovori": {"BrojFiskalnogRacuna": "101", "Prazno": ""}}));
+    }
+
+    #[test]
+    fn provjera_reklamacije_bez_slanja() {
+        let racun = |plu: Value, broj: Value| {
+            json!({
+                "stavke": [{ "artikal": { "sifra": "A1", "naziv": "Kafa", "jm": "kom", "cijena": 2.5, "stopa": "E", "plu": plu }, "kolicina": 1, "rabat": 0 }],
+                "vrstePlacanja": [{ "oznaka": "Gotovina", "iznos": 0 }],
+                "brojRacuna": broj,
+            })
+        };
+        assert_eq!(provjeri_reklamaciju(&racun(json!(7), json!(55))), Ok(()));
+        assert_eq!(
+            provjeri_reklamaciju(&racun(json!(1_000_000), json!(55))),
+            Err("Zahtjev nije poslan fiskalnom uređaju: neispravan PLU (mora biti cijeli broj od 0 do 999999)".to_string())
+        );
+        assert_eq!(
+            provjeri_reklamaciju(&racun(json!(7), json!(-1))),
+            Err("Zahtjev nije poslan fiskalnom uređaju: neispravan BrojRacuna (mora biti cijeli broj od 0 do 999999999)".to_string())
+        );
     }
 
     fn stavka(artikal: Value, kolicina: Value, rabat: Value) -> Value {

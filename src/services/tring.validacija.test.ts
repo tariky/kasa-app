@@ -175,3 +175,28 @@ describe('periodični izvještaj', () => {
       'neispravan datum (očekuje se GGGG-MM-DD)');
   });
 });
+
+describe('provjeriReklamaciju (storno je zove prije unosa novca)', () => {
+  test('ispravna reklamacija: null, bez slanja i bez trošenja broja zahtjeva', async () => {
+    const reklamacija = racun({ brojRacuna: 55 });
+    expect(Tring.provjeriReklamaciju(reklamacija)).toBeNull();
+    expect(uredjaj.zahtjevi).toHaveLength(0);
+    // Sljedeći pravi zahtjev dobija broj kao da provjere nije ni bilo.
+    await Tring.stampatiReklamiraniRacun(reklamacija);
+    const prvi = Number(/<BrojZahtjeva>(\d+)</.exec(poslano())![1]);
+    uredjaj.zahtjevi.length = 0;
+    expect(Tring.provjeriReklamaciju(reklamacija)).toBeNull();
+    await Tring.stampatiReklamiraniRacun(reklamacija);
+    expect(Number(/<BrojZahtjeva>(\d+)</.exec(poslano())![1])).toBe(prvi + 1);
+  });
+
+  test('nevaljana: ista poruka kao neuspjeh štampe, ništa ne ide uređaju', async () => {
+    const lose = racun({ brojRacuna: 55, stavke: [stavka({ plu: 1_000_000 })] });
+    const poruka = 'Zahtjev nije poslan fiskalnom uređaju: neispravan PLU (mora biti cijeli broj od 0 do 999999)';
+    expect(Tring.provjeriReklamaciju(lose)).toBe(poruka);
+    expect(Tring.provjeriReklamaciju(racun({ brojRacuna: -1 })))
+      .toBe('Zahtjev nije poslan fiskalnom uređaju: neispravan BrojRacuna (mora biti cijeli broj od 0 do 999999999)');
+    expect(uredjaj.zahtjevi).toHaveLength(0);
+    expect((await Tring.stampatiReklamiraniRacun(lose)).error).toBe(poruka);
+  });
+});

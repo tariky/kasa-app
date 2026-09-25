@@ -128,6 +128,33 @@ describe('product:create', () => {
     expect(broj('SELECT COUNT(*) AS n FROM products')).toBe(0);
   });
 
+  test('PLU: cijeli broj od 0 do 999999 (Tringovo pravilo) ili prazno', async () => {
+    const PLU = 'PLU mora biti cijeli broj od 0 do 999999';
+    for (const los of [-1, 1_000_000, 1.5, 'abc', '12a', '1e3', true, [1], { n: 1 }]) {
+      await expect(b.call('product:create', noviArtikal({ plu: los }))).rejects.toThrow(PLU);
+    }
+    expect(broj('SELECT COUNT(*) AS n FROM products')).toBe(0);
+
+    const plu = async (sifra: string, v: unknown) =>
+      red('SELECT plu FROM products WHERE id = ?', (await b.call('product:create', noviArtikal({ sifra, plu: v }))).id).plu;
+    expect(await plu('A0', 0)).toBe(0);
+    expect(await plu('A1', 999_999)).toBe(999_999);
+    expect(await plu('A2', ' 42 ')).toBe(42);
+    expect(await plu('A3', '')).toBeNull();
+    expect(await plu('A4', null)).toBeNull();
+
+    const id = dodajArtikal('U1');
+    await expect(b.call('product:update', id, { plu: 1_000_000 })).rejects.toThrow(PLU);
+    await expect(b.call('product:update', id, { plu: '7.5' })).rejects.toThrow(PLU);
+    expect(red('SELECT plu FROM products WHERE id = ?', id).plu).toBe(1);
+    await b.call('product:update', id, { plu: '12' });
+    expect(red('SELECT plu FROM products WHERE id = ?', id).plu).toBe(12);
+    await b.call('product:update', id, { plu: '' });
+    expect(red('SELECT plu FROM products WHERE id = ?', id).plu).toBeNull();
+    await b.call('product:update', id, { naziv: 'Bez PLU-a u izmjeni' });
+    expect(red('SELECT plu FROM products WHERE id = ?', id).plu).toBeNull();
+  });
+
   test('odbija duplikat šifre i barkoda', async () => {
     dodajArtikal('D1', { barkod: '111' });
     await expect(b.call('product:create', noviArtikal({ sifra: 'D1' }))).rejects.toThrow('Artikal sa šifrom "D1" već postoji');

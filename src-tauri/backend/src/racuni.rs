@@ -577,6 +577,26 @@ fn refund_and_print(b: &Backend, data: &Value, korisnik_id: i64) -> R<Value> {
         )?)
     };
 
+    let kupac = if truthy(&order["kupacIdBroj"]) {
+        let s = |k: &str| or(&order[k], &json!("")).clone();
+        json!({
+            "idBroj": order["kupacIdBroj"],
+            "naziv": s("kupacNaziv"),
+            "adresa": s("kupacAdresa"),
+            "postanskiBroj": s("kupacPostanskiBroj"),
+            "grad": s("kupacGrad"),
+        })
+    } else {
+        Value::Null
+    };
+    let racun = tring_racun::build_tring_reklamacija(&json!({ "stavke": stavke, "kupac": kupac }), broj_racuna);
+    // Reklamacija koju uređaj ne bi primio (npr. PLU artikla van opsega) se
+    // odbija prije ikakvog unosa novca — inače bi pokriće ostalo u brojaču
+    // uređaja i u pologu bez storna.
+    if let Err(poruka) = tring::provjeri_reklamaciju(&racun) {
+        baci!("{poruka}");
+    }
+
     // Tring povrat po reklamiranom računu ide isključivo gotovinom, bez obzira
     // kako je original plaćen — uređaj traži pokriće u punom iznosu računa i
     // inače vrati ERROR_FISCAL_INSUFFICIENT_MONEY. Iz ladice, međutim, fizički
@@ -617,20 +637,6 @@ fn refund_and_print(b: &Backend, data: &Value, korisnik_id: i64) -> R<Value> {
         polog_iznos = manjak_ladica;
         uneseno = round2(uneseno + manjak_ladica);
     }
-
-    let kupac = if truthy(&order["kupacIdBroj"]) {
-        let s = |k: &str| or(&order[k], &json!("")).clone();
-        json!({
-            "idBroj": order["kupacIdBroj"],
-            "naziv": s("kupacNaziv"),
-            "adresa": s("kupacAdresa"),
-            "postanskiBroj": s("kupacPostanskiBroj"),
-            "grad": s("kupacGrad"),
-        })
-    } else {
-        Value::Null
-    };
-    let racun = tring_racun::build_tring_reklamacija(&json!({ "stavke": stavke, "kupac": kupac }), broj_racuna);
 
     let mut result = print_reklamacija(b, &racun);
 

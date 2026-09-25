@@ -348,14 +348,25 @@ export function registerIpcHandlers(): void {
   // Tring: naziv zajedno s JM ima 32–36 znakova, zavisno od uređaja.
   const SLOBODAN_NAZIV_MAX = 32;
 
-  type ArtikalUnos = { sifra?: string; naziv?: string; cijena?: number; pdvStopa?: string; barkod?: string | null };
+  type ArtikalUnos = { sifra?: string; naziv?: string; cijena?: number; pdvStopa?: string; barkod?: string | null; plu?: unknown };
+
+  // PLU ide uređaju uz svaku stavku, pa važi Tringovo pravilo (MAX_PLU u
+  // services/tring.ts): cijeli broj od 0 do 999999. Prazno = bez PLU-a.
+  const validirajPlu = (plu: unknown): number | null => {
+    if (plu == null || (typeof plu === 'string' && !plu.trim())) return null;
+    const n = typeof plu === 'number' ? plu
+      : typeof plu === 'string' && /^\d+$/.test(plu.trim()) ? Number(plu.trim())
+      : NaN;
+    if (!Number.isInteger(n) || n < 0 || n > 999_999) throw new Error('PLU mora biti cijeli broj od 0 do 999999');
+    return n;
+  };
 
   // Zajednička pravila za product:create (id = null) i product:update. Na create-u su
   // sva polja obavezna, na update-u se provjerava samo ono što je poslano. Vraća
   // trimovane šifru, naziv i barkod (prazan barkod = null) spremne za upis.
   const validirajArtikal = (data: ArtikalUnos, id: number | null) => {
     const poslano = (k: keyof ArtikalUnos) => id === null || data[k] !== undefined;
-    const upis: { sifra?: string; naziv?: string; barkod?: string | null } = {};
+    const upis: { sifra?: string; naziv?: string; barkod?: string | null; plu?: number | null } = {};
     if (poslano('sifra')) {
       if (!data.sifra?.trim()) throw new Error('Šifra artikla je obavezna');
       upis.sifra = data.sifra.trim();
@@ -366,6 +377,7 @@ export function registerIpcHandlers(): void {
     }
     if (poslano('cijena') && (data.cijena == null || !(data.cijena >= 0))) throw new Error('Cijena mora biti pozitivan broj');
     if (poslano('pdvStopa') && !(PDV_STOPE as readonly string[]).includes(data.pdvStopa as string)) throw new Error('PDV stopa mora biti E ili K');
+    if (poslano('plu')) upis.plu = validirajPlu(data.plu);
     const osimId = id ?? -1;
     if (upis.sifra !== undefined && db.prepare('SELECT id FROM products WHERE sifra = ? AND id != ?').get(upis.sifra, osimId)) {
       throw new Error(`Artikal sa šifrom "${data.sifra}" već postoji`);
@@ -392,7 +404,7 @@ export function registerIpcHandlers(): void {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .run(upis.sifra, upis.naziv, data.jm ?? (tip === 'usluga' ? 'usl' : 'kom'), data.cijena, data.pdvStopa,
-        data.plu ?? null, upis.barkod ?? null, tip, data.plocaSirina ?? null, data.plocaVisina ?? null);
+        upis.plu ?? null, upis.barkod ?? null, tip, data.plocaSirina ?? null, data.plocaVisina ?? null);
     return { id: result.lastInsertRowid };
   });
 
@@ -410,7 +422,7 @@ export function registerIpcHandlers(): void {
     if (data.jm !== undefined) { fields.push('jm = ?'); values.push(data.jm); }
     if (data.cijena !== undefined) { fields.push('cijena = ?'); values.push(data.cijena); }
     if (data.pdvStopa !== undefined) { fields.push('pdvStopa = ?'); values.push(data.pdvStopa); }
-    if (data.plu !== undefined) { fields.push('plu = ?'); values.push(data.plu); }
+    if (upis.plu !== undefined) { fields.push('plu = ?'); values.push(upis.plu); }
     if (upis.barkod !== undefined) { fields.push('barkod = ?'); values.push(upis.barkod); }
     if (data.tip !== undefined) { fields.push('tip = ?'); values.push(normalizujTip(data.tip)); }
     if ('plocaSirina' in data) { fields.push('plocaSirina = ?'); values.push(data.plocaSirina ?? null); }

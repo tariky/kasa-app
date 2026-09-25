@@ -67,6 +67,23 @@ struct UpisArtikla {
     sifra: Option<String>,
     naziv: Option<String>,
     barkod: Option<Value>,
+    plu: Option<Value>,
+}
+
+/// PLU ide uređaju uz svaku stavku, pa važi Tringovo pravilo (`MAX_PLU` u
+/// tring.rs): cijeli broj od 0 do 999999. Prazno = bez PLU-a (null).
+fn validiraj_plu(plu: &Value) -> R<Value> {
+    let n = match plu {
+        Value::Null => return Ok(Value::Null),
+        Value::String(s) if s.trim().is_empty() => return Ok(Value::Null),
+        Value::Number(n) => n.as_f64(),
+        Value::String(s) if s.trim().bytes().all(|c| c.is_ascii_digit()) => s.trim().parse::<f64>().ok(),
+        _ => None,
+    };
+    match n {
+        Some(n) if n.fract() == 0.0 && (0.0..=999_999.0).contains(&n) => Ok(json!(n as i64)),
+        _ => baci!("PLU mora biti cijeli broj od 0 do 999999"),
+    }
 }
 
 /// JS `x !== y` za vrijednosti iz JSON-a i baze (brojevi po vrijednosti).
@@ -101,6 +118,9 @@ fn validiraj_artikal(db: &Db, data: &Value, id: &Value) -> R<UpisArtikla> {
     if poslano("pdvStopa") && !data["pdvStopa"].as_str().is_some_and(|s| PDV_STOPE.contains(&s)) {
         baci!("PDV stopa mora biti E ili K");
     }
+    if poslano("plu") {
+        upis.plu = Some(validiraj_plu(&data["plu"])?);
+    }
     let osim_id = js::nn(id, &json!(-1)).clone();
     if let Some(sifra) = &upis.sifra {
         if db.ima("SELECT id FROM products WHERE sifra = ? AND id != ?", p![sifra, osim_id])? {
@@ -132,7 +152,7 @@ fn product_create(db: &Db, data: &Value) -> R<Value> {
             js::nn(&data["jm"], &jm_zadano),
             data["cijena"],
             data["pdvStopa"],
-            data["plu"],
+            upis.plu.unwrap_or(Value::Null),
             upis.barkod.unwrap_or(Value::Null),
             tip,
             data["plocaSirina"],
@@ -153,7 +173,7 @@ fn product_update(b: &Backend, id: &Value, data: &Value) -> R<Value> {
     if has(data, "jm") { fields.push("jm = ?"); values.push(data["jm"].clone()); }
     if has(data, "cijena") { fields.push("cijena = ?"); values.push(data["cijena"].clone()); }
     if has(data, "pdvStopa") { fields.push("pdvStopa = ?"); values.push(data["pdvStopa"].clone()); }
-    if has(data, "plu") { fields.push("plu = ?"); values.push(data["plu"].clone()); }
+    if let Some(plu) = upis.plu { fields.push("plu = ?"); values.push(plu); }
     if let Some(b) = upis.barkod { fields.push("barkod = ?"); values.push(b); }
     if has(data, "tip") { fields.push("tip = ?"); values.push(json!(normalizuj_tip(&data["tip"]))); }
     if has(data, "plocaSirina") { fields.push("plocaSirina = ?"); values.push(data["plocaSirina"].clone()); }

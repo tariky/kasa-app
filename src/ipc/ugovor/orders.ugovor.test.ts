@@ -332,6 +332,23 @@ describe('order:refundAndPrint', () => {
     await expect(b.call('order:refundAndPrint', { id })).rejects.toThrow('nije ispravan broj računa');
     expect(b.tring.zahtjevi).toEqual([]);
   });
+
+  test('reklamacija koju uređaj ne bi primio se odbija prije unosa novca i štampe', async () => {
+    // Bezgotovinski račun: bez provjere bi pokriće prvo otišlo na uređaj.
+    const p = dodajArtikal('S6', 30);
+    const { id } = await izdaj([stavka(p, 1, 30)], { brojFiskalnogRacuna: '58', nacinPlacanja: 'Virman' });
+    b.db.prepare('UPDATE products SET plu = 1000000 WHERE id = ?').run(p); // stari podatak, van Tringovog opsega
+
+    await expect(b.call('order:refundAndPrint', { id, dozvoliPolog: true }))
+      .rejects.toThrow('Zahtjev nije poslan fiskalnom uređaju: neispravan PLU (mora biti cijeli broj od 0 do 999999)');
+    expect(b.tring.zahtjevi).toEqual([]);
+    expect(red('SELECT COUNT(*) AS n FROM cash_movements').n).toBe(0);
+    expect(red('SELECT status FROM orders WHERE id = ?', id).status).toBe('completed');
+
+    // Ispravljen PLU: isti storno prolazi.
+    b.db.prepare('UPDATE products SET plu = 7 WHERE id = ?').run(p);
+    expect(await b.call('order:refundAndPrint', { id })).toMatchObject({ success: true });
+  });
 });
 
 // ─── order:getFiscalGaps / order:dismissFiscalGap ───────────

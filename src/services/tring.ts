@@ -454,10 +454,8 @@ export function stampatiFiskalniRacun(racun: Racun): Promise<TringResponse> {
   }, (body) => postXml("/sfr", body));
 }
 
-// POST /srr - VrstaZahtjeva=2
-export function stampatiReklamiraniRacun(
-  racun: ReklamiraniRacun
-): Promise<TringResponse> {
+/** `<NoviObjekat>` reklamacije; baca NevaljanZahtjev za polje koje uređaj ne smije dobiti. */
+function reklamacijaObjekat(racun: ReklamiraniRacun): string {
   // Reklamacija mora nositi tačno jednu vrstu plaćanja — gotovinski povrat se
   // šalje kao Gotovina/0 (tako radi i Tringov vlastiti POS na FP1, a isporučeni
   // primjer srr.reklamirani.xml je identičan). Prazan <VrstePlacanja/> iz teksta
@@ -466,16 +464,36 @@ export function stampatiReklamiraniRacun(
   const placanja = racun.vrstePlacanja.length > 0
     ? racun.vrstePlacanja
     : [{ oznaka: 'Gotovina', iznos: 0 }];
+  return (
+    (racun.kupac ? kupacToXml(racun.kupac) : "") +
+    `<StavkeRacuna>${stavkeToXml(racun.stavke)}</StavkeRacuna>` +
+    `<VrstePlacanja>${placanjaToXml(placanja)}</VrstePlacanja>` +
+    `<Napomena>${racun.napomena ? escapeXml(racun.napomena) : ""}</Napomena>` +
+    `<BrojRacuna>${cijeliBroj(racun.brojRacuna, 'neispravan BrojRacuna', MAX_BROJ_RACUNA)}</BrojRacuna>`
+  );
+}
 
-  return posalji(() => {
-    const noviObjekat =
-      (racun.kupac ? kupacToXml(racun.kupac) : "") +
-      `<StavkeRacuna>${stavkeToXml(racun.stavke)}</StavkeRacuna>` +
-      `<VrstePlacanja>${placanjaToXml(placanja)}</VrstePlacanja>` +
-      `<Napomena>${racun.napomena ? escapeXml(racun.napomena) : ""}</Napomena>` +
-      `<BrojRacuna>${cijeliBroj(racun.brojRacuna, 'neispravan BrojRacuna', MAX_BROJ_RACUNA)}</BrojRacuna>`;
-    return racunZahtjev(2, noviObjekat);
-  }, (body) => postXml("/srr", body));
+/**
+ * Provjera reklamacije bez slanja (isti sastavljač kao stampatiReklamiraniRacun):
+ * null = uređaj bi je primio, inače poruka kakvu bi vratio neuspjeh
+ * ("Zahtjev nije poslan fiskalnom uređaju: ..."). Storno je zove prije
+ * ikakvog unosa novca na uređaj. Rust: `provjeri_reklamaciju` u tring.rs.
+ */
+export function provjeriReklamaciju(racun: ReklamiraniRacun): string | null {
+  try {
+    reklamacijaObjekat(racun);
+    return null;
+  } catch (e) {
+    if (e instanceof NevaljanZahtjev) return odbijeno(e).error ?? e.message;
+    throw e;
+  }
+}
+
+// POST /srr - VrstaZahtjeva=2
+export function stampatiReklamiraniRacun(
+  racun: ReklamiraniRacun
+): Promise<TringResponse> {
+  return posalji(() => racunZahtjev(2, reklamacijaObjekat(racun)), (body) => postXml("/srr", body));
 }
 
 // POST /sps - VrstaZahtjeva=3 (X-report)

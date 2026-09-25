@@ -1,4 +1,5 @@
 import type * as Tring from '@/services/tring';
+import { provjeriReklamaciju } from '@/services/tring';
 import type { SqlDb } from './sqldb';
 import { parseFiskalniBroj } from './fiskalni';
 import { buildTringReklamacija } from './tringRacun';
@@ -136,6 +137,23 @@ export async function refundAndPrint(
         WHERE oi.orderId = ?
       `).all(id);
 
+  const racun = buildTringReklamacija({
+    stavke,
+    brojRacuna,
+    kupac: order.kupacIdBroj ? {
+      idBroj: order.kupacIdBroj,
+      naziv: order.kupacNaziv || '',
+      adresa: order.kupacAdresa || '',
+      postanskiBroj: order.kupacPostanskiBroj || '',
+      grad: order.kupacGrad || '',
+    } : undefined,
+  });
+  // Reklamacija koju uređaj ne bi primio (npr. PLU artikla van opsega) se
+  // odbija prije ikakvog unosa novca — inače bi pokriće ostalo u brojaču
+  // uređaja i u pologu bez storna.
+  const nevaljana = provjeriReklamaciju(racun);
+  if (nevaljana) throw new Error(nevaljana);
+
   // Tring povrat po reklamiranom računu ide isključivo gotovinom, bez obzira
   // kako je original plaćen — uređaj traži pokriće u punom iznosu računa i
   // inače vrati ERROR_FISCAL_INSUFFICIENT_MONEY. Iz ladice, međutim, fizički
@@ -174,18 +192,6 @@ export async function refundAndPrint(
       pologIznos = manjakLadica;
       uneseno = round2(uneseno + manjakLadica);
     }
-
-    const racun = buildTringReklamacija({
-      stavke,
-      brojRacuna,
-      kupac: order.kupacIdBroj ? {
-        idBroj: order.kupacIdBroj,
-        naziv: order.kupacNaziv || '',
-        adresa: order.kupacAdresa || '',
-        postanskiBroj: order.kupacPostanskiBroj || '',
-        grad: order.kupacGrad || '',
-      } : undefined,
-    });
 
     let result = await print(racun);
 
