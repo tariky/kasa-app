@@ -49,6 +49,8 @@
   .tabela-omot { overflow-x: auto; }
   .kod { font-family: ui-monospace, Menlo, monospace; font-size: 12px; word-break: break-all; }
   .napomena { font-size: 12px; color: var(--blijed); margin-top: 4px; }
+  .izbor { display:flex; gap:6px; align-items:center; margin:0; color:var(--tekst); font-size:14px; }
+  .izbor input { width:auto; }
   #kljuc-greska { background:#f7e1df; color: var(--crvena); padding: 12px 14px; border-radius: 8px; margin-bottom: 16px; }
 </style>
 </head>
@@ -75,8 +77,16 @@
           <button type="button" data-dana="366">1 godina</button>
         </div>
 
-        <label for="uredjaj">ID uređaja (opcionalno)</label>
-        <input id="uredjaj" autocomplete="off" placeholder="prazno = važi na bilo kojem računaru">
+        <label>Uređaj</label>
+        <div class="brzo" id="vezanje">
+          <label class="izbor"><input type="radio" name="vezanje" value="uredjaj" checked> Samo jedan računar</label>
+          <label class="izbor"><input type="radio" name="vezanje" value="bilo-koji"> Bilo koji računar</label>
+        </div>
+        <div id="uredjaj-polje">
+          <label for="uredjaj">ID uređaja <span style="font-weight:400">(klijent ga vidi na ekranu aktivacije i u Postavkama)</span></label>
+          <input id="uredjaj" class="kod" autocomplete="off" placeholder="npr. 3F9A-01C2-7B44">
+        </div>
+        <div class="napomena" id="bilo-koji-napomena" hidden>Licenca će važiti na svakom računaru na koji se kopira.</div>
 
         <label>Moduli <span style="font-weight:400;color:var(--blijed)">(Kasa, Šifarnik, Računi i Izvještaji su uvijek uključeni)</span></label>
         <div class="brzo" id="paketi">
@@ -170,6 +180,21 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
+
+// Token po pokretanju servera stiže u fragmentu linka (#t=…). Čuva se u
+// memoriji (i sessionStorage ovog taba, da reload radi) i ide u header svakog
+// /api/* poziva; iz adresne trake se briše.
+const TOKEN = (() => {
+  const izLinka = new URLSearchParams(location.hash.slice(1)).get('t');
+  try {
+    if (izLinka) sessionStorage.setItem('pazar-token', izLinka);
+    return izLinka || sessionStorage.getItem('pazar-token') || '';
+  } catch {
+    return izLinka || '';
+  } finally {
+    if (location.hash) history.replaceState(null, '', location.pathname);
+  }
+})();
 let izdane = [];
 let sviModuli = [];
 let podrazumijevani = [];
@@ -233,10 +258,22 @@ function znacka(vrijediDo) {
 }
 
 async function api(put, tijelo) {
-  const r = await fetch(put, tijelo ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(tijelo) } : undefined);
+  if (!TOKEN) throw new Error('Otvori link koji je server ispisao u terminalu (s #t=… na kraju).');
+  const headers = { 'x-pazar-token': TOKEN };
+  const r = await fetch(put, tijelo
+    ? { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify(tijelo) }
+    : { headers });
   const j = await r.json();
   if (!r.ok) throw new Error(j.greska || 'Greška');
   return j;
+}
+
+function vezanje() { return document.querySelector('input[name="vezanje"]:checked').value; }
+function postaviVezanje(v) {
+  document.querySelector(`input[name="vezanje"][value="${v}"]`).checked = true;
+  $('uredjaj-polje').hidden = v !== 'uredjaj';
+  $('bilo-koji-napomena').hidden = v === 'uredjaj';
+  $('uredjaj').required = v === 'uredjaj';
 }
 
 function postaviDane(dana) {
@@ -302,6 +339,7 @@ async function kopiraj(tekst, gdje) {
 $('brzo').addEventListener('click', (e) => { if (e.target.dataset.dana) postaviDane(Number(e.target.dataset.dana)); });
 $('paketi').addEventListener('click', (e) => { if (e.target.dataset.paket !== undefined) crtajModule(e.target.dataset.paket.split(',').filter(Boolean)); });
 $('vrijediDo').addEventListener('input', oznaciBrzo);
+$('vezanje').addEventListener('change', () => postaviVezanje(vezanje()));
 $('saBackupom').addEventListener('change', (e) => postaviBackup(e.target.checked));
 $('klijent').addEventListener('change', () => { if ($('saBackupom').checked) postaviBackup(true); });
 $('bucket').addEventListener('input', oznaciBucket);
@@ -329,7 +367,9 @@ $('forma-izdaj').addEventListener('submit', async (e) => {
   e.preventDefault();
   $('poruka-izdaj').textContent = '';
   try {
-    const l = await api('/api/izdaj', { klijent: $('klijent').value, vrijediDo: $('vrijediDo').value, uredjaj: $('uredjaj').value, moduli: odabraniModuli(),
+    const biloKoji = vezanje() === 'bilo-koji';
+    const l = await api('/api/izdaj', { klijent: $('klijent').value, vrijediDo: $('vrijediDo').value,
+      uredjaj: biloKoji ? '' : $('uredjaj').value, biloKojiUredjaj: biloKoji, moduli: odabraniModuli(),
       backup: $('saBackupom').checked ? { bucket: $('bucket').value, accessKeyId: $('r2-key').value, secret: $('r2-secret').value } : undefined });
     $('token').value = l.token;
     $('rezultat').hidden = false;
@@ -355,6 +395,8 @@ $('lista').addEventListener('click', (e) => {
     const l = izdane.filter((x) => { const q = $('pretraga').value.trim().toLowerCase(); return !q || x.klijent.toLowerCase().includes(q); })[Number(b.dataset.produzi)];
     $('klijent').value = l.klijent;
     $('uredjaj').value = l.uredjaj || '';
+    // Produženje zadržava izbor stare licence; nova forma je uvijek "jedan računar".
+    postaviVezanje(l.uredjaj ? 'uredjaj' : 'bilo-koji');
     // Stari unos bez liste modula: isti podrazumijevani paket kao za novog klijenta
     crtajModule(l.moduli ?? podrazumijevani);
     postaviBackup(!!l.backup, l.backup?.bucket);
@@ -392,6 +434,7 @@ $('forma-provjeri').addEventListener('submit', async (e) => {
 });
 
 postaviDane(31);
+postaviVezanje('uredjaj');
 ucitaj();
 </script>
 </body>
