@@ -21,6 +21,7 @@ import {
 import { pdf } from '@react-pdf/renderer';
 import { OtpremnicaPdf } from '@/components/OtpremnicaPdf';
 import { otvoriFakturuZaStampu } from '@/components/stampaFakture';
+import { ucitajZaStampu } from '@/lib/stampa';
 import FakturaDialog, { type SkicaFakture } from '@/components/FakturaDialog';
 import SlobodnaStavkaDialog from '@/components/kasa/SlobodnaStavkaDialog';
 import StavkeRacuna from '@/components/kasa/StavkeRacuna';
@@ -465,8 +466,8 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
     try {
       const fullOrder = await window.api.getOrder(orderId);
       if (!fullOrder) return;
-      const firma = await window.api.getFirmaSettings();
-      const blob = await pdf(<OtpremnicaPdf order={fullOrder} firma={firma} />).toBlob();
+      const { firma, postavke } = await ucitajZaStampu();
+      const blob = await pdf(<OtpremnicaPdf order={fullOrder} firma={firma} postavke={postavke} />).toBlob();
       const url = URL.createObjectURL(blob);
       const win = window.open(url, '_blank');
       if (win) win.onafterprint = () => URL.revokeObjectURL(url);

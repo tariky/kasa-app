@@ -1,6 +1,6 @@
 import React from 'react';
 import { Document, Page, View, Text, Image, StyleSheet } from '@react-pdf/renderer';
-import { Order, OrderItem, BankAccount } from '@/types';
+import { Order, BankAccount } from '@/types';
 import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
 import { POTPIS_AUTORA, POTPIS_AUTORA_EN } from '@/lib/brend';
 import { pdvStavke, iznosStavke } from '@/lib/racun';
@@ -9,6 +9,9 @@ import { uNetto } from '@/lib/pdvUnos';
 import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { formatDatumValute } from '@/lib/valuta';
 import { logoVelicina, kontaktFirme } from '@/lib/firma';
+import { formatRabat, pecatZa, type DokumentPostavke } from '@/lib/dokumentPostavke';
+import { PotpisBlok } from './pdf/PotpisBlok';
+import { PdfPodnozje, DODATAK_PODNOZJA } from './pdf/PdfPodnozje';
 
 export type InvoiceLang = 'bs' | 'en';
 
@@ -28,6 +31,7 @@ export interface RacunPdfProps {
     logoVelicina?: number;
   };
   lang?: InvoiceLang;
+  postavke: DokumentPostavke;
 }
 
 const translations = {
@@ -43,6 +47,7 @@ const translations = {
     status: 'Status',
     statusCompleted: 'Završeno',
     statusRefunded: 'Reklamirano',
+    colCode: 'Šifra',
     colDescription: 'Opis',
     colUnit: 'JM',
     colQty: 'Kol.',
@@ -75,6 +80,7 @@ const translations = {
     status: 'Status',
     statusCompleted: 'Completed',
     statusRefunded: 'Refunded',
+    colCode: 'Code',
     colDescription: 'Description',
     colUnit: 'Unit',
     colQty: 'Qty',
@@ -251,6 +257,7 @@ const s = StyleSheet.create({
   },
   // Širine u pt (A4 minus margine = 495pt); Opis uzima ostatak (~173pt).
   colRb: { width: 18 },
+  colSifra: { width: 44 },
   colArtikal: { flex: 1, paddingRight: 8 },
   colJm: { width: 26 },
   colKol: { width: 38, textAlign: 'right' },
@@ -366,50 +373,16 @@ const s = StyleSheet.create({
     color: '#000',
     letterSpacing: 0.3,
   },
-
-  /* ── Signatures ── */
-  signaturesWrap: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 'auto',
-    paddingTop: 40,
-    paddingBottom: 20,
-  },
-  signatureBlock: {
-    width: '42%',
-  },
-  signatureLine: {
-    borderTop: '0.5pt solid #000',
-    marginBottom: 4,
-  },
-  signatureLabel: {
-    fontSize: 7,
-    fontFamily: FB,
-    fontWeight: 700,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-    color: '#000',
-    textAlign: 'center',
-  },
-
-  /* ── Footer ── */
-  footer: {
-    position: 'absolute',
-    bottom: 30,
-    left: 50,
-    right: 50,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    borderTop: '0.5pt solid #ccc',
-    paddingTop: 8,
-    fontSize: 7,
-    color: '#999',
-  },
 });
 
-export function RacunPdf({ order, firma, lang = 'bs' }: RacunPdfProps) {
+export function RacunPdf({ order, firma, lang = 'bs', postavke }: RacunPdfProps) {
   const t = translations[lang];
   const stavke = order.stavke ?? [];
+  const kol = postavke.kolone;
+  const imaRabat = stavke.some(si => si.rabat > 0);
+  const dodatak = postavke.podnozje ? { paddingBottom: 70 + DODATAK_PODNOZJA } : {};
+  // Engleski potpisi ostaju fiksni prijevodi — nazivi iz postavki su na bosanskom.
+  const potpisi = lang === 'en' ? { lijevo: t.signatureIssuer, desno: t.signatureRecipient } : postavke.potpisi.racun;
 
   // Use stored pdvIznos as single source of truth
   const pdvIznos = order.pdvIznos;
@@ -433,7 +406,7 @@ export function RacunPdf({ order, firma, lang = 'bs' }: RacunPdfProps) {
 
   return (
     <Document>
-      <Page size="A4" style={s.page}>
+      <Page size="A4" style={[s.page, dodatak]}>
 
         {/* ── Top: Logo+Firma left, Invoice title right ── */}
         <View style={s.topBar}>
@@ -512,11 +485,12 @@ export function RacunPdf({ order, firma, lang = 'bs' }: RacunPdfProps) {
         <View style={s.table}>
           <View style={s.tHeaderRow}>
             <Text style={[s.tHeaderCell, s.colRb]}>#</Text>
+            {kol.sifra && <Text style={[s.tHeaderCell, s.colSifra]}>{t.colCode}</Text>}
             <Text style={[s.tHeaderCell, s.colArtikal]}>{t.colDescription}</Text>
-            <Text style={[s.tHeaderCell, s.colJm]}>{t.colUnit}</Text>
+            {kol.jm && <Text style={[s.tHeaderCell, s.colJm]}>{t.colUnit}</Text>}
             <Text style={[s.tHeaderCell, s.colKol]}>{t.colQty}</Text>
             <Text style={[s.tHeaderCell, s.colCijena]}>{t.colPrice}</Text>
-            <Text style={[s.tHeaderCell, s.colRabat]}>{t.colDiscount}</Text>
+            {imaRabat && <Text style={[s.tHeaderCell, s.colRabat]}>{t.colDiscount}</Text>}
             <Text style={[s.tHeaderCell, s.colPdv]}>{t.colVat}</Text>
             <Text style={[s.tHeaderCell, s.colUkupno]}>{t.colAmount}</Text>
           </View>
@@ -531,13 +505,16 @@ export function RacunPdf({ order, firma, lang = 'bs' }: RacunPdfProps) {
             return (
               <View key={si.id} style={s.tRow}>
                 <Text style={[s.tCell, s.colRb]}>{i + 1}</Text>
+                {kol.sifra && <Text style={[s.tCell, s.colSifra]}>{si.productSifra ?? ''}</Text>}
                 <Text style={[s.tCellBold, s.colArtikal]}>{si.productNaziv ?? ''}</Text>
-                <Text style={[s.tCell, s.colJm]}>{si.productJm ?? ''}</Text>
+                {kol.jm && <Text style={[s.tCell, s.colJm]}>{si.productJm ?? ''}</Text>}
                 <Text style={[s.tCell, s.colKol]}>{si.kolicina}</Text>
                 <Text style={[s.tCell, s.colCijena]}>{formatKM(cijenaBezPdv)}</Text>
-                <Text style={[s.tCell, s.colRabat]}>
-                  {si.rabat > 0 ? `${si.rabat.toFixed(0)}%` : '—'}
-                </Text>
+                {imaRabat && (
+                  <Text style={[s.tCell, s.colRabat]}>
+                    {si.rabat > 0 ? formatRabat(si.rabat) : '—'}
+                  </Text>
+                )}
                 <Text style={[s.tCell, s.colPdv]}>
                   {si.pdvStopa === 'E' ? formatKM(linePdv) : '—'}
                 </Text>
@@ -596,28 +573,15 @@ export function RacunPdf({ order, firma, lang = 'bs' }: RacunPdfProps) {
           </View>
         )}
 
-        {/* ── Signatures ── */}
-        <View style={s.signaturesWrap} wrap={false}>
-          <View style={s.signatureBlock}>
-            <View style={s.signatureLine} />
-            <Text style={s.signatureLabel}>{t.signatureIssuer}</Text>
-          </View>
-          <View style={s.signatureBlock}>
-            <View style={s.signatureLine} />
-            <Text style={s.signatureLabel}>{t.signatureRecipient}</Text>
-          </View>
-        </View>
+        <PotpisBlok linije={potpisi} pecat={pecatZa(postavke, 'racun')} />
 
-        {/* ── Footer ── */}
-        <View style={s.footer} fixed>
-          <Text>{lang === 'en' ? POTPIS_AUTORA_EN : POTPIS_AUTORA}</Text>
-          <Text>{firma.naziv} · {t.generated}: {today}</Text>
-          <Text
-            render={({ pageNumber, totalPages }) =>
-              `${pageNumber} / ${totalPages}`
-            }
-          />
-        </View>
+        <PdfPodnozje
+          firmaNaziv={firma.naziv}
+          danas={today}
+          tekst={postavke.podnozje}
+          potpisAutora={lang === 'en' ? POTPIS_AUTORA_EN : POTPIS_AUTORA}
+          generisano={t.generated}
+        />
       </Page>
     </Document>
   );

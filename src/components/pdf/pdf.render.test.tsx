@@ -3,6 +3,8 @@ import { Document, Page, renderToBuffer } from '@react-pdf/renderer';
 import { PotpisBlok } from './PotpisBlok';
 import { PdfPodnozje } from './PdfPodnozje';
 import { PrilogPdf } from '../PrilogPdf';
+import { RacunPdf } from '../RacunPdf';
+import { OtpremnicaPdf } from '../OtpremnicaPdf';
 import { ZADANE_DOKUMENT_POSTAVKE, procitajDokumentPostavke } from '@/lib/dokumentPostavke';
 
 // 1×1 PNG
@@ -72,5 +74,14 @@ for (const [ime, postavke] of [['zadano', ZADANE_DOKUMENT_POSTAVKE], ['sve uklju
   test(`faktura (${ime})`, async () => {
     await renderuj(<PrilogPdf order={ORDER} firma={FIRMA} stavke={ORDER.stavke} postavke={postavke} />);
     await renderuj(<PrilogPdf order={ORDER} firma={{ ...FIRMA, ziroRacuniPozicija: 'podnozje' }} stavke={ORDER.stavke} postavke={postavke} />);
+  });
+}
+
+for (const [ime, postavke] of [['zadano', ZADANE_DOKUMENT_POSTAVKE], ['sve uključeno', SVE_UKLJUCENO]] as const) {
+  test(`račun bs/en i otpremnica (${ime})`, async () => {
+    await renderuj(<RacunPdf order={ORDER} firma={FIRMA} postavke={postavke} />);
+    await renderuj(<RacunPdf order={ORDER} firma={FIRMA} postavke={postavke} lang="en" />);
+    await renderuj(<RacunPdf order={{ ...ORDER, stavke: ORDER.stavke.map((s: any) => ({ ...s, rabat: 0 })) }} firma={FIRMA} postavke={postavke} />);
+    await renderuj(<OtpremnicaPdf order={ORDER} firma={FIRMA} postavke={postavke} />);
   });
 }

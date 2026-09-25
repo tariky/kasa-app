@@ -10,7 +10,6 @@ import { formatDatumValute } from '@/lib/valuta';
 import { gotovinskiIznos } from '@/lib/drawer';
 import { opisPlacanja, raspodjelaPlacanja } from '@/lib/placanje';
 import { round2 } from '@/lib/novac';
-import { LOGO_VELICINA } from '@/lib/firma';
 import { ucitajZaStampu } from '@/lib/stampa';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -126,10 +125,6 @@ export function RacunDetailDialog({ orderId, redoslijed, uloga, onClose, onNavig
   const mozeUreditiFakturu = imaFakturu && !fakturaZavrsena && !refunded;
 
   // ── dokumenti ─────────────────────────────────────────
-  const loadFirma = async () => {
-    try { return await window.api.getFirmaSettings(); }
-    catch { return { naziv: '', adresa: '', grad: '', idBroj: '', pdvBroj: '', skladiste: '', web: '', email: '', logo: '', logoVelicina: LOGO_VELICINA.zadano, ziroRacuniPozicija: 'zaglavlje' as const, bankAccounts: [] }; }
-  };
   const otvoriZaStampu = (blob: Blob) => {
     const url = URL.createObjectURL(blob);
     const win = window.open(url, '_blank');
@@ -140,8 +135,14 @@ export function RacunDetailDialog({ orderId, redoslijed, uloga, onClose, onNavig
     if (!savePath) return;
     await window.api.writeFile(savePath, Array.from(new Uint8Array(await blob.arrayBuffer())) as any);
   };
-  const racunBlob = async (o: Order) => pdf(<RacunPdf order={o} firma={await loadFirma()} lang={lang} />).toBlob();
-  const otpremnicaBlob = async (o: Order) => pdf(<OtpremnicaPdf order={o} firma={await loadFirma()} />).toBlob();
+  const racunBlob = async (o: Order) => {
+    const { firma, postavke } = await ucitajZaStampu();
+    return pdf(<RacunPdf order={o} firma={firma} postavke={postavke} lang={lang} />).toBlob();
+  };
+  const otpremnicaBlob = async (o: Order) => {
+    const { firma, postavke } = await ucitajZaStampu();
+    return pdf(<OtpremnicaPdf order={o} firma={firma} postavke={postavke} />).toBlob();
+  };
 
   const stampajRacun = async () => { if (order) try { otvoriZaStampu(await racunBlob(order)); } catch (e) { greska(e, 'Štampa računa'); } };
   const spremiRacun = async () => {

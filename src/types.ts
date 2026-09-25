@@ -120,6 +120,7 @@ export interface OrderItem {
   pdvStopa: string;
   productNaziv?: string;
   productJm?: string;
+  productSifra?: string;
 }
 
 export interface Kupac {

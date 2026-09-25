@@ -4,6 +4,7 @@
  * vrijednost, pa dokument bez podešavanja izgleda kao prije ovih postavki.
  */
 import type { SqlDb } from './sqldb';
+import { round2 } from './novac';
 
 export type NacinPlacanja = 'Gotovina' | 'Kartica' | 'Virman' | 'Ček';
 export const NACINI_PLACANJA: NacinPlacanja[] = ['Gotovina', 'Kartica', 'Virman', 'Ček'];
@@ -229,5 +230,5 @@ export function pecatZa(p: DokumentPostavke, dok: DokumentSaPecatom): { slika: s
 
 /** Rabat za štampu: „5%“, „2,5%“, „12,75%“. */
 export function formatRabat(r: number): string {
-  return `${String(Math.round(r * 100) / 100).replace('.', ',')}%`;
+  return `${String(round2(r)).replace('.', ',')}%`;
 }

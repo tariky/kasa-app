@@ -173,4 +173,8 @@ describe('formatRabat', () => {
     expect(formatRabat(12.75)).toBe('12,75%');
     expect(formatRabat(3.333)).toBe('3,33%');
   });
+
+  test('zaokružuje kao round2 (1.005 → 1,01%)', () => {
+    expect(formatRabat(1.005)).toBe('1,01%');
+  });
 });
