@@ -113,6 +113,7 @@ describe.skipIf(!IZVOR)('stvarna baza: TS i Rust vraćaju isto', () => {
       ['settings:getTring'], ['settings:getFirma'], ['settings:get', 'proizvodnja.enabled'],
       ['savedCarts:list'], ['cash:getToday'], ['cash:lastPolog'], ['cash:drawerState'],
       ['report:getData', 'dnevni', '2000-01-01', '2100-12-31'], ['report:getData', 'primke', '2000-01-01', '2100-12-31'],
+      ['izvoz:knjigovodja', '2000-01-01', '2100-12-31'], ['izvoz:knjigovodja', '2026-09-01', '2026-09-30'],
     ];
     for (const id of ids('SELECT id FROM orders')) p.push(['order:get', id], ['prilog:getStavke', id]);
     for (const id of ids('SELECT id FROM primke')) p.push(['primka:get', id], ['primka:pregledBrisanja', id]);
