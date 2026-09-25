@@ -373,7 +373,8 @@ fn product_find_by_dobavljac_sifra(db: &Db, dobavljac_id: &Value, sifra: &Value)
 // a svaki novi artikal trajno zauzme mjesto (PLU) u memoriji uređaja — zato se
 // isti naziv (bez obzira na velika slova), stopa i JM uvijek vraćaju na isti
 // artikal, kome se mijenja samo cijena.
-fn product_slobodan(db: &Db, data: &Value) -> R<Value> {
+fn product_slobodan(b: &Backend, data: &Value) -> R<Value> {
+    let db = b.db()?;
     let naziv = js::trim(&data["naziv"]).unwrap_or("").to_string();
     if naziv.is_empty() {
         baci!("Naziv stavke je obavezan");
@@ -392,12 +393,19 @@ fn product_slobodan(db: &Db, data: &Value) -> R<Value> {
 
     db.tx(|| {
         // SQLite-ov lower() zna samo ASCII (Š ≠ š), pa se naziv poredi ovdje.
-        let kandidati = db.all("SELECT id, naziv FROM products WHERE slobodan = 1 AND pdvStopa = ? AND jm = ?", p![stopa, jm])?;
+        let kandidati = db.all("SELECT id, naziv, cijena FROM products WHERE slobodan = 1 AND pdvStopa = ? AND jm = ?", p![stopa, jm])?;
         let mali = naziv.to_lowercase();
         let postojeci = kandidati.iter().find(|k| k["naziv"].as_str().is_some_and(|n| n.to_lowercase() == mali));
         let id = match postojeci {
             Some(k) => {
                 db.run("UPDATE products SET cijena = ?, updatedAt = datetime('now','localtime') WHERE id = ?", p![data["cijena"], k["id"]])?;
+                if razlicito(&data["cijena"], &k["cijena"]) {
+                    audit::zabiljezi(
+                        b,
+                        "artikal:cijena",
+                        json!({ "productId": k["id"], "staraCijena": k["cijena"], "novaCijena": data["cijena"], "izvor": "slobodan" }),
+                    )?;
+                }
                 k["id"].clone()
             }
             None => {
@@ -571,7 +579,7 @@ pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
         "product:delete" => product_delete(db, &a[0]),
         "product:adjustStock" => product_adjust_stock(b, &a[0], &a[1]),
         "product:search" => product_search(db, &a[0]),
-        "product:slobodan" => product_slobodan(db, &a[0]),
+        "product:slobodan" => product_slobodan(b, &a[0]),
         "product:getDobavljacSifre" => product_get_dobavljac_sifre(db, &a[0]),
         "product:setDobavljacSifre" => product_set_dobavljac_sifre(db, &a[0], &a[1]),
         "product:findByDobavljacSifra" => product_find_by_dobavljac_sifra(db, &a[0], &a[1]),

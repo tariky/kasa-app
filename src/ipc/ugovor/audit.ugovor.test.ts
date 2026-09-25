@@ -109,6 +109,14 @@ describe('audit_log', () => {
     expect(audit()).toEqual([{ korisnikId: ADMIN, akcija: 'artikal:cijena', detalji: { productId: p, staraCijena: 10, novaCijena: 12.5, izvor: 'rucno' } }]);
   });
 
+  test('slobodna stavka: nova cijena postojećeg artikla → artikal:cijena; novi artikal i ista cijena ne', async () => {
+    const stavka = (cijena: number) => ({ naziv: 'Popravak', cijena, pdvStopa: 'E' });
+    const { id } = await b.call('product:slobodan', stavka(5));
+    await b.call('product:slobodan', stavka(5));
+    await b.call('product:slobodan', stavka(7.5));
+    expect(audit()).toEqual([{ korisnikId: ADMIN, akcija: 'artikal:cijena', detalji: { productId: id, staraCijena: 5, novaCijena: 7.5, izvor: 'slobodan' } }]);
+  });
+
   test('primka: nova cijena, izmjena i vraćanje cijene pri brisanju → artikal:cijena; pregled ne ostavlja trag', async () => {
     const saZalihom = dodajArtikal('P1', 10);
     b.db.prepare("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'ulaz', 5, 'test', 0)").run(saZalihom);

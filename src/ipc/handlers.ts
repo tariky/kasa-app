@@ -600,13 +600,16 @@ export function registerIpcHandlers(): void {
     return db.transaction(() => {
       // SQLite-ov lower() zna samo ASCII (Š ≠ š), pa se naziv poredi ovdje.
       const kandidati = db.prepare(
-        'SELECT id, naziv FROM products WHERE slobodan = 1 AND pdvStopa = ? AND jm = ?'
-      ).all(data.pdvStopa, jm) as { id: number; naziv: string }[];
+        'SELECT id, naziv, cijena FROM products WHERE slobodan = 1 AND pdvStopa = ? AND jm = ?'
+      ).all(data.pdvStopa, jm) as { id: number; naziv: string; cijena: number }[];
       const postojeci = kandidati.find(k => k.naziv.toLowerCase() === naziv.toLowerCase());
       let id: number;
       if (postojeci) {
         id = postojeci.id;
         db.prepare("UPDATE products SET cijena = ?, updatedAt = datetime('now','localtime') WHERE id = ?").run(data.cijena, id);
+        if (data.cijena !== postojeci.cijena) {
+          audit('artikal:cijena', { productId: id, staraCijena: postojeci.cijena, novaCijena: data.cijena, izvor: 'slobodan' });
+        }
       } else {
         const zadnji = db.prepare(
           "SELECT MAX(CAST(substr(sifra, 2) AS INTEGER)) AS n FROM products WHERE slobodan = 1"
@@ -1379,6 +1382,7 @@ export function registerIpcHandlers(): void {
         if (ponuda && ponuda.status !== 'konvertovana') oznaciPonuduFakturisanom(db, snap.ponudaId, orderId);
       }
       db.prepare('DELETE FROM pending_receipts WHERE id = ?').run(data.id);
+      audit('pending:rijesi', { pendingId: data.id, brojFiskalnogRacuna: data.brojFiskalnogRacuna.trim(), orderId });
       return orderId;
     });
     return { id: resolveTx() };

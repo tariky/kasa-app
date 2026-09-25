@@ -393,6 +393,9 @@ describe('pending:*', () => {
       .toEqual({ brojFiskalnogRacuna: '300', isManual: 1, createdAt: '2026-03-03 12:00:00', ukupno: 12 });
     expect(stanje(p)).toBe(8);
     expect(await b.call('pending:list')).toEqual([]);
+    const trag = red("SELECT korisnikId, detalji FROM audit_log WHERE akcija = 'pending:rijesi'");
+    expect({ ...trag, detalji: JSON.parse(trag.detalji) })
+      .toEqual({ korisnikId: ADMIN, detalji: { pendingId: id, brojFiskalnogRacuna: '300', orderId: r.id } });
   });
 
   test('resolve odbija postojeći broj i nepostojeći zapis', async () => {
@@ -405,6 +408,7 @@ describe('pending:*', () => {
     await expect(b.call('pending:resolve', { id: 999, brojFiskalnogRacuna: '301', createdAt: '2026-03-03' }))
       .rejects.toThrow('Zapis više ne postoji');
     expect(await b.call('pending:list')).toHaveLength(1);
+    expect(red("SELECT COUNT(*) AS n FROM audit_log WHERE akcija = 'pending:rijesi'").n).toBe(0);
   });
 
   test('resolve fakture nosi valutu i napomenu i veže ponudu', async () => {

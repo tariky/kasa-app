@@ -945,7 +945,8 @@ fn pending_list(db: &Db) -> R<Value> {
     Ok(Value::from(out))
 }
 
-fn pending_resolve(db: &Db, data: &Value) -> R<Value> {
+fn pending_resolve(b: &Backend, data: &Value) -> R<Value> {
+    let db = b.db()?;
     if js::blank(&data["brojFiskalnogRacuna"]) {
         baci!("Fiskalni broj je obavezan");
     }
@@ -995,6 +996,7 @@ fn pending_resolve(db: &Db, data: &Value) -> R<Value> {
             }
         }
         db.run("DELETE FROM pending_receipts WHERE id = ?", p![data["id"]])?;
+        audit::zabiljezi(b, "pending:rijesi", json!({ "pendingId": data["id"], "brojFiskalnogRacuna": broj, "orderId": order_id }))?;
         Ok(order_id)
     })?;
     Ok(json!({ "id": id }))
@@ -1132,7 +1134,7 @@ pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
         // Orkestracija (štampa → atomični upis) je u `refund_and_print`.
         "order:refundAndPrint" => storno(b, &a[0]),
         "pending:list" => pending_list(db),
-        "pending:resolve" => pending_resolve(db, &a[0]),
+        "pending:resolve" => pending_resolve(b, &a[0]),
         "pending:discard" => pending_discard(b, &a[0]),
         "order:getFiscalGaps" => get_fiscal_gaps(db),
         "order:dismissFiscalGap" => dismiss_fiscal_gap(b, &a[0]),
