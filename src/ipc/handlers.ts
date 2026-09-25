@@ -36,6 +36,7 @@ import {
 import { buildTringRacun, buildTringReklamacija } from '../lib/tringRacun';
 import { addCashMovement, retryCashMovement, getTodayMovements, getDrawerState, getLastPologIznos } from '../lib/cash';
 import { logoVelicina } from '../lib/firma';
+import { dohvatiKnjigovodja } from '../lib/knjigovodja/podaci';
 import * as Tring from '../services/tring';
 import { provjeriKanal, stanjeLicence, aktivirajLicencu } from './licenca';
 import Database from 'better-sqlite3';
@@ -1631,6 +1632,9 @@ export function registerIpcHandlers(): void {
 
     throw new Error(`Nepoznat tip izvještaja: ${type}`);
   });
+
+  // Izvoz za knjigovođu: sirovi redovi za period, obračun je u rendereru.
+  handle('izvoz:knjigovodja', (od: string, doDatum: string) => dohvatiKnjigovodja(db, od, doDatum));
 
   // ─── Nivelacija Helpers ─────────────────────────────────
 
