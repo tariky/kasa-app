@@ -30,6 +30,7 @@ pub mod cash;
 pub mod ponude;
 pub mod proizvodnja;
 pub mod uredjaj;
+pub mod izvoz;
 
 use std::ops::Index;
 use std::path::{Path, PathBuf};

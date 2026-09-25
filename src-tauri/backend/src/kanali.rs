@@ -2,7 +2,7 @@
 //! kanal koji nije njen.
 
 use crate::greska::{Greska, R};
-use crate::{cash, katalog, korisnici, licenca, ponude, postavke, proizvodnja, racuni, skladiste, uredjaj};
+use crate::{cash, izvoz, katalog, korisnici, licenca, ponude, postavke, proizvodnja, racuni, skladiste, uredjaj};
 use crate::{Args, Backend};
 use serde_json::Value;
 
@@ -19,6 +19,7 @@ pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> R<Value> {
         "ponuda" => ponude::obradi(b, kanal, a),
         "nalog" | "normativ" => proizvodnja::obradi(b, kanal, a),
         "tring" | "dialog" | "fs" | "db" => uredjaj::obradi(b, kanal, a),
+        "izvoz" => izvoz::obradi(b, kanal, a),
         _ => None,
     };
     r.unwrap_or_else(|| Err(Greska(format!("Kanal ne postoji: {kanal}"))))

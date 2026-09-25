@@ -156,6 +156,7 @@ export function napraviApi(pozovi: Pozovi, naLicencaBlokirano: (cb: () => void) 
 
     // Reports
     getReportData: (type: string, from: string, to: string) => pozovi('report:getData', type, from, to),
+    izvozKnjigovodja: (od: string, doDatum: string) => pozovi('izvoz:knjigovodja', od, doDatum),
 
     // Database
     backupDatabase: () => pozovi('db:backup'),

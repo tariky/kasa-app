@@ -7,10 +7,11 @@ import { LedgerHead } from '@/components/ui/ledger';
 import { Stat } from '@/components/ui/stat';
 import {
   Printer, FileText, AlertTriangle, TrendingUp, Package,
-  Calendar, Loader2, ChevronRight, Zap, Clock, BarChart3, Download, Banknote, Boxes,
+  Calendar, Loader2, ChevronRight, Zap, Clock, BarChart3, Download, Banknote, Boxes, BookOpenCheck,
 } from 'lucide-react';
 import { VrijednostZalihe } from '@/components/skladiste/VrijednostZalihe';
 import CashMovementDialog from '@/components/CashMovementDialog';
+import KnjigovodjaTab from '@/components/izvjestaji/KnjigovodjaTab';
 import { cn, formatKM, formatDateTime, formatDate } from '@/lib/utils';
 import { nabavnaVrijednost } from '@/lib/kalkulacija';
 import { Order, Primka } from '@/types';
@@ -27,7 +28,7 @@ function fmtDisplay(d: Date): string {
   return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
 }
 
-type Tab = 'promet' | 'primke' | 'nivelacije' | 'zaliha' | 'fiskalni';
+type Tab = 'promet' | 'primke' | 'nivelacije' | 'zaliha' | 'fiskalni' | 'knjigovodja';
 
 /** Ćelija izvještajne tabele — ista mjera kao lista artikala. */
 const td = 'py-2.5 border-b border-slate-100';
@@ -88,7 +89,7 @@ function IzvjestajKartica({ naslov, broj, akcije, children }: {
   );
 }
 
-export default function IzvjestajiScreen({ korisnikId }: { korisnikId: number }) {
+export default function IzvjestajiScreen({ korisnikId, uloga }: { korisnikId: number; uloga: string }) {
   const [dateFrom, setDateFrom] = useState(new Date());
   const [dateTo, setDateTo] = useState(new Date());
   const [fromOpen, setFromOpen] = useState(false);
@@ -318,6 +319,7 @@ export default function IzvjestajiScreen({ korisnikId }: { korisnikId: number })
     { id: 'nivelacije', label: 'Nivelacije', icon: FileText },
     { id: 'zaliha', label: 'Zaliha', icon: Boxes },
     { id: 'fiskalni', label: 'Fiskalni', icon: Printer },
+    ...(uloga === 'admin' ? [{ id: 'knjigovodja' as Tab, label: 'Knjigovođa', icon: BookOpenCheck }] : []),
   ];
 
   return (
@@ -349,8 +351,8 @@ export default function IzvjestajiScreen({ korisnikId }: { korisnikId: number })
             })}
           </div>
 
-          {/* Date range — zaliha je stanje na danas, period joj ne treba */}
-          {activeTab !== 'zaliha' && <div className="flex items-center gap-3">
+          {/* Date range — zaliha je stanje na danas, Knjigovođa ima svoj izbor perioda */}
+          {activeTab !== 'zaliha' && activeTab !== 'knjigovodja' && <div className="flex items-center gap-3">
             <div className="flex items-center gap-2 text-[13px] text-slate-500">
               <Calendar size={14} />
               <span>Period:</span>
@@ -426,7 +428,7 @@ export default function IzvjestajiScreen({ korisnikId }: { korisnikId: number })
       {/* ── Content area ── */}
       <div className="flex-1 min-h-0 overflow-hidden">
 
-        {reportError && (
+        {reportError && activeTab !== 'knjigovodja' && (
           <div className="mx-6 mt-4 flex items-center gap-2 rounded-xl px-4 py-3 text-[12px] font-medium bg-red-50/60 border border-red-100 text-red-600">
             <AlertTriangle size={14} className="flex-shrink-0" />
             {reportError}
@@ -868,6 +870,9 @@ export default function IzvjestajiScreen({ korisnikId }: { korisnikId: number })
             />
           </div>
         )}
+
+        {/* ═══ KNJIGOVOĐA TAB ═══ */}
+        {activeTab === 'knjigovodja' && <KnjigovodjaTab />}
       </div>
     </div>
   );

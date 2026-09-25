@@ -146,8 +146,9 @@ interface Window {
     getFirmaSettings: () => Promise<import('./types').FirmaSettings>;
     saveFirmaSettings: (data: import('./types').FirmaSettings) => Promise<{ success: boolean }>;
     showSaveDialog: (data: { defaultName: string; filters: Array<{ name: string; extensions: string[] }> }) => Promise<string | null>;
-    writeFile: (path: string, buffer: Buffer) => Promise<any>;
+    writeFile: (path: string, buffer: ArrayLike<number>) => Promise<any>;
     getReportData: (type: string, from: string, to: string) => Promise<any[]>;
+    izvozKnjigovodja: (od: string, doDatum: string) => Promise<import('./lib/knjigovodja/tipovi').KnjigovodjaPodaci>;
     backupDatabase: () => Promise<string | null>;
     restoreDatabase: () => Promise<{ source: string; safetyPath: string } | null>;
   };
