@@ -258,6 +258,7 @@ test('kupci dobijaju kolone za zadane vrijednosti dokumenata', () => {
   const cols = (db.prepare('PRAGMA table_info(kupci)').all() as { name: string }[]).map(c => c.name);
   expect(cols).toEqual(expect.arrayContaining(['rokPlacanjaDana', 'nacinPlacanja', 'rabat']));
   runMigrations(db as Db); // idempotentno
+  db.close();
 });
 
 test('aktuelna baza prolazi kroz migracije bez promjena', () => {

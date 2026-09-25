@@ -758,8 +758,13 @@ export function registerIpcHandlers(): void {
     if (data.rabat !== undefined) {
       const v = data.rabat;
       if (prazno(v)) upis.rabat = null;
-      else if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v >= 100) throw new Error('Rabat kupca mora biti od 0 do manje od 100 %');
-      else upis.rabat = Math.round(v * 100) / 100;
+      else {
+        // Gornja granica se provjerava nakon zaokruživanja (99.995 → 100); negativno se
+        // odbija prije, jer Math.round i Rustov round različito zaokružuju -x.5.
+        const r = typeof v === 'number' ? Math.round(v * 100) / 100 : NaN;
+        if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || !(r < 100)) throw new Error('Rabat kupca mora biti od 0 do manje od 100 %');
+        upis.rabat = r;
+      }
     }
     return upis;
   };

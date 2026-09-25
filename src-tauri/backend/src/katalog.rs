@@ -568,8 +568,10 @@ fn validiraj_zadano_kupca(data: &Value) -> R<Vec<(&'static str, Value)>> {
         if prazno(v) {
             upis.push(("rabat", Value::Null));
         } else {
-            match v.as_f64() {
-                Some(n) if n.is_finite() && (0.0..100.0).contains(&n) => upis.push(("rabat", json!((n * 100.0).round() / 100.0))),
+            // Gornja granica se provjerava nakon zaokruživanja (99.995 → 100); negativno se
+            // odbija prije, jer JS Math.round i f64::round različito zaokružuju -x.5.
+            match v.as_f64().map(|n| (n, (n * 100.0).round() / 100.0)) {
+                Some((n, r)) if n.is_finite() && n >= 0.0 && r < 100.0 => upis.push(("rabat", json!(r))),
                 _ => baci!("Rabat kupca mora biti od 0 do manje od 100 %"),
             }
         }

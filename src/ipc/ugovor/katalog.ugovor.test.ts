@@ -976,6 +976,10 @@ describe('kupac: zadano za dokumente', () => {
     await expect(b.call('kupac:create', { naziv: 'A', idBroj: '1', rokPlacanjaDana: 2.5 })).rejects.toThrow(rok);
     await expect(b.call('kupac:create', { naziv: 'A', idBroj: '1', rabat: 100 })).rejects.toThrow(rab);
     await expect(b.call('kupac:create', { naziv: 'A', idBroj: '1', rabat: -0.5 })).rejects.toThrow(rab);
+    // Provjera ide nakon zaokruživanja: 99.995 bi se upisao kao 100.
+    await expect(b.call('kupac:create', { naziv: 'A', idBroj: '1', rabat: 99.995 })).rejects.toThrow(rab);
+    // Negativan unos se odbija prije zaokruživanja (-0.005 bi se zaokružio na -0).
+    await expect(b.call('kupac:create', { naziv: 'A', idBroj: '1', rabat: -0.005 })).rejects.toThrow(rab);
     await expect(b.call('kupac:create', { naziv: 'A', idBroj: '1', nacinPlacanja: 'Bitcoin' })).rejects.toThrow('Nepoznat način plaćanja "Bitcoin"');
     expect(broj('SELECT COUNT(*) AS n FROM kupci')).toBe(0);
     const id = dodajKupca('B', '2');
