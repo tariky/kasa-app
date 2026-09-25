@@ -11,6 +11,7 @@ import { gotovinskiIznos } from '@/lib/drawer';
 import { opisPlacanja, raspodjelaPlacanja } from '@/lib/placanje';
 import { round2 } from '@/lib/novac';
 import { LOGO_VELICINA } from '@/lib/firma';
+import { ucitajZaStampu } from '@/lib/stampa';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -173,7 +174,8 @@ export function RacunDetailDialog({ orderId, redoslijed, uloga, onClose, onNavig
         });
         return;
       }
-      otvoriZaStampu(await pdf(<PrilogPdf order={order} firma={await loadFirma()} stavke={stavke as any} />).toBlob());
+      const { firma, postavke } = await ucitajZaStampu();
+      otvoriZaStampu(await pdf(<PrilogPdf order={order} firma={firma} stavke={stavke as any} postavke={postavke} />).toBlob());
     } catch (e) { greska(e, 'Štampa fakture'); }
   };
 

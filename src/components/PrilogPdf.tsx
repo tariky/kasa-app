@@ -2,6 +2,9 @@ import { Document, Page, View, Text, Image, StyleSheet } from '@react-pdf/render
 import { Order, BankAccount } from '@/types';
 import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
 import { POTPIS_AUTORA } from '@/lib/brend';
+import { formatRabat, pecatZa, type DokumentPostavke } from '@/lib/dokumentPostavke';
+import { PotpisBlok } from './pdf/PotpisBlok';
+import { PdfPodnozje, PodnozjeTekst, DODATAK_PODNOZJA } from './pdf/PdfPodnozje';
 import { iznosStavke, pdvStavke } from '@/lib/racun';
 import { round2 } from '@/lib/novac';
 import { PDV_FAKTOR_E, PDV_STOPA_E_PCT } from '@/lib/pdv';
@@ -39,6 +42,7 @@ export interface PrilogPdfProps {
     ziroRacuniPozicija?: string;
   };
   stavke: PrilogPdfStavka[];
+  postavke: DokumentPostavke;
 }
 
 const F = PDF_FONT_FAMILY;
@@ -105,15 +109,15 @@ const s = StyleSheet.create({
   tCellLast: { paddingRight: 0 },
   colRb: { width: '4%' },
   colSifra: { width: '12%' },
-  colNaziv: { width: '31%', paddingRight: 10 },
+  /** Naziv uzima širinu svih skrivenih kolona (JM, rabat). */
+  colNaziv: { flex: 1, paddingRight: 10 },
   colJm: { width: '5%' },
   colKol: { width: '8%', textAlign: 'right' },
   colCijena: { width: '14%', textAlign: 'right' },
   colPdv: { width: '12%', textAlign: 'right' },
   colIznos: { width: '14%', textAlign: 'right' },
-  /** Kolona rabata postoji samo kad ga ima — uzima širinu od naziva. */
+  /** Kolona rabata postoji samo kad ga ima. */
   colRabat: { width: '6%', textAlign: 'right' },
-  colNazivUzRabat: { width: '25%', paddingRight: 10 },
 
   /* ── Napomena ── */
   napomenaBox: { marginTop: 14 },
@@ -147,25 +151,6 @@ const s = StyleSheet.create({
   vezaValue: { fontSize: 7.5, color: '#000' },
   vezaNota: { fontSize: 7, color: '#000', marginTop: 4, lineHeight: 1.4 },
 
-  /* ── Signatures ── */
-  signaturesWrap: {
-    flexDirection: 'row', justifyContent: 'space-between',
-    marginTop: 'auto', paddingTop: 40, paddingBottom: 20,
-  },
-  signatureBlock: { width: '42%' },
-  signatureLine: { borderTop: '0.5pt solid #000', marginBottom: 4 },
-  signatureLabel: {
-    fontSize: 7, fontFamily: FB, fontWeight: 700, textTransform: 'uppercase',
-    letterSpacing: 1, color: '#000', textAlign: 'center',
-  },
-
-  /* ── Footer ── */
-  footer: {
-    position: 'absolute', bottom: 30, left: 50, right: 50,
-    flexDirection: 'row', justifyContent: 'space-between',
-    borderTop: '0.5pt solid #ccc', paddingTop: 8, fontSize: 7, color: '#999',
-  },
-
   /* ── Žiro računi u podnožju: zrcali debelu liniju zaglavlja i nosi se na svakoj
      stranici, pa kupac broj za uplatu nađe na istom mjestu kao na memorandumu. ── */
   pagePodnozje: { paddingBottom: 118 },
@@ -185,7 +170,7 @@ const s = StyleSheet.create({
  * A4 faktura uz fiskalni račun — stvarne stavke iza zbirne stavke. Veza sa fiskalnim
  * računom (BF broj) je zakonski obavezna — bez nje je ovo samo papir.
  */
-export function PrilogPdf({ order, firma, stavke }: PrilogPdfProps) {
+export function PrilogPdf({ order, firma, stavke, postavke }: PrilogPdfProps) {
   const pad = (n: number) => String(n).padStart(2, '0');
   const fmtDate = (d: Date) => `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`;
   const fmtDateTime = (d: Date) => `${fmtDate(d)} u ${pad(d.getHours())}:${pad(d.getMinutes())}`;
@@ -195,6 +180,8 @@ export function PrilogPdf({ order, firma, stavke }: PrilogPdfProps) {
   const datumValute = formatDatumValute(order.datumValute);
   const hasKupac = order.kupacNaziv || order.kupacIdBroj;
   const racuniDolje = ziroRacuniPozicija(firma) === 'podnozje' && firma.bankAccounts.length > 0;
+  const kol = postavke.kolone;
+  const dodatak = postavke.podnozje ? { paddingBottom: (racuniDolje ? 118 : 70) + DODATAK_PODNOZJA } : {};
 
   // Cijene u sistemu su sa uračunatim PDV-om; za fakturni prikaz se jedinična
   // cijena bez PDV-a izlučuje iz bruto cijene po stopi stavke.
@@ -206,15 +193,13 @@ export function PrilogPdf({ order, firma, stavke }: PrilogPdfProps) {
     pdv: pdvStavke({ cijena: si.cijena, kolicina: si.kolicina, rabat: si.rabat ?? 0, pdvStopa: si.pdvStopa }),
   }));
   const imaRabat = linije.some(l => l.rabat > 0);
-  const colNaziv = imaRabat ? s.colNazivUzRabat : s.colNaziv;
-  const fmtRabat = (r: number) => `${String(round2(r)).replace('.', ',')}%`;
   const ukupno = round2(linije.reduce((sum, l) => sum + l.iznos, 0));
   const pdvIznos = round2(linije.reduce((sum, l) => sum + l.pdv, 0));
   const osnovica = round2(ukupno - pdvIznos);
 
   return (
     <Document>
-      <Page size="A4" style={racuniDolje ? [s.page, s.pagePodnozje] : s.page}>
+      <Page size="A4" style={[s.page, racuniDolje ? s.pagePodnozje : {}, dodatak]}>
 
         {/* ── Top: Logo+Firma left, title right ── */}
         <View style={s.topBar}>
@@ -297,9 +282,10 @@ export function PrilogPdf({ order, firma, stavke }: PrilogPdfProps) {
         <View style={s.table}>
           <View style={s.tHeaderRow}>
             <Text style={[s.tHeaderCell, s.colRb]}>#</Text>
+            {/* Šifra na fakturi nije pod `kolone.sifra` — faktura je oduvijek ima (prekidač važi za račun, ponudu i otpremnicu). */}
             <Text style={[s.tHeaderCell, s.colSifra]}>Šifra</Text>
-            <Text style={[s.tHeaderCell, colNaziv]}>Naziv</Text>
-            <Text style={[s.tHeaderCell, s.colJm]}>JM</Text>
+            <Text style={[s.tHeaderCell, s.colNaziv]}>Naziv</Text>
+            {kol.jm && <Text style={[s.tHeaderCell, s.colJm]}>JM</Text>}
             <Text style={[s.tHeaderCell, s.colKol]}>Kol.</Text>
             <Text style={[s.tHeaderCell, s.colCijena]}>Cijena bez PDV</Text>
             {imaRabat && <Text style={[s.tHeaderCell, s.colRabat]}>Rabat</Text>}
@@ -311,11 +297,11 @@ export function PrilogPdf({ order, firma, stavke }: PrilogPdfProps) {
             <View key={`${l.productId}-${i}`} style={s.tRow}>
               <Text style={[s.tCell, s.colRb]}>{i + 1}</Text>
               <Text style={[s.tCell, s.colSifra]}>{l.productSifra ?? ''}</Text>
-              <Text style={[s.tCellBold, colNaziv]}>{l.productNaziv ?? `#${l.productId}`}</Text>
-              <Text style={[s.tCell, s.colJm]}>{l.productJm ?? ''}</Text>
+              <Text style={[s.tCellBold, s.colNaziv]}>{l.productNaziv ?? `#${l.productId}`}</Text>
+              {kol.jm && <Text style={[s.tCell, s.colJm]}>{l.productJm ?? ''}</Text>}
               <Text style={[s.tCell, s.colKol]}>{formatKol(l.kolicina)}</Text>
               <Text style={[s.tCell, s.colCijena]}>{formatKM(l.cijenaBezPdv)}</Text>
-              {imaRabat && <Text style={[s.tCell, s.colRabat]}>{l.rabat > 0 ? fmtRabat(l.rabat) : '—'}</Text>}
+              {imaRabat && <Text style={[s.tCell, s.colRabat]}>{l.rabat > 0 ? formatRabat(l.rabat) : '—'}</Text>}
               <Text style={[s.tCell, s.colPdv]}>{formatKM(round2(l.pdv))}</Text>
               <Text style={[s.tCellBold, s.tCellLast, s.colIznos]}>{formatKM(l.iznos)}</Text>
             </View>
@@ -363,17 +349,7 @@ export function PrilogPdf({ order, firma, stavke }: PrilogPdfProps) {
           </Text>
         </View>
 
-        {/* ── Signatures ── */}
-        <View style={s.signaturesWrap} wrap={false}>
-          <View style={s.signatureBlock}>
-            <View style={s.signatureLine} />
-            <Text style={s.signatureLabel}>Izdao</Text>
-          </View>
-          <View style={s.signatureBlock}>
-            <View style={s.signatureLine} />
-            <Text style={s.signatureLabel}>Primio</Text>
-          </View>
-        </View>
+        <PotpisBlok linije={postavke.potpisi.faktura} pecat={pecatZa(postavke, 'faktura')} />
 
         {/* ── Footer ── */}
         {racuniDolje ? (
@@ -387,6 +363,7 @@ export function PrilogPdf({ order, firma, stavke }: PrilogPdfProps) {
                 </View>
               ))}
             </View>
+            <PodnozjeTekst tekst={postavke.podnozje} />
             <View style={s.podnozjeMeta}>
               <Text>{POTPIS_AUTORA}</Text>
               <Text>{firma.naziv} · Generisano: {today}</Text>
@@ -394,11 +371,7 @@ export function PrilogPdf({ order, firma, stavke }: PrilogPdfProps) {
             </View>
           </View>
         ) : (
-          <View style={s.footer} fixed>
-            <Text>{POTPIS_AUTORA}</Text>
-            <Text>{firma.naziv} · Generisano: {today}</Text>
-            <Text render={({ pageNumber, totalPages }) => `${pageNumber} / ${totalPages}`} />
-          </View>
+          <PdfPodnozje firmaNaziv={firma.naziv} danas={today} tekst={postavke.podnozje} />
         )}
       </Page>
     </Document>

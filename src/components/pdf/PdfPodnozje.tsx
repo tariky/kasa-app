@@ -13,13 +13,18 @@ const s = StyleSheet.create({
   red: { flexDirection: 'row', justifyContent: 'space-between' },
 });
 
+/** Tekst firme u podnožju (npr. sudski registar); ništa kad ga nema. Dijele ga i dokumenti s vlastitim podnožjem. */
+export function PodnozjeTekst({ tekst }: { tekst?: string }) {
+  return tekst ? <Text style={s.tekst}>{tekst}</Text> : null;
+}
+
 /** Podnožje na svakoj stranici: tekst firme (ako postoji), pa autor · firma · datum · stranica. */
 export function PdfPodnozje({ firmaNaziv, danas, tekst, potpisAutora = POTPIS_AUTORA, generisano = 'Generisano' }: {
   firmaNaziv: string; danas: string; tekst?: string; potpisAutora?: string; generisano?: string;
 }) {
   return (
     <View style={s.footer} fixed>
-      {tekst ? <Text style={s.tekst}>{tekst}</Text> : null}
+      <PodnozjeTekst tekst={tekst} />
       <View style={s.red}>
         <Text>{potpisAutora}</Text>
         <Text>{firmaNaziv} · {generisano}: {danas}</Text>
