@@ -296,7 +296,21 @@ fn meni(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     }
 }
 
+/// WebView2 na Windowsu čita dodatne argumente iz okruženja, pa bi
+/// `--remote-debugging-port=...` u toj varijabli otvorio port kroz koji se
+/// izvršava kod u prozoru (i zovu kanali s prijavljenom sesijom). Release build
+/// je briše prije prvog prozora; debug je zadržava zbog DevTools-a.
+fn bez_debug_argumenata_webviewa() {
+    if cfg!(debug_assertions) {
+        return;
+    }
+    // SAFETY: poziva se prvo u `run()`, iz `main`-a, prije Tauri buildera —
+    // nijedna druga nit još ne postoji, pa niko ne čita okruženje istovremeno.
+    unsafe { std::env::remove_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS") };
+}
+
 pub fn run() {
+    bez_debug_argumenata_webviewa();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![api, smoke_kraj])
