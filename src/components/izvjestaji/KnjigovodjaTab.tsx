@@ -114,6 +114,7 @@ export default function KnjigovodjaTab() {
         setIzvjestaj(obracunaj(podaci, {
           moduli: { skladiste, proizvodnja },
           odbacenePraznine: odbaceneIzPostavke(odbacene),
+          danas: localDateStr(),
         }));
       })
       .catch(e => { if (aktuelno) { setIzvjestaj(null); setGreska(`Podaci za period nisu učitani: ${porukaGreske(e)}`); } })

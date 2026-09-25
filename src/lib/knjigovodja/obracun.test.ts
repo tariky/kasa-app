@@ -178,4 +178,22 @@ describe('obracunaj', () => {
     const r = obracunaj(p, { moduli: SVI });
     expect([r.zbir.polozi, r.zbir.povrati]).toEqual([100.2, 20.1]);
   });
+
+  test('period koji još traje: upozorenje „nezavrsen“ je prvo', () => {
+    const p = prazno();
+    p.racuni = [racun(1, { nacinPlacanja: 'Bitcoin' })];
+    const r = obracunaj(p, { moduli: SVI, danas: '2026-09-25' });
+    expect(r.upozorenja[0]).toEqual({
+      vrsta: 'nezavrsen',
+      opis: 'Period još traje — podaci su do 25.09.2026., a zalihe i promet nisu konačni',
+    });
+    expect(r.upozorenja.map(u => u.vrsta)).toEqual(['nezavrsen', 'placanje']);
+  });
+
+  test('završen period ili bez danas: nema upozorenja „nezavrsen“', () => {
+    for (const danas of ['2026-09-30', '2026-10-01', undefined]) {
+      const r = obracunaj(prazno(), { moduli: SVI, danas });
+      expect(r.upozorenja).toEqual([]);
+    }
+  });
 });

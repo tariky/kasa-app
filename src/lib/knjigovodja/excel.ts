@@ -4,7 +4,7 @@ import ExcelJS from 'exceljs';
 import type { FirmaSettings } from '@/types';
 import { prikazPerioda } from './period';
 import { NAZIVI_LISTOVA } from './listovi';
-import type { KnjigovodjaIzvjestaj } from './obracun';
+import type { KnjigovodjaIzvjestaj, VrstaUpozorenja } from './obracun';
 
 type Format = 'km' | 'datum' | 'datumVrijeme' | 'kolicina' | 'cijena' | 'broj';
 type Celija = string | number | Date | null;
@@ -284,13 +284,13 @@ export async function napraviExcel(
     ], iz.zalihe, 'Ukupno (bez minusa)');
   }
 
-  const kontrola = iz.upozorenja.length ? iz.upozorenja : [{ vrsta: '', opis: '' }];
-  const VRSTE: Record<string, string> = {
-    praznina: 'Rupa u numeraciji', bezBroja: 'Bez fiskalnog broja', odstupanje: 'Odstupanje iznosa',
+  const kontrola: { vrsta: VrstaUpozorenja | ''; opis: string }[] = iz.upozorenja.length ? iz.upozorenja : [{ vrsta: '', opis: '' }];
+  const VRSTE: Record<VrstaUpozorenja | '', string> = {
+    nezavrsen: 'Period još traje', praznina: 'Rupa u numeraciji', bezBroja: 'Bez fiskalnog broja', odstupanje: 'Odstupanje iznosa',
     placanje: 'Način plaćanja', minus: 'Zaliha u minusu', '': 'Nema upozorenja',
   };
   list(wb, L.kontrola, ctx, [
-    { naslov: 'Vrsta', sirina: 22, v: r => VRSTE[r.vrsta] ?? r.vrsta },
+    { naslov: 'Vrsta', sirina: 22, v: r => VRSTE[r.vrsta] },
     { naslov: 'Opis', sirina: 90, v: r => r.opis },
   ], kontrola, null);
 

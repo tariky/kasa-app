@@ -220,6 +220,12 @@ test('format broja: cijeli brojevi bez decimalne tačke, razlomci do 3 decimale'
   expect(zal.getRow(7).getCell(5).numFmt).toBe('#,##0');
 });
 
+test('Kontrola: period koji još traje ima svoj naziv', async () => {
+  const iz = obracunaj(podaci(), { moduli: { skladiste: false, proizvodnja: false }, danas: '2026-09-25' });
+  const wb = await ucitaj(await napraviExcel(iz, FIRMA, IZVEZENO));
+  expect(wb.getWorksheet('Kontrola')!.getRow(6).getCell(1).value).toBe('Period još traje');
+});
+
 test('listovi u fajlu = listoviIzvjestaja', async () => {
   for (const moduli of [{ skladiste: true, proizvodnja: true }, { skladiste: true, proizvodnja: false }, { skladiste: false, proizvodnja: true }]) {
     const iz = obracunaj(podaci(), { moduli });

@@ -119,7 +119,7 @@ export interface ZalihaRed {
   prodajnaVrijednost: number;
 }
 
-export type VrstaUpozorenja = 'praznina' | 'bezBroja' | 'odstupanje' | 'placanje' | 'minus';
+export type VrstaUpozorenja = 'nezavrsen' | 'praznina' | 'bezBroja' | 'odstupanje' | 'placanje' | 'minus';
 
 export interface Upozorenje {
   vrsta: VrstaUpozorenja;
@@ -227,9 +227,20 @@ function saberi<T extends object>(redovi: T[], kljucevi: (keyof T)[]): Record<ke
 const KLJUCEVI_STOPA: (keyof Stope)[] = ['osnovicaE', 'pdvE', 'iznosK', 'ukupno'];
 const KLJUCEVI_PLACANJA: (keyof Placanja)[] = ['gotovina', 'kartica', 'virman', 'cek'];
 
-export function obracunaj(p: KnjigovodjaPodaci, opcije: { moduli: Moduli; odbacenePraznine?: number[] }): KnjigovodjaIzvjestaj {
-  const { moduli } = opcije;
+export function obracunaj(
+  p: KnjigovodjaPodaci,
+  opcije: {
+    moduli: Moduli;
+    odbacenePraznine?: number[];
+    /** Današnji lokalni datum 'YYYY-MM-DD'; period koji ide dalje još traje. */
+    danas?: string;
+  },
+): KnjigovodjaIzvjestaj {
+  const { moduli, danas } = opcije;
   const upozorenja: Upozorenje[] = [];
+  if (danas && p.do > danas) {
+    upozorenja.push({ vrsta: 'nezavrsen', opis: `Period još traje — podaci su do ${prikazDatuma(danas)}, a zalihe i promet nisu konačni` });
+  }
   const odstupanja: Upozorenje[] = [];
   const placanjaUpoz: Upozorenje[] = [];
 
