@@ -130,6 +130,39 @@ pub fn num_str(x: f64) -> String {
     s
 }
 
+/// `Number.prototype.toFixed(d)`: tačna decimalna vrijednost broja, a
+/// polovina ide od nule (Rustov `{:.2}` polovinu zaokružuje na parnu cifru:
+/// 0.125 → "0.12", JS daje "0.13").
+pub fn to_fixed(x: f64, d: usize) -> String {
+    if !x.is_finite() || x.abs() >= 1e21 {
+        return num_str(x);
+    }
+    // Dovoljno cifara da je ispis tačan (double ima najviše 1074 decimale).
+    let s = format!("{:.1100}", x.abs());
+    let (cijeli, decimale) = s.split_once('.').unwrap();
+    let mut cifre: Vec<u8> = cijeli.bytes().chain(decimale.bytes().take(d)).map(|c| c - b'0').collect();
+    if decimale.as_bytes()[d] >= b'5' {
+        let mut i = cifre.len();
+        loop {
+            if i == 0 {
+                cifre.insert(0, 1);
+                break;
+            }
+            i -= 1;
+            if cifre[i] == 9 {
+                cifre[i] = 0;
+            } else {
+                cifre[i] += 1;
+                break;
+            }
+        }
+    }
+    let tekst: String = cifre.iter().map(|c| (c + b'0') as char).collect();
+    let (c, dec) = tekst.split_at(tekst.len() - d);
+    let znak = if x < 0.0 { "-" } else { "" };
+    if d == 0 { format!("{znak}{c}") } else { format!("{znak}{c}.{dec}") }
+}
+
 /// Broj iz `Value` kao string (JS `String(n)`).
 pub fn number_str(n: &serde_json::Number) -> String {
     if let Some(i) = n.as_i64() { return i.to_string(); }
@@ -275,5 +308,13 @@ mod tests {
         assert_eq!(parse_float(" 12.50kn"), 12.5);
         assert_eq!(to_number(&json!("")), 0.0);
         assert!(to_number(&json!("abc")).is_nan());
+        assert_eq!(to_fixed(0.125, 2), "0.13");
+        assert_eq!(to_fixed(1.005, 2), "1.00");
+        assert_eq!(to_fixed(9.995, 2), "9.99");
+        assert_eq!(to_fixed(99.999, 2), "100.00");
+        assert_eq!(to_fixed(-2.5, 0), "-3");
+        assert_eq!(to_fixed(-0.001, 2), "-0.00");
+        assert_eq!(to_fixed(5.0, 2), "5.00");
+        assert_eq!(to_fixed(0.73, 2), "0.73");
     }
 }

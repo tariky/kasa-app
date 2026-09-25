@@ -11,7 +11,8 @@ use crate::greska::{Greska, R};
 use crate::js::{self, or, or_null, round2, to_number, truthy};
 use crate::sql::Db;
 use crate::tring::{self, Odgovor};
-use crate::{baci, cash, fiskalni, p, racun, tring_racun, Args, Backend};
+use crate::sesija::{self, Korisnik};
+use crate::{audit, baci, cash, fiskalni, korisnici, p, provjera_racuna, racun, tring_racun, Args, Backend};
 
 // ─── Pomoćne ────────────────────────────────────────────────
 
@@ -29,15 +30,6 @@ fn niz<'a>(v: &'a Value, ime: &str) -> R<&'a Vec<Value>> {
     match v.as_array() {
         Some(a) => Ok(a),
         None => baci!("{ime} is not iterable"),
-    }
-}
-
-/// `x.length === 0` za `!x || x.length === 0` (neistinito je već provjereno).
-fn prazan(v: &Value) -> bool {
-    match v {
-        Value::Array(a) => a.is_empty(),
-        Value::String(s) => s.is_empty(),
-        _ => false,
     }
 }
 
@@ -188,21 +180,16 @@ pub fn suma_priloga(stavke: &[Value]) -> f64 {
 pub fn validiraj_prilog_stavke(db: &Db, stavke: &[Value]) -> R<HashMap<String, Value>> {
     let mut tipovi = HashMap::new();
     for s in stavke {
-        if !(to_number(&s["kolicina"]) > 0.0) {
-            baci!("Količina mora biti veća od 0");
+        // JS `!s || typeof s !== 'object'` — niz prolazi (i padne na količini).
+        if !(s.is_object() || s.is_array()) {
+            baci!("Neispravna stavka računa");
         }
-        if to_number(&s["cijena"]) < 0.0 {
-            baci!("Cijena ne može biti negativna");
-        }
-        let rabat = to_number(js::nn(&s["rabat"], &json!(0)));
-        if !(rabat >= 0.0 && rabat < 100.0) {
-            baci!("Rabat mora biti između 0 i 100 %");
-        }
+        provjera_racuna::provjeri_iznose_stavke(s)?;
         if s["pdvStopa"] != "E" {
             baci!("U prilog smiju samo stavke sa PDV stopom E (zbirna stavka je fiskalizovana sa E)");
         }
         let Some(product) = db.get("SELECT tip FROM products WHERE id = ?", p![s["productId"]])? else {
-            baci!("Proizvod #{} ne postoji", js::to_string(&s["productId"]));
+            baci!("Proizvod #{} ne postoji", provjera_racuna::prikaz_polja(s, "productId"));
         };
         tipovi.insert(js::stringify(&s["productId"]), product["tip"].clone());
     }
@@ -326,15 +313,20 @@ fn finalize_prilog_and_print(b: &Backend, data: &Value) -> R<Value> {
     }
 
     let stavke_v = js::nn(&data["stavke"], &json!([])).clone();
-    let stavke = niz(&stavke_v, "stavke")?;
+    let Some(stavke) = stavke_v.as_array() else {
+        baci!("Neispravna stavka računa");
+    };
     // Prije bilo kakve štampe: neispravna stavka ne smije proizvesti papir.
     if !stavke.is_empty() {
         validiraj_prilog_stavke(db, stavke)?;
     }
-    let iznos = if !stavke.is_empty() { suma_priloga(stavke) } else { to_number(js::nn(&data["iznos"], &json!(0))) };
-    if !(iznos > 0.0) {
+    let iznos = if !stavke.is_empty() { Some(suma_priloga(stavke)) } else { js::nn(&data["iznos"], &json!(0)).as_f64() };
+    let Some(iznos) = iznos.filter(|x| x.is_finite() && *x > 0.0) else {
         baci!("Iznos mora biti veći od 0");
-    }
+    };
+    let nacin_placanja = json!(provjera_racuna::provjeri_nacin_placanja(&data["nacinPlacanja"])?);
+    let kupac = provjera_racuna::provjeri_kupca(&data["kupac"])?;
+    let kupac_v = kupac.clone().unwrap_or(Value::Null);
     let (datum_valute, napomena, ponuda_id) = provjeri_dodatke_fakture(db, data)?;
 
     // Naziv stavke mora nositi broj isječka na koji se kuca, a njega uređaj vrati
@@ -359,10 +351,9 @@ fn finalize_prilog_and_print(b: &Backend, data: &Value) -> R<Value> {
     snapshot.insert("korisnikId".into(), data["korisnikId"].clone());
     snapshot.insert("ukupno".into(), js::f(ukupno));
     snapshot.insert("pdvIznos".into(), js::f(pdv_iznos));
-    for k in ["nacinPlacanja", "kupac"] {
-        if js::has(data, k) {
-            snapshot.insert(k.into(), data[k].clone());
-        }
+    snapshot.insert("nacinPlacanja".into(), nacin_placanja.clone());
+    if let Some(k) = &kupac {
+        snapshot.insert("kupac".into(), k.clone());
     }
     snapshot.insert("stavke".into(), json!([]));
     snapshot.insert("prilogBroj".into(), json!(predvidjeni_broj));
@@ -382,8 +373,8 @@ fn finalize_prilog_and_print(b: &Backend, data: &Value) -> R<Value> {
     // grana "izuzetak iz štampe → počisti write-ahead red" pada u granu ispod.
     let racun = tring_racun::build_tring_racun(&json!({
         "ukupno": js::f(ukupno),
-        "nacinPlacanja": data["nacinPlacanja"],
-        "kupac": data["kupac"],
+        "nacinPlacanja": nacin_placanja,
+        "kupac": kupac_v,
         "items": [stavka],
     }));
     if b.tring.is_logging_enabled() {
@@ -423,9 +414,9 @@ fn finalize_prilog_and_print(b: &Backend, data: &Value) -> R<Value> {
         VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
       ",
             p![
-                data["korisnikId"], js::f(ukupno), js::f(pdv_iznos), data["nacinPlacanja"], broj_fiskalnog_racuna,
-                kupac_polje(data, "naziv"), kupac_polje(data, "idBroj"), kupac_polje(data, "adresa"),
-                kupac_polje(data, "grad"), kupac_polje(data, "postanskiBroj"), prilog_broj, naziv,
+                data["korisnikId"], js::f(ukupno), js::f(pdv_iznos), nacin_placanja, broj_fiskalnog_racuna,
+                or_null(&kupac_v["naziv"]), or_null(&kupac_v["idBroj"]), or_null(&kupac_v["adresa"]),
+                or_null(&kupac_v["grad"]), or_null(&kupac_v["postanskiBroj"]), prilog_broj, naziv,
                 datum_valute, napomena
             ],
         )?;
@@ -544,7 +535,7 @@ fn print_reklamacija(b: &Backend, racun: &Value) -> Odgovor {
 /// jednoj transakciji. Ranije su štampa, promjena statusa i upis broja bila tri
 /// odvojena IPC poziva iz renderera, pa je pad ili dvoklik između njih ostavljao
 /// odštampan fiskalni storno bez ikakvog traga u bazi.
-fn refund_and_print(b: &Backend, data: &Value) -> R<Value> {
+fn refund_and_print(b: &Backend, data: &Value, korisnik_id: i64) -> R<Value> {
     let db = b.baza()?;
     let id = &data["id"];
     let kljuc = js::stringify(id);
@@ -622,7 +613,7 @@ fn refund_and_print(b: &Backend, data: &Value) -> R<Value> {
     let mut polog_iznos = 0.0;
     if dozvoli_polog && manjak_ladica > 0.0 {
         let napomena = format!("Automatski polog za reklamaciju računa #{}", js::to_string(id));
-        cash::deposit_cash(b, manjak_ladica, &napomena, &data["korisnikId"])?;
+        cash::deposit_cash(b, manjak_ladica, &napomena, &json!(korisnik_id))?;
         polog_iznos = manjak_ladica;
         uneseno = round2(uneseno + manjak_ladica);
     }
@@ -690,6 +681,41 @@ fn refund_and_print(b: &Backend, data: &Value) -> R<Value> {
         "odgovori": result["odgovori"],
         "pologIznos": js::f(polog_iznos),
     }))
+}
+
+/// `order:refundAndPrint`. Kasir uz uključen "PIN za reklamaciju" šalje admin
+/// PIN u istom pozivu; provjera je ovdje, prije štampe — odvojen korak
+/// provjere renderer bi mogao preskočiti.
+fn storno(b: &Backend, data: &Value) -> R<Value> {
+    let db = b.baza()?;
+    let k: Korisnik = sesija::korisnik(b)?;
+    let mut odobrio_admin_id = Value::Null;
+    if db.val("SELECT value FROM settings WHERE key = ?", p!["kasa.requirePinRefund"])? == "true" && !k.je_admin() {
+        if !truthy(&data["adminPin"]) {
+            baci!("Reklamacija traži PIN administratora");
+        }
+        odobrio_admin_id = json!(korisnici::provjeri_admin_pin(b, &data["adminPin"])?.id);
+    }
+    let original = db.get("SELECT brojFiskalnogRacuna, ukupno FROM orders WHERE id = ?", p![data["id"]])?;
+    b.load_tring_config()?;
+    let rezultat = refund_and_print(b, data, k.id)?;
+    if truthy(&rezultat["success"]) {
+        // Storno je već odštampan i upisan — greška traga ne smije to sakriti.
+        let o = |kljuc: &str| original.as_ref().map(|o| o[kljuc].clone()).unwrap_or(Value::Null);
+        let trag = audit::zabiljezi(
+            b,
+            "storno",
+            json!({
+                "orderId": data["id"], "brojFiskalnogRacuna": o("brojFiskalnogRacuna"),
+                "brojReklamacije": rezultat["brojReklamacije"], "ukupno": o("ukupno"),
+                "odobrioAdminId": odobrio_admin_id, "pologIznos": js::nn(&rezultat["pologIznos"], &json!(0)),
+            }),
+        );
+        if let Err(e) = trag {
+            eprintln!("[audit] storno {}", e.0);
+        }
+    }
+    Ok(rezultat)
 }
 
 // ─── lib/valuta.ts ──────────────────────────────────────────
@@ -783,119 +809,89 @@ fn get(db: &Db, id: &Value) -> R<Value> {
     Ok(order)
 }
 
-fn create(db: &Db, data: &Value) -> R<Value> {
-    if !truthy(&data["stavke"]) || prazan(&data["stavke"]) {
-        baci!("Račun mora imati najmanje jednu stavku");
-    }
-    if !truthy(&data["korisnikId"]) {
-        baci!("Korisnik nije prijavljen");
-    }
-    db.tx(|| {
-        let order_id = db
-            .run(
-                "
-          INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, status,
-            kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj)
-          VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?)
-        ",
-                p![
-                    data["korisnikId"], data["ukupno"], data["pdvIznos"], data["nacinPlacanja"], data["brojFiskalnogRacuna"],
-                    kupac_polje(data, "naziv"), kupac_polje(data, "idBroj"), kupac_polje(data, "adresa"),
-                    kupac_polje(data, "grad"), kupac_polje(data, "postanskiBroj")
-                ],
-            )?
-            .last_insert_rowid;
-
-        for item in niz(&data["stavke"], "data.stavke")? {
-            db.run(
-                "INSERT INTO order_items (orderId, productId, kolicina, cijena, rabat, pdvStopa) VALUES (?, ?, ?, ?, ?, ?)",
-                p![order_id, item["productId"], item["kolicina"], item["cijena"], item["rabat"], item["pdvStopa"]],
-            )?;
-            // Only create stock movements for artikli, not services
-            let product = db.get("SELECT tip FROM products WHERE id = ?", p![item["productId"]])?;
-            if product.map_or(true, |p| p["tip"] != "usluga") {
-                db.run(
-                    "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'izlaz', ?, 'order', ?)",
-                    p![item["productId"], item["kolicina"], order_id],
-                )?;
-            }
-        }
-
-        Ok(json!({ "id": order_id }))
-    })
-}
-
-fn create_manual(db: &Db, data: &Value) -> R<Value> {
-    if !truthy(&data["stavke"]) || prazan(&data["stavke"]) {
-        baci!("Račun mora imati najmanje jednu stavku");
-    }
-    if !truthy(&data["korisnikId"]) {
-        baci!("Korisnik nije prijavljen");
-    }
-    if js::blank(&data["brojFiskalnogRacuna"]) {
+// Račun izdat mimo programa (npr. dok program nije radio), upisan naknadno.
+// Stavke, iznosi i plaćanje se provjeravaju kao na kasi (pripremi_racun), ali
+// stopa i cijena stavke smiju odstupati od današnjeg artikla — prepisuje se
+// stari isječak.
+fn create_manual(b: &Backend, unos: &Value) -> R<Value> {
+    let db = b.baza()?;
+    let korisnik_id = sesija::korisnik(b)?.id;
+    let r = provjera_racuna::pripremi_racun(db, unos, false)?;
+    let broj = unos["brojFiskalnogRacuna"].as_str().map(str::trim).unwrap_or("").to_string();
+    if broj.is_empty() {
         baci!("Fiskalni broj je obavezan");
     }
-    if js::blank(&data["createdAt"]) {
+    let created_at = unos["createdAt"].as_str().unwrap_or("").to_string();
+    if created_at.trim().is_empty() {
         baci!("Datum računa je obavezan");
     }
-    let broj = js::trim(&data["brojFiskalnogRacuna"]).map(Value::from).unwrap_or_else(|| data["brojFiskalnogRacuna"].clone());
 
     if db.ima("SELECT id FROM orders WHERE brojFiskalnogRacuna = ?", p![broj])? {
         baci!("Fiskalni račun sa tim brojem već postoji");
     }
 
+    let stavke: Vec<Value> = r.stavke.iter().map(|s| s.stavka.clone()).collect();
     db.tx(|| {
-        let order_id = db
-            .run(
-                "
-          INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, status,
-            kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj, isManual, createdAt)
-          VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, 1, ?)
-        ",
-                p![
-                    data["korisnikId"], data["ukupno"], data["pdvIznos"], data["nacinPlacanja"], broj,
-                    kupac_polje(data, "naziv"), kupac_polje(data, "idBroj"), kupac_polje(data, "adresa"),
-                    kupac_polje(data, "grad"), kupac_polje(data, "postanskiBroj"), data["createdAt"]
-                ],
-            )?
-            .last_insert_rowid;
-
-        for item in niz(&data["stavke"], "data.stavke")? {
-            db.run(
-                "INSERT INTO order_items (orderId, productId, kolicina, cijena, rabat, pdvStopa) VALUES (?, ?, ?, ?, ?, ?)",
-                p![order_id, item["productId"], item["kolicina"], item["cijena"], item["rabat"], item["pdvStopa"]],
-            )?;
-            // Only create stock movements for artikli, not services
-            let product = db.get("SELECT tip FROM products WHERE id = ?", p![item["productId"]])?;
-            if product.map_or(true, |p| p["tip"] != "usluga") {
-                db.run(
-                    "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId, createdAt) VALUES (?, 'izlaz', ?, 'order', ?, ?)",
-                    p![item["productId"], item["kolicina"], order_id, data["createdAt"]],
-                )?;
-            }
-        }
-
-        Ok(json!({ "id": order_id }))
+        let id = insert_completed_order(
+            db,
+            &json!({
+                "korisnikId": korisnik_id, "ukupno": js::f(r.ukupno), "pdvIznos": js::f(r.pdv_iznos),
+                "nacinPlacanja": r.nacin_placanja, "brojFiskalnogRacuna": broj,
+                "kupac": r.kupac.clone().unwrap_or(Value::Null), "stavke": stavke, "isManual": 1, "createdAt": created_at,
+            }),
+        )?;
+        audit::zabiljezi(
+            b,
+            "racun:rucni",
+            json!({ "orderId": id, "brojFiskalnogRacuna": broj, "ukupno": js::f(r.ukupno), "createdAt": created_at }),
+        )?;
+        Ok(json!({ "id": id }))
     })
 }
 
-fn finalize(b: &Backend, data: &Value) -> R<Value> {
+fn finalize(b: &Backend, unos: &Value) -> R<Value> {
     let db = b.baza()?;
-    if !truthy(&data["stavke"]) || prazan(&data["stavke"]) {
-        baci!("Račun mora imati najmanje jednu stavku");
+    // Račun izdaje prijavljeni korisnik — korisnikId iz payload-a se ne čita.
+    let korisnik_id = sesija::korisnik(b)?.id;
+    // Sve provjere prije write-ahead zapisa i štampe; iznosi se računaju iz stavki.
+    let r = provjera_racuna::pripremi_racun(db, unos, true)?;
+    let mut m = Map::new();
+    m.insert("korisnikId".into(), json!(korisnik_id));
+    m.insert("ukupno".into(), js::f(r.ukupno));
+    m.insert("pdvIznos".into(), js::f(r.pdv_iznos));
+    m.insert("nacinPlacanja".into(), json!(r.nacin_placanja));
+    m.insert("vrstePlacanja".into(), r.vrste_placanja.clone());
+    // `undefined` JSON.stringify izostavlja (snapshot).
+    if let Some(k) = &r.kupac {
+        m.insert("kupac".into(), k.clone());
     }
-    if !truthy(&data["korisnikId"]) {
-        baci!("Korisnik nije prijavljen");
+    if let Some(n) = &r.napomena {
+        m.insert("napomena".into(), n.clone());
     }
+    // Uređaj dobija šifru, naziv, JM i PLU artikla iz baze, ne iz payload-a.
+    let stavke: Vec<Value> = r
+        .stavke
+        .iter()
+        .map(|s| {
+            let (x, a) = (&s.stavka, &s.artikal);
+            json!({
+                "productId": x["productId"], "sifra": a["sifra"], "naziv": a["naziv"],
+                "jm": js::nn(&a["jm"], &json!("kom")), "plu": js::nn(&a["plu"], &json!(0)),
+                "cijena": x["cijena"], "kolicina": x["kolicina"], "rabat": x["rabat"], "pdvStopa": x["pdvStopa"],
+            })
+        })
+        .collect();
+    m.insert("stavke".into(), Value::from(stavke));
+    let data = Value::Object(m);
 
     // 1. Write-ahead: persist the snapshot BEFORE printing (committed immediately).
     let pending_id = db
-        .run("INSERT INTO pending_receipts (korisnikId, snapshot) VALUES (?, ?)", p![data["korisnikId"], js::stringify(data)])?
+        .run("INSERT INTO pending_receipts (korisnikId, snapshot) VALUES (?, ?)", p![data["korisnikId"], js::stringify(&data)])?
         .last_insert_rowid;
 
     // 2. Print.
     b.load_tring_config()?;
-    let racun = tring_racun::build_tring_racun(&spoji(data, vec![("items", data["stavke"].clone())]));
+    let racun = tring_racun::build_tring_racun(&spoji(&data, vec![("items", data["stavke"].clone())]));
     if b.tring.is_logging_enabled() {
         eprintln!("[Tring] finalize request: {}", js::stringify(&racun));
     }
@@ -919,7 +915,7 @@ fn finalize(b: &Backend, data: &Value) -> R<Value> {
     let order_id = db.tx(|| {
         let order_id = insert_completed_order(
             db,
-            &spoji(data, vec![("brojFiskalnogRacuna", broj_fiskalnog_racuna.clone()), ("isManual", json!(0))]),
+            &spoji(&data, vec![("brojFiskalnogRacuna", broj_fiskalnog_racuna.clone()), ("isManual", json!(0))]),
         )?;
         db.run("DELETE FROM pending_receipts WHERE id = ?", p![pending_id])?;
         Ok(order_id)
@@ -1018,26 +1014,56 @@ fn get_fiscal_gaps(db: &Db) -> R<Value> {
     Ok(json!(fiskalni::izracunaj_praznine(&brojevi, fiskalni::MAX_PRAZNINA, &dismissed)))
 }
 
-fn dismiss_fiscal_gap(db: &Db, broj: &Value) -> R<Value> {
+fn dismiss_fiscal_gap(b: &Backend, broj: &Value) -> R<Value> {
+    let db = b.baza()?;
     let mut dismissed = odbacene_praznine(db)?;
     // `includes` poredi brojeve po vrijednosti (5 i 5.0 su isti).
     let isti = |v: &Value| match (v.as_f64(), broj.as_f64()) {
         (Some(x), Some(y)) => x == y,
         _ => v == broj,
     };
-    if !dismissed.iter().any(isti) {
-        dismissed.push(broj.clone());
+    if dismissed.iter().any(isti) {
+        return Ok(json!({ "success": true }));
     }
-    db.run(
-        "INSERT INTO settings (key, value) VALUES ('fiscal.dismissedGaps', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        p![js::stringify(&Value::from(dismissed))],
-    )?;
+    dismissed.push(broj.clone());
+    db.tx(|| {
+        db.run(
+            "INSERT INTO settings (key, value) VALUES ('fiscal.dismissedGaps', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            p![js::stringify(&Value::from(dismissed))],
+        )?;
+        audit::zabiljezi(b, "fiskalni:odbaciPrazninu", json!({ "broj": broj }))
+    })?;
     Ok(json!({ "success": true }))
 }
 
-const KANALI: [&str; 19] = [
-    "order:getAll", "order:get", "order:create", "order:createManual", "order:finalize", "order:finalizePrilog",
-    "order:updateReklamacija", "order:setDatumValute", "order:refund", "order:refundAndPrint",
+fn pending_discard(b: &Backend, id: &Value) -> R<Value> {
+    let db = b.baza()?;
+    db.tx(|| {
+        let row = db.get("SELECT snapshot FROM pending_receipts WHERE id = ?", p![id])?;
+        let r = db.run("DELETE FROM pending_receipts WHERE id = ?", p![id])?;
+        if let Some(row) = row.filter(|_| r.changes > 0) {
+            let tekst = js::to_string(&row["snapshot"]);
+            let snapshot = js::parse(&tekst).unwrap_or(row["snapshot"].clone());
+            audit::zabiljezi(b, "pending:odbaci", json!({ "pendingId": id, "snapshot": snapshot }))?;
+        }
+        Ok(())
+    })?;
+    Ok(json!({ "success": true }))
+}
+
+fn set_zadnji_broj(b: &Backend, broj: &Value) -> R<Value> {
+    let db = b.baza()?;
+    db.tx(|| {
+        let stari_broj = fiskalni::zadnji_upisani_fiskalni_broj(db)?;
+        fiskalni::postavi_zadnji_fiskalni_broj(db, broj)?;
+        audit::zabiljezi(b, "fiskalni:zadnjiBroj", json!({ "stariBroj": stari_broj, "noviBroj": broj }))
+    })?;
+    Ok(json!({ "success": true, "predvidjeni": fiskalni::predvidjeni_fiskalni_broj(db)? }))
+}
+
+const KANALI: [&str; 16] = [
+    "order:getAll", "order:get", "order:createManual", "order:finalize", "order:finalizePrilog",
+    "order:setDatumValute", "order:refundAndPrint",
     "order:getFiscalGaps", "order:dismissFiscalGap",
     "pending:list", "pending:resolve", "pending:discard",
     "prilog:getStavke", "prilog:saveStavke",
@@ -1060,12 +1086,15 @@ pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
     Some(match kanal {
         "order:getAll" => get_all(db),
         "order:get" => get(db, &a[0]),
-        "order:create" => create(db, &a[0]),
-        "order:createManual" => create_manual(db, &a[0]),
+        "order:createManual" => create_manual(b, &a[0]),
         "order:finalize" => finalize(b, &a[0]),
         // Račun po prilogu: jedna zbirna stavka na fiskalnom računu, stvarne stavke
         // se dodjeljuju naknadno.
-        "order:finalizePrilog" => b.load_tring_config().and_then(|_| finalize_prilog_and_print(b, &a[0])),
+        "order:finalizePrilog" => sesija::korisnik(b).and_then(|k| {
+            let data = sesija::sa_korisnikom(&a[0], k.id);
+            b.load_tring_config()?;
+            finalize_prilog_and_print(b, &data)
+        }),
         // Fiskalni niz: račun po prilogu mora znati broj isječka prije nego ga odštampa.
         "fiscal:getNumeracija" => (|| {
             Ok(json!({
@@ -1074,8 +1103,7 @@ pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
                 "predvidjeni": fiskalni::predvidjeni_fiskalni_broj(db)?,
             }))
         })(),
-        "fiscal:setZadnjiBroj" => fiskalni::postavi_zadnji_fiskalni_broj(db, &a[0])
-            .and_then(|_| Ok(json!({ "success": true, "predvidjeni": fiskalni::predvidjeni_fiskalni_broj(db)? }))),
+        "fiscal:setZadnjiBroj" => set_zadnji_broj(b, &a[0]),
         "prilog:getStavke" => db
             .all(
                 "
@@ -1091,23 +1119,14 @@ pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
         "prilog:saveStavke" => db
             .tx(|| save_prilog_stavke_in_transaction(db, &a[0], &a[1]))
             .map(|_| json!({ "success": true })),
-        "order:updateReklamacija" => db
-            .run("UPDATE orders SET brojReklamacije = ? WHERE id = ?", p![a[1], a[0]])
-            .map(|r| json!({ "changes": r.changes })),
         "order:setDatumValute" => postavi_datum_valute(db, &a[0], &a[1]).map(|d| json!({ "datumValute": d })),
-        "order:refund" => {
-            let broj = a[1].as_str().map(str::trim).filter(|s| !s.is_empty()).map(Value::from).unwrap_or(Value::Null);
-            db.tx(|| refund_order_in_transaction(db, &a[0], &broj)).map(|_| json!({ "success": true }))
-        }
         // Orkestracija (štampa → atomični upis) je u `refund_and_print`.
-        "order:refundAndPrint" => b.load_tring_config().and_then(|_| refund_and_print(b, &a[0])),
+        "order:refundAndPrint" => storno(b, &a[0]),
         "pending:list" => pending_list(db),
         "pending:resolve" => pending_resolve(db, &a[0]),
-        "pending:discard" => db
-            .run("DELETE FROM pending_receipts WHERE id = ?", p![a[0]])
-            .map(|_| json!({ "success": true })),
+        "pending:discard" => pending_discard(b, &a[0]),
         "order:getFiscalGaps" => get_fiscal_gaps(db),
-        "order:dismissFiscalGap" => dismiss_fiscal_gap(db, &a[0]),
+        "order:dismissFiscalGap" => dismiss_fiscal_gap(b, &a[0]),
         _ => return None,
     })
 }

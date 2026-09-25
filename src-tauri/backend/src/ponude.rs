@@ -13,7 +13,8 @@ use crate::racun::{izracunaj_totale, upisi_racun};
 use crate::sql::Db;
 use crate::tring::uspjeh;
 use crate::tring_racun::build_tring_racun;
-use crate::{baci, p, Args, Backend};
+use crate::sesija;
+use crate::{baci, p, provjera_racuna, Args, Backend};
 
 /// Default rok važenja ponude (uobičajena "opcija 8 dana").
 pub const DEFAULT_ROK_DANA: i64 = 8;
@@ -66,10 +67,6 @@ fn godina_iz_datuma(datum: &str) -> Value {
     js::f(js::to_number(&Value::String(s)))
 }
 
-fn stavke_niz(v: &Value) -> &[Value] {
-    v.as_array().map(Vec::as_slice).unwrap_or(&[])
-}
-
 fn upisi_stavke(db: &Db, id: &Value, stavke: &[Value]) -> R<()> {
     for s in stavke {
         db.run(
@@ -80,17 +77,27 @@ fn upisi_stavke(db: &Db, id: &Value, stavke: &[Value]) -> R<()> {
     Ok(())
 }
 
+/// `!data.stavke || data.stavke.length === 0`
+fn bez_stavki(v: &Value) -> bool {
+    !truthy(v) || js::length(v) == Some(0)
+}
+
+/// Provjerene stavke ponude (iznosi, stopa, artikal) svedene na polja ugovora.
+fn provjerene_stavke(db: &Db, stavke: &Value) -> R<Vec<Value>> {
+    Ok(provjera_racuna::provjeri_stavke(db, stavke)?.into_iter().map(|s| s.stavka).collect())
+}
+
 /// Upiše ponudu sa stavkama. Cijene stavki se zamrzavaju kopiranjem u
 /// `ponuda_stavke` — kasnija promjena cjenovnika ne smije mijenjati ponudu,
 /// jer je ponuda obećanje kupcu. Poziva se unutar transakcije.
 pub fn create_ponuda(db: &Db, data: &Value, danas: &str) -> R<Value> {
-    let stavke = stavke_niz(&data["stavke"]);
-    if stavke.is_empty() {
+    if bez_stavki(&data["stavke"]) {
         baci!("Ponuda mora imati najmanje jednu stavku");
     }
     if !truthy(&data["kupacId"]) {
         baci!("Kupac je obavezan");
     }
+    let stavke = &provjerene_stavke(db, &data["stavke"])?;
 
     let datum = if truthy(&data["datum"]) { js::to_string(&data["datum"]) } else { danas.to_string() };
     let godina = godina_iz_datuma(&datum);
@@ -174,8 +181,7 @@ pub fn delete_ponuda(db: &Db, id: &Value) -> R<Value> {
 /// Konvertovana ponuda je zaključana: račun je već izdat po njoj.
 /// Poziva se unutar transakcije.
 pub fn update_ponuda(db: &Db, id: &Value, data: &Value) -> R<()> {
-    let stavke = stavke_niz(&data["stavke"]);
-    if stavke.is_empty() {
+    if bez_stavki(&data["stavke"]) {
         baci!("Ponuda mora imati najmanje jednu stavku");
     }
 
@@ -185,6 +191,7 @@ pub fn update_ponuda(db: &Db, id: &Value, data: &Value) -> R<()> {
     if ponuda["status"] == "konvertovana" {
         baci!("Konvertovana ponuda se ne može mijenjati");
     }
+    let stavke = &provjerene_stavke(db, &data["stavke"])?;
 
     let (ukupno, pdv_iznos) = izracunaj_totale(stavke);
 
@@ -208,9 +215,6 @@ pub fn update_ponuda(db: &Db, id: &Value, data: &Value) -> R<()> {
     db.run("DELETE FROM ponuda_stavke WHERE ponudaId = ?", p![id])?;
     upisi_stavke(db, id, stavke)
 }
-
-/// Načini plaćanja koje nude ekrani (u bazi se čuva "Ček" s kvačicom).
-pub const NACINI_PLACANJA: [&str; 4] = ["Gotovina", "Kartica", "Virman", "Ček"];
 
 /// Ponude kojima se konverzija trenutno štampa — zaštita od dvoklika.
 static KONVERZIJE_IN_FLIGHT: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
@@ -322,13 +326,7 @@ pub fn konvertuj_ponudu(b: &Backend, kanal: &str, data: &Value) -> R<Value> {
         baci!("Korisnik nije prijavljen");
     }
 
-    let nacin_placanja = data["nacinPlacanja"].as_str().map(str::trim).unwrap_or("");
-    if nacin_placanja.is_empty() {
-        baci!("Način plaćanja je obavezan");
-    }
-    if !NACINI_PLACANJA.contains(&nacin_placanja) {
-        baci!("Nepoznat način plaćanja: \"{nacin_placanja}\"");
-    }
+    let nacin_placanja = provjera_racuna::provjeri_nacin_placanja(&data["nacinPlacanja"])?;
 
     let Some(ponuda) = db.get("SELECT * FROM ponude WHERE id = ?", p![id])? else {
         baci!("Ponuda ne postoji");
@@ -469,13 +467,17 @@ pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
             let godina = b.sat.godina();
             next_broj_ponude(db, &json!(godina)).map(|broj| json!({ "broj": broj, "godina": godina }))
         }
-        "ponuda:create" => create(db, &a[0], &b.sat.danas()),
+        "ponuda:create" => sesija::korisnik(b).and_then(|k| create(db, &sesija::sa_korisnikom(&a[0], k.id), &b.sat.danas())),
         "ponuda:update" => db.tx(|| update_ponuda(db, &a[0], &a[1])).map(|_| json!({ "success": true })),
         "ponuda:setStatus" => set_status_ponude(db, &a[0], &a[1]).map(|_| json!({ "success": true })),
         "ponuda:delete" => db.tx(|| delete_ponuda(db, &a[0])),
         // Orkestracija (štampa → atomični upis) je u `konvertuj_ponudu`, isto
         // kao što je u TS-u živjela u lib/ponuda.ts.
-        "ponuda:konvertuj" => b.load_tring_config().and_then(|_| konvertuj_ponudu(b, kanal, &a[0])),
+        "ponuda:konvertuj" => sesija::korisnik(b).and_then(|k| {
+            let data = sesija::sa_korisnikom(&a[0], k.id);
+            b.load_tring_config()?;
+            konvertuj_ponudu(b, kanal, &data)
+        }),
         _ => return None,
     })
 }

@@ -10,7 +10,7 @@ use crate::greska::R;
 use crate::js::{self, round2, to_number};
 use crate::sql::Db;
 use crate::tring::{self, Odgovor};
-use crate::{baci, p, Args, Backend};
+use crate::{baci, p, sesija, Args, Backend};
 
 // ─── lib/drawer.ts ──────────────────────────────────────────
 
@@ -243,7 +243,7 @@ pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
         Err(e) => return Some(Err(e)),
     };
     Some(match kanal {
-        "cash:add" => add_cash_movement(b, &a[0]),
+        "cash:add" => sesija::korisnik(b).and_then(|k| add_cash_movement(b, &sesija::sa_korisnikom(&a[0], k.id))),
         "cash:retry" => retry_cash_movement(b, &a[0]),
         "cash:getToday" => get_today_movements(db),
         "cash:lastPolog" => get_last_polog_iznos(db),

@@ -13,7 +13,7 @@ use crate::racun::{izracunaj_totale, upisi_racun};
 use crate::sql::Db;
 use crate::tring::uspjeh;
 use crate::tring_racun::build_tring_racun;
-use crate::{baci, p, Args, Backend};
+use crate::{baci, p, provjera_racuna, sesija, Args, Backend};
 
 /// Usluga preko koje se prodaje rad po mjeri — kreira se pri uključivanju modula.
 pub const PRODAJNA_USLUGA_SIFRA: &str = "NAMJ";
@@ -706,7 +706,7 @@ pub fn izdaj_racun_za_nalog(b: &Backend, kanal: &str, data: &Value) -> R<Value> 
         baci!("Korisnik nije prijavljen");
     }
     // Štampa bez oznake plaćanja ide kao Gotovina — i u bazu se tako upisuje.
-    let nacin_placanja = js::or(&data["nacinPlacanja"], &json!("Gotovina")).clone();
+    let nacin_placanja = json!(provjera_racuna::provjeri_nacin_placanja(js::or(&data["nacinPlacanja"], &json!("Gotovina")))?);
 
     if truthy(&nalog["ponudaId"]) {
         let ponuda = db.get("SELECT status, racunId FROM ponude WHERE id = ?", p![nalog["ponudaId"]])?;
@@ -777,15 +777,15 @@ pub fn izdaj_racun_za_nalog(b: &Backend, kanal: &str, data: &Value) -> R<Value> 
     }
 }
 
-fn set_status(db: &Db, data: &Value) -> R<Value> {
+fn set_status(b: &Backend, data: &Value) -> R<Value> {
+    let db = b.db()?;
     let status = &data["status"];
     if status == "u_izradi" {
         set_status_naloga(db, &data["id"], "u_izradi")?;
     } else if status == "zavrsen" {
         db.tx(|| zavrsi_nalog(db, &data["id"]))?;
     } else if status == "vrati" {
-        let u = db.get("SELECT uloga FROM users WHERE id = ?", p![data["korisnikId"]])?;
-        if !u.is_some_and(|u| u["uloga"] == "admin") {
+        if !sesija::korisnik(b)?.je_admin() {
             baci!("Vraćanje naloga u izradu može samo administrator");
         }
         db.tx(|| vrati_u_izradu(db, &data["id"]))?;
@@ -812,27 +812,26 @@ pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
             let godina = b.sat.godina();
             next_broj_naloga(db, &json!(godina)).map(|broj| json!({ "broj": broj, "godina": godina }))
         }
-        "nalog:create" => {
-            if !truthy(&a[0]["korisnikId"]) {
-                return Some(Err("Korisnik nije prijavljen".into()));
-            }
+        "nalog:create" => sesija::korisnik(b).and_then(|k| {
+            let data = sesija::sa_korisnikom(&a[0], k.id);
             let danas = b.sat.danas();
-            db.tx(|| create_nalog(db, &a[0], &danas))
-        }
-        "nalog:createIzPonude" => {
-            if !truthy(&a[1]) {
-                return Some(Err("Korisnik nije prijavljen".into()));
-            }
+            db.tx(|| create_nalog(db, &data, &danas))
+        }),
+        "nalog:createIzPonude" => sesija::korisnik(b).and_then(|k| {
             let danas = b.sat.danas();
-            db.tx(|| create_nalog_iz_ponude(db, &a[0], &a[1], &danas))
-        }
+            db.tx(|| create_nalog_iz_ponude(db, &a[0], &json!(k.id), &danas))
+        }),
         "nalog:zaPonudu" => nalog_za_ponudu(db, &a[0]),
         "nalog:update" => ok(update_nalog(db, &a[0], &a[1])),
         "nalog:replaceStavke" => ok(db.tx(|| replace_stavke(db, &a[0], &a[1]))),
-        "nalog:setStatus" => set_status(db, &a[0]),
+        "nalog:setStatus" => set_status(b, &a[0]),
         "nalog:delete" => ok(db.tx(|| delete_nalog(db, &a[0]))),
         "nalog:kalkulacija" => kalkulacija_naloga(db, &a[0]),
-        "nalog:izdajRacun" => b.load_tring_config().and_then(|_| izdaj_racun_za_nalog(b, kanal, &a[0])),
+        "nalog:izdajRacun" => sesija::korisnik(b).and_then(|k| {
+            let data = sesija::sa_korisnikom(&a[0], k.id);
+            b.load_tring_config()?;
+            izdaj_racun_za_nalog(b, kanal, &data)
+        }),
         "normativ:get" => get_normativ(db, &a[0]).map(Value::from),
         "normativ:save" => ok(db.tx(|| save_normativ(db, &a[0], &a[1]))),
         _ => return None,
