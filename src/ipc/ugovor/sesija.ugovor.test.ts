@@ -416,7 +416,9 @@ describe('settings:set', () => {
 });
 
 // ─── Ograničenje pokušaja ───────────────────────────────────
-// Neuspjesi se broje u kliznom prozoru od 15 min; uspjeh ih ne briše.
+// Neuspjesi se broje u kliznom prozoru od 15 min; uspjeh ih ne briše. Nakon
+// prve blokade svaki neuspjeh blokira duplo duže (do 15 min) dok ne prođe
+// 60 min bez neuspjeha. Stanje je u bazi i preživi restart.
 
 describe('ograničenje pokušaja', () => {
   beforeEach(async () => {
@@ -441,24 +443,38 @@ describe('ograničenje pokušaja', () => {
     expect(await b.call('user:login', ADMIN_PIN)).toMatchObject({ id: ADMIN });
   });
 
-  test('svaki sljedeći neuspjeh na pragu udvostručuje blokadu; stari neuspjesi ističu iz prozora', async () => {
+  test('svaki sljedeći neuspjeh udvostručuje blokadu do 15 min, i kad stari neuspjesi isteknu iz prozora', async () => {
     let t = Date.now();
     setSystemTime(t);
     await pogresno(5);
     let blokada = 30;
-    for (const sljedeca of [60, 120, 240, 480]) {
+    for (const sljedeca of [60, 120, 240, 480, 900, 900]) {
       t += blokada * 1000;
       setSystemTime(t);
       await pogresno(1);
       await expect(b.call('user:login', ADMIN_PIN)).rejects.toThrow(`${BLOKADA} ${sljedeca} s.`);
       blokada = sljedeca;
     }
-    // t = 450 s: nakon 480 s čekanja prvih šest neuspjeha (0 s i 30 s) je
-    // izvan 15-minutnog prozora — u njemu ostaju 4, pa novi neuspjeh ne blokira.
+    // Uporan napad: jedan pokušaj po isteku blokade, a svaki donese novih 15 min.
     t += blokada * 1000;
     setSystemTime(t);
-    await pogresno(1);
     expect(await b.call('user:login', ADMIN_PIN)).toMatchObject({ id: ADMIN });
+  });
+
+  test('eskalacija se poništi tek nakon 60 min bez ijednog neuspjeha', async () => {
+    const t0 = Date.now();
+    setSystemTime(t0);
+    await pogresno(5);
+    // 59 min kasnije: prozor od 15 min je prazan, ali eskalacija traje.
+    setSystemTime(t0 + 59 * 60_000);
+    await pogresno(1);
+    await expect(b.call('user:login', ADMIN_PIN)).rejects.toThrow(`${BLOKADA} 60 s.`);
+    // 60 min od zadnjeg neuspjeha: kreće se ispočetka (4 bez blokade, peti 30 s).
+    setSystemTime(t0 + 119 * 60_000);
+    await pogresno(4);
+    expect(await b.call('user:login', ADMIN_PIN)).toMatchObject({ id: ADMIN });
+    await pogresno(1);
+    await expect(b.call('user:login', ADMIN_PIN)).rejects.toThrow(`${BLOKADA} 30 s.`);
   });
 
   test('uspjeh ne poništava brojač', async () => {
@@ -507,11 +523,28 @@ describe('ograničenje pokušaja', () => {
     await expect(b.call('user:login', ADMIN_PIN)).rejects.toThrow(BLOKADA);
   });
 
-  test('restart backenda poništava brojač (drži se u memoriji)', async () => {
-    setSystemTime(Date.now());
+  test('blokada, neuspjesi i eskalacija prežive restart backenda (stanje je u bazi)', async () => {
+    const t0 = Date.now();
+    setSystemTime(t0);
     await pogresno(5);
     await b.ponovoPokreni();
-    expect(await b.call('user:login', ADMIN_PIN)).toMatchObject({ id: ADMIN });
+    await expect(b.call('user:login', ADMIN_PIN)).rejects.toThrow(`${BLOKADA} 30 s.`);
+    setSystemTime(t0 + 30_000);
+    await pogresno(1);
+    await b.ponovoPokreni();
+    await expect(b.call('user:login', ADMIN_PIN)).rejects.toThrow(`${BLOKADA} 60 s.`);
+  });
+
+  test('stanje blokade se ne može pročitati ni promijeniti kroz settings:get/set', async () => {
+    setSystemTime(Date.now());
+    await pogresno(2);
+    await prijavi(b, ADMIN_PIN);
+    expect(red("SELECT value FROM settings WHERE key = 'sigurnost.pinBlokada'")).toBeTruthy();
+    expect(await b.call('settings:get', 'sigurnost.pinBlokada')).toBeNull();
+    await expect(b.call('settings:set', 'sigurnost.pinBlokada', '{}'))
+      .rejects.toThrow('Postavka "sigurnost.pinBlokada" se ne može mijenjati');
+    await b.call('user:logout');
+    await expect(b.call('settings:get', 'sigurnost.pinBlokada')).rejects.toThrow(NISTE_PRIJAVLJENI);
   });
 });
 

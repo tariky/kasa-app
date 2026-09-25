@@ -58,8 +58,11 @@ export const POSTAVKE_ZA_ADMINA: ReadonlySet<string> = new Set([
   'ui.showGenerator',
 ]);
 
-/** Postavke koje settings:get nikad ne vraća (ide null). */
-export const TAJNE_POSTAVKE: ReadonlySet<string> = new Set(['tring.operatorPassword']);
+/**
+ * Postavke koje settings:get nikad ne vraća (ide null). Stanje blokade PIN-a
+ * je interno: ni čitanje ni upis (settings:set ga ionako odbija, nije na listi).
+ */
+export const TAJNE_POSTAVKE: ReadonlySet<string> = new Set(['tring.operatorPassword', 'sigurnost.pinBlokada']);
 
 /**
  * Baca grešku ako `korisnik` (null = niko nije prijavljen) ne smije zvati
@@ -90,51 +93,109 @@ function provjeriUpisPostavke(kljuc: unknown, korisnik: JavniKorisnik): void {
 // Zajednički brojač za svaku provjeru PIN-a (prijava, admin PIN pri stornu,
 // promjena svog PIN-a). Neuspjesi se broje u kliznom prozoru od 15 min i uspjeh
 // ih NE briše — inače bi "4 pogrešna + prijava svojim PIN-om" išlo u beskraj.
-// Živi u memoriji main procesa — restart aplikacije ga poništi.
+// Kad blokada jednom počne, eskalacija ostaje dok ne prođe 60 min bez ijednog
+// neuspjeha: svaki novi neuspjeh blokira duplo duže (do 15 min), pa uporan
+// napad dobije najviše jedan pokušaj u 15 min. Stanje je u bazi (postavka
+// KLJUC_BLOKADE, nevidljiva za settings:get/set) i preživi restart programa.
 
 export const DOZVOLJENI_NEUSPJESI = 5;
 export const PROZOR_NEUSPJEHA_MS = 15 * 60_000;
 export const PRVA_BLOKADA_MS = 30_000;
 export const NAJDUZA_BLOKADA_MS = 15 * 60_000;
+/** Eskalacija se poništava tek kad ovoliko prođe bez ijednog neuspjeha. */
+export const SMIRENJE_MS = 60 * 60_000;
+/** Postavka u kojoj živi stanje blokade (JSON, vidi StanjeBlokade). */
+export const KLJUC_BLOKADE = 'sigurnost.pinBlokada';
 
 export function porukaBlokade(preostaloMs: number): string {
   return `Previše pogrešnih pokušaja. Pokušajte ponovo za ${Math.ceil(preostaloMs / 1000)} s.`;
 }
 
+/**
+ * Stanje kako se upisuje: `neuspjesi` su vremena (ms) neuspjeha iz zadnjih
+ * 60 min, rastuće; `trajanje` je zadnja blokada (0 = nema eskalacije);
+ * `blokiranDo` je kraj tekuće blokade (ms).
+ */
+export interface StanjeBlokade {
+  neuspjesi: number[];
+  trajanje: number;
+  blokiranDo: number;
+}
+
+/** Gdje se stanje čuva — u programu je to red u `settings` (KLJUC_BLOKADE). */
+export interface SkladisteBlokade {
+  ucitaj(): string | null;
+  spremi(json: string): void;
+}
+
+function uMemoriji(): SkladisteBlokade {
+  let zapis: string | null = null;
+  return { ucitaj: () => zapis, spremi: (s) => { zapis = s; } };
+}
+
+const konacan = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x);
+
+/** Neispravan ili nepostojeći zapis = čisto stanje (bez blokade). */
+function procitajStanje(json: string | null): StanjeBlokade {
+  try {
+    const s = JSON.parse(json ?? '');
+    if (Array.isArray(s?.neuspjesi) && s.neuspjesi.every(konacan) && konacan(s.trajanje) && konacan(s.blokiranDo)) {
+      return { neuspjesi: s.neuspjesi, trajanje: s.trajanje, blokiranDo: s.blokiranDo };
+    }
+  } catch { /* nije JSON */ }
+  return { neuspjesi: [], trajanje: 0, blokiranDo: 0 };
+}
+
 export class OgranicenjePokusaja {
-  private neuspjesi: number[] = [];
-  private blokiranDo = 0;
-  private trajanje = 0;
+  constructor(
+    private readonly sada: () => number = () => Date.now(),
+    private readonly skladiste: SkladisteBlokade = uMemoriji(),
+  ) {}
 
-  constructor(private readonly sada: () => number = () => Date.now()) {}
+  private spremi(s: StanjeBlokade): void {
+    this.skladiste.spremi(JSON.stringify(s));
+  }
 
-  /** Baca grešku dok traje blokada — tada se PIN ni ne provjerava. */
+  /**
+   * Baca grešku dok traje blokada — tada se PIN ni ne provjerava. Blokada koja
+   * bi trajala duže od najduže (sat vraćen unazad) skrati se na najdužu.
+   */
   provjeri(): void {
-    const preostalo = this.blokiranDo - this.sada();
+    const t = this.sada();
+    const s = procitajStanje(this.skladiste.ucitaj());
+    let preostalo = s.blokiranDo - t;
+    if (preostalo > NAJDUZA_BLOKADA_MS) {
+      s.blokiranDo = t + NAJDUZA_BLOKADA_MS;
+      this.spremi(s);
+      preostalo = NAJDUZA_BLOKADA_MS;
+    }
     if (preostalo > 0) throw new Error(porukaBlokade(preostalo));
   }
 
   /**
-   * Neuspjeh ulazi u prozor. Kad prozor ima ≥ 5 neuspjeha: prva blokada 30 s,
-   * svaki sljedeći neuspjeh dok je prozor na pragu ili iznad udvostručuje je
-   * (najviše 15 min). Kad stari neuspjesi isteknu ispod praga, kreće se od 30 s.
+   * Neuspjeh ulazi u prozor. Bez eskalacije: kad prozor od 15 min ima ≥ 5
+   * neuspjeha, blokada 30 s. Uz eskalaciju (bilo je blokade, a od zadnjeg
+   * neuspjeha nije prošlo 60 min): svaki neuspjeh blokira duplo duže od
+   * prethodne blokade, najviše 15 min.
    */
   neuspjeh(): void {
     const t = this.sada();
-    this.neuspjesi = this.neuspjesi.filter(x => t - x < PROZOR_NEUSPJEHA_MS);
-    this.neuspjesi.push(t);
-    if (this.neuspjesi.length < DOZVOLJENI_NEUSPJESI) {
-      this.trajanje = 0;
-      return;
-    }
-    this.trajanje = this.trajanje === 0 ? PRVA_BLOKADA_MS : Math.min(this.trajanje * 2, NAJDUZA_BLOKADA_MS);
-    this.blokiranDo = t + this.trajanje;
+    let s = procitajStanje(this.skladiste.ucitaj());
+    const zadnji = s.neuspjesi.at(-1);
+    if (zadnji === undefined || t - zadnji >= SMIRENJE_MS) s = { neuspjesi: [], trajanje: 0, blokiranDo: 0 };
+    s.neuspjesi = s.neuspjesi.filter(x => t - x < SMIRENJE_MS);
+    s.neuspjesi.push(t);
+    const uProzoru = s.neuspjesi.filter(x => t - x < PROZOR_NEUSPJEHA_MS).length;
+    if (s.trajanje > 0) s.trajanje = Math.min(s.trajanje * 2, NAJDUZA_BLOKADA_MS);
+    else if (uProzoru >= DOZVOLJENI_NEUSPJESI) s.trajanje = PRVA_BLOKADA_MS;
+    if (s.trajanje > 0) s.blokiranDo = t + s.trajanje;
+    this.spremi(s);
   }
 }
 
 // ─── Promjena svog PIN-a ────────────────────────────────────
 // Uspješna promjena otkriva da novi PIN nije ničiji, pa je i ona ograničena:
-// najviše 3 po korisniku u 10 min (u memoriji, kao i brojač pokušaja).
+// najviše 3 po korisniku u 10 min (u memoriji — restart programa ga poništi).
 
 export const PROMJENA_PINA_MAKS = 3;
 export const PROMJENA_PINA_PROZOR_MS = 10 * 60_000;

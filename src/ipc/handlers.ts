@@ -44,7 +44,7 @@ import { dohvatiKnjigovodja } from '../lib/knjigovodja/podaci';
 import * as Tring from '../services/tring';
 import { provjeriKanal, stanjeLicence, aktivirajLicencu } from './licenca';
 import {
-  provjeriPristup, OgranicenjePokusaja, OgranicenjePromjenaPina, PORUKA_NISTE_PRIJAVLJENI, TAJNE_POSTAVKE,
+  provjeriPristup, OgranicenjePokusaja, OgranicenjePromjenaPina, PORUKA_NISTE_PRIJAVLJENI, TAJNE_POSTAVKE, KLJUC_BLOKADE,
 } from './sesija';
 import Database from 'better-sqlite3';
 
@@ -150,7 +150,14 @@ export function registerIpcHandlers(): void {
   let prijavljeniId: number | null = null;
   // Prijava PIN-om 0000: dok ga ne promijeni, korisnik smije samo promijeniSvojPin i odjavu.
   let sesijaSaZadanimPinom = false;
-  const pokusaji = new OgranicenjePokusaja();
+  // Stanje blokade je u bazi — restart programa ne briše ni blokadu ni eskalaciju.
+  const pokusaji = new OgranicenjePokusaja(undefined, {
+    ucitaj: () => postavka(KLJUC_BLOKADE),
+    spremi: (json) => {
+      db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+        .run(KLJUC_BLOKADE, json);
+    },
+  });
   const promjenePina = new OgranicenjePromjenaPina();
 
   const trenutni = (): JavniKorisnik | null => {

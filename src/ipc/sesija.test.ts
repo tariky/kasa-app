@@ -38,6 +38,10 @@ describe('zadani PIN', () => {
 });
 
 describe('OgranicenjePokusaja', () => {
+  /** Poruka blokade ili '' kad nema blokade. */
+  const stanje = (o: OgranicenjePokusaja) => { try { o.provjeri(); return ''; } catch (e: any) { return e.message; } };
+  const sekundi = (o: OgranicenjePokusaja) => Number(/za (\d+) s/.exec(stanje(o))?.[1] ?? 0);
+
   test('5 neuspjeha u 15 min → 30 s, zatim duplo do 15 min; uspjeh ne postoji kao reset', () => {
     let sada = 1_000_000;
     const o = new OgranicenjePokusaja(() => sada);
@@ -53,21 +57,75 @@ describe('OgranicenjePokusaja', () => {
     const trajanja: number[] = [];
     for (let i = 0; i < 7; i++) {
       o.neuspjeh();
-      trajanja.push(Number(/za (\d+) s/.exec((() => { try { o.provjeri(); return ''; } catch (e: any) { return e.message; } })())![1]));
+      trajanja.push(sekundi(o));
     }
     expect(trajanja).toEqual([60, 120, 240, 480, 900, 900, 900]);
   });
 
-  test('neuspjesi stariji od 15 min ispadaju iz prozora, a prag kreće ispočetka', () => {
+  test('eskalacija ostaje i kad stari neuspjesi isteknu iz prozora — svaki novi neuspjeh blokira duplo', () => {
     let sada = 0;
     const o = new OgranicenjePokusaja(() => sada);
     for (let i = 0; i < 5; i++) o.neuspjeh();
+    expect(sekundi(o)).toBe(30);
     sada += 15 * 60_000;
-    expect(() => o.provjeri()).not.toThrow();
-    for (let i = 0; i < 4; i++) o.neuspjeh();
-    expect(() => o.provjeri()).not.toThrow();
+    expect(stanje(o)).toBe('');
     o.neuspjeh();
-    expect(() => o.provjeri()).toThrow(porukaBlokade(30_000));
+    expect(sekundi(o)).toBe(60);
+  });
+
+  test('eskalacija se poništi tek nakon 60 min bez ijednog neuspjeha', () => {
+    let sada = 0;
+    const o = new OgranicenjePokusaja(() => sada);
+    for (let i = 0; i < 5; i++) o.neuspjeh();
+    sada += 60 * 60_000 - 1;
+    o.neuspjeh();
+    expect(sekundi(o)).toBe(60);
+    sada += 60 * 60_000;
+    for (let i = 0; i < 4; i++) o.neuspjeh();
+    expect(stanje(o)).toBe('');
+    o.neuspjeh();
+    expect(sekundi(o)).toBe(30);
+  });
+
+  test('uporan napad: najviše jedan pokušaj u 15 min (≈ 100 na dan, ne 900)', () => {
+    let sada = 0;
+    const o = new OgranicenjePokusaja(() => sada);
+    const pokusaji: number[] = [];
+    // Napadač pokušava čim blokada istekne, 24 h.
+    while (sada < 24 * 3600_000) {
+      const preostalo = sekundi(o) * 1000;
+      if (preostalo > 0) { sada += preostalo; continue; }
+      pokusaji.push(sada);
+      o.neuspjeh();
+    }
+    expect(pokusaji.length).toBeLessThanOrEqual(110);
+    // Nakon početnih 5 + eskalacije do 15 min, razmak je uvijek pun prozor.
+    const razmaci = pokusaji.slice(11).map((t, i) => t - pokusaji[10 + i]);
+    expect(new Set(razmaci)).toEqual(new Set([15 * 60_000]));
+  });
+
+  test('stanje živi u skladištu: nova instanca (restart) nastavlja blokadu i eskalaciju', () => {
+    let sada = 0;
+    let zapis: string | null = null;
+    const skladiste = { ucitaj: () => zapis, spremi: (s: string) => { zapis = s; } };
+    const prva = new OgranicenjePokusaja(() => sada, skladiste);
+    for (let i = 0; i < 5; i++) prva.neuspjeh();
+    const druga = new OgranicenjePokusaja(() => sada, skladiste);
+    expect(sekundi(druga)).toBe(30);
+    sada += 30_000;
+    expect(stanje(druga)).toBe('');
+    druga.neuspjeh();
+    expect(sekundi(new OgranicenjePokusaja(() => sada, skladiste))).toBe(60);
+    expect(JSON.parse(zapis!)).toEqual({ neuspjesi: [0, 0, 0, 0, 0, 30_000], trajanje: 60_000, blokiranDo: 90_000 });
+  });
+
+  test('neispravan zapis u skladištu = bez blokade; blokada duža od 15 min (sat vraćen unazad) se skrati', () => {
+    let zapis: string | null = 'nije json';
+    const skladiste = { ucitaj: () => zapis, spremi: (s: string) => { zapis = s; } };
+    expect(stanje(new OgranicenjePokusaja(() => 0, skladiste))).toBe('');
+    zapis = JSON.stringify({ neuspjesi: [1e12], trajanje: 900_000, blokiranDo: 1e12 + 900_000 });
+    const o = new OgranicenjePokusaja(() => 1e12 - 86_400_000, skladiste);
+    expect(sekundi(o)).toBe(900);
   });
 });
 
