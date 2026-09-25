@@ -52,6 +52,9 @@ export type Provjera =
   | { ok: false; razlog: 'format' | 'potpis' | 'istekla' | 'uredjaj'; licenca?: Licenca };
 
 const DATUM = /^\d{4}-\d{2}-\d{2}$/;
+const jeDatum = (v: unknown): v is string => typeof v === 'string' && DATUM.test(v);
+/** Ed25519 potpis (64 B) u base64url bez paddinga: tačno 86 znakova, zadnji nosi 2 bita. */
+const POTPIS = /^[A-Za-z0-9_-]{85}[AQgw]$/;
 /** R2 pravila za ime bucketa. */
 const BUCKET = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
 
@@ -126,7 +129,10 @@ export function procitajLicencu(token: string): Licenca | null {
   if (dijelovi.length !== 3 || dijelovi[0] !== PREFIKS) return null;
   try {
     const p = JSON.parse(Buffer.from(dijelovi[1], 'base64url').toString('utf8')) as Payload;
-    if (typeof p.k !== 'string' || !DATUM.test(p.d) || !DATUM.test(p.i)) return null;
+    // typeof prije regexa: RegExp.test(['2026-10-31']) bi niz pretvorio u string i pustio ga.
+    if (typeof p.k !== 'string' || !jeDatum(p.d) || !jeDatum(p.i)) return null;
+    // u koji nije string je neispravan token (Rust ga isto odbija); prazan string = bilo koji uređaj.
+    if ('u' in p && typeof p.u !== 'string') return null;
     let moduli: Modul[] | undefined;
     if ('m' in p) {
       const n = normalizujModule(p.m);
@@ -163,6 +169,8 @@ export function provjeriLicencu(
   if (!licenca) return { ok: false, razlog: 'format' };
 
   const [prefiks, payload, potpis] = token.trim().split('.');
+  // Buffer.from(…, 'base64url') guta višak, padding, razmake i +/ — potpis mora biti tačan, kao u Rustu.
+  if (!POTPIS.test(potpis)) return { ok: false, razlog: 'potpis' };
   const ispravan = verify(
     null,
     Buffer.from(`${prefiks}.${payload}`),

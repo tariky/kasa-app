@@ -1,14 +1,16 @@
 // Licenca u main procesu: čuva token i zadnji viđeni datum u
 // `userData/licenca.json` (van baze, da ga restore backupa ne pregazi),
 // računa ID uređaja i blokira kanale koji prave nove dokumente kad je
-// licenca zaključana ili modul nije licenciran.
+// licenca zaključana ili modul nije licenciran. Datum za istek je najveći od
+// sata, `zadnjiDatum` i najnovijeg računa u bazi (vraćen sat / obrisan zapis).
 import { app, BrowserWindow } from 'electron';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { lokalniDatum } from '../lib/licenca';
 import { LICENCA_JAVNI_KLJUC } from '../lib/licencaJavniKljuc';
 import { uredjajId } from '../lib/uredjaj';
-import { izracunajStanje, efektivniDanas, kanalPodLicencom, razlogBlokade, type LicencaInfo } from '../lib/licencaStanje';
+import { getDb } from '../database/db';
+import { izracunajStanje, efektivniDanas, kanalPodLicencom, najnovijiDatumIzBaze, razlogBlokade, type LicencaInfo } from '../lib/licencaStanje';
 
 interface Zapis {
   token?: string;
@@ -21,7 +23,12 @@ function putanja(): string {
 
 function procitaj(): Zapis {
   try {
-    return existsSync(putanja()) ? JSON.parse(readFileSync(putanja(), 'utf8')) : {};
+    const z: unknown = existsSync(putanja()) ? JSON.parse(readFileSync(putanja(), 'utf8')) : {};
+    // `null` ili niz u ručno izmijenjenom fajlu = nema zapisa (kao u Rustu).
+    if (!z || typeof z !== 'object' || Array.isArray(z)) return {};
+    const zapis = { ...(z as Record<string, unknown>) };
+    for (const k of ['token', 'zadnjiDatum'] as const) if (typeof zapis[k] !== 'string') delete zapis[k];
+    return zapis as Zapis;
   } catch {
     return {};
   }
@@ -31,9 +38,22 @@ function zapisi(z: Zapis): void {
   writeFileSync(putanja(), JSON.stringify(z, null, 2));
 }
 
+/** Najnoviji dan iz baze; baza koja se ne da otvoriti ne ruši provjeru licence. */
+function datumIzBaze(): string | null {
+  try {
+    return najnovijiDatumIzBaze(getDb());
+  } catch {
+    return null;
+  }
+}
+
+function danasZaLicencu(z: Zapis): string {
+  return efektivniDanas(lokalniDatum(new Date()), z.zadnjiDatum, datumIzBaze());
+}
+
 export function stanjeLicence(): LicencaInfo {
   const z = procitaj();
-  const danas = efektivniDanas(lokalniDatum(new Date()), z.zadnjiDatum);
+  const danas = danasZaLicencu(z);
   if (z.zadnjiDatum !== danas && z.token) zapisi({ ...z, zadnjiDatum: danas });
   const uredjaj = uredjajId();
   return { ...izracunajStanje(z.token, LICENCA_JAVNI_KLJUC, { danas, uredjaj }), uredjaj };
@@ -41,7 +61,7 @@ export function stanjeLicence(): LicencaInfo {
 
 export function aktivirajLicencu(token: string): LicencaInfo {
   const z = procitaj();
-  const danas = efektivniDanas(lokalniDatum(new Date()), z.zadnjiDatum);
+  const danas = danasZaLicencu(z);
   const uredjaj = uredjajId();
   const s = izracunajStanje(token, LICENCA_JAVNI_KLJUC, { danas, uredjaj });
   if (s.stanje === 'nema' || s.stanje === 'neispravna') {

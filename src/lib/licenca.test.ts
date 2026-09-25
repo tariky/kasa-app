@@ -136,3 +136,30 @@ test('backup: dopisan backup u payload ruši potpis', () => {
   const lazni = Buffer.from(JSON.stringify({ k: osnovna.klijent, d: osnovna.vrijediDo, i: osnovna.izdana, b: tudjeB })).toString('base64url');
   expect(provjeriLicencu(`${pre}.${lazni}.${potpis}`, publicKey, { sada })).toEqual({ ok: false, razlog: 'potpis' });
 });
+
+test('d, i i u moraju biti stringovi — inače je token neispravan', () => {
+  const osn = { k: 'F', d: '2026-10-31', i: '2026-10-01' };
+  // ['2026-10-31'] bi kroz regex (String(niz)) prošao kao datum.
+  for (const los of [{ d: ['2026-10-31'] }, { i: ['2026-10-01'] }, { d: 20261031 }, { u: 1 }, { u: ['A'] }, { u: { x: 1 } }, { u: null }, { u: true }]) {
+    const token = potpisi({ ...osn, ...los });
+    expect(procitajLicencu(token)).toBeNull();
+    expect(provjeriLicencu(token, publicKey, { sada })).toEqual({ ok: false, razlog: 'format' });
+  }
+  // Prazan u (kao i bez u) znači "bilo koji uređaj", kao u Rustu.
+  expect(provjeriLicencu(potpisi({ ...osn, u: '' }), publicKey, { sada, uredjaj: 'X' }).ok).toBe(true);
+});
+
+test('potpis mora biti tačno 64 bajta u kanonskom base64url, bez viška', () => {
+  const token = izdajLicencu(osnovna, privateKey);
+  const [pre, payload, potpis] = token.split('.');
+  expect(potpis).toHaveLength(86);
+  const saPotpisom = (p: string) => provjeriLicencu(`${pre}.${payload}.${p}`, publicKey, { sada });
+  expect(saPotpisom(potpis).ok).toBe(true);
+  // Node bi višak na kraju, padding, razmak ili drugačije zadnje bitove tiho progutao.
+  const zadnji = potpis.at(-1)!;
+  const drugiZadnji = { A: 'B', Q: 'R', g: 'h', w: 'x' }[zadnji as 'A'];
+  for (const los of [`${potpis}A`, `${potpis}AA`, `${potpis}==`, `${potpis.slice(0, 40)} ${potpis.slice(40)}`,
+    potpis.slice(0, -1) + drugiZadnji, potpis.replace(/-/g, '+').replace(/_/g, '/'), potpis.slice(0, -2), ''].filter(p => p !== potpis)) {
+    expect(saPotpisom(los)).toEqual({ ok: false, razlog: 'potpis' });
+  }
+});

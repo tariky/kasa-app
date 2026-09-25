@@ -1,7 +1,8 @@
 import { test, expect } from 'bun:test';
+import { Database } from 'bun:sqlite';
 import { generateKeyPairSync } from 'node:crypto';
 import { izdajLicencu } from './licenca';
-import { izracunajStanje, efektivniDanas, smijeRaditi, razlikaDana, opisLicence, brojDana, razlogBlokade, kanalPodLicencom } from './licencaStanje';
+import { izracunajStanje, efektivniDanas, najnovijiDatumIzBaze, smijeRaditi, razlikaDana, opisLicence, brojDana, razlogBlokade, kanalPodLicencom, type StanjeLicence } from './licencaStanje';
 
 const { privateKey, publicKey } = generateKeyPairSync('ed25519');
 const token = izdajLicencu({ klijent: 'Pekara', vrijediDo: '2026-10-31', izdana: '2026-10-01' }, privateKey);
@@ -47,6 +48,46 @@ test('vraćen sat ne vraća datum unazad', () => {
   expect(efektivniDanas('2026-11-21', null)).toBe('2026-11-21');
 });
 
+test('efektivni datum je najveći od sistemskog, zadnjeg viđenog i datuma iz baze', () => {
+  // Obrisan zadnjiDatum iz licenca.json: baza i dalje pamti najnoviji račun.
+  expect(efektivniDanas('2026-10-01', undefined, '2026-11-20')).toBe('2026-11-20');
+  expect(efektivniDanas('2026-10-01', '2026-11-25', '2026-11-20')).toBe('2026-11-25');
+  expect(efektivniDanas('2026-12-01', '2026-11-25', '2026-11-20')).toBe('2026-12-01');
+  expect(efektivniDanas('2026-12-01', null, null)).toBe('2026-12-01');
+  // Smeće (ručno izmijenjen fajl) se ignoriše umjesto da zaključa ili otključa.
+  expect(efektivniDanas('2026-12-01', 'zzzz', '9999')).toBe('2026-12-01');
+  expect(efektivniDanas('2026-12-01', 42 as never, ['2027-01-01'] as never)).toBe('2026-12-01');
+});
+
+function baza() {
+  const db = new Database(':memory:');
+  db.exec(`CREATE TABLE orders (id INTEGER PRIMARY KEY, isManual INTEGER NOT NULL DEFAULT 0, createdAt TEXT);
+           CREATE TABLE cash_movements (id INTEGER PRIMARY KEY, createdAt TEXT);`);
+  return db;
+}
+
+test('najnoviji datum iz baze: računi (bez ručno unesenih) i polozi/povrati', () => {
+  const db = baza();
+  expect(najnovijiDatumIzBaze(db)).toBeNull();
+  db.exec("INSERT INTO orders (createdAt) VALUES ('2026-11-02 08:00:00'), ('2026-11-20 23:59:59'), ('2026-11-03 10:00:00')");
+  expect(najnovijiDatumIzBaze(db)).toBe('2026-11-20');
+  db.exec("INSERT INTO cash_movements (createdAt) VALUES ('2026-11-21 07:00:00')");
+  expect(najnovijiDatumIzBaze(db)).toBe('2026-11-21');
+  // Ručni račun nosi datum koji je korisnik upisao — greška u kucanju ne smije zaključati licencu.
+  db.exec("INSERT INTO orders (isManual, createdAt) VALUES (1, '2099-01-01 00:00:00')");
+  expect(najnovijiDatumIzBaze(db)).toBe('2026-11-21');
+  // Datum koji nije YYYY-MM-DD se ignoriše.
+  db.exec("INSERT INTO cash_movements (createdAt) VALUES ('smeće')");
+  expect(najnovijiDatumIzBaze(db)).toBe('2026-11-21');
+});
+
+test('najnoviji datum iz baze: nedostupna baza nije greška', () => {
+  expect(najnovijiDatumIzBaze(new Database(':memory:'))).toBeNull();
+  const zatvorena = baza();
+  zatvorena.close();
+  expect(najnovijiDatumIzBaze(zatvorena)).toBeNull();
+});
+
 test('razlika dana preko promjene ljetnog računanja vremena', () => {
   expect(razlikaDana('2026-10-24', '2026-10-26')).toBe(2);
   expect(razlikaDana('2026-03-28', '2026-03-30')).toBe(2);
@@ -70,6 +111,31 @@ test('razlog blokade: istekla licenca ima prednost nad modulom', () => {
     .toEqual({ razlog: 'modul', poruka: 'Modul Ponude nije uključen u licencu.' });
   expect(razlogBlokade({ stanje: 'aktivna', licenca: lic, danaDoIsteka: 9 }, 'order:create')).toBeNull();
   expect(razlogBlokade({ stanje: 'zakljucana', licenca: lic }, 'product:getAll')).toBeNull();
+});
+
+test('kanali samo modula: bez važeće licence nisu "sve licencirano"', () => {
+  const samoModul = ['primka:delete', 'ponuda:delete', 'ponuda:setStatus', 'nalog:delete', 'normativ:save', 'proizvodnja:setEnabled'];
+  const stari = { klijent: 'F', vrijediDo: '2026-01-01', izdana: '2025-01-01' };
+  const bezPrava = [
+    { stanje: 'nema' },
+    { stanje: 'neispravna', razlog: 'potpis' },
+    { stanje: 'neispravna', razlog: 'uredjaj' },
+    // Stari token bez liste modula, istekao: samo pregled.
+    { stanje: 'zakljucana', licenca: stari },
+  ] as const;
+  for (const s of bezPrava) {
+    for (const kanal of samoModul) expect(razlogBlokade(s, kanal)?.razlog).toBe('istekla');
+    // Čitanje ostaje u "samo pregled" modu.
+    for (const kanal of ['ponuda:getAll', 'nalog:getAll', 'primka:getAll', 'normativ:get', 'product:getAll']) {
+      expect(razlogBlokade(s, kanal)).toBeNull();
+    }
+  }
+  // Važeća licenca bez liste (stari token) i dalje daje sve module.
+  for (const kanal of samoModul) expect(razlogBlokade({ stanje: 'milost', licenca: stari, danaDoBlokade: 3 }, kanal)).toBeNull();
+  // Važeća licenca s listom blokira modul koji nema.
+  const bezPonuda: StanjeLicence = { stanje: 'aktivna', licenca: { ...stari, moduli: ['proizvodnja'] }, danaDoIsteka: 9 };
+  expect(razlogBlokade(bezPonuda, 'ponuda:delete')).toEqual({ razlog: 'modul', poruka: 'Modul Ponude nije uključen u licencu.' });
+  expect(razlogBlokade(bezPonuda, 'normativ:save')).toBeNull();
 });
 
 test('kanalPodLicencom: pisanje dokumenata i kanali modula, ne čitanje', () => {

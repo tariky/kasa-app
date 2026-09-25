@@ -3,7 +3,8 @@
 //! Token `PAZAR1.<payload>.<potpis>` (base64url), potpis Ed25519 nad
 //! `PAZAR1.<payload>`. Zapis (token, zadnji viđeni datum) je u
 //! `userData/licenca.json`, van baze. ID uređaja se računa isto kao u
-//! Electronu, pa licence izdane za Electron verziju važe i ovdje.
+//! Electronu, pa licence izdane za Electron verziju važe i ovdje. Datum za
+//! istek je najveći od sata, `zadnjiDatum` i najnovijeg računa u bazi.
 //! Moduli i kanal → moduli: `src/lib/moduliKatalog.json`.
 
 use std::sync::OnceLock;
@@ -19,6 +20,7 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::greska::{Greska, R};
+use crate::sql::Db;
 use crate::{Args, Backend};
 
 const PREFIKS: &str = "PAZAR1";
@@ -74,6 +76,17 @@ fn base64url(s: &str) -> Option<Vec<u8>> {
     E.decode(cist.trim_end_matches('=')).ok()
 }
 
+/// Ed25519 potpis: tačno 86 znakova base64url bez paddinga i bez viška, s
+/// kanonskim zadnjim znakom (kao `POTPIS` u licenca.ts) — bez Node popustljivosti.
+fn potpis(s: &str) -> Option<Signature> {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    if s.len() != 86 {
+        return None;
+    }
+    let bajtovi = URL_SAFE_NO_PAD.decode(s).ok()?;
+    Signature::from_slice(&bajtovi).ok()
+}
+
 fn datum_ok(s: &str) -> bool {
     thread_local!(static D: Regex = Regex::new(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$").unwrap());
     D.with(|r| r.is_match(s))
@@ -98,6 +111,10 @@ pub fn procitaj_licencu(token: &str) -> Option<Value> {
     let k = p["k"].as_str()?;
     let d = p["d"].as_str().filter(|d| datum_ok(d))?;
     let i = p["i"].as_str().filter(|i| datum_ok(i))?;
+    // `u` koji nije string je neispravan token (kao u licenca.ts); prazan = bilo koji uređaj.
+    if p.get("u").is_some_and(|u| !u.is_string()) {
+        return None;
+    }
     let mut l = Map::new();
     l.insert("klijent".into(), json!(k));
     l.insert("vrijediDo".into(), json!(d));
@@ -119,8 +136,7 @@ pub fn provjeri_licencu(token: &str, kljuc: &VerifyingKey, danas: &str, uredjaj:
     let Some(licenca) = procitaj_licencu(token) else { return Err(("format", None)) };
     let dijelovi: Vec<&str> = token.trim().split('.').collect();
     let poruka = format!("{}.{}", dijelovi[0], dijelovi[1]);
-    let ispravan = base64url(dijelovi[2])
-        .and_then(|p| Signature::from_slice(&p).ok())
+    let ispravan = potpis(dijelovi[2])
         .map(|sig| kljuc.verify_strict(poruka.as_bytes(), &sig).is_ok())
         .unwrap_or(false);
     if !ispravan {
@@ -163,11 +179,37 @@ pub fn razlika_dana(od: &str, do_: &str) -> i64 {
     dan_broj(do_) - dan_broj(od)
 }
 
-pub fn efektivni_danas(stvarni: &str, zadnji: Option<&str>) -> String {
-    match zadnji {
-        Some(z) if !z.is_empty() && z > stvarni => z.to_string(),
-        _ => stvarni.to_string(),
+/// `efektivniDanas`: najveći od stvarnog, zadnjeg viđenog i najnovijeg iz baze;
+/// vrijednost koja nije `YYYY-MM-DD` se ignoriše.
+pub fn efektivni_danas(stvarni: &str, zadnji: Option<&str>, iz_baze: Option<&str>) -> String {
+    let mut danas = stvarni;
+    for d in [zadnji, iz_baze].into_iter().flatten() {
+        if datum_ok(d) && d > danas {
+            danas = d;
+        }
     }
+    danas.to_string()
+}
+
+/// `UPIT_NAJNOVIJI_DATUM` iz licencaStanje.ts: računi bez ručno unesenih
+/// (`isManual` nosi datum koji je korisnik ukucao) i polozi/povrati.
+const UPIT_NAJNOVIJI_DATUM: &str = "
+  SELECT MAX(d) AS d FROM (
+    SELECT MAX(substr(createdAt, 1, 10)) AS d FROM orders
+      WHERE isManual = 0 AND createdAt GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*'
+    UNION ALL
+    SELECT MAX(substr(createdAt, 1, 10)) FROM cash_movements
+      WHERE createdAt GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*'
+  )";
+
+/// `najnovijiDatumIzBaze`: `YYYY-MM-DD` ili `None` (nedostupna baza nije greška).
+pub fn najnoviji_datum_iz_baze(db: &Db) -> Option<String> {
+    db.val(UPIT_NAJNOVIJI_DATUM, &[]).ok()?.as_str().filter(|d| datum_ok(d)).map(str::to_string)
+}
+
+fn danas_za_licencu(b: &Backend, z: &Value) -> String {
+    let iz_baze = b.db().ok().and_then(najnoviji_datum_iz_baze);
+    efektivni_danas(&b.sat.danas(), z["zadnjiDatum"].as_str(), iz_baze.as_deref())
 }
 
 pub fn izracunaj_stanje(token: Option<&str>, kljuc: &VerifyingKey, danas: &str, uredjaj: &str) -> Value {
@@ -194,11 +236,23 @@ pub fn smije_raditi(s: &Value) -> bool {
     matches!(s["stanje"].as_str(), Some("aktivna" | "upozorenje" | "milost"))
 }
 
+/// `regPutanja` iz uredjaj.ts: apsolutna putanja, da `reg` iz PATH-a ili
+/// radnog foldera ne podmetne tuđi ID.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn reg_putanja(system_root: Option<&str>) -> String {
+    let root = system_root.filter(|r| !r.is_empty()).unwrap_or(r"C:\Windows");
+    format!(r"{}\System32\reg.exe", root.trim_end_matches(['\\', '/']))
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+const IOREG: &str = "/usr/sbin/ioreg";
+
 fn sirov_id_uredjaja() -> String {
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
-        if let Ok(out) = std::process::Command::new("reg")
+        let root = std::env::var("SystemRoot").ok();
+        if let Ok(out) = std::process::Command::new(reg_putanja(root.as_deref()))
             .args(["query", r"HKLM\SOFTWARE\Microsoft\Cryptography", "/v", "MachineGuid"])
             .creation_flags(0x0800_0000)
             .output()
@@ -211,7 +265,7 @@ fn sirov_id_uredjaja() -> String {
     }
     #[cfg(target_os = "macos")]
     {
-        if let Ok(out) = std::process::Command::new("ioreg").args(["-rd1", "-c", "IOPlatformExpertDevice"]).output() {
+        if let Ok(out) = std::process::Command::new(IOREG).args(["-rd1", "-c", "IOPlatformExpertDevice"]).output() {
             let s = String::from_utf8_lossy(&out.stdout);
             if let Some(c) = Regex::new(r#""IOPlatformUUID"\s*=\s*"([^"]+)""#).unwrap().captures(&s) {
                 return c[1].to_string();
@@ -226,6 +280,7 @@ fn sirov_id_uredjaja() -> String {
             }
         }
     }
+    // Ostaje: postojeće licence mogu biti vezane za hash hostname-a.
     hostname::get().map(|h| h.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
@@ -263,7 +318,7 @@ fn sa_uredjajem(mut s: Value) -> Value {
 
 pub fn stanje_licence(b: &Backend) -> R<Value> {
     let mut z = procitaj(b);
-    let danas = efektivni_danas(&b.sat.danas(), z["zadnjiDatum"].as_str());
+    let danas = danas_za_licencu(b, &z);
     let token = z["token"].as_str().map(str::to_string);
     if z["zadnjiDatum"].as_str() != Some(danas.as_str()) && token.as_deref().is_some_and(|t| !t.is_empty()) {
         z["zadnjiDatum"] = json!(danas);
@@ -274,7 +329,7 @@ pub fn stanje_licence(b: &Backend) -> R<Value> {
 
 pub fn aktiviraj_licencu(b: &Backend, token: &str) -> R<Value> {
     let z = procitaj(b);
-    let danas = efektivni_danas(&b.sat.danas(), z["zadnjiDatum"].as_str());
+    let danas = danas_za_licencu(b, &z);
     let s = izracunaj_stanje(Some(token), javni_kljuc(), &danas, uredjaj_id());
     match s["stanje"].as_str() {
         Some("nema") => return Err(Greska::nova("Upišite kod licence.")),
@@ -294,14 +349,20 @@ pub fn aktiviraj_licencu(b: &Backend, token: &str) -> R<Value> {
     Ok(sa_uredjajem(s))
 }
 
+/// Kanal pripada modulu (svi takvi kanali nešto mijenjaju).
+fn kanal_modula(kanal: &str) -> bool {
+    katalog()["kanali"].get(kanal).is_some()
+}
+
 /// `kanalPodLicencom`: kanal koji pravi dokumente ili pripada modulu.
 fn pod_licencom(kanal: &str) -> bool {
-    BLOKIRANI_KANALI.contains(&kanal) || katalog()["kanali"].get(kanal).is_some()
+    BLOKIRANI_KANALI.contains(&kanal) || kanal_modula(kanal)
 }
 
 /// `razlogBlokade`: `Some((istekla, poruka))` kad licenca ne dozvoljava kanal.
+/// Bez važeće licence (samo pregled) i kanali modula su blokirani; čitanja nisu.
 pub fn razlog_blokade(s: &Value, kanal: &str) -> Option<(bool, String)> {
-    if BLOKIRANI_KANALI.contains(&kanal) && !smije_raditi(s) {
+    if (BLOKIRANI_KANALI.contains(&kanal) || kanal_modula(kanal)) && !smije_raditi(s) {
         return Some((true, "Licenca je istekla — program radi samo za pregled. Unesite novi kod licence.".into()));
     }
     let trazi = katalog()["kanali"].get(kanal)?.as_array()?;
@@ -397,6 +458,117 @@ mod tests {
         let zakljucana = izracunaj_stanje(Some(&samo_proizvodnja), &v, "2026-12-01", "X");
         assert!(razlog_blokade(&zakljucana, "ponuda:create").unwrap().0);
         assert!(pod_licencom("normativ:save") && pod_licencom("order:create") && !pod_licencom("product:getAll"));
+    }
+
+    #[test]
+    fn d_i_u_moraju_biti_stringovi() {
+        let k = SigningKey::from_bytes(&[7u8; 32]);
+        let v = k.verifying_key();
+        for los in [r#""d":["2026-10-31"]"#, r#""d":20261031"#, r#""i":["2026-10-01"]"#, r#""u":1"#, r#""u":["A"]"#, r#""u":{"x":1}"#, r#""u":null"#, r#""u":true"#] {
+            let payload = format!(r#"{{"k":"F","d":"2026-10-31","i":"2026-10-01",{los}}}"#);
+            // Kasniji ključ u JSON-u pobjeđuje (kao JSON.parse).
+            let t = izdaj(&k, &payload);
+            assert!(procitaj_licencu(&t).is_none(), "{los}");
+            assert_eq!(izracunaj_stanje(Some(&t), &v, "2026-10-05", "X"), json!({"stanje": "neispravna", "razlog": "format"}), "{los}");
+        }
+        let prazan_u = izdaj(&k, r#"{"k":"F","d":"2026-10-31","i":"2026-10-01","u":""}"#);
+        assert_eq!(izracunaj_stanje(Some(&prazan_u), &v, "2026-10-05", "X")["stanje"], "aktivna");
+    }
+
+    #[test]
+    fn potpis_tacne_duzine_bez_viska() {
+        let k = SigningKey::from_bytes(&[7u8; 32]);
+        let v = k.verifying_key();
+        let t = izdaj(&k, r#"{"k":"F","d":"2026-10-31","i":"2026-10-01"}"#);
+        let (tijelo, potpis) = t.rsplit_once('.').unwrap();
+        assert_eq!(potpis.len(), 86);
+        let sa = |p: &str| izracunaj_stanje(Some(&format!("{tijelo}.{p}")), &v, "2026-10-05", "X");
+        assert_eq!(sa(potpis)["stanje"], "aktivna");
+        let zadnji = potpis.chars().last().unwrap();
+        let drugi = match zadnji { 'A' => 'B', 'Q' => 'R', 'g' => 'h', _ => 'x' };
+        let losi = [
+            format!("{potpis}A"),
+            format!("{potpis}AA"),
+            format!("{potpis}=="),
+            format!("{} {}", &potpis[..40], &potpis[40..]),
+            format!("{}{drugi}", &potpis[..85]),
+            potpis.replace('-', "+").replace('_', "/"),
+            potpis[..84].to_string(),
+            String::new(),
+        ];
+        for los in losi.iter().filter(|l| l.as_str() != potpis) {
+            assert_eq!(sa(los), json!({"stanje": "neispravna", "razlog": "potpis"}), "{los}");
+        }
+    }
+
+    #[test]
+    fn efektivni_datum_i_baza() {
+        assert_eq!(efektivni_danas("2026-10-01", Some("2026-11-20"), None), "2026-11-20");
+        assert_eq!(efektivni_danas("2026-11-21", Some("2026-11-20"), None), "2026-11-21");
+        assert_eq!(efektivni_danas("2026-10-01", None, Some("2026-11-20")), "2026-11-20");
+        assert_eq!(efektivni_danas("2026-10-01", Some("2026-11-25"), Some("2026-11-20")), "2026-11-25");
+        assert_eq!(efektivni_danas("2026-12-01", Some("2026-11-25"), Some("2026-11-20")), "2026-12-01");
+        assert_eq!(efektivni_danas("2026-12-01", Some("zzzz"), Some("9999")), "2026-12-01");
+
+        let dir = std::env::temp_dir().join(format!("kasa-licenca-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = Db::aktivna(&dir.join("kasa.db"), std::sync::Arc::new(crate::petlja::Petlja::nova())).unwrap();
+        assert_eq!(najnoviji_datum_iz_baze(&db), None);
+        let racun = |manual: i64, kad: &str| {
+            db.run(
+                "INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, status, isManual, createdAt) VALUES (1, 1, 0, 'Gotovina', 'completed', ?, ?)",
+                &[json!(manual), json!(kad)],
+            )
+            .unwrap();
+        };
+        racun(0, "2026-11-02 08:00:00");
+        racun(0, "2026-11-20 23:59:59");
+        racun(0, "2026-11-03 10:00:00");
+        assert_eq!(najnoviji_datum_iz_baze(&db).as_deref(), Some("2026-11-20"));
+        db.run("INSERT INTO cash_movements (tip, iznos, korisnikId, tringStatus, createdAt) VALUES ('polog', 1, 1, 'ok', '2026-11-21 07:00:00')", &[]).unwrap();
+        assert_eq!(najnoviji_datum_iz_baze(&db).as_deref(), Some("2026-11-21"));
+        // Ručni račun: datum je ukucao korisnik — ne broji se.
+        racun(1, "2099-01-01 00:00:00");
+        assert_eq!(najnoviji_datum_iz_baze(&db).as_deref(), Some("2026-11-21"));
+        db.run("INSERT INTO cash_movements (tip, iznos, korisnikId, tringStatus, createdAt) VALUES ('polog', 1, 1, 'ok', 'smeće')", &[]).unwrap();
+        assert_eq!(najnoviji_datum_iz_baze(&db).as_deref(), Some("2026-11-21"));
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn kanali_samo_modula_bez_vazece_licence() {
+        let samo_modul = ["primka:delete", "ponuda:delete", "ponuda:setStatus", "nalog:delete", "normativ:save", "proizvodnja:setEnabled"];
+        let stari = json!({"klijent": "F", "vrijediDo": "2026-01-01", "izdana": "2025-01-01"});
+        let bez_prava = [
+            json!({"stanje": "nema"}),
+            json!({"stanje": "neispravna", "razlog": "potpis"}),
+            json!({"stanje": "neispravna", "razlog": "uredjaj"}),
+            json!({"stanje": "zakljucana", "licenca": stari}),
+        ];
+        for s in &bez_prava {
+            for kanal in samo_modul {
+                assert!(razlog_blokade(s, kanal).is_some_and(|(istekla, _)| istekla), "{s} {kanal}");
+            }
+            for kanal in ["ponuda:getAll", "nalog:getAll", "primka:getAll", "normativ:get", "product:getAll"] {
+                assert_eq!(razlog_blokade(s, kanal), None, "{s} {kanal}");
+            }
+        }
+        let milost = json!({"stanje": "milost", "licenca": stari, "danaDoBlokade": 3});
+        for kanal in samo_modul {
+            assert_eq!(razlog_blokade(&milost, kanal), None);
+        }
+        let bez_ponuda = json!({"stanje": "aktivna", "danaDoIsteka": 9, "licenca": {"klijent": "F", "vrijediDo": "2026-01-01", "izdana": "2025-01-01", "moduli": ["proizvodnja"]}});
+        assert_eq!(razlog_blokade(&bez_ponuda, "ponuda:delete"), Some((false, "Modul Ponude nije uključen u licencu.".to_string())));
+        assert_eq!(razlog_blokade(&bez_ponuda, "normativ:save"), None);
+    }
+
+    #[test]
+    fn apsolutne_putanje_alata() {
+        assert_eq!(reg_putanja(Some(r"D:\WIN")), r"D:\WIN\System32\reg.exe");
+        assert_eq!(reg_putanja(None), r"C:\Windows\System32\reg.exe");
+        assert_eq!(reg_putanja(Some("")), r"C:\Windows\System32\reg.exe");
+        assert_eq!(IOREG, "/usr/sbin/ioreg");
     }
 
     #[test]

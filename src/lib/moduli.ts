@@ -4,8 +4,9 @@
 import katalog from './moduliKatalog.json';
 import type { StanjeLicence } from './licencaTipovi';
 
-// Generator nema svojih kanala (koristi kanale jezgra order:create i
-// tring:printReceipt), pa se blokira samo u UI-ju, ne u backendu.
+// Generator nema svojih kanala: GeneratorScreen (batchRacuni) čita
+// product:getAll i izdaje račune kroz order:finalize, isti kanal kao Kasa —
+// backend ga ne može razlikovati, pa se Generator blokira samo u UI-ju.
 export type Modul = 'skladiste' | 'ponude' | 'proizvodnja' | 'generator';
 
 export const LICENCIRANI_MODULI = katalog.moduli as readonly Modul[];
@@ -23,7 +24,11 @@ export function normalizujModule(m: unknown): Modul[] | null {
 
 export type SkupModula = Record<Modul, boolean>;
 
-/** Šta licenca dozvoljava. Stari token bez liste i stanje bez licence daju sve. */
+/**
+ * Šta licenca dozvoljava. Stari token bez liste i stanje bez licence daju sve —
+ * u "samo pregled" modu ekrani modula ostaju vidljivi; kanale modula tada
+ * blokira `razlogBlokade` (licencaStanje.ts), ne ova funkcija.
+ */
 export function licenciraniModuli(s: StanjeLicence): SkupModula {
   const lista = 'licenca' in s ? s.licenca.moduli : undefined;
   return Object.fromEntries(LICENCIRANI_MODULI.map(m => [m, lista ? lista.includes(m) : true])) as SkupModula;
