@@ -278,8 +278,8 @@ export function normalizeOznaka(oznaka: string): OznakaPlacanja {
   }
 }
 
-function escapeXml(str: string): string {
-  return str
+function escapeXml(v: unknown): string {
+  return String(v)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -287,16 +287,120 @@ function escapeXml(str: string): string {
     .replace(/'/g, "&apos;");
 }
 
+// ─── Validacija polja prije slanja ──────────────────────────────
+// Svako polje koje ide uređaju prolazi kroz escape ili validaciju. Nevaljan
+// zahtjev se odbija prije HTTP-a — uređaj ga nikad ne vidi, a pozivaoci ga
+// dobiju kao običan neuspjeh (isto kao grešku uređaja). Rust backend
+// (src-tauri/backend/src/tring.rs) mora odbiti iste ulaze istom porukom.
+
+class NevaljanZahtjev extends Error {}
+
+const MAX_PLU = 999_999;
+const MAX_GRUPA = 999_999;
+const MAX_BROJ_RACUNA = 999_999_999;
+/** Decimalni zapis ("2.5", " 12 ", "1e3"); bez "0x10", "1,5", "Infinity". */
+const DECIMALNI_BROJ = /^[ \t\r\n]*[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?[ \t\r\n]*$/;
+
+/** Broj ili decimalni string → konačan broj; sve ostalo (NaN, ±∞, null...) je null. */
+function konacanBroj(v: unknown): number | null {
+  const n = typeof v === 'number' ? v
+    : typeof v === 'string' && DECIMALNI_BROJ.test(v) ? Number(v)
+    : NaN;
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Numeričko polje kako ga uređaj i dosad dobija: JS zapis broja (`${n}`),
+ * bez fiksnih decimala — tako za ispravne ulaze XML ostaje bajt po bajt isti.
+ */
+function broj(v: unknown, polje: string): string {
+  const n = konacanBroj(v);
+  if (n === null) throw new NevaljanZahtjev(`neispravna vrijednost polja ${polje} (mora biti broj)`);
+  return String(n);
+}
+
+function cijeliBroj(v: unknown, opis: string, max: number): string {
+  const n = konacanBroj(v);
+  if (n === null || !Number.isInteger(n) || n < 0 || n > max) {
+    throw new NevaljanZahtjev(`${opis} (mora biti cijeli broj od 0 do ${max})`);
+  }
+  return String(n);
+}
+
+/** Uređaj zna samo stope E (17 %) i K (oslobođeno) — isto kao CHECK u bazi. */
+function stopa(v: unknown): string {
+  if (v !== 'E' && v !== 'K') throw new NevaljanZahtjev('neispravna PDV stopa (dozvoljeno E ili K)');
+  return v;
+}
+
+function odbijeno(greska: NevaljanZahtjev): TringResponse {
+  return {
+    success: false,
+    vrstaOdgovora: "Greska",
+    odgovori: {},
+    error: `Zahtjev nije poslan fiskalnom uređaju: ${greska.message}`,
+    statusCode: null,
+  };
+}
+
+/** Sastavi tijelo pa pošalji; nevaljan ulaz vraća neuspjeh bez slanja. */
+function posalji(sastavi: () => string, posaljiTijelo: (body: string) => Promise<TringResponse>): Promise<TringResponse> {
+  let body: string;
+  try {
+    body = sastavi();
+  } catch (e) {
+    if (e instanceof NevaljanZahtjev) return Promise.resolve(odbijeno(e));
+    throw e;
+  }
+  return posaljiTijelo(body);
+}
+
+function racunZahtjev(vrstaZahtjeva: number, noviObjekat: string): string {
+  return (
+    `${XML_DECL}` +
+    `<RacunZahtjev ${XMLNS}>` +
+    `<BrojZahtjeva>${nextRequestNumber()}</BrojZahtjeva>` +
+    `<VrstaZahtjeva>${vrstaZahtjeva}</VrstaZahtjeva>` +
+    `<NoviObjekat>${noviObjekat}</NoviObjekat>` +
+    `</RacunZahtjev>`
+  );
+}
+
 function artikalToXml(a: Artikal): string {
   return (
     `<Sifra>${escapeXml(a.sifra)}</Sifra>` +
     `<Naziv>${escapeXml(a.naziv)}</Naziv>` +
     `<JM>${escapeXml(a.jm)}</JM>` +
-    `<Cijena>${a.cijena}</Cijena>` +
-    `<Stopa>${a.stopa}</Stopa>` +
-    `<Grupa>${a.grupa ?? 0}</Grupa>` +
-    `<PLU>${a.plu ?? 0}</PLU>`
+    `<Cijena>${broj(a.cijena, 'Cijena')}</Cijena>` +
+    `<Stopa>${stopa(a.stopa)}</Stopa>` +
+    `<Grupa>${cijeliBroj(a.grupa ?? 0, 'neispravna Grupa', MAX_GRUPA)}</Grupa>` +
+    `<PLU>${cijeliBroj(a.plu ?? 0, 'neispravan PLU', MAX_PLU)}</PLU>`
   );
+}
+
+function stavkeToXml(stavke: RacunStavka[]): string {
+  return stavke
+    .map(
+      (s) =>
+        `<RacunStavka>` +
+        `<artikal>${artikalToXml(s.artikal)}</artikal>` +
+        `<Kolicina>${broj(s.kolicina, 'Kolicina')}</Kolicina>` +
+        `<Rabat>${broj(s.rabat, 'Rabat')}</Rabat>` +
+        `</RacunStavka>`
+    )
+    .join("");
+}
+
+function placanjaToXml(placanja: VrstaPlacanja[]): string {
+  return placanja
+    .map(
+      (v) =>
+        `<VrstaPlacanja>` +
+        `<Oznaka>${normalizeOznaka(v.oznaka)}</Oznaka>` +
+        `<Iznos>${broj(v.iznos, 'Iznos')}</Iznos>` +
+        `</VrstaPlacanja>`
+    )
+    .join("");
 }
 
 function kupacToXml(k: Kupac): string {
@@ -319,8 +423,8 @@ export function inicijalizacija(
   const body =
     `${XML_DECL}` +
     `<Operator ${XMLNS}>` +
-    `<BrojOperatora>${operatorId}</BrojOperatora>` +
-    `<Lozinka>${password}</Lozinka>` +
+    `<BrojOperatora>${escapeXml(operatorId)}</BrojOperatora>` +
+    `<Lozinka>${escapeXml(password)}</Lozinka>` +
     `</Operator>`;
 
   return postXml("/inicijalizacija", body);
@@ -328,84 +432,32 @@ export function inicijalizacija(
 
 // POST /ua - VrstaZahtjeva=105
 export function upisiArtikal(artikal: Artikal): Promise<TringResponse> {
-  const n = nextRequestNumber();
-  const body =
-    `${XML_DECL}` +
-    `<RacunZahtjev ${XMLNS}>` +
-    `<BrojZahtjeva>${n}</BrojZahtjeva>` +
-    `<VrstaZahtjeva>105</VrstaZahtjeva>` +
-    `<NoviObjekat>${artikalToXml(artikal)}</NoviObjekat>` +
-    `</RacunZahtjev>`;
-
-  return postXml("/ua", body);
+  return posalji(() => {
+    const noviObjekat = artikalToXml(artikal);
+    return racunZahtjev(105, noviObjekat);
+  }, (body) => postXml("/ua", body));
 }
 
 // POST /sfr - VrstaZahtjeva=0
 export function stampatiFiskalniRacun(racun: Racun): Promise<TringResponse> {
-  const n = nextRequestNumber();
-
-  const stavkeXml = racun.stavke
-    .map(
-      (s) =>
-        `<RacunStavka>` +
-        `<artikal>${artikalToXml(s.artikal)}</artikal>` +
-        `<Kolicina>${s.kolicina}</Kolicina>` +
-        `<Rabat>${s.rabat}</Rabat>` +
-        `</RacunStavka>`
-    )
-    .join("");
-
-  const placanjaXml = racun.vrstePlacanja
-    .map(
-      (v) =>
-        `<VrstaPlacanja>` +
-        `<Oznaka>${normalizeOznaka(v.oznaka)}</Oznaka>` +
-        `<Iznos>${v.iznos}</Iznos>` +
-        `</VrstaPlacanja>`
-    )
-    .join("");
-
-  const kupacXml = racun.kupac ? kupacToXml(racun.kupac) : "";
-
-  const body =
-    `${XML_DECL}` +
-    `<RacunZahtjev ${XMLNS}>` +
-    `<BrojZahtjeva>${n}</BrojZahtjeva>` +
-    `<VrstaZahtjeva>0</VrstaZahtjeva>` +
-    `<NoviObjekat>` +
-    kupacXml +
-    `<StavkeRacuna>${stavkeXml}</StavkeRacuna>` +
-    // Omotač je VrstePlacanja (množina) — ime iz stampatifiskalniracun.xsd.
-    // Ranije je stajalo VrstaPlacanja, što TFS-ov deserializator tiho ignoriše,
-    // pa je uređaj svaki račun knjižio kao gotovinski bez obzira na plaćanje.
-    `<VrstePlacanja>${placanjaXml}</VrstePlacanja>` +
-    `<Napomena>${racun.napomena ? escapeXml(racun.napomena) : ""}</Napomena>` +
-    `<BrojRacuna>${racun.brojRacuna ?? 0}</BrojRacuna>` +
-    `</NoviObjekat>` +
-    `</RacunZahtjev>`;
-
-  return postXml("/sfr", body);
+  return posalji(() => {
+    const noviObjekat =
+      (racun.kupac ? kupacToXml(racun.kupac) : "") +
+      `<StavkeRacuna>${stavkeToXml(racun.stavke)}</StavkeRacuna>` +
+      // Omotač je VrstePlacanja (množina) — ime iz stampatifiskalniracun.xsd.
+      // Ranije je stajalo VrstaPlacanja, što TFS-ov deserializator tiho ignoriše,
+      // pa je uređaj svaki račun knjižio kao gotovinski bez obzira na plaćanje.
+      `<VrstePlacanja>${placanjaToXml(racun.vrstePlacanja)}</VrstePlacanja>` +
+      `<Napomena>${racun.napomena ? escapeXml(racun.napomena) : ""}</Napomena>` +
+      `<BrojRacuna>${cijeliBroj(racun.brojRacuna ?? 0, 'neispravan BrojRacuna', MAX_BROJ_RACUNA)}</BrojRacuna>`;
+    return racunZahtjev(0, noviObjekat);
+  }, (body) => postXml("/sfr", body));
 }
 
 // POST /srr - VrstaZahtjeva=2
 export function stampatiReklamiraniRacun(
   racun: ReklamiraniRacun
 ): Promise<TringResponse> {
-  const n = nextRequestNumber();
-
-  const stavkeXml = racun.stavke
-    .map(
-      (s) =>
-        `<RacunStavka>` +
-        `<artikal>${artikalToXml(s.artikal)}</artikal>` +
-        `<Kolicina>${s.kolicina}</Kolicina>` +
-        `<Rabat>${s.rabat}</Rabat>` +
-        `</RacunStavka>`
-    )
-    .join("");
-
-  const kupacXml = racun.kupac ? kupacToXml(racun.kupac) : "";
-
   // Reklamacija mora nositi tačno jednu vrstu plaćanja — gotovinski povrat se
   // šalje kao Gotovina/0 (tako radi i Tringov vlastiti POS na FP1, a isporučeni
   // primjer srr.reklamirani.xml je identičan). Prazan <VrstePlacanja/> iz teksta
@@ -414,31 +466,16 @@ export function stampatiReklamiraniRacun(
   const placanja = racun.vrstePlacanja.length > 0
     ? racun.vrstePlacanja
     : [{ oznaka: 'Gotovina', iznos: 0 }];
-  const placanjaXml = placanja
-    .map(
-      (v) =>
-        `<VrstaPlacanja>` +
-        `<Oznaka>${normalizeOznaka(v.oznaka)}</Oznaka>` +
-        `<Iznos>${v.iznos}</Iznos>` +
-        `</VrstaPlacanja>`
-    )
-    .join("");
 
-  const body =
-    `${XML_DECL}` +
-    `<RacunZahtjev ${XMLNS}>` +
-    `<BrojZahtjeva>${n}</BrojZahtjeva>` +
-    `<VrstaZahtjeva>2</VrstaZahtjeva>` +
-    `<NoviObjekat>` +
-    kupacXml +
-    `<StavkeRacuna>${stavkeXml}</StavkeRacuna>` +
-    `<VrstePlacanja>${placanjaXml}</VrstePlacanja>` +
-    `<Napomena>${racun.napomena ? escapeXml(racun.napomena) : ""}</Napomena>` +
-    `<BrojRacuna>${racun.brojRacuna}</BrojRacuna>` +
-    `</NoviObjekat>` +
-    `</RacunZahtjev>`;
-
-  return postXml("/srr", body);
+  return posalji(() => {
+    const noviObjekat =
+      (racun.kupac ? kupacToXml(racun.kupac) : "") +
+      `<StavkeRacuna>${stavkeToXml(racun.stavke)}</StavkeRacuna>` +
+      `<VrstePlacanja>${placanjaToXml(placanja)}</VrstePlacanja>` +
+      `<Napomena>${racun.napomena ? escapeXml(racun.napomena) : ""}</Napomena>` +
+      `<BrojRacuna>${cijeliBroj(racun.brojRacuna, 'neispravan BrojRacuna', MAX_BROJ_RACUNA)}</BrojRacuna>`;
+    return racunZahtjev(2, noviObjekat);
+  }, (body) => postXml("/srr", body));
 }
 
 // POST /sps - VrstaZahtjeva=3 (X-report)
@@ -484,14 +521,14 @@ const POVRAT_NOVCA_VRSTA_ZAHTJEVA = 8;
 export type OznakaPlacanja = "Gotovina" | "Cek" | "Kartica" | "Virman";
 
 function novacXml(brojZahtjeva: number, vrstaZahtjeva: number, iznos: number, oznaka: OznakaPlacanja): string {
-  const iznosZaokruzen = Math.round((iznos + Number.EPSILON) * 100) / 100;
+  const iznosZaokruzen = broj(Math.round((iznos + Number.EPSILON) * 100) / 100, 'Iznos');
   return (
     `${XML_DECL}` +
     `<RacunZahtjev ${XMLNS}>` +
     `<BrojZahtjeva>${brojZahtjeva}</BrojZahtjeva>` +
     `<VrstaZahtjeva>${vrstaZahtjeva}</VrstaZahtjeva>` +
     `<NoviObjekat>` +
-    `<Oznaka>${oznaka}</Oznaka>` +
+    `<Oznaka>${escapeXml(oznaka)}</Oznaka>` +
     `<Iznos>${iznosZaokruzen}</Iznos>` +
     `</NoviObjekat>` +
     `</RacunZahtjev>`
@@ -520,12 +557,25 @@ async function postXmlFallback(paths: string[], body: string): Promise<TringResp
 // Službeni unos gotovine u kasu (polog). Uvijek Gotovina — polog drugim
 // sredstvima ne mijenja ladicu pa ga aplikacija ne nudi.
 export function unosNovca(iznos: number, oznaka: OznakaPlacanja = "Gotovina"): Promise<TringResponse> {
-  return postXmlFallback(UNOS_NOVCA_PATHS, buildUnosNovcaXml(nextRequestNumber(), iznos, oznaka));
+  return posalji(() => {
+    broj(iznos, 'Iznos'); // prije brojača zahtjeva
+    return buildUnosNovcaXml(nextRequestNumber(), iznos, oznaka);
+  }, (body) => postXmlFallback(UNOS_NOVCA_PATHS, body));
 }
 
 // Službeni iznos gotovine iz kase (npr. pražnjenje ladice na kraju dana).
 export function povratNovca(iznos: number, oznaka: OznakaPlacanja = "Gotovina"): Promise<TringResponse> {
-  return postXmlFallback(POVRAT_NOVCA_PATHS, buildPovratNovcaXml(nextRequestNumber(), iznos, oznaka));
+  return posalji(() => {
+    broj(iznos, 'Iznos');
+    return buildPovratNovcaXml(nextRequestNumber(), iznos, oznaka);
+  }, (body) => postXmlFallback(POVRAT_NOVCA_PATHS, body));
+}
+
+/** "GGGG-MM-DD" → "d.M.gggg vrijeme", format koji Tring očekuje. */
+function datumIzvjestaja(datum: unknown, vrijeme: string): string {
+  const m = typeof datum === 'string' ? /^([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})$/.exec(datum) : null;
+  if (!m) throw new NevaljanZahtjev('neispravan datum (očekuje se GGGG-MM-DD)');
+  return `${parseInt(m[3], 10)}.${parseInt(m[2], 10)}.${m[1]} ${vrijeme}`;
 }
 
 // POST /spi - VrstaZahtjeva=5
@@ -533,24 +583,19 @@ export function stampatiPeriodicniIzvjestaj(
   odDatuma: string,
   doDatuma: string
 ): Promise<TringResponse> {
-  const n = nextRequestNumber();
-
-  // Convert YYYY-MM-DD to d.M.yyyy HH:mm:ss format expected by Tring
-  const fromParts = odDatuma.split('-');
-  const toParts = doDatuma.split('-');
-  const fromFormatted = `${parseInt(fromParts[2])}.${parseInt(fromParts[1])}.${fromParts[0]} 00:00:00`;
-  const toFormatted = `${parseInt(toParts[2])}.${parseInt(toParts[1])}.${toParts[0]} 23:59:59`;
-
-  const body =
-    `${XML_DECL}` +
-    `<Zahtjev ${XMLNS}>` +
-    `<BrojZahtjeva>${n}</BrojZahtjeva>` +
-    `<VrstaZahtjeva>5</VrstaZahtjeva>` +
-    `<Parametri>` +
-    `<Parametar><Naziv>odDatuma</Naziv><Vrijednost>${fromFormatted}</Vrijednost></Parametar>` +
-    `<Parametar><Naziv>doDatuma</Naziv><Vrijednost>${toFormatted}</Vrijednost></Parametar>` +
-    `</Parametri>` +
-    `</Zahtjev>`;
-
-  return postXml("/spi", body);
+  return posalji(() => {
+    const od = datumIzvjestaja(odDatuma, '00:00:00');
+    const do_ = datumIzvjestaja(doDatuma, '23:59:59');
+    return (
+      `${XML_DECL}` +
+      `<Zahtjev ${XMLNS}>` +
+      `<BrojZahtjeva>${nextRequestNumber()}</BrojZahtjeva>` +
+      `<VrstaZahtjeva>5</VrstaZahtjeva>` +
+      `<Parametri>` +
+      `<Parametar><Naziv>odDatuma</Naziv><Vrijednost>${od}</Vrijednost></Parametar>` +
+      `<Parametar><Naziv>doDatuma</Naziv><Vrijednost>${do_}</Vrijednost></Parametar>` +
+      `</Parametri>` +
+      `</Zahtjev>`
+    );
+  }, (body) => postXml("/spi", body));
 }
