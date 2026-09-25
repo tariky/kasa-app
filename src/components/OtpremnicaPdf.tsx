@@ -6,6 +6,7 @@ import { logoVelicina, kontaktFirme } from '@/lib/firma';
 import { pecatZa, type DokumentPostavke } from '@/lib/dokumentPostavke';
 import { PotpisBlok } from './pdf/PotpisBlok';
 import { PdfPodnozje, DODATAK_PODNOZJA } from './pdf/PdfPodnozje';
+import { SifraTekst } from './pdf/SifraTekst';
 
 export interface OtpremnicaPdfProps {
   order: Order;
@@ -169,7 +170,7 @@ const s = StyleSheet.create({
     lineHeight: 1.3,
   },
   colRb: { width: '7%' },
-  colSifra: { width: '12%' },
+  colSifra: { width: '12%', paddingRight: 6 },
   colArtikal: { flex: 1 },
   colJm: { width: '12%' },
   colKol: { width: '18%', textAlign: 'right' },
@@ -268,7 +269,7 @@ export function OtpremnicaPdf({ order, firma, postavke }: OtpremnicaPdfProps) {
           {stavke.map((si, i) => (
             <View key={si.id} style={s.tRow}>
               <Text style={[s.tCell, s.colRb]}>{i + 1}</Text>
-              {kol.sifra && <Text style={[s.tCell, s.colSifra]}>{si.productSifra ?? ''}</Text>}
+              {kol.sifra && <SifraTekst style={[s.tCell, s.colSifra]}>{si.productSifra ?? ''}</SifraTekst>}
               <Text style={[s.tCellBold, s.colArtikal]}>{si.productNaziv ?? ''}</Text>
               {kol.jm && <Text style={[s.tCell, s.colJm]}>{si.productJm ?? ''}</Text>}
               <Text style={[s.tCell, s.colKol]}>{si.kolicina}</Text>

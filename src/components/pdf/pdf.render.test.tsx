@@ -2,6 +2,7 @@ import { test, expect } from 'bun:test';
 import { Document, Page, renderToBuffer } from '@react-pdf/renderer';
 import { PotpisBlok } from './PotpisBlok';
 import { PdfPodnozje } from './PdfPodnozje';
+import { prelomNaZnaku } from './SifraTekst';
 import { PrilogPdf } from '../PrilogPdf';
 import { RacunPdf } from '../RacunPdf';
 import { OtpremnicaPdf } from '../OtpremnicaPdf';
@@ -105,3 +106,13 @@ for (const [ime, postavke] of [['zadano', ZADANE_DOKUMENT_POSTAVKE], ['sve uklju
     await renderuj(<RadniNalogPdf nalog={NALOG} firma={FIRMA} postavke={postavke} />);
   });
 }
+
+test('šifra se lomi na svakom znaku bez crtice (prazan slog = prelom nulte širine)', async () => {
+  expect(prelomNaZnaku('A1')).toEqual(['A', '', '1']);
+  expect(prelomNaZnaku('123').join('')).toBe('123');
+  const duge = ['123456789', '1234567890123', 'ABCDEFGHIJKLMN'].map((sifra, i) => ({ ...ORDER.stavke[0], id: i + 1, productSifra: sifra }));
+  await renderuj(<PrilogPdf order={{ ...ORDER, stavke: duge }} firma={FIRMA} stavke={duge} postavke={SVE_UKLJUCENO} />);
+  await renderuj(<RacunPdf order={{ ...ORDER, stavke: duge }} firma={FIRMA} postavke={SVE_UKLJUCENO} />);
+  await renderuj(<OtpremnicaPdf order={{ ...ORDER, stavke: duge }} firma={FIRMA} postavke={SVE_UKLJUCENO} />);
+  await renderuj(<PonudaPdf ponuda={{ ...PONUDA, stavke: duge }} firma={FIRMA} postavke={SVE_UKLJUCENO} />);
+});

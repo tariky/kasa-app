@@ -7,6 +7,7 @@ import { logoVelicina, kontaktFirme } from '@/lib/firma';
 import type { DokumentPostavke } from '@/lib/dokumentPostavke';
 import { PotpisBlok } from './pdf/PotpisBlok';
 import { PdfPodnozje, DODATAK_PODNOZJA } from './pdf/PdfPodnozje';
+import { SifraTekst } from './pdf/SifraTekst';
 
 const F = PDF_FONT_FAMILY;
 const FB = PDF_FONT_FAMILY_BOLD;
@@ -40,7 +41,7 @@ const s = StyleSheet.create({
   tCell: { fontSize: 8.5, lineHeight: 1.3 },
   tCellBold: { fontSize: 8.5, fontFamily: FB, fontWeight: 700, lineHeight: 1.3 },
   colRb: { width: '5%' },
-  colSifra: { width: '14%' },
+  colSifra: { width: '14%', paddingRight: 6 },
   colMat: { width: '36%' },
   colJm: { width: '8%' },
   colKol: { width: '12%', textAlign: 'right' },
@@ -126,7 +127,7 @@ export function RadniNalogPdf({ nalog, firma, postavke }: { nalog: RadniNalog; f
           {stavke.map((st, i) => (
             <View key={st.id} style={s.tRow}>
               <Text style={[s.tCell, s.colRb]}>{i + 1}</Text>
-              <Text style={[s.tCell, s.colSifra]}>{st.materijalSifra ?? ''}</Text>
+              <SifraTekst style={[s.tCell, s.colSifra]}>{st.materijalSifra ?? ''}</SifraTekst>
               <Text style={[s.tCellBold, s.colMat]}>{st.materijalNaziv ?? ''}</Text>
               <Text style={[s.tCell, s.colJm]}>{st.materijalJm ?? ''}</Text>
               <Text style={[s.tCellBold, s.colKol]}>{fmtKol(st.kolicina)}</Text>

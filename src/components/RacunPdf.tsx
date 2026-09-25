@@ -12,6 +12,7 @@ import { logoVelicina, kontaktFirme } from '@/lib/firma';
 import { formatRabat, pecatZa, type DokumentPostavke } from '@/lib/dokumentPostavke';
 import { PotpisBlok } from './pdf/PotpisBlok';
 import { PdfPodnozje, DODATAK_PODNOZJA } from './pdf/PdfPodnozje';
+import { SifraTekst } from './pdf/SifraTekst';
 
 export type InvoiceLang = 'bs' | 'en';
 
@@ -505,7 +506,7 @@ export function RacunPdf({ order, firma, lang = 'bs', postavke }: RacunPdfProps)
             return (
               <View key={si.id} style={s.tRow}>
                 <Text style={[s.tCell, s.colRb]}>{i + 1}</Text>
-                {kol.sifra && <Text style={[s.tCell, s.colSifra]}>{si.productSifra ?? ''}</Text>}
+                {kol.sifra && <SifraTekst style={[s.tCell, s.colSifra]}>{si.productSifra ?? ''}</SifraTekst>}
                 <Text style={[s.tCellBold, s.colArtikal]}>{si.productNaziv ?? ''}</Text>
                 {kol.jm && <Text style={[s.tCell, s.colJm]}>{si.productJm ?? ''}</Text>}
                 <Text style={[s.tCell, s.colKol]}>{si.kolicina}</Text>

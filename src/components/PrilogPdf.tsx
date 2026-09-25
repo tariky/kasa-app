@@ -11,6 +11,7 @@ import { PDV_FAKTOR_E, PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { prilogNaziv } from '@/lib/prilog';
 import { formatDatumValute } from '@/lib/valuta';
 import { logoVelicina, kontaktFirme, ziroRacuniPozicija } from '@/lib/firma';
+import { SifraTekst } from './pdf/SifraTekst';
 
 /** Red iz `prilog:getStavke` (prilog_stavke + JOIN na products). */
 export interface PrilogPdfStavka {
@@ -108,7 +109,7 @@ const s = StyleSheet.create({
   tCellBold: { fontSize: 8.5, fontFamily: FB, fontWeight: 700, lineHeight: 1.3, paddingRight: 6 },
   tCellLast: { paddingRight: 0 },
   colRb: { width: '4%' },
-  colSifra: { width: '12%' },
+  colSifra: { width: '12%', paddingRight: 6 },
   /** Naziv uzima širinu svih skrivenih kolona (JM, rabat). */
   colNaziv: { flex: 1, paddingRight: 10 },
   colJm: { width: '5%' },
@@ -296,7 +297,7 @@ export function PrilogPdf({ order, firma, stavke, postavke }: PrilogPdfProps) {
           {linije.map((l, i) => (
             <View key={`${l.productId}-${i}`} style={s.tRow}>
               <Text style={[s.tCell, s.colRb]}>{i + 1}</Text>
-              <Text style={[s.tCell, s.colSifra]}>{l.productSifra ?? ''}</Text>
+              <SifraTekst style={[s.tCell, s.colSifra]}>{l.productSifra ?? ''}</SifraTekst>
               <Text style={[s.tCellBold, s.colNaziv]}>{l.productNaziv ?? `#${l.productId}`}</Text>
               {kol.jm && <Text style={[s.tCell, s.colJm]}>{l.productJm ?? ''}</Text>}
               <Text style={[s.tCell, s.colKol]}>{formatKol(l.kolicina)}</Text>
