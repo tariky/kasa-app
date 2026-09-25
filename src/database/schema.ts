@@ -315,6 +315,18 @@ export const schema = `
     FOREIGN KEY (materijalId) REFERENCES products(id)
   );
 
+  -- Trag osjetljivih radnji (storno, korekcije, postavke, korisnici, uvoz baze).
+  -- Samo upis: nema kanala za izmjenu ni brisanje. korisnikId je iz sesije i
+  -- namjerno bez stranog ključa — brisanje korisnika ne smije brisati trag.
+  -- detalji je JSON bez PIN-ova i heševa (lib/audit.ts).
+  CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    createdAt TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    korisnikId INTEGER,
+    akcija TEXT NOT NULL,
+    detalji TEXT NOT NULL DEFAULT '{}'
+  );
+
   CREATE INDEX IF NOT EXISTS idx_cash_movements_createdAt ON cash_movements(createdAt);
   CREATE INDEX IF NOT EXISTS idx_products_sifra ON products(sifra);
   CREATE INDEX IF NOT EXISTS idx_ponuda_stavke_ponudaId ON ponuda_stavke(ponudaId);
