@@ -1,8 +1,10 @@
-import { app, BrowserWindow, nativeImage } from 'electron';
+import { app, BrowserWindow, Menu, nativeImage, net, protocol } from 'electron';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import started from 'electron-squirrel-startup';
 import { registerIpcHandlers } from './ipc/handlers';
 import { closeDb } from './database/db';
+import { APP_SEMA, APP_URL, CSP_ELECTRON, jeDozvoljenaNavigacija, jeDozvoljenaNavigacijaPopupa, jeDozvoljenPopup, meniSablon, putanjaZaZahtjev } from './ljuska/sigurnost';
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (started) {
@@ -13,6 +15,69 @@ if (started) {
 const iconPath = app.isPackaged
   ? path.join(process.resourcesPath, 'icon.png')
   : path.join(__dirname, '../../src/assets/icon.png');
+
+// Ugrađeni renderer se servira kao app://pazar/… a ne file:// (file:// nema
+// dodatne privilegije — fuse GrantFileProtocolExtraPrivileges je isključen).
+// Mora biti registrovano prije `ready`.
+protocol.registerSchemesAsPrivileged([
+  { scheme: APP_SEMA, privileges: { standard: true, secure: true, supportFetchAPI: true } },
+]);
+
+const urlAplikacije = MAIN_WINDOW_VITE_DEV_SERVER_URL || APP_URL;
+
+// webContents glavnih prozora: samo oni smiju navigirati (na urlAplikacije) i otvarati PDF prozore.
+const glavniProzori = new Set<number>();
+
+function posluziRenderer() {
+  const korijen = path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}`);
+  protocol.handle(APP_SEMA, async (zahtjev) => {
+    const fajl = putanjaZaZahtjev(zahtjev.url, korijen);
+    if (!fajl) return new Response('Not found', { status: 404 });
+    let odgovor: Response;
+    try {
+      odgovor = await net.fetch(pathToFileURL(fajl).toString());
+    } catch {
+      return new Response('Not found', { status: 404 });
+    }
+    const zaglavlja = new Headers(odgovor.headers);
+    zaglavlja.set('Content-Security-Policy', CSP_ELECTRON);
+    zaglavlja.set('X-Content-Type-Options', 'nosniff');
+    return new Response(odgovor.body, { status: odgovor.status, headers: zaglavlja });
+  });
+}
+
+// Svaki webContents (glavni prozor, PDF prozori): nema navigacije van
+// aplikacije ni novih prozora osim PDF pregleda iz glavnog prozora.
+app.on('web-contents-created', (_e, contents) => {
+  contents.on('will-navigate', (e, url) => {
+    const dozvoljeno = glavniProzori.has(contents.id)
+      ? jeDozvoljenaNavigacija(url, urlAplikacije)
+      : jeDozvoljenaNavigacijaPopupa(url, contents.getURL());
+    if (!dozvoljeno) e.preventDefault();
+  });
+  contents.on('will-attach-webview', (e) => e.preventDefault());
+  contents.setWindowOpenHandler(({ url }) => {
+    if (!glavniProzori.has(contents.id) || !jeDozvoljenPopup(url)) return { action: 'deny' };
+    // PDF pregled: bez preloada (nema window.api), sandbox, bez Node-a.
+    return {
+      action: 'allow',
+      overrideBrowserWindowOptions: {
+        width: 900,
+        height: 700,
+        title: 'PDF',
+        icon: iconPath,
+        autoHideMenuBar: true,
+        webPreferences: {
+          preload: undefined,
+          sandbox: true,
+          contextIsolation: true,
+          nodeIntegration: false,
+          devTools: !app.isPackaged,
+        },
+      },
+    };
+  });
+});
 
 const createWindow = () => {
   const mainWindow = new BrowserWindow({
@@ -25,37 +90,21 @@ const createWindow = () => {
     icon: iconPath,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      devTools: !app.isPackaged,
     },
   });
+  const id = mainWindow.webContents.id;
+  glavniProzori.add(id);
+  mainWindow.on('closed', () => glavniProzori.delete(id));
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
   });
 
-  // Allow opening blob: URLs in new windows (PDF preview)
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('blob:')) {
-      return {
-        action: 'allow',
-        overrideBrowserWindowOptions: {
-          width: 900,
-          height: 700,
-          title: 'PDF',
-          icon: iconPath,
-          autoHideMenuBar: true,
-        },
-      };
-    }
-    return { action: 'deny' };
-  });
-
-  if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
-    mainWindow.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
-  } else {
-    mainWindow.loadFile(
-      path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`),
-    );
-  }
+  mainWindow.loadURL(urlAplikacije);
 };
 
 app.on('ready', () => {
@@ -76,6 +125,10 @@ app.on('ready', () => {
     icon: appIcon,   // macOS (NativeImage)
   } as Electron.AboutPanelOptionsOptions);
 
+  // Upakovana aplikacija: bez Reload/DevTools u meniju; Uredi ostaje (copy/paste).
+  Menu.setApplicationMenu(Menu.buildFromTemplate(meniSablon({ mac: process.platform === 'darwin', razvoj: !app.isPackaged })));
+
+  if (!MAIN_WINDOW_VITE_DEV_SERVER_URL) posluziRenderer();
   registerIpcHandlers();
   createWindow();
 });
