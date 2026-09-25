@@ -24,7 +24,7 @@ Ovo je podprojekt 1 od 3. Podprojekt 2 (Kasa: zadani način plaćanja, auto-otva
 
 ## 1. Postavke (ključevi u tabeli `settings`)
 
-Sve preko postojećih `settings:get/set` (oba backenda ih već imaju) — bez nove IPC komande. Vrijednosti su stringovi; prazan/nevažeći string znači zadanu vrijednost.
+Sve preko postojećih `settings:get/set` (oba backenda ih već imaju) — bez nove IPC komande. Vrijednosti su stringovi. Ključ koji nikad nije spremljen (NULL) → zadana vrijednost; nevažeći broj/izbor → zadana vrijednost; spremljen tekst se koristi takav kakav je (trim + limit), pa i prazan (npr. prazan prefiks naloga). Izuzetak: prazan naziv potpisne linije → zadani naziv.
 
 | Ključ | Tip | Zadano | Napomena |
 |---|---|---|---|
@@ -90,7 +90,7 @@ Tabela `kupci` dobija tri NULL kolone: `rokPlacanjaDana INTEGER`, `nacinPlacanja
 - **FakturaDialog:** pri otvaranju nove fakture (ne skice) i pri izboru firme/kupca: `zadanoZaKupca` daje rok (8/15/30/60 → taj chip, drugi broj → „datum“ s izračunatim danom, prazno → bez roka), način plaćanja i rabat. Napomena: `dokumenti.faktura.napomena`, osim kad faktura nastaje iz ponude („Po ponudi br. X“ ostaje). Skica zadržava svoje spremljene vrijednosti.
 - **PonudeScreen:** nova ponuda važi `vaziDana`; konverzija u račun kreće s `dokumenti.ponuda.nacinPlacanja`; izbor kupca primjenjuje rabat kupca; nove stavke dobijaju rabat kupca.
 - **KasaScreen:** izbor kupca iz šifarnika postavlja njegov način plaćanja (ako ga ima) i primjenjuje rabat na košaricu. Ručno upisan kupac (nije u šifarniku) nema zadane vrijednosti.
-- **Postavke › Dokumenti:** nova grupa između „Fiskalni uređaj“ i „Korisnici“, ikona `FileText`, podnaslov „Fakture, ponude, štampa“. Sekcije: Faktura · Ponuda · Radni nalog · Izgled dokumenata (kolone, podnožje) · Potpis i pečat (upload kao logo u FirmaGrupi — izdvojiti zajedničku komponentu za sliku; prekidači po dokumentu; nazivi linija). Spremanje po polju na blur/promjenu kao u KasaGrupi (tekstualna polja: dugme Spremi po sekciji, kao FirmaGrupa, jer se kucaju).
+- **Postavke › Dokumenti:** nova grupa između „Fiskalni uređaj“ i „Korisnici“, ikona `FileText`, podnaslov „Fakture, ponude, štampa“. Sekcije: Faktura · Ponuda · Radni nalog · Izgled dokumenata (kolone, podnožje) · Potpis i pečat (upload kao logo u FirmaGrupi — izdvojiti zajedničku komponentu za sliku; prekidači po dokumentu; nazivi linija). Spremanje kao u FirmaGrupi: cijela grupa je jedna forma sa sticky trakom „Spremi postavke dokumenata“ / „Odbaci“; nespremljene izmjene se javljaju u listi grupa kao kod Firme.
 
 ## 6. Backend poruka
 
