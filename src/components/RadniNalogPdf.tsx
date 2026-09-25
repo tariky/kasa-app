@@ -2,6 +2,7 @@ import React from 'react';
 import { Document, Page, View, Text, Image, StyleSheet } from '@react-pdf/renderer';
 import type { FirmaSettings, RadniNalog } from '@/types';
 import { formatBrojNaloga } from '@/lib/proizvodnja';
+import { formatBrojPonude } from '@/lib/ponuda';
 import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
 import { logoVelicina, kontaktFirme } from '@/lib/firma';
 import type { DokumentPostavke } from '@/lib/dokumentPostavke';
@@ -106,7 +107,7 @@ export function RadniNalogPdf({ nalog, firma, postavke }: { nalog: RadniNalog; f
           <View><Text style={s.metaLabel}>Datum naloga</Text><Text style={s.metaValue}>{fmtDateStr(nalog.datum)}</Text></View>
           <View><Text style={s.metaLabel}>Rok isporuke</Text><Text style={s.metaValue}>{fmtDateStr(nalog.rok)}</Text></View>
           <View><Text style={s.metaLabel}>Nalog otvorio</Text><Text style={s.metaValue}>{nalog.korisnikIme || '—'}</Text></View>
-          {nalog.ponudaBroj ? <View><Text style={s.metaLabel}>Po ponudi</Text><Text style={s.metaValue}>{nalog.ponudaBroj}/{nalog.ponudaGodina}</Text></View> : null}
+          {nalog.ponudaBroj ? <View><Text style={s.metaLabel}>Po ponudi</Text><Text style={s.metaValue}>{formatBrojPonude({ broj: nalog.ponudaBroj, godina: nalog.ponudaGodina ?? 0 }, postavke.ponuda.broj)}</Text></View> : null}
         </View>
 
         <View style={s.opisBox}>
