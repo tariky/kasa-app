@@ -735,6 +735,32 @@ describe('order:refundAndPrint uz kasa.requirePinRefund', () => {
     expect(await b.call('order:refundAndPrint', { id: drugi })).toMatchObject({ success: true });
   });
 
+  // Dok printer štampa, drugi pozivi rade (odjava, prijava drugog korisnika) —
+  // trag storna mora nositi korisnika koji ga je pokrenuo.
+  const kasirId = () => red("SELECT id FROM users WHERE ime = 'Kasir'").id;
+  const tragStorna = () => red("SELECT korisnikId FROM audit_log WHERE akcija = 'storno'");
+
+  test('audit storna nosi korisnika s početka poziva i kad se tokom štampe odjavi', async () => {
+    const stampa = b.tring.zadrzi('/srr');
+    const storno = b.call('order:refundAndPrint', { id: racun });
+    await stampa.stigao;
+    expect(await b.call('user:logout')).toEqual({ success: true });
+    stampa.pusti();
+    expect(await storno).toMatchObject({ success: true });
+    expect(tragStorna()).toEqual({ korisnikId: kasirId() });
+  });
+
+  test('audit storna nosi korisnika s početka poziva i kad se tokom štampe prijavi drugi', async () => {
+    const stampa = b.tring.zadrzi('/srr');
+    const storno = b.call('order:refundAndPrint', { id: racun });
+    await stampa.stigao;
+    const berina = await prijavi(b, '1111');
+    stampa.pusti();
+    expect(await storno).toMatchObject({ success: true });
+    expect(tragStorna()).toEqual({ korisnikId: kasirId() });
+    expect(tragStorna().korisnikId).not.toBe(berina.id);
+  });
+
   test('pogrešan admin PIN ulazi u ograničenje pokušaja, a tačan ne briše ranije neuspjehe', async () => {
     setSystemTime(Date.now());
     postavka('kasa.requirePinRefund', 'true');

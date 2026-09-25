@@ -701,9 +701,12 @@ fn storno(b: &Backend, data: &Value) -> R<Value> {
     let rezultat = refund_and_print(b, data, k.id)?;
     if truthy(&rezultat["success"]) {
         // Storno je već odštampan i upisan — greška traga ne smije to sakriti.
+        // Korisnik je onaj s početka poziva: dok se čekala štampa, neko se mogao
+        // odjaviti ili prijaviti drugi korisnik.
         let o = |kljuc: &str| original.as_ref().map(|o| o[kljuc].clone()).unwrap_or(Value::Null);
-        let trag = audit::zabiljezi(
-            b,
+        let trag = audit::zapisi(
+            db,
+            Some(k.id),
             "storno",
             json!({
                 "orderId": data["id"], "brojFiskalnogRacuna": o("brojFiskalnogRacuna"),

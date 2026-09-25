@@ -1310,8 +1310,10 @@ export function registerIpcHandlers(): void {
     }, data);
     if (rezultat.success) {
       // Storno je već odštampan i upisan — greška traga ne smije to sakriti.
+      // Korisnik je onaj s početka poziva: dok se čekala štampa, neko se mogao
+      // odjaviti ili prijaviti drugi korisnik.
       try {
-        audit('storno', {
+        zapisiAudit(db, k.id, 'storno', {
           orderId: data.id, brojFiskalnogRacuna: original?.brojFiskalnogRacuna ?? null,
           brojReklamacije: rezultat.brojReklamacije ?? null, ukupno: original?.ukupno ?? null,
           odobrioAdminId, pologIznos: rezultat.pologIznos ?? 0,
