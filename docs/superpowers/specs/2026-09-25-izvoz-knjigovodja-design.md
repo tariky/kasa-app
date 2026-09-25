@@ -22,18 +22,22 @@ Ime fajla: `Knjigovodja_<Firma>_2026-09.zip` kad je izabran cijeli mjesec, inač
 
 Svaki list ima zaglavlje: naziv firme, JIB, PDV broj, period, datum izvoza. Ispod tabela sa zamrznutim redom naslova, autofilterom, formatom `#,##0.00` za KM i `dd.mm.yyyy` za datume, i zbirnim redom na dnu gdje ima smisla.
 
+- **Red „Ukupno“** ide iza jednog praznog reda ispod zadnjeg reda podataka; autofilter pokriva samo naslove i podatke (bez podataka: samo red naslova), pa sort/filter u Excelu ne pomjera zbirni red. Zbir je formula (`SUM` nad redovima podataka) s keširanim rezultatom istim kao broj iz `obracun.ts`. Isto važi za drugu tabelu na listu Utrošak materijala.
+- **Zalihe na dan** imaju red „Ukupno (bez minusa)“: `SUMIF(<Količina>,">0",<vrijednost>)` za nabavnu i prodajnu vrijednost, s rezultatom `zbir.zalihe` — isti zbir kao PDF i ekran (vidi §2, Zalihe).
+- **Brojevi**: broj računa `#,##0`; količina i rabat % po ćeliji — cijeli broj `#,##0` (bez „1.“), inače `#,##0.###`; cijene `#,##0.00##`.
+
 | List | Kolone | Filter |
 |---|---|---|
 | **Rekapitulacija** | Po danu: datum, broj računa, osnovica E, PDV E, iznos K, ukupno, gotovina, kartica, virman, ček, reklamacije (iznos, negativno), neto. Zbirni red za period. | `date(orders.createdAt)`; reklamacije po `date(refundedAt)` |
-| **KIF - računi** | datum i vrijeme, fiskalni broj, kupac, JIB kupca, osnovica E, PDV E, iznos K, ukupno, način plaćanja (tekst; za podijeljeno npr. „Gotovina 20,00 + Kartica 30,00“), datum valute, oznaka (ručni / po prilogu / reklamiran) | `date(createdAt)` — svi računi prodani u periodu, i oni kasnije reklamirani |
+| **KIF - računi** | datum i vrijeme, fiskalni broj, kupac, JIB kupca, osnovica E, PDV E, iznos K, ukupno, način plaćanja (tekst; za podijeljeno npr. „Gotovina 20,00 + Kartica 30,00“), datum valute, oznaka (`ručni`, `prilog N`, `reklamiran`, spojeno zarezom) | `date(createdAt)` — svi računi prodani u periodu, i oni kasnije reklamirani |
 | **Reklamacije** | datum reklamacije, broj reklamacije, originalni fiskalni broj, datum originala, kupac, osnovica E, PDV E, iznos K, ukupno (negativno), način plaćanja | `date(refundedAt)` |
 | **KUF - ulaz robe** | datum, broj primke, dobavljač, JIB/ID dobavljača, broj fakture, fakturna vrijednost, rabat, zavisni troškovi, nabavna vrijednost, PDV (ulazni, na fakturnu umanjenu za rabat), prodajna vrijednost s PDV-om, RUC | `primke.datum` |
 | **Ulaz - stavke** | broj primke, datum, šifra, artikal, JM, količina, fakturna cijena, rabat %, zavisni, nabavna cijena, prodajna cijena, PDV stopa | isto |
 | **Nivelacije** | broj, datum, šifra, artikal, količina, stara cijena, nova cijena, razlika po jedinici, ukupna razlika, PDV stopa | `nivelacije.datum` |
-| **Polog - povrat** | datum i vrijeme, vrsta, iznos, korisnik, napomena, status na Tringu | `date(cash_movements.createdAt)` |
+| **Polog - povrat** | datum i vrijeme, vrsta (Polog / Povrat), polog, povrat (iznos u svojoj koloni, u drugoj 0; zbir svake kolone posebno), korisnik, napomena, fiskalni uređaj (status riječima: Evidentirano / Greška / Nije slano) | `date(cash_movements.createdAt)` |
 | **Utrošak materijala** | Po nalogu: broj/godina, datum završetka, opis/proizvod, šifra materijala, materijal, JM, količina, nabavna cijena, vrijednost. Ispod: zbir po materijalu (šifra, naziv, JM, količina, vrijednost). | `date(radni_nalozi.zavrsenAt)`, status `zavrsen` ili `fakturisan` |
 | **Zalihe na dan** | šifra, artikal, JM, tip, količina, prosječna nabavna cijena, nabavna vrijednost, prodajna cijena, prodajna vrijednost. Samo artikli s količinom ≠ 0; tip `usluga` se preskače. | `stock_movements` s `date(createdAt) <= do` |
-| **Kontrola** | Rupe u numeraciji fiskalnih računa čiji brojevi padaju u raspon računa iz perioda (odbačene rupe iz `fiscal.dismissedGaps` se ne prijavljuju); računi iz perioda bez fiskalnog broja; računi čiji zbir stavki odstupa od `ukupno` > 0,01 KM; računi s nepoznatim oblikom načina plaćanja. Ako nema ničega: jedan red „Nema upozorenja“. | period |
+| **Kontrola** | Rupe u numeraciji fiskalnih računa čiji brojevi padaju u raspon računa iz perioda (odbačene rupe iz `fiscal.dismissedGaps` se ne prijavljuju); računi iz perioda bez fiskalnog broja; računi čiji zbir stavki odstupa od `ukupno` > 0,01 KM; računi s nepoznatim oblikom načina plaćanja; artikli u minusu. Kad period još traje (`do` je poslije današnjeg dana), prvo upozorenje je „Period još traje“ (vidi §2). Kolone: vrsta (naziv riječima), opis. Ako nema ničega: jedan red „Nema upozorenja“. | period |
 
 Listovi **KUF - ulaz robe**, **Ulaz - stavke**, **Nivelacije** i **Zalihe na dan** postoje samo ako je modul `skladiste` aktivan u licenci; **Utrošak materijala** samo ako je aktivan `proizvodnja` (i `proizvodnja.enabled`). Kad modul nije aktivan, list se ne pravi (ne prazan list).
 
@@ -66,9 +70,10 @@ U nazivima listova je obična crtica (`KIF - računi`, `KUF - ulaz robe`, `Ulaz 
 - **KUF vrijednosti** preko `src/lib/kalkulacija.ts` (`fakturnaVrijednost`, `rabatIznos`, `nabavnaVrijednost`); ulazni PDV = (fakturna vrijednost − rabat) × stopa (`pdvStopaPct`) — zavisni troškovi ne ulaze jer nisu na fakturi dobavljača; prodajna vrijednost = Σ `cijena × kolicina` (materijal: 0); RUC = prodajna bez PDV-a − nabavna, računa se samo za stavke s prodajnom cijenom > 0 (materijal ne ulazi u RUC).
 - **Prosječna nabavna cijena** (zalihe) ista formula kao `getProsjecnaNabavna`, ali samo nad `primka_stavke` čija primka ima `datum <= do`. Bez primki → 0.
 - **Prodajna cijena na dan `do`**: `novaCijena` posljednje promjene iz `cijena_historija` do tog dana; ako je nema, `staraCijena` prve kasnije promjene; ako ni nje nema, trenutna `products.cijena`.
-- **Zalihe**: artikli (`tip = 'artikal'`), a materijal samo kad je Proizvodnja uključena (isto kao `VrijednostZalihe` na Skladištu). Na listu idu sve količine ≠ 0, ali u zbir vrijednosti samo pozitivne; artikli u minusu se prijavljuju u Kontroli.
+- **Zalihe**: artikli (`tip = 'artikal'`), a materijal samo kad je Proizvodnja uključena; usluge i slobodne stavke nikad. Na listu idu sve količine ≠ 0, ali u zbir vrijednosti (`zbir.zalihe`: ekran, PDF i red „Ukupno (bez minusa)“ u Excelu) samo pozitivne — stavka u minusu nema vrijednost na zalihi; artikli u minusu se prijavljuju u Kontroli.
 - **Utrošak materijala**: vrijednost = `radni_nalog_stavke.kolicina × nabavnaCijena` (snimljena na nalogu; ako je NULL → prosječna nabavna na dan završetka, ista formula kao gore).
 - **Mjesec** = od prvog do zadnjeg dana u mjesecu; sve granice su lokalni datumi `YYYY-MM-DD`, uključivo.
+- **Period koji još traje**: `obracunaj` prima `danas` (lokalni `YYYY-MM-DD`, tab šalje `localDateStr()`). Ako je `do > danas` (npr. tekući mjesec), prvo upozorenje je vrste `nezavrsen`: „Period još traje — podaci su do DD.MM.GGGG., a zalihe i promet nisu konačni“. Izvoz je i dalje dozvoljen. Bez `danas` nema ove provjere.
 
 ## 3. Arhitektura
 
@@ -126,7 +131,7 @@ Nove zavisnosti: `exceljs`, `fflate` — samo renderer.
 - Nova komponenta `src/components/ui/period-picker.tsx`: prekidač **Mjesec / Period**.
   - Mjesec: strelice za godinu + mreža 12 mjeseci (bosanski nazivi); budući mjeseci onemogućeni. Podrazumijevano: prošli mjesec.
   - Period: dva `DatePicker`-a od–do; `do` ne može biti prije `od`.
-  - `value/onChange` kao `{ od: 'YYYY-MM-DD', do: 'YYYY-MM-DD', mjesec?: 'YYYY-MM' }`.
+  - `value/onChange` kao `Period { od: 'YYYY-MM-DD', do: 'YYYY-MM-DD' }` (`period.ts`); da li je izabran cijeli mjesec izvodi se iz granica (`mjesecPerioda`). `max` (danas) onemogućava buduće mjesece.
 - Nova komponenta `src/components/izvjestaji/KnjigovodjaTab.tsx`: na promjenu perioda poziva kanal, računa `obracun` i prikazuje pregled (broj računa, promet, PDV, reklamacije, ulaz, polog/povrat, utrošak, zalihe) + upozorenja iz Kontrole; dugme **„Izvezi za knjigovođu (.zip)“** sa stanjem učitavanja; poruka o uspjehu (putanja) ili grešci; otkazan dijalog → ništa.
 - Vizuelni dizajn taba i picker-a radi se kroz `/frontend-design` u implementaciji, u skladu s postojećim izgledom Izvještaja.
 
@@ -140,5 +145,5 @@ Nove zavisnosti: `exceljs`, `fflate` — samo renderer.
 ## 5. Testovi
 
 - **Ugovorni** `src/ipc/ugovor/izvoz.ugovor.test.ts` (TS i Rust, `bun test` / `bun run test:rust`): pripremljena baza s računom obje stope, računom s rabatom, podijeljenim plaćanjem, računom po prilogu, reklamacijom računa iz prethodnog perioda, računom prodanim i reklamiranim u periodu, primkom na granici perioda, nivelacijom, pologom i povratom, završenim nalogom (i nezavršenim — ne ulazi), kretanjima zaliha prije/poslije `do`, cijenom promijenjenom poslije `do`; `od > do` i neispravan datum → greška. Kanal se dodaje u `stvarnaBaza.poredjenje.test.ts`.
-- **Unit** (`bun test`): `obracun.ts` (izdvajanje stope K, raspodjela plaćanja, rupe u numeraciji i odbačene rupe, moduli isključeni → listovi prazni, prilog bez stavki, odstupanje od `ukupno`, reklamacije, zbirovi = zbir redova), `excel.ts` (fajl se ponovo učita kroz exceljs, listovi prema modulima, zbirni redovi), `zip.ts` (fflate `unzipSync` vraća oba fajla; test je u `excel.test.ts`), `period.ts` (`imeFajla`, granice mjeseca, prestupna godina).
+- **Unit** (`bun test`): `obracun.ts` (izdvajanje stope K, raspodjela plaćanja, rupe u numeraciji i odbačene rupe, moduli isključeni → listovi prazni, prilog bez stavki, odstupanje od `ukupno`, reklamacije, zbirovi = zbir redova, upozorenje `nezavrsen`), `excel.ts` (fajl se ponovo učita kroz exceljs, listovi prema modulima; red Ukupno svakog lista = odgovarajući `zbir` iz `obracunaj`, i sa zalihom u minusu; prazan red prije Ukupno i opseg autofiltera; format cijelih i decimalnih količina), `zip.ts` (fflate `unzipSync` vraća oba fajla; test je u `excel.test.ts`), `period.ts` (`imeFajla`, granice mjeseca, prestupna godina).
 - **Ručno**: screenshot taba kroz statički build + Playwright; otvaranje generisanog `.xlsx` i `.pdf`.
