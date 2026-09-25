@@ -629,6 +629,26 @@ describe('db:restore', () => {
     expect(sigurnosneKopije()).toEqual([]);
   });
 
+  test('odbija backup s triggerom, view-om ili tabelom koje nema u shemi — prije potvrde', async () => {
+    for (const [dodatak, poruka] of [
+      ['CREATE TRIGGER t AFTER INSERT ON orders BEGIN DELETE FROM orders; END;', 'Fajl sadrži trigger ili view (trigger t), a Kasa baza ih nema.'],
+      ['CREATE VIEW v AS SELECT 1;', 'Fajl sadrži trigger ili view (view v), a Kasa baza ih nema.'],
+      ['CREATE TABLE tajna (x);', 'Fajl sadrži tabele kojih nema u Kasa bazi: tajna.'],
+    ]) {
+      const backup = await napraviBackup();
+      const t = new Database(backup);
+      t.exec(dodatak);
+      t.close();
+      b.dijalog.otvori = backup;
+      b.dijalog.potvrda = 1;
+      b.otvoreniDijalozi.length = 0;
+      await expect(b.call('db:restore')).rejects.toThrow(`Neispravan backup fajl: ${poruka}`);
+      expect(b.otvoreniDijalozi.map(d => d.vrsta)).toEqual(['otvori']);
+    }
+    expect(sigurnosneKopije()).toEqual([]);
+    expect(b.restartovan()).toBe(false);
+  });
+
   test('odbija nepostojeći fajl', async () => {
     b.dijalog.otvori = path.join(b.radniFolder, 'nema.db');
     b.dijalog.potvrda = 1;

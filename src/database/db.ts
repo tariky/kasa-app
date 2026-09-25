@@ -3,6 +3,7 @@ import { app } from 'electron';
 import path from 'node:path';
 import { schema } from './schema';
 import { runMigrations } from './migrations';
+import { podesiKonekciju } from './konekcija';
 import { hesirajStarePinove, osigurajZadanogAdmina } from '../lib/korisnici';
 
 let db: Database.Database | null = null;
@@ -13,8 +14,7 @@ export function getDb(): Database.Database {
   const dbPath = path.join(app.getPath('userData'), 'kasa.db');
   db = new Database(dbPath);
 
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
+  podesiKonekciju(db);
 
   db.exec(schema);
 
