@@ -738,22 +738,53 @@ export function registerIpcHandlers(): void {
     return upis;
   };
 
+  const NACINI_PLACANJA = ['Gotovina', 'Kartica', 'Virman', 'Ček'];
+  const prazno = (v: unknown) => v === null || v === '';
+  // Zadane vrijednosti kupca za dokumente — samo poslana polja; prazno/null briše vrijednost.
+  const validirajZadanoKupca = (data: { rokPlacanjaDana?: unknown; nacinPlacanja?: unknown; rabat?: unknown }) => {
+    const upis: { rokPlacanjaDana?: number | null; nacinPlacanja?: string | null; rabat?: number | null } = {};
+    if (data.rokPlacanjaDana !== undefined) {
+      const v = data.rokPlacanjaDana;
+      if (prazno(v)) upis.rokPlacanjaDana = null;
+      else if (typeof v !== 'number' || !Number.isInteger(v) || v < 0 || v > 365) throw new Error('Rok plaćanja mora biti cijeli broj dana od 0 do 365');
+      else upis.rokPlacanjaDana = v;
+    }
+    if (data.nacinPlacanja !== undefined) {
+      const v = data.nacinPlacanja;
+      if (prazno(v)) upis.nacinPlacanja = null;
+      else if (typeof v !== 'string' || !NACINI_PLACANJA.includes(v)) throw new Error(`Nepoznat način plaćanja "${String(v)}"`);
+      else upis.nacinPlacanja = v;
+    }
+    if (data.rabat !== undefined) {
+      const v = data.rabat;
+      if (prazno(v)) upis.rabat = null;
+      else if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v >= 100) throw new Error('Rabat kupca mora biti od 0 do manje od 100 %');
+      else upis.rabat = Math.round(v * 100) / 100;
+    }
+    return upis;
+  };
+
   handle('kupac:create', (data: {
     naziv: string; idBroj: string; pdvBroj?: string; adresa?: string;
     postanskiBroj?: string; grad?: string; kontakt?: string;
+    rokPlacanjaDana?: number | null; nacinPlacanja?: string | null; rabat?: number | null;
   }) => {
     const upis = validirajKupca(data, null);
+    const zadano = validirajZadanoKupca(data);
     const result = db
-      .prepare('INSERT INTO kupci (naziv, idBroj, pdvBroj, adresa, postanskiBroj, grad, kontakt) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(upis.naziv, upis.idBroj, data.pdvBroj ?? null, data.adresa ?? null, data.postanskiBroj ?? null, data.grad ?? null, data.kontakt ?? null);
+      .prepare('INSERT INTO kupci (naziv, idBroj, pdvBroj, adresa, postanskiBroj, grad, kontakt, rokPlacanjaDana, nacinPlacanja, rabat) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(upis.naziv, upis.idBroj, data.pdvBroj ?? null, data.adresa ?? null, data.postanskiBroj ?? null, data.grad ?? null, data.kontakt ?? null,
+        zadano.rokPlacanjaDana ?? null, zadano.nacinPlacanja ?? null, zadano.rabat ?? null);
     return { id: result.lastInsertRowid };
   });
 
   handle('kupac:update', (id: number, data: {
     naziv?: string; idBroj?: string; pdvBroj?: string; adresa?: string;
     postanskiBroj?: string; grad?: string; kontakt?: string;
+    rokPlacanjaDana?: number | null; nacinPlacanja?: string | null; rabat?: number | null;
   }) => {
     const upis = validirajKupca(data, id);
+    const zadano = validirajZadanoKupca(data);
     const fields: string[] = [];
     const values: any[] = [];
 
@@ -764,6 +795,9 @@ export function registerIpcHandlers(): void {
     if (data.postanskiBroj !== undefined) { fields.push('postanskiBroj = ?'); values.push(data.postanskiBroj); }
     if (data.grad !== undefined) { fields.push('grad = ?'); values.push(data.grad); }
     if (data.kontakt !== undefined) { fields.push('kontakt = ?'); values.push(data.kontakt); }
+    for (const k of ['rokPlacanjaDana', 'nacinPlacanja', 'rabat'] as const) {
+      if (zadano[k] !== undefined) { fields.push(`${k} = ?`); values.push(zadano[k]); }
+    }
 
     if (fields.length === 0) return { changes: 0 };
     values.push(id);

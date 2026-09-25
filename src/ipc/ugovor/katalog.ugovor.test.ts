@@ -943,6 +943,59 @@ describe('kupac:update', () => {
   });
 });
 
+// ─── kupac: zadane vrijednosti za dokumente ─────────────────
+
+describe('kupac: zadano za dokumente', () => {
+  test('create upisuje rok, način plaćanja i rabat; bez njih su null', async () => {
+    const a = await b.call('kupac:create', { naziv: 'A', idBroj: '1', rokPlacanjaDana: 30, nacinPlacanja: 'Virman', rabat: 5.5 });
+    expect(red('SELECT rokPlacanjaDana, nacinPlacanja, rabat FROM kupci WHERE id = ?', a.id))
+      .toEqual({ rokPlacanjaDana: 30, nacinPlacanja: 'Virman', rabat: 5.5 });
+    const bez = await b.call('kupac:create', { naziv: 'B', idBroj: '2' });
+    expect(red('SELECT rokPlacanjaDana, nacinPlacanja, rabat FROM kupci WHERE id = ?', bez.id))
+      .toEqual({ rokPlacanjaDana: null, nacinPlacanja: null, rabat: null });
+  });
+
+  test('prazno i null brišu vrijednost na update-u', async () => {
+    const r = await b.call('kupac:create', { naziv: 'A', idBroj: '1', rokPlacanjaDana: 30, nacinPlacanja: 'Virman', rabat: 5 });
+    expect(await b.call('kupac:update', r.id, { rokPlacanjaDana: null, nacinPlacanja: '', rabat: null })).toEqual({ changes: 1 });
+    expect(red('SELECT rokPlacanjaDana, nacinPlacanja, rabat FROM kupci WHERE id = ?', r.id))
+      .toEqual({ rokPlacanjaDana: null, nacinPlacanja: null, rabat: null });
+  });
+
+  test('update mijenja samo poslana zadana polja', async () => {
+    const r = await b.call('kupac:create', { naziv: 'A', idBroj: '1', rokPlacanjaDana: 30, rabat: 5 });
+    await b.call('kupac:update', r.id, { rabat: 7.25 });
+    expect(red('SELECT rokPlacanjaDana, rabat FROM kupci WHERE id = ?', r.id)).toEqual({ rokPlacanjaDana: 30, rabat: 7.25 });
+  });
+
+  test('validacija', async () => {
+    const rok = 'Rok plaćanja mora biti cijeli broj dana od 0 do 365';
+    const rab = 'Rabat kupca mora biti od 0 do manje od 100 %';
+    await expect(b.call('kupac:create', { naziv: 'A', idBroj: '1', rokPlacanjaDana: -1 })).rejects.toThrow(rok);
+    await expect(b.call('kupac:create', { naziv: 'A', idBroj: '1', rokPlacanjaDana: 366 })).rejects.toThrow(rok);
+    await expect(b.call('kupac:create', { naziv: 'A', idBroj: '1', rokPlacanjaDana: 2.5 })).rejects.toThrow(rok);
+    await expect(b.call('kupac:create', { naziv: 'A', idBroj: '1', rabat: 100 })).rejects.toThrow(rab);
+    await expect(b.call('kupac:create', { naziv: 'A', idBroj: '1', rabat: -0.5 })).rejects.toThrow(rab);
+    await expect(b.call('kupac:create', { naziv: 'A', idBroj: '1', nacinPlacanja: 'Bitcoin' })).rejects.toThrow('Nepoznat način plaćanja "Bitcoin"');
+    expect(broj('SELECT COUNT(*) AS n FROM kupci')).toBe(0);
+    const id = dodajKupca('B', '2');
+    await expect(b.call('kupac:update', id, { rabat: 150 })).rejects.toThrow(rab);
+  });
+
+  test('rabat se zaokružuje na 2 decimale', async () => {
+    const r = await b.call('kupac:create', { naziv: 'A', idBroj: '1', rabat: 3.14159 });
+    expect(red('SELECT rabat FROM kupci WHERE id = ?', r.id)).toEqual({ rabat: 3.14 });
+  });
+
+  test('getAll vraća nova polja', async () => {
+    await b.call('kupac:create', { naziv: 'A', idBroj: '1', rabat: 5 });
+    const [k] = await b.call('kupac:getAll');
+    expect(k.rabat).toBe(5);
+    expect(k.rokPlacanjaDana).toBeNull();
+    expect(k.nacinPlacanja).toBeNull();
+  });
+});
+
 // ─── kupac:delete ───────────────────────────────────────────
 
 describe('kupac:delete', () => {

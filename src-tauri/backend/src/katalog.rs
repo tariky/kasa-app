@@ -463,12 +463,12 @@ fn dobavljac_create(db: &Db, data: &Value) -> R<Value> {
 
 /// `UPDATE <tabela> SET ... WHERE id = ?` samo za poslana polja; `upis` su već
 /// provjerene vrijednosti koje idu prve.
-fn azuriraj(db: &Db, tabela: &str, id: &Value, data: &Value, upis: Vec<(&str, String)>, polja: &[&str]) -> R<Value> {
+fn azuriraj(db: &Db, tabela: &str, id: &Value, data: &Value, upis: Vec<(&str, Value)>, polja: &[&str]) -> R<Value> {
     let mut fields: Vec<String> = Vec::new();
     let mut values: Vec<Value> = Vec::new();
     for (k, v) in upis {
         fields.push(format!("{k} = ?"));
-        values.push(json!(v));
+        values.push(v);
     }
     for k in polja {
         if has(data, k) {
@@ -486,7 +486,7 @@ fn azuriraj(db: &Db, tabela: &str, id: &Value, data: &Value, upis: Vec<(&str, St
 
 fn dobavljac_update(db: &Db, id: &Value, data: &Value) -> R<Value> {
     let naziv = validiraj_dobavljaca(data, id)?;
-    let upis = naziv.map(|n| vec![("naziv", n)]).unwrap_or_default();
+    let upis = naziv.map(|n| vec![("naziv", json!(n))]).unwrap_or_default();
     azuriraj(db, "dobavljaci", id, data, upis, &["idBroj", "pdvBroj", "adresa", "kontakt"])
 }
 
@@ -535,18 +535,66 @@ fn validiraj_kupca(db: &Db, data: &Value, id: &Value) -> R<Vec<(&'static str, St
     Ok(upis)
 }
 
+const NACINI_PLACANJA: [&str; 4] = ["Gotovina", "Kartica", "Virman", "Ček"];
+
+// Zadane vrijednosti kupca za dokumente — samo poslana polja; prazno/null briše vrijednost.
+fn validiraj_zadano_kupca(data: &Value) -> R<Vec<(&'static str, Value)>> {
+    let prazno = |v: &Value| v.is_null() || v.as_str() == Some("");
+    let mut upis = Vec::new();
+    if has(data, "rokPlacanjaDana") {
+        let v = &data["rokPlacanjaDana"];
+        if prazno(v) {
+            upis.push(("rokPlacanjaDana", Value::Null));
+        } else {
+            match v.as_f64() {
+                Some(n) if js::is_integer(v) && (0.0..=365.0).contains(&n) => upis.push(("rokPlacanjaDana", json!(n as i64))),
+                _ => baci!("Rok plaćanja mora biti cijeli broj dana od 0 do 365"),
+            }
+        }
+    }
+    if has(data, "nacinPlacanja") {
+        let v = &data["nacinPlacanja"];
+        if prazno(v) {
+            upis.push(("nacinPlacanja", Value::Null));
+        } else {
+            match v.as_str() {
+                Some(s) if NACINI_PLACANJA.contains(&s) => upis.push(("nacinPlacanja", json!(s))),
+                _ => baci!("Nepoznat način plaćanja \"{}\"", js::to_string(v)),
+            }
+        }
+    }
+    if has(data, "rabat") {
+        let v = &data["rabat"];
+        if prazno(v) {
+            upis.push(("rabat", Value::Null));
+        } else {
+            match v.as_f64() {
+                Some(n) if n.is_finite() && (0.0..100.0).contains(&n) => upis.push(("rabat", json!((n * 100.0).round() / 100.0))),
+                _ => baci!("Rabat kupca mora biti od 0 do manje od 100 %"),
+            }
+        }
+    }
+    Ok(upis)
+}
+
 fn kupac_create(db: &Db, data: &Value) -> R<Value> {
     let upis = validiraj_kupca(db, data, &Value::Null)?;
     let (naziv, id_broj) = (&upis[0].1, &upis[1].1);
+    let zadano = validiraj_zadano_kupca(data)?;
+    let zadano_po = |k: &str| zadano.iter().find(|(z, _)| *z == k).map(|(_, v)| v.clone()).unwrap_or(Value::Null);
     let result = db.run(
-        "INSERT INTO kupci (naziv, idBroj, pdvBroj, adresa, postanskiBroj, grad, kontakt) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        p![naziv, id_broj, data["pdvBroj"], data["adresa"], data["postanskiBroj"], data["grad"], data["kontakt"]],
+        "INSERT INTO kupci (naziv, idBroj, pdvBroj, adresa, postanskiBroj, grad, kontakt, rokPlacanjaDana, nacinPlacanja, rabat) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        p![
+            naziv, id_broj, data["pdvBroj"], data["adresa"], data["postanskiBroj"], data["grad"], data["kontakt"],
+            zadano_po("rokPlacanjaDana"), zadano_po("nacinPlacanja"), zadano_po("rabat")
+        ],
     )?;
     Ok(json!({ "id": result.last_insert_rowid }))
 }
 
 fn kupac_update(db: &Db, id: &Value, data: &Value) -> R<Value> {
-    let upis = validiraj_kupca(db, data, id)?;
+    let mut upis: Vec<(&str, Value)> = validiraj_kupca(db, data, id)?.into_iter().map(|(k, v)| (k, json!(v))).collect();
+    upis.extend(validiraj_zadano_kupca(data)?);
     azuriraj(db, "kupci", id, data, upis, &["pdvBroj", "adresa", "postanskiBroj", "grad", "kontakt"])
 }
 
