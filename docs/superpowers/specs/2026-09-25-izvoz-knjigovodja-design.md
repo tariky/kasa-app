@@ -55,13 +55,15 @@ Listovi **KUF – ulaz robe**, **Ulaz – stavke**, **Nivelacije** i **Zalihe na
 
 ## 2. Pravila obračuna
 
-- **Iznos i PDV po stavci** računaju se postojećim `iznosStavke` / `pdvStavke` iz `src/lib/racun.ts` (zaokruživanje po stavci kao fiskalni uređaj). Osnovica E = iznos E − PDV E. Zbir po računu zaokružen jednom (`round2`), isto kao `izracunajTotale`.
-- **Račun po prilogu** nema `order_items`; stavke dolaze iz `prilog_stavke` (rabat 0). Ako prilog nema ni tih stavki, cijeli `ukupno` se tretira kao jedna stavka stope E (isto kao `order:get`).
-- **Odstupanje od `orders.ukupno`**: ako zbir stavki odstupa od `orders.ukupno` za više od 0,01 KM, račun se prijavljuje na listu Kontrola; u KIF ide `orders.ukupno` a razlika se pripisuje stopi E, da zbir KIF-a odgovara fiskalnom prometu.
+- **Iznosi računa**: `ukupno` i PDV stope E su snimljeni `orders.ukupno` i `orders.pdvIznos` — tačno ono što je fiskalizovano (izračunato istim `izracunajTotale` iz `src/lib/racun.ts`). Stavke (`order_items`, za prilog `prilog_stavke`) služe samo da se izdvoji iznos stope K (`iznosStavke`); osnovica E = ukupno − iznos K − PDV E.
+- **Račun po prilogu** bez ijedne stavke: cijeli iznos je stopa E (isto kao `order:get`).
+- **Odstupanje**: ako zbir stavki (`iznosStavke`) odstupa od `orders.ukupno` za više od 0,01 KM, račun se prijavljuje na listu Kontrola; iznosi ostaju po pravilu iznad, pa razlika pada na stopu E i zbir KIF-a odgovara fiskalnom prometu.
 - **Način plaćanja**: tekst (`Gotovina`, `Kartica`, `Virman`, `Ček`) → cijeli iznos u tu kolonu; JSON (`{gotovina, kartica, virman, cek}`) → raspoređuje se po ključevima. Nepoznat oblik (ni tekst ni JSON s poznatim ključevima) → cijeli iznos ide u gotovinu, a račun se prijavljuje u Kontroli. Parsiranje u jednoj funkciji uz `gotovinskiIznos` u `src/lib/drawer.ts`.
 - **Reklamacija** je u periodu kad je `refundedAt` u periodu, bez obzira kad je račun prodan. Račun prodan i reklamiran u istom periodu pojavljuje se i u KIF-u i u Reklamacijama (isto pravilo kao `ocekivanoStanje` za ladicu).
 - **KUF vrijednosti** preko `src/lib/kalkulacija.ts` (`fakturnaVrijednost`, `rabatIznos`, `nabavnaVrijednost`); ulazni PDV = nabavna vrijednost × stopa (`pdvStopaPct`); prodajna vrijednost = Σ `cijena × kolicina` (materijal: 0); RUC = prodajna bez PDV-a − nabavna.
 - **Prosječna nabavna cijena** (zalihe) ista formula kao `getProsjecnaNabavna`, ali samo nad `primka_stavke` čija primka ima `datum <= do`. Bez primki → 0.
+- **Prodajna cijena na dan `do`**: `novaCijena` posljednje promjene iz `cijena_historija` do tog dana; ako je nema, `staraCijena` prve kasnije promjene; ako ni nje nema, trenutna `products.cijena`.
+- **Zalihe**: artikli (`tip = 'artikal'`), a materijal samo kad je Proizvodnja uključena (isto kao `VrijednostZalihe` na Skladištu). Na listu idu sve količine ≠ 0, ali u zbir vrijednosti samo pozitivne; artikli u minusu se prijavljuju u Kontroli.
 - **Utrošak materijala**: vrijednost = `radni_nalog_stavke.kolicina × nabavnaCijena` (snimljena na nalogu; ako je NULL → prosječna nabavna na dan završetka, ista formula kao gore).
 - **Mjesec** = od prvog do zadnjeg dana u mjesecu; sve granice su lokalni datumi `YYYY-MM-DD`, uključivo.
 
@@ -74,28 +76,25 @@ Jedan kanal samo za čitanje. Vraća **sirove redove**, sva logika obračuna je 
 ```ts
 interface KnjigovodjaPodaci {
   od: string; do: string;
-  izvezeno: string;               // 'YYYY-MM-DD HH:MM:SS' lokalno
-  firma: FirmaSettings;
-  moduli: { skladiste: boolean; proizvodnja: boolean };
   racuni: IzvozRacun[];           // prodani u periodu (createdAt)
   reklamacije: IzvozRacun[];      // reklamirani u periodu (refundedAt)
   stavkeRacuna: IzvozStavkaRacuna[]; // za sve račune iz obje liste: orderId, cijena, kolicina, rabat, pdvStopa, izvor 'order'|'prilog'
-  primke: IzvozPrimka[];          // [] ako skladište nije aktivno
+  primke: IzvozPrimka[];
   primkaStavke: IzvozPrimkaStavka[];
   nivelacije: IzvozNivelacijaStavka[];
   kretanjaNovca: IzvozKretanjeNovca[];
-  utrosak: IzvozUtrosak[];        // [] ako proizvodnja nije aktivna
+  utrosak: IzvozUtrosak[];
   zalihe: IzvozZaliha[];          // agregirano u SQL-u po artiklu
-  fiskalnePraznine: number[];
 }
 ```
 
-Tačan oblik tipova definiše se u `src/types.ts` u fazi plana. `od > do` ili neispravan datum → greška `Neispravan period`. Nema zapisa → prazne liste (ne greška).
+Tipovi su u `src/lib/knjigovodja/tipovi.ts`. `od > do` ili neispravan datum → greška `Neispravan period`. Nema zapisa → prazne liste (ne greška).
+
+**Izmjena nakon čitanja koda:** kanal vraća samo rezultate SQL upita (`od`, `do` + liste ispod). Firma (`settings:getFirma`), moduli (`useModuli`), odbačene praznine (`settings:get fiscal.dismissedGaps`) i praznine (`izracunajPraznine`) rješava renderer postojećim kanalima i funkcijama — Rust tako nema nikakve logike osim upita. SQL tekst je u `src/lib/knjigovodja/upiti.ts`, a Rust ga čita `include_str!` (isti trik kao `schema.ts`), pa su upiti doslovno isti u oba backenda. Svi listovi se uvijek vraćaju; renderer izostavlja one čiji modul nije uključen.
 
 - **TS:** upiti u `src/lib/izvozKnjigovodja.ts` (`dohvatiKnjigovodja(db, od, do)`), registracija u `src/ipc/handlers.ts`; `src/ipc/api.ts` + `src/global.d.ts` (`window.api.izvozKnjigovodja`).
 - **Rust:** novi modul `src-tauri/backend/src/izvoz.rs` s istim upitima, krak `"izvoz"` u `kanali.rs`.
-- **Licenca:** kanal je samo za čitanje, ne ide u `kanali` u `moduliKatalog.json`; aktivnost modula se čita iz licence u backendu i vraća u `moduli`.
-- Fiskalne praznine: postojeći `izracunajPraznine` (TS) / njegov Rust parnjak, nad brojevima iz perioda.
+- **Licenca:** kanal je samo za čitanje i ne ide u `kanali` u `moduliKatalog.json`.
 
 ### 3.2 Renderer — `src/lib/knjigovodja/`
 
@@ -131,6 +130,6 @@ Nove zavisnosti: `exceljs`, `fflate` — samo renderer.
 
 ## 5. Testovi
 
-- **Ugovorni** `src/ipc/ugovor/izvoz.ugovor.test.ts` (TS i Rust, `bun test` / `bun run test:rust`): pripremljena baza s računom obje stope, računom s rabatom, podijeljenim plaćanjem, računom po prilogu, reklamacijom računa iz prethodnog perioda, računom prodanim i reklamiranim u periodu, primkom na granici perioda, nivelacijom, pologom i povratom, završenim nalogom (i nezavršenim — ne ulazi), kretanjima zaliha prije/poslije `do`, rupom u fiskalnoj numeraciji i odbačenom rupom; `od > do` → greška; moduli isključeni → prazne liste. Kanal se dodaje u `stvarnaBaza.poredjenje.test.ts`.
-- **Unit** (`bun test`): `obracun.ts` (zaokruživanje po stavci, raspodjela plaćanja, prilog bez stavki, odstupanje od `ukupno`, reklamacije, zbirovi = zbir redova), `excel.ts` (fajl se ponovo učita kroz exceljs, listovi prema modulima, zbirni redovi), `zip.ts` (fflate `unzipSync` vraća oba fajla), `imeFajla.ts`, period-picker logika (granice mjeseca, prestupna godina).
+- **Ugovorni** `src/ipc/ugovor/izvoz.ugovor.test.ts` (TS i Rust, `bun test` / `bun run test:rust`): pripremljena baza s računom obje stope, računom s rabatom, podijeljenim plaćanjem, računom po prilogu, reklamacijom računa iz prethodnog perioda, računom prodanim i reklamiranim u periodu, primkom na granici perioda, nivelacijom, pologom i povratom, završenim nalogom (i nezavršenim — ne ulazi), kretanjima zaliha prije/poslije `do`, cijenom promijenjenom poslije `do`; `od > do` i neispravan datum → greška. Kanal se dodaje u `stvarnaBaza.poredjenje.test.ts`.
+- **Unit** (`bun test`): `obracun.ts` (izdvajanje stope K, raspodjela plaćanja, rupe u numeraciji i odbačene rupe, moduli isključeni → listovi prazni, prilog bez stavki, odstupanje od `ukupno`, reklamacije, zbirovi = zbir redova), `excel.ts` (fajl se ponovo učita kroz exceljs, listovi prema modulima, zbirni redovi), `zip.ts` (fflate `unzipSync` vraća oba fajla), `imeFajla.ts`, period-picker logika (granice mjeseca, prestupna godina).
 - **Ručno**: screenshot taba kroz statički build + Playwright; otvaranje generisanog `.xlsx` i `.pdf`.
