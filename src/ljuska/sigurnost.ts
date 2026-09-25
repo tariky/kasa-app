@@ -83,15 +83,40 @@ export function putanjaZaZahtjev(urlZahtjeva: string, korijen: string, p: typeof
   return puna;
 }
 
+/** Prekidači Chromiuma koji otvaraju DevTools protokol (CDP) prema procesu. */
+const DEBUG_PREKIDACI = ['remote-debugging-port', 'remote-debugging-pipe'];
+
+/**
+ * Da li argumenti komandne linije traže udaljeno debagovanje. Chromium
+ * prihvata `--x`, `-x` i (na Windowsu) `/x`, s vrijednošću iza `=` ili bez,
+ * a imena prekidača na Windowsu ne razlikuju velika i mala slova.
+ */
+export function imaDebugPrekidac(argv: readonly string[]): boolean {
+  return argv.some((arg) => {
+    const m = /^(?:--|-|\/)([^=]+)(?:=.*)?$/s.exec(arg.trim());
+    return !!m && DEBUG_PREKIDACI.includes(m[1].toLowerCase());
+  });
+}
+
 /**
  * Aplikacijski meni. Uredi (copy/paste) i na macOS-u meni aplikacije moraju
- * ostati — bez njih ne rade Cmd+C/V. Pogled (Reload, DevTools) samo u razvoju.
+ * ostati — bez njih ne rade Cmd+C/V. Pogled u paketu ima samo zoom i puni
+ * ekran; Reload i DevTools samo u razvoju.
  */
 export function meniSablon(opcije: { mac: boolean; razvoj: boolean }): MenuItemConstructorOptions[] {
+  const pogled: MenuItemConstructorOptions[] = [];
+  if (opcije.razvoj) {
+    pogled.push({ role: 'reload' }, { role: 'forceReload' }, { role: 'toggleDevTools' }, { type: 'separator' });
+  }
+  pogled.push(
+    { role: 'resetZoom' },
+    { role: 'zoomIn' },
+    { role: 'zoomOut' },
+    { type: 'separator' },
+    { role: 'togglefullscreen' },
+  );
   const meni: MenuItemConstructorOptions[] = [];
   if (opcije.mac) meni.push({ role: 'appMenu' });
-  meni.push({ role: 'fileMenu' }, { role: 'editMenu' });
-  if (opcije.razvoj) meni.push({ role: 'viewMenu' });
-  meni.push({ role: 'windowMenu' });
+  meni.push({ role: 'fileMenu' }, { role: 'editMenu' }, { label: 'View', submenu: pogled }, { role: 'windowMenu' });
   return meni;
 }

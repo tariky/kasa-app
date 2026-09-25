@@ -4,7 +4,15 @@ import { pathToFileURL } from 'node:url';
 import started from 'electron-squirrel-startup';
 import { registerIpcHandlers } from './ipc/handlers';
 import { closeDb } from './database/db';
-import { APP_SEMA, APP_URL, CSP_ELECTRON, jeDozvoljenaNavigacija, jeDozvoljenaNavigacijaPopupa, jeDozvoljenPopup, meniSablon, putanjaZaZahtjev } from './ljuska/sigurnost';
+import { APP_SEMA, APP_URL, CSP_ELECTRON, imaDebugPrekidac, jeDozvoljenaNavigacija, jeDozvoljenaNavigacijaPopupa, jeDozvoljenPopup, meniSablon, putanjaZaZahtjev } from './ljuska/sigurnost';
+
+// Upakovana aplikacija se ne pokreće s udaljenim debagovanjem: preko CDP-a bi
+// se (npr. izmijenjenom prečicom na Windowsu) moglo ući u renderer i zvati
+// window.api, iako su DevTools isključeni.
+if (app.isPackaged && (app.commandLine.hasSwitch('remote-debugging-port') || app.commandLine.hasSwitch('remote-debugging-pipe') || imaDebugPrekidac(process.argv))) {
+  app.exit(1);
+  process.exit(1);
+}
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (started) {

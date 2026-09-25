@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import path from 'node:path';
-import { APP_URL, CSP_ELECTRON, jeDozvoljenaNavigacija, jeDozvoljenaNavigacijaPopupa, jeDozvoljenPopup, meniSablon, putanjaZaZahtjev } from './sigurnost';
+import { APP_URL, CSP_ELECTRON, imaDebugPrekidac, jeDozvoljenaNavigacija, jeDozvoljenaNavigacijaPopupa, jeDozvoljenPopup, meniSablon, putanjaZaZahtjev } from './sigurnost';
 
 describe('jeDozvoljenaNavigacija', () => {
   test('upakovana aplikacija: samo app://pazar', () => {
@@ -90,15 +90,47 @@ describe('CSP_ELECTRON', () => {
 });
 
 describe('meniSablon', () => {
-  const uloge = (m: ReturnType<typeof meniSablon>) => m.map(s => s.role);
+  const uloge = (m: ReturnType<typeof meniSablon>) => m.map(s => s.role ?? s.label);
+  const pogled = (m: ReturnType<typeof meniSablon>) => {
+    const p = m.find(s => s.label === 'View');
+    return (p?.submenu as Array<{ role?: string; type?: string }>).map(s => s.role ?? s.type);
+  };
+  const zoom = ['resetZoom', 'zoomIn', 'zoomOut', 'separator', 'togglefullscreen'];
 
-  test('paket: bez Pogleda (Reload/DevTools), Uredi ostaje', () => {
-    expect(uloge(meniSablon({ mac: true, razvoj: false }))).toEqual(['appMenu', 'fileMenu', 'editMenu', 'windowMenu']);
-    expect(uloge(meniSablon({ mac: false, razvoj: false }))).toEqual(['fileMenu', 'editMenu', 'windowMenu']);
+  for (const mac of [true, false]) {
+    test(`paket (${mac ? 'macOS' : 'Windows/Linux'}): Pogled samo zoom i puni ekran, Uredi ostaje`, () => {
+      const m = meniSablon({ mac, razvoj: false });
+      expect(uloge(m)).toEqual([...(mac ? ['appMenu'] : []), 'fileMenu', 'editMenu', 'View', 'windowMenu']);
+      expect(pogled(m)).toEqual(zoom);
+    });
+
+    test(`razvoj (${mac ? 'macOS' : 'Windows/Linux'}): Pogled i Reload/DevTools`, () => {
+      const m = meniSablon({ mac, razvoj: true });
+      expect(uloge(m)).toEqual([...(mac ? ['appMenu'] : []), 'fileMenu', 'editMenu', 'View', 'windowMenu']);
+      expect(pogled(m)).toEqual(['reload', 'forceReload', 'toggleDevTools', 'separator', ...zoom]);
+    });
+  }
+});
+
+describe('imaDebugPrekidac', () => {
+  test('prepoznaje --remote-debugging-port/pipe u svim oblicima', () => {
+    for (const arg of [
+      '--remote-debugging-port=9222',
+      '--remote-debugging-port',
+      '--remote-debugging-pipe',
+      '-remote-debugging-port=0',
+      '/remote-debugging-port=9222',
+      '--REMOTE-DEBUGGING-PORT=9222',
+      ' --remote-debugging-pipe ',
+    ]) {
+      expect(imaDebugPrekidac(['C:\\Pazar\\Pazar.exe', arg])).toBe(true);
+    }
   });
 
-  test('razvoj: i meni Pogled', () => {
-    expect(uloge(meniSablon({ mac: true, razvoj: true }))).toContain('viewMenu');
-    expect(uloge(meniSablon({ mac: false, razvoj: true }))).toContain('editMenu');
+  test('običan start i slični prekidači ne smetaju', () => {
+    expect(imaDebugPrekidac(['/Applications/Pazar.app/Contents/MacOS/Pazar'])).toBe(false);
+    expect(imaDebugPrekidac(['Pazar.exe', '--squirrel-firstrun', '--user-data-dir=C:\\x'])).toBe(false);
+    expect(imaDebugPrekidac(['Pazar.exe', '--remote-debugging-portx=1', 'remote-debugging-port=1'])).toBe(false);
+    expect(imaDebugPrekidac(['Pazar.exe', '--remote-debugging-address=0.0.0.0'])).toBe(false);
   });
 });
