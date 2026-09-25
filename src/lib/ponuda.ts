@@ -5,6 +5,7 @@ import { localDateStr } from './novac';
 import { buildTringRacun } from './tringRacun';
 import { provjeriStavke } from './provjeraRacuna';
 import { provjeriNacinPlacanja } from './placanje';
+import { formatBroja, ZADANE_DOKUMENT_POSTAVKE, type FormatBroja } from './dokumentPostavke';
 
 export interface PonudaStavka {
   productId: number;
@@ -51,9 +52,9 @@ export function nextBrojPonude(db: SqlDb, godina: number): number {
   return (row.maxBroj ?? 0) + 1;
 }
 
-/** Prikazni oblik broja ponude, npr. "3/2026". */
-export function formatBrojPonude(p: { broj: number; godina: number }): string {
-  return `${p.broj}/${p.godina}`;
+/** Prikazni oblik broja ponude, npr. "3/2026" ili "P-003/2026" s formatom iz postavki. */
+export function formatBrojPonude(p: { broj: number; godina: number }, f: FormatBroja = ZADANE_DOKUMENT_POSTAVKE.ponuda.broj): string {
+  return formatBroja(p, f);
 }
 
 /**
@@ -144,7 +145,7 @@ export function deletePonuda(db: SqlDb, id: number): { changes: number } {
   const nalog = db.prepare('SELECT broj, godina FROM radni_nalozi WHERE ponudaId = ? ORDER BY id LIMIT 1')
     .get(id) as { broj: number; godina: number } | undefined;
   if (nalog) {
-    throw new Error(`Ponuda je vezana za radni nalog RN-${nalog.broj}/${nalog.godina} — prvo obrišite nalog`);
+    throw new Error(`Ponuda je vezana za radni nalog br. ${nalog.broj}/${nalog.godina} — prvo obrišite nalog`);
   }
   db.prepare('DELETE FROM ponuda_stavke WHERE ponudaId = ?').run(id);
   const r = db.prepare('DELETE FROM ponude WHERE id = ?').run(id);

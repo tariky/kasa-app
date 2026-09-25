@@ -398,7 +398,7 @@ describe('ponuda:delete', () => {
     const nalog = await b.call('nalog:createIzPonude', id, ADMIN);
 
     await expect(b.call('ponuda:delete', id)).rejects.toThrow(
-      `Ponuda je vezana za radni nalog RN-${nalog.broj}/${nalog.godina} — prvo obrišite nalog`
+      `Ponuda je vezana za radni nalog br. ${nalog.broj}/${nalog.godina} — prvo obrišite nalog`
     );
     await expect(b.call('ponuda:delete', id)).rejects.not.toThrow('FOREIGN KEY');
     expect(broj('SELECT COUNT(*) AS n FROM ponude WHERE id = ?', id)).toBe(1);

@@ -166,7 +166,7 @@ pub fn delete_ponuda(db: &Db, id: &Value) -> R<Value> {
     }
     if let Some(nalog) = db.get("SELECT broj, godina FROM radni_nalozi WHERE ponudaId = ? ORDER BY id LIMIT 1", p![id])? {
         baci!(
-            "Ponuda je vezana za radni nalog RN-{}/{} — prvo obrišite nalog",
+            "Ponuda je vezana za radni nalog br. {}/{} — prvo obrišite nalog",
             js::to_string(&nalog["broj"]),
             js::to_string(&nalog["godina"])
         );

@@ -6,6 +6,7 @@ import { izracunajTotale, upisiRacun } from './racun';
 import { provjeriNacinPlacanja } from './placanje';
 import { buildTringRacun } from './tringRacun';
 import { konvertujPonudu, type KonverzijaDeps, type KonverzijaResult } from './ponuda';
+import { formatBroja, ZADANE_DOKUMENT_POSTAVKE, type FormatBroja } from './dokumentPostavke';
 import type {
   NalogStatus, NalogVrsta, NormativStavka, RadniNalog, RadniNalogStavka,
 } from '@/types';
@@ -41,8 +42,9 @@ export function nextBrojNaloga(db: SqlDb, godina: number): number {
   return (row.maxBroj ?? 0) + 1;
 }
 
-export function formatBrojNaloga(n: { broj: number; godina: number }): string {
-  return `RN-${n.broj}/${n.godina}`;
+/** Prikazni oblik broja naloga, npr. "RN-2/2026" ili format iz postavki. */
+export function formatBrojNaloga(n: { broj: number; godina: number }, f: FormatBroja = ZADANE_DOKUMENT_POSTAVKE.nalog.broj): string {
+  return formatBroja(n, f);
 }
 
 // ── validacija ───────────────────────────────────────────

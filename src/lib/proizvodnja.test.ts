@@ -53,6 +53,8 @@ test('broj naloga kreće od 1 svake godine', () => {
   expect(nextBrojNaloga(db, 2026)).toBe(2);
   expect(nextBrojNaloga(db, 2027)).toBe(1);
   expect(formatBrojNaloga({ broj: 2, godina: 2026 })).toBe('RN-2/2026');
+  expect(formatBrojNaloga({ broj: 2, godina: 2026 }, { prefiks: 'NAL ', cifara: 0 })).toBe('NAL 2/2026');
+  expect(formatBrojNaloga({ broj: 2, godina: 2026 }, { prefiks: '', cifara: 0 })).toBe('2/2026');
 });
 
 // ── kreiranje ────────────────────────────────────────────
