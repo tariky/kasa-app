@@ -283,7 +283,7 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
   const primijeniRabatSve = () => {
     const n = parseFloat(rabatSve.replace(',', '.'));
     const rabat = isNaN(n) ? 0 : n;
-    if (!(rabat >= 0 && rabat < 100)) { setObavijest('Rabat mora biti između 0 i 100 %.'); return; }
+    if (!(rabat >= 0 && rabat <= 100)) { setObavijest('Rabat mora biti od 0 do 100 %.'); return; }
     setObavijest(null);
     setStavke(prev => prev.map(s => ({ ...s, rabat })));
     setRabatSve('');
@@ -324,8 +324,8 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
       setError('Svaka stavka mora imati količinu veću od 0.');
       return;
     }
-    if (mode === 'stavke' && stavke.some(s => !(s.rabat >= 0 && s.rabat < 100))) {
-      setError('Rabat mora biti između 0 i 100 %.');
+    if (mode === 'stavke' && stavke.some(s => !(s.rabat >= 0 && s.rabat <= 100))) {
+      setError('Rabat mora biti od 0 do 100 %.');
       return;
     }
     if (mode === 'stavke' && zabranjene.length > 0) {
@@ -572,7 +572,7 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
                                   className={cn(
                                     'h-9 w-[72px] rounded-lg text-center font-mono text-sm tabular-nums',
                                     s.rabat === 0 && 'text-slate-400',
-                                    !(s.rabat >= 0 && s.rabat < 100) && 'border-rose-300 bg-rose-50',
+                                    !(s.rabat >= 0 && s.rabat <= 100) && 'border-rose-300 bg-rose-50',
                                   )}
                                 />
                                 <span className="w-28 text-right font-mono tabular-nums">

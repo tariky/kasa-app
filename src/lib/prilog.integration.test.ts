@@ -365,7 +365,7 @@ test('rabat van 0–100 se odbija prije štampe', async () => {
   let stampano = false;
   await expect(finalizePrilogAndPrint(
     { ...deps(), print: async () => { stampano = true; return null; } },
-    { korisnikId: 1, nacinPlacanja: 'Virman', stavke: [{ productId: 1, kolicina: 1, cijena: 30, rabat: 100, pdvStopa: 'E' }] }
+    { korisnikId: 1, nacinPlacanja: 'Virman', stavke: [{ productId: 1, kolicina: 1, cijena: 30, rabat: 100.5, pdvStopa: 'E' }] }
   )).rejects.toThrow(/Rabat/);
   expect(stampano).toBe(false);
 });

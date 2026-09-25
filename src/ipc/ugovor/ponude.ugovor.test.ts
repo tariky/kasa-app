@@ -277,11 +277,18 @@ describe('ponuda:create / ponuda:update — provjera stavki', () => {
     [{ kolicina: '1' }, 'Količina mora biti veća od 0'],
     [{ cijena: -1 }, 'Cijena ne može biti negativna'],
     [{ cijena: null }, 'Cijena mora biti broj'],
-    [{ rabat: 100 }, 'Rabat mora biti između 0 i 100 %'],
+    [{ rabat: 100.5 }, 'Rabat mora biti od 0 do 100 %'],
     [{ pdvStopa: 'X' }, 'PDV stopa mora biti E ili K'],
     [{ productId: 424242 }, 'Proizvod #424242 ne postoji'],
     [{ productId: `${p}` }, `Proizvod #${p} ne postoji`],
   ];
+
+  test('rabat 100 % je dozvoljen', async () => {
+    const kupacId = dodajKupca();
+    const p = dodajArtikal('Q0', 10);
+    const r = await b.call('ponuda:create', { kupacId, stavke: [stavka(p, 1, 10, 100), stavka(p, 2, 10)] });
+    expect(red('SELECT ukupno FROM ponude WHERE id = ?', r.id).ukupno).toBe(20);
+  });
 
   test('create odbija neispravnu stavku i ništa ne upisuje', async () => {
     const kupacId = dodajKupca();
@@ -602,7 +609,7 @@ describe('prilog:saveStavke', () => {
     await b.call('prilog:saveStavke', id, [{ ...prilogStavka(a, 5, 10), rabat: 10 }, prilogStavka(c, 1, 5)]);
     expect((await b.call('prilog:getStavke', id)).map((s: any) => [s.productId, s.rabat])).toEqual([[a, 10], [c, 0]]);
     await expect(b.call('prilog:saveStavke', id, [{ ...prilogStavka(a, 1, 10), rabat: -1 }]))
-      .rejects.toThrow('Rabat mora biti između 0 i 100 %');
+      .rejects.toThrow('Rabat mora biti od 0 do 100 %');
   });
 
   test('upisuje stavke i razdužuje skladište, usluge ne', async () => {

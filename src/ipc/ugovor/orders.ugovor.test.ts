@@ -237,8 +237,8 @@ describe('order:finalizePrilog', () => {
       .rejects.toThrow('Neispravan datum valute: 2026-13-01');
     await expect(b.call('order:finalizePrilog', { ...osnova, napomena: 'x'.repeat(501) }))
       .rejects.toThrow('Napomena može imati najviše 500 znakova');
-    await expect(b.call('order:finalizePrilog', { ...osnova, stavke: [{ productId: p, kolicina: 1, cijena: 20, rabat: 100, pdvStopa: 'E' }] }))
-      .rejects.toThrow('Rabat mora biti između 0 i 100 %');
+    await expect(b.call('order:finalizePrilog', { ...osnova, stavke: [{ productId: p, kolicina: 1, cijena: 20, rabat: 100.01, pdvStopa: 'E' }] }))
+      .rejects.toThrow('Rabat mora biti od 0 do 100 %');
     expect(b.tring.zahtjevi).toEqual([]);
   });
 
@@ -431,9 +431,9 @@ describe('provjera računa prije štampe (order:finalize, order:createManual)', 
       [{ cijena: -0.01 }, 'Cijena ne može biti negativna'],
       [{ cijena: null }, 'Cijena mora biti broj'],
       [{ cijena: '5' }, 'Cijena mora biti broj'],
-      [{ rabat: 100 }, 'Rabat mora biti između 0 i 100 %'],
-      [{ rabat: -5 }, 'Rabat mora biti između 0 i 100 %'],
-      [{ rabat: '10' }, 'Rabat mora biti između 0 i 100 %'],
+      [{ rabat: 100.01 }, 'Rabat mora biti od 0 do 100 %'],
+      [{ rabat: -5 }, 'Rabat mora biti od 0 do 100 %'],
+      [{ rabat: '10' }, 'Rabat mora biti od 0 do 100 %'],
       [{ pdvStopa: 'A' }, 'PDV stopa mora biti E ili K'],
       [{ pdvStopa: null }, 'PDV stopa mora biti E ili K'],
       [{ productId: 999_999 }, 'Proizvod #999999 ne postoji'],
@@ -468,6 +468,17 @@ describe('provjera računa prije štampe (order:finalize, order:createManual)', 
         .rejects.toThrow(poruka);
     }
     nistaUpisano();
+  });
+
+  test('rabat 100 % je dozvoljen (stavka od 0 KM), i na kasi i na ručnom računu', async () => {
+    const p = dodajArtikal('V0', 5, { stanje: 10 });
+    const q = dodajArtikal('V9', 4, { stanje: 10 });
+    const stavke = [{ ...kasaStavka(p, 1, 5), rabat: 100 }, kasaStavka(q, 1, 4)];
+    const r = await b.call('order:finalize', racun(stavke));
+    expect(red('SELECT ukupno FROM orders WHERE id = ?', r.id).ukupno).toBe(4);
+    expect(red('SELECT rabat FROM order_items WHERE orderId = ? AND productId = ?', r.id, p).rabat).toBe(100);
+    const m = await b.call('order:createManual', racun([{ ...stavka(p, 1, 5), rabat: 100 }, stavka(q, 1, 4)], { brojFiskalnogRacuna: '4242', createdAt: sada() }));
+    expect(red('SELECT ukupno FROM orders WHERE id = ?', m.id).ukupno).toBe(4);
   });
 
   test('ukupno i PDV iz payload-a smiju odstupati najviše 0,005 — u bazu ide iznos izračunat iz stavki', async () => {

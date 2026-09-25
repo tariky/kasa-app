@@ -16,14 +16,14 @@ const konacan = (x: unknown): x is number => typeof x === 'number' && Number.isF
 /**
  * Količina, cijena i rabat jedne stavke (račun, ponuda, prilog): količina
  * konačan broj > 0, cijena konačan broj ≥ 0, rabat (nedostaje = 0) konačan
- * broj u [0, 100).
+ * broj u [0, 100] — 100 % je stavka od 0 KM (kasa ga nudi).
  */
 export function provjeriIznoseStavke(s: { kolicina?: unknown; cijena?: unknown; rabat?: unknown }): void {
   if (!(konacan(s.kolicina) && s.kolicina > 0)) throw new Error('Količina mora biti veća od 0');
   if (!konacan(s.cijena)) throw new Error('Cijena mora biti broj');
   if (s.cijena < 0) throw new Error('Cijena ne može biti negativna');
   const rabat = s.rabat ?? 0;
-  if (!(konacan(rabat) && rabat >= 0 && rabat < 100)) throw new Error('Rabat mora biti između 0 i 100 %');
+  if (!(konacan(rabat) && rabat >= 0 && rabat <= 100)) throw new Error('Rabat mora biti od 0 do 100 %');
 }
 
 /** Artikal stavke kako je u bazi — za štampu i za provjeru stope. */
