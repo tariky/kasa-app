@@ -4,6 +4,8 @@ import { pdf } from '@react-pdf/renderer';
 import type { RadniNalog } from '@/types';
 import type { Kalkulacija } from '@/lib/proizvodnja';
 import { formatBrojNaloga } from '@/lib/proizvodnja';
+import { formatBrojPonude } from '@/lib/ponuda';
+import { useDokumentPostavke } from '@/components/DokumentPostavkeProvider';
 import { rokOznaka } from '@/lib/nalogPrikaz';
 import { localDateStr } from '@/lib/novac';
 import { cn, formatKM, formatDate } from '@/lib/utils';
@@ -34,6 +36,7 @@ export function NalogDetailDialog({ nalogId, redoslijed, uloga, onClose, onNavig
   nalogId: number | null; redoslijed: number[]; uloga: 'admin' | 'kasir';
   onClose: () => void; onNavigate: (id: number) => void; onChanged: () => void; onDeleted: (n: RadniNalog) => void;
 }) {
+  const { postavke } = useDokumentPostavke();
   const [nalog, setNalog] = useState<RadniNalog | null>(null);
   const [kalk, setKalk] = useState<Kalkulacija | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -182,7 +185,7 @@ export function NalogDetailDialog({ nalogId, redoslijed, uloga, onClose, onNavig
             <>
               <FullDialogHeader
                 eyebrow={nalog.vrsta === 'narudzba' ? 'Nalog po narudžbi' : 'Nalog za zalihu'}
-                title={formatBrojNaloga(nalog)}
+                title={formatBrojNaloga(nalog, postavke.nalog.broj)}
                 description={<>
                   {nalog.vrsta === 'narudzba' ? nalog.kupacNaziv : `${nalog.productNaziv} × ${nalog.kolicina}`}
                   {nalog.opis && nalog.opis !== nalog.productNaziv && <span className="text-white/45"> · {nalog.opis}</span>}
@@ -234,7 +237,7 @@ export function NalogDetailDialog({ nalogId, redoslijed, uloga, onClose, onNavig
                             : <span className="text-amber-600 text-[12px]">nije upisana</span>}
                         </Fact>
                       )}
-                      {nalog.ponudaBroj && <Fact label="Iz ponude"><span className="font-mono">PO-{nalog.ponudaBroj}/{nalog.ponudaGodina}</span></Fact>}
+                      {nalog.ponudaBroj && <Fact label="Iz ponude"><span className="font-mono">{formatBrojPonude({ broj: nalog.ponudaBroj, godina: nalog.ponudaGodina ?? 0 }, postavke.ponuda.broj)}</span></Fact>}
                       {nalog.racunBroj && (
                         <Fact label="Fiskalni račun">
                           <span className="font-mono font-medium text-violet-600">#{nalog.racunBroj}</span>
@@ -302,7 +305,7 @@ export function NalogDetailDialog({ nalogId, redoslijed, uloga, onClose, onNavig
             onSaved={async () => { await reload(); setNotice({ type: 'success', text: 'Nalog izmijenjen' }); }} />
 
           <IzdajRacunDialog open={racunOpen} onOpenChange={setRacunOpen} nalog={nalog}
-            onIzdat={async (bf) => { await reload(); setNotice({ type: 'success', text: `Račun #${bf ?? ''} izdat po nalogu ${formatBrojNaloga(nalog)}` }); }} />
+            onIzdat={async (bf) => { await reload(); setNotice({ type: 'success', text: `Račun #${bf ?? ''} izdat po nalogu ${formatBrojNaloga(nalog, postavke.nalog.broj)}` }); }} />
 
           <Dialog open={pending != null} onOpenChange={v => { if (!v) setPending(null); }}>
             <DialogContent className="sm:max-w-[420px]" onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); spremiPaNastavi(); } }}>
@@ -323,7 +326,7 @@ export function NalogDetailDialog({ nalogId, redoslijed, uloga, onClose, onNavig
           <Dialog open={brisiOpen} onOpenChange={setBrisiOpen}>
             <DialogContent className="sm:max-w-[400px]" onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); obrisi(); } }}>
               <DialogHeader>
-                <DialogTitle>Obrisati nalog {formatBrojNaloga(nalog)}?</DialogTitle>
+                <DialogTitle>Obrisati nalog {formatBrojNaloga(nalog, postavke.nalog.broj)}?</DialogTitle>
                 <DialogDescription>Nalog nije završen pa ništa nije knjiženo. Brisanje se ne može poništiti.</DialogDescription>
               </DialogHeader>
               <div className="flex justify-end gap-2 pt-2">
@@ -336,7 +339,7 @@ export function NalogDetailDialog({ nalogId, redoslijed, uloga, onClose, onNavig
           <Dialog open={zavrsiOpen} onOpenChange={setZavrsiOpen}>
             <DialogContent className="sm:max-w-[460px]" onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); zavrsi(); } }}>
               <DialogHeader>
-                <DialogTitle>Završiti nalog {formatBrojNaloga(nalog)}?</DialogTitle>
+                <DialogTitle>Završiti nalog {formatBrojNaloga(nalog, postavke.nalog.broj)}?</DialogTitle>
                 <DialogDescription>
                   Materijal se skida sa skladišta po stavkama utroška i nabavne cijene se zamrzavaju.
                   {nalog.vrsta === 'zaliha' && ` Na stanje ulazi ${nalog.kolicina} × ${nalog.productNaziv}.`}

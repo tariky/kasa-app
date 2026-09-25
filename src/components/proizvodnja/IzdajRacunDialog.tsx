@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import type { RadniNalog } from '@/types';
 import { formatBrojNaloga, PRODAJNA_USLUGA } from '@/lib/proizvodnja';
+import { formatBrojPonude } from '@/lib/ponuda';
+import { useDokumentPostavke } from '@/components/DokumentPostavkeProvider';
 import { cn, formatKM } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
@@ -20,6 +22,7 @@ export function IzdajRacunDialog({ open, onOpenChange, nalog, onIzdat }: {
   open: boolean; onOpenChange: (v: boolean) => void; nalog: RadniNalog;
   onIzdat: (brojFiskalnog: string | null) => void;
 }) {
+  const { postavke } = useDokumentPostavke();
   const [paymentType, setPaymentType] = useState<PaymentType>('Gotovina');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -58,9 +61,9 @@ export function IzdajRacunDialog({ open, onOpenChange, nalog, onIzdat }: {
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-violet-50 flex items-center justify-center"><Receipt className="h-5 w-5 text-violet-500" /></div>
               <div>
-                <DialogTitle className="text-lg">Izdaj račun za {formatBrojNaloga(nalog)}</DialogTitle>
+                <DialogTitle className="text-lg">Izdaj račun za {formatBrojNaloga(nalog, postavke.nalog.broj)}</DialogTitle>
                 <DialogDescription className="text-xs mt-0.5">
-                  {izPonude ? `Račun po stavkama ponude ${nalog.ponudaBroj}/${nalog.ponudaGodina}` : `Jedna stavka: „${PRODAJNA_USLUGA.naziv}“ po dogovorenoj cijeni`}
+                  {izPonude ? `Račun po stavkama ponude ${formatBrojPonude({ broj: nalog.ponudaBroj ?? 0, godina: nalog.ponudaGodina ?? 0 }, postavke.ponuda.broj)}` : `Jedna stavka: „${PRODAJNA_USLUGA.naziv}“ po dogovorenoj cijeni`}
                 </DialogDescription>
               </div>
             </div>

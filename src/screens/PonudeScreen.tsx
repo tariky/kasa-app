@@ -27,6 +27,8 @@ import { localDateStr } from '@/lib/novac';
 import { cn, formatKM, formatDate } from '@/lib/utils';
 import { useModuli } from '@/hooks/useModuli';
 import { formatBrojNaloga } from '@/lib/proizvodnja';
+import type { FormatBroja } from '@/lib/dokumentPostavke';
+import { useDokumentPostavke } from '@/components/DokumentPostavkeProvider';
 import { ucitajZaStampu } from '@/lib/stampa';
 import { PretragaProizvoda } from '@/components/PretragaProizvoda';
 import type { Product } from '@/types';
@@ -130,14 +132,15 @@ function rokOznaka(p: PonudaRow, danas: string): { text: string; cls: string } |
   return null;
 }
 
-/** Pretraga ponuda: kupac, broj ponude ("12/2026") i ko je izdao. */
-const poljaPonude = (p: PonudaRow): PoljaPretrage => ({
+/** Pretraga ponuda: kupac, broj ponude u formatu iz postavki ("P-0012/2026") i ko je izdao. */
+const poljaPonude = (f: FormatBroja) => (p: PonudaRow): PoljaPretrage => ({
   naziv: p.kupacNaziv ?? '',
-  sifra: formatBrojPonude(p),
-  dodatno: [formatBrojPonude(p), p.korisnikIme].join(' '),
+  sifra: formatBrojPonude(p, f),
+  dodatno: [formatBrojPonude(p, f), p.korisnikIme].join(' '),
 });
 
 export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
+  const { postavke } = useDokumentPostavke();
   const [ponude, setPonude] = useState<PonudaRow[]>([]);
   const [selected, setSelected] = useState<PonudaRow | null>(null);
   const [filter, setFilter] = useState<Filter>('sve');
@@ -201,7 +204,10 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
     setSelected(await window.api.getPonuda(p.id));
   };
 
-  const trazene = useMemo(() => filtriraj(ponude, search, poljaPonude), [ponude, search]);
+  const trazene = useMemo(
+    () => filtriraj(ponude, search, poljaPonude(postavke.ponuda.broj)),
+    [ponude, search, postavke.ponuda.broj],
+  );
 
   const visible = useMemo(() => {
     if (filter === 'sve') return trazene;
@@ -310,7 +316,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
         setMsg({ type: 'success', text: 'Ponuda izmijenjena' });
       } else {
         const res = await window.api.createPonuda(payload);
-        setMsg({ type: 'success', text: `Ponuda ${res.broj}/${res.godina} kreirana` });
+        setMsg({ type: 'success', text: `Ponuda ${formatBrojPonude(res, postavke.ponuda.broj)} kreirana` });
       }
       setFormOpen(false);
       await loadPonude();
@@ -340,7 +346,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
     try {
       await window.api.deletePonuda(selected.id);
       setBrisiOpen(false);
-      setMsg({ type: 'success', text: `Ponuda ${formatBrojPonude(selected)} obrisana` });
+      setMsg({ type: 'success', text: `Ponuda ${formatBrojPonude(selected, postavke.ponuda.broj)} obrisana` });
       setSelected(null);
       await loadPonude();
     } catch (err: any) {
@@ -367,7 +373,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
         return;
       }
       setKonvertujOpen(false);
-      setMsg({ type: 'success', text: `Račun #${result.brojFiskalnogRacuna ?? ''} izdat po ponudi ${formatBrojPonude(selected)}` });
+      setMsg({ type: 'success', text: `Račun #${result.brojFiskalnogRacuna ?? ''} izdat po ponudi ${formatBrojPonude(selected, postavke.ponuda.broj)}` });
       await loadPonude();
       setSelected(await window.api.getPonuda(selected.id));
     } catch (err: any) {
@@ -384,7 +390,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
       const p = await window.api.getPonuda(selected.id);
       setFaktura({
         ponudaId: p.id,
-        ponudaOznaka: formatBrojPonude(p),
+        ponudaOznaka: formatBrojPonude(p, postavke.ponuda.broj),
         firma: {
           naziv: p.kupacNaziv ?? '', idBroj: p.kupacIdBroj ?? '', adresa: p.kupacAdresa ?? '',
           grad: p.kupacGrad ?? '', postanskiBroj: p.kupacPostanskiBroj ?? '',
@@ -438,7 +444,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
     if (!selected) return;
     try {
       const r = await window.api.createNalogIzPonude(selected.id);
-      setMsg({ type: 'success', text: `Radni nalog ${formatBrojNaloga(r)} otvoren po ponudi ${formatBrojPonude(selected)}` });
+      setMsg({ type: 'success', text: `Radni nalog ${formatBrojNaloga(r, postavke.nalog.broj)} otvoren po ponudi ${formatBrojPonude(selected, postavke.ponuda.broj)}` });
       otvoriNalog(r.id);
     } catch (err: any) { setMsg({ type: 'error', text: err?.message || 'Nepoznata greška' }); }
   };
@@ -664,7 +670,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
                                 isSel ? 'text-blue-600 shadow-[inset_3px_0_0_0_#2563eb]' : 'text-slate-400',
                               )}
                             >
-                              {formatBrojPonude(p)}
+                              {formatBrojPonude(p, postavke.ponuda.broj)}
                             </td>
                             <td className={cn(td, 'hidden xl:table-cell px-3 text-[12px] tabular-nums whitespace-nowrap', isSel ? 'text-slate-700' : 'text-slate-500')}>
                               {formatDate(p.datum)}
@@ -728,7 +734,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
                   <div>
                     <Eyebrow>{selStatus === 'konvertovana' ? 'Ponuda po kojoj je izdat račun' : 'Ponuda kupcu'}</Eyebrow>
                     <h3 className="text-[19px] font-bold font-mono tracking-tight text-slate-900 leading-tight mt-1">
-                      {formatBrojPonude(selected)}
+                      {formatBrojPonude(selected, postavke.ponuda.broj)}
                     </h3>
                     <p className="text-[11.5px] text-slate-400 mt-0.5 tabular-nums">
                       {formatDate(selected.datum)} · važi do {formatDate(selected.vaziDo)}
@@ -839,7 +845,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
                 )}
                 {veza && nalogZaPonudu && (
                   <>
-                    <ActionRow icon={Hammer} label={`Otvori nalog ${formatBrojNaloga(nalogZaPonudu)}`} onClick={() => otvoriNalog(nalogZaPonudu.id)} />
+                    <ActionRow icon={Hammer} label={`Otvori nalog ${formatBrojNaloga(nalogZaPonudu, postavke.nalog.broj)}`} onClick={() => otvoriNalog(nalogZaPonudu.id)} />
                     <p className="text-[11px] text-slate-400 px-0.5">Račun se izdaje iz radnog naloga</p>
                   </>
                 )}
@@ -1140,7 +1146,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
                 </div>
                 <div>
                   <DialogTitle className="text-lg">
-                    Konvertuj ponudu {selected ? formatBrojPonude(selected) : ''}
+                    Konvertuj ponudu {selected ? formatBrojPonude(selected, postavke.ponuda.broj) : ''}
                   </DialogTitle>
                   <DialogDescription className="text-xs mt-0.5">
                     Izdaje fiskalni račun po cijenama sa ponude
@@ -1230,7 +1236,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
                 </div>
                 <div>
                   <DialogTitle className="text-lg">
-                    Obriši ponudu {selected ? formatBrojPonude(selected) : ''}
+                    Obriši ponudu {selected ? formatBrojPonude(selected, postavke.ponuda.broj) : ''}
                   </DialogTitle>
                   <DialogDescription className="text-xs mt-0.5">
                     Ponuda i njene stavke se brišu trajno

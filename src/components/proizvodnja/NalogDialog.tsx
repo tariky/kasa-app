@@ -4,6 +4,7 @@ import type { Kupac, Product, RadniNalog, NalogVrsta } from '@/types';
 import { cn, formatKM, formatDate, parseDecimal } from '@/lib/utils';
 import { localDateStr } from '@/lib/novac';
 import { formatBrojNaloga } from '@/lib/proizvodnja';
+import { useDokumentPostavke } from '@/components/DokumentPostavkeProvider';
 import { rokOznaka } from '@/lib/nalogPrikaz';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -66,6 +67,7 @@ export function NalogDialog({ open, onOpenChange, nalog, onSaved }: {
   open: boolean; onOpenChange: (v: boolean) => void;
   nalog: RadniNalog | null; onSaved: (id: number) => void;
 }) {
+  const { postavke } = useDokumentPostavke();
   const [forma, setForma] = useState<Forma>(prazna);
   const [pocetna, setPocetna] = useState('');
   const [kupci, setKupci] = useState<Kupac[] | null>(null);
@@ -153,7 +155,7 @@ export function NalogDialog({ open, onOpenChange, nalog, onSaved }: {
   const danas = localDateStr();
   const rokInfo = rokOznaka(forma.rok, danas);
   const zaliha = forma.vrsta === 'zaliha';
-  const naslov = nalog ? formatBrojNaloga(nalog) : 'Novi nalog';
+  const naslov = nalog ? formatBrojNaloga(nalog, postavke.nalog.broj) : 'Novi nalog';
   const opisZaglavlja = zaliha
     ? (forma.proizvod ? `${forma.proizvod.naziv} × ${forma.kolicina || '—'}` : <span className="text-white/40">proizvod nije izabran</span>)
     : (kupacNaziv || <span className="text-white/40">kupac nije izabran</span>);
