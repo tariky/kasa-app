@@ -109,7 +109,6 @@ async function neodbijeni(kanali: string[], poruka: string): Promise<string[]> {
 describe('lista kanala', () => {
   beforeEach(async () => { b = await otvoriBackend({ prijava: null }); });
 
-  // TODO(Task 6): Rust adapter još nema kanali() — pod KASA_BACKEND=rust ovaj test pada dok se ne doda.
   test('SVI_KANALI su tačno kanali koje backend registruje', async () => {
     expect([...SVI_KANALI].sort()).toEqual(await b.kanali());
   });
