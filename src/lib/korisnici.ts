@@ -1,6 +1,7 @@
 // Pravila za korisnike (user:create / user:update / user:delete) i PIN-ove — na jednom mjestu.
 import { pbkdf2Sync, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { SqlDb } from './sqldb';
+import { zapisiAudit } from './audit';
 
 export const ULOGE = ['admin', 'kasir'] as const;
 export type Uloga = (typeof ULOGE)[number];
@@ -71,13 +72,48 @@ export function provjeriPin(pin: unknown, zapis: string): boolean {
 
 // ─── Baza ───────────────────────────────────────────────────
 
-/** Migracija: svaki PIN koji još nije heš postaje heš. Vraća broj izmijenjenih redova. */
+/**
+ * Migracija: svaki PIN koji još nije heš postaje heš. Vraća broj izmijenjenih redova.
+ *
+ * Stari seed je vraćao Admin/0000 pri svakom pokretanju nakon što je vlasnik
+ * promijenio PIN zadanog admina, pa bi heširanje tog reda ostavilo živog
+ * admina s PIN-om 0000. Zato se, dok još ima PIN-ova u čistom tekstu, admin
+ * s PIN-om '0000' onemogući kad postoji drugi admin s drugačijim PIN-om:
+ * obriše se ako ga ništa ne referencira, a inače dobije nasumičan heš s kojim
+ * se niko ne može prijaviti. Ako je on jedini admin, ostaje (prijava traži
+ * promjenu PIN-a). Rust: `hesiraj_stare_pinove` u korisnici.rs.
+ */
 export function hesirajStarePinove(db: SqlDb): number {
-  const redovi = db.prepare('SELECT id, pin FROM users').all() as Array<{ id: number; pin: string }>;
+  const redovi = db.prepare('SELECT id, ime, uloga, pin FROM users ORDER BY id').all() as
+    Array<{ id: number; ime: string; uloga: string; pin: string }>;
+  if (redovi.every(r => jeHesPina(String(r.pin)))) return 0;
+
+  const zadani = redovi.filter(r => r.uloga === 'admin' && String(r.pin) === ZADANI_PIN);
+  const imaDrugogAdmina = redovi.some(r => {
+    if (r.uloga !== 'admin') return false;
+    const pin = String(r.pin);
+    return jeHesPina(pin) ? !provjeriPin(ZADANI_PIN, pin) : pin !== ZADANI_PIN;
+  });
+  const ugaseni = new Set<number>();
+  if (zadani.length > 0 && imaDrugogAdmina) {
+    for (const r of zadani) {
+      const referenciran = VEZE_KORISNIKA.some(({ tabela }) =>
+        db.prepare(`SELECT 1 FROM ${tabela} WHERE korisnikId = ? LIMIT 1`).get(r.id));
+      if (referenciran) {
+        // Nasumičan PIN koji niko ne zna: red ostaje zbog računa/pologa, ali se s njim ne može prijaviti.
+        db.prepare('UPDATE users SET pin = ? WHERE id = ?').run(hesirajPin(randomBytes(32).toString('hex')), r.id);
+      } else {
+        db.prepare('DELETE FROM users WHERE id = ?').run(r.id);
+      }
+      zapisiAudit(db, null, 'korisnik:zadaniUklonjen', { id: r.id, ime: r.ime, obrisan: !referenciran });
+      ugaseni.add(r.id);
+    }
+  }
+
   const upis = db.prepare('UPDATE users SET pin = ? WHERE id = ?');
-  let n = 0;
+  let n = ugaseni.size;
   for (const r of redovi) {
-    if (jeHesPina(String(r.pin))) continue;
+    if (ugaseni.has(r.id) || jeHesPina(String(r.pin))) continue;
     upis.run(hesirajPin(String(r.pin)), r.id);
     n++;
   }

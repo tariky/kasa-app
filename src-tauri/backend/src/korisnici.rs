@@ -112,14 +112,52 @@ pub fn provjeri_pin(pin: &Value, zapis: &str) -> bool {
 // ─── Baza ───────────────────────────────────────────────────
 
 /// Migracija: svaki PIN koji još nije heš postaje heš. Vraća broj izmijenjenih redova.
+///
+/// Stari seed je vraćao Admin/0000 pri svakom pokretanju nakon što je vlasnik
+/// promijenio PIN zadanog admina, pa bi heširanje tog reda ostavilo živog
+/// admina s PIN-om 0000. Zato se, dok još ima PIN-ova u čistom tekstu, admin
+/// s PIN-om '0000' onemogući kad postoji drugi admin s drugačijim PIN-om:
+/// obriše se ako ga ništa ne referencira, a inače dobije nasumičan heš s kojim
+/// se niko ne može prijaviti. Ako je on jedini admin, ostaje (prijava traži
+/// promjenu PIN-a). TS: `hesirajStarePinove` u lib/korisnici.ts.
 pub fn hesiraj_stare_pinove(db: &Db) -> R<usize> {
-    let mut n = 0;
-    for r in db.all("SELECT id, pin FROM users", p![])? {
-        let pin = js::to_string(&r["pin"]);
-        if je_hes_pina(&pin) {
+    let redovi = db.all("SELECT id, ime, uloga, pin FROM users ORDER BY id", p![])?;
+    let pin = |r: &Value| js::to_string(&r["pin"]);
+    if redovi.iter().all(|r| je_hes_pina(&pin(r))) {
+        return Ok(0);
+    }
+
+    let admin = |r: &Value| r["uloga"] == "admin";
+    let ima_drugog_admina = redovi.iter().any(|r| {
+        let p = pin(r);
+        admin(r) && if je_hes_pina(&p) { !provjeri_pin(&json!(ZADANI_PIN), &p) } else { p != ZADANI_PIN }
+    });
+    let mut ugaseni: Vec<Value> = Vec::new();
+    if ima_drugog_admina {
+        for r in redovi.iter().filter(|r| admin(r) && pin(r) == ZADANI_PIN) {
+            let mut referenciran = false;
+            for (tabela, _) in VEZE_KORISNIKA {
+                referenciran = referenciran || db.ima(&format!("SELECT 1 FROM {tabela} WHERE korisnikId = ? LIMIT 1"), p![r["id"]])?;
+            }
+            if referenciran {
+                // Nasumičan PIN koji niko ne zna: red ostaje zbog računa/pologa, ali se s njim ne može prijaviti.
+                let mut tajna = [0u8; 32];
+                getrandom::getrandom(&mut tajna).expect("sistemski izvor slučajnih bajtova");
+                db.run("UPDATE users SET pin = ? WHERE id = ?", p![hesiraj_pin(&hex(&tajna)), r["id"]])?;
+            } else {
+                db.run("DELETE FROM users WHERE id = ?", p![r["id"]])?;
+            }
+            audit::zapisi(db, None, "korisnik:zadaniUklonjen", json!({ "id": r["id"], "ime": r["ime"], "obrisan": !referenciran }))?;
+            ugaseni.push(r["id"].clone());
+        }
+    }
+
+    let mut n = ugaseni.len();
+    for r in &redovi {
+        if ugaseni.contains(&r["id"]) || je_hes_pina(&pin(r)) {
             continue;
         }
-        db.run("UPDATE users SET pin = ? WHERE id = ?", p![hesiraj_pin(&pin), r["id"]])?;
+        db.run("UPDATE users SET pin = ? WHERE id = ?", p![hesiraj_pin(&pin(r)), r["id"]])?;
         n += 1;
     }
     Ok(n)

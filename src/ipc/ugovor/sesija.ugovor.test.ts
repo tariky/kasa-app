@@ -265,6 +265,57 @@ describe('PIN heš, seed i migracija', () => {
     expect(await prijavi(b, '4321')).toMatchObject({ id: stari, uloga: 'kasir', zadaniPin: false });
   });
 
+  // Stari seed je vraćao Admin/0000 pri svakom pokretanju, i kad je vlasnik
+  // zadanom adminu već promijenio PIN — nadogradnja ga ne smije ostaviti živog.
+  describe('Admin/0000 koga je vratio stari seed', () => {
+    const zadaniUklonjen = () => (b.db.prepare(
+      "SELECT korisnikId, detalji FROM audit_log WHERE akcija = 'korisnik:zadaniUklonjen' ORDER BY id"
+    ).all() as any[]).map(r => ({ korisnikId: r.korisnikId, detalji: JSON.parse(r.detalji) }));
+
+    /** Baza iz starije verzije: vlasnik (id 1) s PIN-om 1234 i vraćeni Admin/0000, oba u čistom tekstu. */
+    function staraBaza(): number {
+      b.db.prepare("UPDATE users SET pin = '1234' WHERE id = ?").run(ADMIN);
+      return Number(b.db.prepare("INSERT INTO users (ime, pin, uloga) VALUES ('Admin', '0000', 'admin')").run().lastInsertRowid);
+    }
+
+    test('bez računa i pologa se briše', async () => {
+      const zadani = staraBaza();
+      await b.ponovoPokreni();
+      expect(await b.call('user:login', '0000')).toBeNull();
+      expect(broj('SELECT COUNT(*) AS n FROM users WHERE id = ?', zadani)).toBe(0);
+      expect(zadaniUklonjen()).toEqual([{ korisnikId: null, detalji: { id: zadani, ime: 'Admin', obrisan: true } }]);
+      expect(await prijavi(b, '1234')).toMatchObject({ id: ADMIN, uloga: 'admin', zadaniPin: false });
+    });
+
+    test('s pologom ostaje u bazi, ali mu PIN niko ne zna', async () => {
+      const zadani = staraBaza();
+      b.db.prepare("INSERT INTO cash_movements (tip, iznos, korisnikId, tringStatus) VALUES ('polog', 10, ?, 'ok')").run(zadani);
+      await b.ponovoPokreni();
+      expect(await b.call('user:login', '0000')).toBeNull();
+      const pin = red('SELECT pin FROM users WHERE id = ?', zadani).pin;
+      expect(pin).toMatch(/^pbkdf2\$100000\$/);
+      expect(provjeriPin('0000', pin)).toBe(false);
+      expect(zadaniUklonjen()).toEqual([{ korisnikId: null, detalji: { id: zadani, ime: 'Admin', obrisan: false } }]);
+      expect(JSON.stringify(zadaniUklonjen())).not.toContain('0000');
+      expect(await prijavi(b, '1234')).toMatchObject({ id: ADMIN, uloga: 'admin', zadaniPin: false });
+
+      // Migracija se ne ponavlja: sljedeće pokretanje ne dira ništa.
+      await b.ponovoPokreni();
+      expect(red('SELECT pin FROM users WHERE id = ?', zadani).pin).toBe(pin);
+      expect(zadaniUklonjen()).toHaveLength(1);
+    });
+
+    test('kad je jedini admin, ostaje i prijava traži promjenu PIN-a', async () => {
+      b.db.prepare("UPDATE users SET pin = '0000' WHERE id = ?").run(ADMIN);
+      const kasir = Number(b.db.prepare("INSERT INTO users (ime, pin, uloga) VALUES ('Kasir', '1234', 'kasir')").run().lastInsertRowid);
+      await b.ponovoPokreni();
+      expect(zadaniUklonjen()).toEqual([]);
+      expect(await prijavi(b, '0000')).toMatchObject({ id: ADMIN, uloga: 'admin', zadaniPin: true });
+      await expect(b.call('product:getAll')).rejects.toThrow(ZADANI_PIN);
+      expect(await prijavi(b, '1234')).toMatchObject({ id: kasir, zadaniPin: false });
+    });
+  });
+
   test('heš s manje od 100000 iteracija ili neispravan zapis se ne prihvata', async () => {
     const so = Buffer.alloc(16, 7);
     const slab = `pbkdf2$1000$${so.toString('hex')}$${pbkdf2Sync('5555', so, 1000, 32, 'sha256').toString('hex')}`;

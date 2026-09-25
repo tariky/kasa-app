@@ -68,6 +68,53 @@ describe('seed i migracija', () => {
     expect((db.prepare('SELECT pin FROM users WHERE id = ?').get(a) as any).pin).toBe(h);
     expect(provjeriPin('2222', (db.prepare('SELECT pin FROM users WHERE id = ?').get(b) as any).pin)).toBe(true);
   });
+
+  const audit = () => (db.prepare('SELECT korisnikId, akcija, detalji FROM audit_log ORDER BY id').all() as any[])
+    .map(r => ({ ...r, detalji: JSON.parse(r.detalji) }));
+
+  test('vraćeni Admin/0000 uz drugog admina: bez veza se briše, s vezama dobije nepoznat PIN', () => {
+    const vlasnik = dodaj('Admin', '1234', 'admin');
+    const zadani = dodaj('Admin', '0000', 'admin');
+    expect(hesirajStarePinove(db)).toBe(2);
+    expect(db.prepare('SELECT id FROM users').all()).toEqual([{ id: vlasnik }]);
+    expect(nadjiPoPinu(db, '1234')).toMatchObject({ id: vlasnik });
+    expect(audit()).toEqual([{ korisnikId: null, akcija: 'korisnik:zadaniUklonjen', detalji: { id: zadani, ime: 'Admin', obrisan: true } }]);
+
+    // Referenciran (ima polog) — ostaje u bazi, ali se s 0000 više niko ne prijavi.
+    db.prepare('DELETE FROM audit_log').run();
+    const drugi = dodaj('Admin', '0000', 'admin');
+    db.prepare("INSERT INTO cash_movements (tip, iznos, korisnikId, tringStatus) VALUES ('polog', 1, ?, 'ok')").run(drugi);
+    expect(hesirajStarePinove(db)).toBe(1);
+    const pin = (db.prepare('SELECT pin FROM users WHERE id = ?').get(drugi) as any).pin;
+    expect(jeHesPina(pin)).toBe(true);
+    expect(provjeriPin('0000', pin)).toBe(false);
+    expect(nadjiPoPinu(db, '0000')).toBeNull();
+    expect(audit()).toEqual([{ korisnikId: null, akcija: 'korisnik:zadaniUklonjen', detalji: { id: drugi, ime: 'Admin', obrisan: false } }]);
+  });
+
+  test('Admin/0000 kao jedini admin ostaje (kasir s drugim PIN-om nije drugi admin)', () => {
+    const zadani = dodaj('Admin', '0000', 'admin');
+    dodaj('Kasir', '1234');
+    expect(hesirajStarePinove(db)).toBe(2);
+    expect(nadjiPoPinu(db, '0000')).toMatchObject({ id: zadani, uloga: 'admin' });
+    expect(audit()).toEqual([]);
+  });
+
+  test('drugi admin s već heširanim PIN-om se računa; heš PIN-a 0000 ne', () => {
+    dodaj('Admin', hesirajPin('0000'), 'admin');
+    const zadani = dodaj('Admin', '0000', 'admin');
+    expect(hesirajStarePinove(db)).toBe(1);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM users').get()).toEqual({ n: 2 });
+    expect(audit()).toEqual([]);
+    expect(provjeriPin('0000', (db.prepare('SELECT pin FROM users WHERE id = ?').get(zadani) as any).pin)).toBe(true);
+
+    db.prepare('DELETE FROM users').run();
+    const vlasnik = dodaj('Vlasnik', hesirajPin('4321'), 'admin');
+    const vraceni = dodaj('Admin', '0000', 'admin');
+    expect(hesirajStarePinove(db)).toBe(1);
+    expect(db.prepare('SELECT id FROM users').all()).toEqual([{ id: vlasnik }]);
+    expect(audit()).toEqual([{ korisnikId: null, akcija: 'korisnik:zadaniUklonjen', detalji: { id: vraceni, ime: 'Admin', obrisan: true } }]);
+  });
 });
 
 describe('pretraga po PIN-u', () => {
