@@ -22,3 +22,25 @@ test('potpis s pečatom i podnožje s dugim tekstom se renderuju', async () => {
     </Document>,
   );
 });
+
+test('zadano: potpis bez pečata i podnožje bez teksta firme', async () => {
+  await renderuj(
+    <Document>
+      <Page size="A4" style={{ padding: 50, paddingBottom: 70 }}>
+        <PotpisBlok linije={{ lijevo: 'Potpis izdavaoca', desno: 'Potpis primaoca' }} pecat={null} />
+        <PdfPodnozje firmaNaziv="Firma" danas="25.09.2026" />
+      </Page>
+    </Document>,
+  );
+});
+
+test('podnožje s 8 redova iz \\n (maxLines ga reže na 4) i najveći pečat', async () => {
+  await renderuj(
+    <Document>
+      <Page size="A4" style={{ padding: 50, paddingBottom: 94 }}>
+        <PotpisBlok linije={{ lijevo: 'Izdao', desno: 'Primio' }} pecat={{ slika: SLIKA, velicina: 200 }} />
+        <PdfPodnozje firmaNaziv="Firma" danas="25.09.2026" tekst={Array.from({ length: 8 }, (_, i) => `Red ${i + 1}`).join('\n')} />
+      </Page>
+    </Document>,
+  );
+});

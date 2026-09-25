@@ -1,7 +1,7 @@
 import { View, Text, StyleSheet } from '@react-pdf/renderer';
 import { POTPIS_AUTORA } from '@/lib/brend';
 
-/** Koliko `paddingBottom` stranice raste kad firma ima svoj tekst podnožja (do 3 reda). */
+/** Koliko `paddingBottom` stranice raste kad firma ima svoj tekst podnožja (`maxLines` ga reže na 4 reda, i kad su redovi iz `\n`). */
 export const DODATAK_PODNOZJA = 24;
 
 const s = StyleSheet.create({
@@ -9,7 +9,7 @@ const s = StyleSheet.create({
     position: 'absolute', bottom: 30, left: 50, right: 50,
     borderTop: '0.5pt solid #ccc', paddingTop: 8, fontSize: 7, color: '#999',
   },
-  tekst: { fontSize: 6.5, color: '#555', lineHeight: 1.35, marginBottom: 4 },
+  tekst: { fontSize: 6.5, color: '#555', lineHeight: 1.35, marginBottom: 4, maxLines: 4, textOverflow: 'ellipsis' },
   red: { flexDirection: 'row', justifyContent: 'space-between' },
 });
 
