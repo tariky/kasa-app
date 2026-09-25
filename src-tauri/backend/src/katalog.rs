@@ -7,7 +7,7 @@ use crate::js::{self, has};
 use crate::proizvodnja::je_artikal_u_proizvodnji;
 use crate::skladiste::{is_dobavljac_used, zapisi_promjene_cijena};
 use crate::sql::Db;
-use crate::{baci, p, Args, Backend};
+use crate::{audit, baci, p, Args, Backend};
 
 // Napomena: `data.x !== undefined` je ovdje `has(data, "x")`. JSON gubi samo
 // `undefined` (polje nestane), a `null` ostaje `null` — i u originalu je
@@ -70,7 +70,7 @@ struct UpisArtikla {
 }
 
 /// JS `x !== y` za vrijednosti iz JSON-a i baze (brojevi po vrijednosti).
-fn razlicito(a: &Value, b: &Value) -> bool {
+pub(crate) fn razlicito(a: &Value, b: &Value) -> bool {
     match (a.as_f64(), b.as_f64()) {
         (Some(x), Some(y)) => x != y,
         _ => a != b,
@@ -142,7 +142,8 @@ fn product_create(db: &Db, data: &Value) -> R<Value> {
     Ok(json!({ "id": result.last_insert_rowid }))
 }
 
-fn product_update(db: &Db, id: &Value, data: &Value) -> R<Value> {
+fn product_update(b: &Backend, id: &Value, data: &Value) -> R<Value> {
+    let db = b.db()?;
     let upis = validiraj_artikal(db, data, id)?;
     let mut fields: Vec<&str> = Vec::new();
     let mut values: Vec<Value> = Vec::new();
@@ -172,6 +173,11 @@ fn product_update(db: &Db, id: &Value, data: &Value) -> R<Value> {
         if let Some(prije) = prije {
             if has(data, "cijena") && razlicito(&data["cijena"], &prije["cijena"]) {
                 zapisi_promjene_cijena(db, "rucno", &Value::Null, &[(id.clone(), prije["cijena"].clone(), data["cijena"].clone())])?;
+                audit::zabiljezi(
+                    b,
+                    "artikal:cijena",
+                    json!({ "productId": id, "staraCijena": prije["cijena"], "novaCijena": data["cijena"], "izvor": "rucno" }),
+                )?;
             }
         }
         Ok(json!({ "changes": result.changes }))
@@ -211,10 +217,14 @@ fn product_delete(db: &Db, id: &Value) -> R<Value> {
     })
 }
 
-fn product_adjust_stock(db: &Db, product_id: &Value, new_stanje: &Value) -> R<Value> {
+fn product_adjust_stock(b: &Backend, product_id: &Value, new_stanje: &Value) -> R<Value> {
+    let db = b.db()?;
     if !db.ima("SELECT 1 FROM products WHERE id = ?", p![product_id])? {
         baci!("Artikal ne postoji");
     }
+    let Some(novo) = new_stanje.as_f64().filter(|x| x.is_finite()) else {
+        baci!("Stanje mora biti broj");
+    };
     // Calculate current stock
     let stanje = db.val(
         "
@@ -226,7 +236,7 @@ fn product_adjust_stock(db: &Db, product_id: &Value, new_stanje: &Value) -> R<Va
         p![product_id],
     )?;
 
-    let diff = js::to_number(new_stanje) - js::to_number(&stanje);
+    let diff = novo - js::to_number(&stanje);
     if diff == 0.0 {
         return Ok(json!({ "changes": 0 }));
     }
@@ -234,10 +244,13 @@ fn product_adjust_stock(db: &Db, product_id: &Value, new_stanje: &Value) -> R<Va
     let tip = if diff > 0.0 { "ulaz" } else { "izlaz" };
     let kolicina = js::f(diff.abs());
 
-    db.run(
-        "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, ?, ?, 'adjustment', 0)",
-        p![product_id, tip, kolicina],
-    )?;
+    db.tx(|| {
+        db.run(
+            "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, ?, ?, 'adjustment', 0)",
+            p![product_id, tip, kolicina],
+        )?;
+        audit::zabiljezi(b, "zaliha:korekcija", json!({ "productId": product_id, "staroStanje": stanje, "novoStanje": new_stanje }))
+    })?;
 
     Ok(json!({ "changes": 1 }))
 }
@@ -534,9 +547,9 @@ pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
         "product:getAll" => product_get_all(db, &a[0]),
         "product:get" => db.get("SELECT * FROM products WHERE id = ?", p![a[0]]).map(|r| r.unwrap_or(Value::Null)),
         "product:create" => product_create(db, &a[0]),
-        "product:update" => product_update(db, &a[0], &a[1]),
+        "product:update" => product_update(b, &a[0], &a[1]),
         "product:delete" => product_delete(db, &a[0]),
-        "product:adjustStock" => product_adjust_stock(db, &a[0], &a[1]),
+        "product:adjustStock" => product_adjust_stock(b, &a[0], &a[1]),
         "product:search" => product_search(db, &a[0]),
         "product:slobodan" => product_slobodan(db, &a[0]),
         "product:getDobavljacSifre" => product_get_dobavljac_sifre(db, &a[0]),

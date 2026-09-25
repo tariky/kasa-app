@@ -6,13 +6,13 @@ use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 
 use crate::greska::{Greska, R};
 use crate::js;
 use crate::sql::Db;
 use crate::tring::Odgovor;
-use crate::{baci, fiskalni, p, tring_racun, Args, Backend};
+use crate::{audit, baci, baza, cuvanje, p, Args, Backend};
 
 // ─── Tring ──────────────────────────────────────────────
 
@@ -39,28 +39,6 @@ fn init(b: &Backend) -> R<Odgovor> {
     Ok(result)
 }
 
-fn print_receipt(b: &Backend, data: &Value) -> R<Odgovor> {
-    load_tring_config(b)?;
-    let racun = tring_racun::build_tring_racun(data);
-    loguj(b, "printReceipt request", &racun);
-    let result = b.tring.stampati_fiskalni_racun(&racun);
-    loguj(b, "printReceipt response", &result);
-    Ok(result)
-}
-
-fn print_refund(b: &Backend, data: &Value) -> R<Odgovor> {
-    load_tring_config(b)?;
-    let Some(broj_racuna) = fiskalni::parse_fiskalni_broj(&data["brojRacuna"]) else {
-        let prikaz = js::to_string(js::nn(&data["brojRacuna"], &json!("")));
-        baci!("Fiskalni broj \"{prikaz}\" nije ispravan broj računa");
-    };
-    let racun = tring_racun::build_tring_reklamacija(data, broj_racuna);
-    loguj(b, "printRefund request", &racun);
-    let result = b.tring.stampati_reklamirani_racun(&racun);
-    loguj(b, "printRefund response", &result);
-    Ok(result)
-}
-
 fn x_report(b: &Backend) -> R<Odgovor> {
     load_tring_config(b)?;
     let result = b.tring.stampati_presjek_stanja();
@@ -82,35 +60,24 @@ fn periodic_report(b: &Backend, from: &Value, to: &Value) -> R<Odgovor> {
     Ok(result)
 }
 
-fn write_article(b: &Backend, data: &Value) -> R<Odgovor> {
-    load_tring_config(b)?;
-    let result = b.tring.upisi_artikal(data);
-    loguj(b, "writeArticle", &result);
-    Ok(result)
-}
-
 // ─── Dialog / File System ─────────────────────────────────
 
-/// Objekat bez ključeva čija je vrijednost `undefined` (kao što ih Electron vidi).
-fn opcije(parovi: &[(&str, &Value)]) -> Value {
-    let mut m = Map::new();
-    for (k, v) in parovi {
-        if !v.is_null() {
-            m.insert(k.to_string(), (*v).clone());
-        }
-    }
-    Value::Object(m)
+fn odobri(b: &Backend, putanja: Option<String>) {
+    *b.odobrena_putanja.lock().unwrap_or_else(|e| e.into_inner()) = putanja;
 }
 
+// Predloženo ime, filteri i odabrana putanja idu kroz pravila iz cuvanje.rs
+// (ista kao u Tauri ljusci). Svaki poziv poništava ranije odobrenje — upisiva
+// je samo putanja iz zadnjeg dijaloga; odbijeno ime ili ekstenzija = otkazano.
 fn save_file(b: &Backend, data: &Value) -> R<Value> {
-    let izbor = b.dijalog_sacuvaj(opcije(&[("defaultPath", &data["defaultName"]), ("filters", &data["filters"])]));
-    // Otkazan dijalog poništava i ranije odobrenje — upisiva je samo putanja
-    // iz zadnjeg dijaloga.
-    let mut odobrena = b.odobrena_putanja.lock().unwrap_or_else(|e| e.into_inner());
-    *odobrena = None;
-    match izbor.filter(|p| !p.is_empty()) {
+    odobri(b, None);
+    let Some(ime) = cuvanje::ime_za_cuvanje(&data["defaultName"]) else {
+        return Ok(Value::Null);
+    };
+    let izbor = b.dijalog_sacuvaj(json!({ "defaultPath": ime, "filters": cuvanje::dozvoljeni_filteri(&data["filters"]) }));
+    match izbor.filter(|p| !p.is_empty() && cuvanje::dozvoljena_ekstenzija(&json!(p))) {
         Some(p) => {
-            *odobrena = Some(p.clone());
+            odobri(b, Some(p.clone()));
             Ok(Value::String(p))
         }
         None => Ok(Value::Null),
@@ -134,6 +101,9 @@ fn write_file(b: &Backend, data: &Value) -> R<Value> {
     };
     *odobrena = None;
     drop(odobrena);
+    if !cuvanje::dozvoljena_ekstenzija(&json!(putanja)) {
+        baci!("Nedozvoljena vrsta fajla");
+    }
     let bajtovi: Vec<u8> = data["buffer"].as_array().map(|a| a.iter().map(u_bajt).collect()).unwrap_or_default();
     std::fs::write(&putanja, bajtovi)?;
     Ok(json!({ "success": true }))
@@ -148,7 +118,7 @@ fn backup(b: &Backend) -> R<Value> {
         "defaultPath": format!("kasa-backup-{timestamp}.db"),
         "filters": [{ "name": "SQLite Database", "extensions": ["db"] }],
     }));
-    let Some(cilj) = izbor.filter(|p| !p.is_empty()) else {
+    let Some(cilj) = izbor.filter(|p| !p.is_empty() && cuvanje::dozvoljena_ekstenzija(&json!(p))) else {
         return Ok(Value::Null);
     };
 
@@ -195,6 +165,14 @@ fn restore(b: &Backend) -> R<Value> {
     let stamp: String = b.sat.iso().replace([':', '.'], "-").chars().take(19).collect();
     let safety_path = b.user_data().join(format!("kasa-prije-uvoza-{stamp}.db"));
     swap_in_backup(b, Path::new(&source), &db_path, &safety_path)?;
+    // Trag ide u uvezenu bazu (aktivna konekcija je već nova); stara ga ima u sigurnosnoj kopiji.
+    if let Err(e) = audit::zabiljezi(
+        b,
+        "baza:restore",
+        json!({ "izvor": source, "sigurnosnaKopija": safety_path.to_string_lossy() }),
+    ) {
+        eprintln!("[audit] baza:restore {}", e.0);
+    }
 
     // Renderer drži stanje stare baze (prijavljeni korisnik, korpa) — restart je
     // jedini pouzdan način da se sve osvježi.
@@ -299,6 +277,8 @@ fn priprema_kopije(file_path: &Path, folder: &Path) -> R<PathBuf> {
         }
         // Konekcija se zatvara kad `db` ode iz opsega (`finally { db?.close() }`).
         let db = Db::otvori_postojecu(&kopija)?;
+        // Shema iz tuđeg fajla ne smije pozivati funkcije koje nisu bezopasne.
+        db.exec("PRAGMA trusted_schema = OFF")?;
         u_delete_mode(&db)?;
         let integrity = db.get("PRAGMA integrity_check", p![])?;
         if integrity.as_ref().map(|r| &r["integrity_check"]) != Some(&json!("ok")) {
@@ -310,10 +290,41 @@ fn priprema_kopije(file_path: &Path, folder: &Path) -> R<PathBuf> {
         if !missing.is_empty() {
             baci!("Fajl nije backup Kasa baze (nedostaje: {}).", missing.join(", "));
         }
-        Ok(())
+        provjeri_objekte(&db)
     };
     provjera().map_err(|e| Greska(format!("Neispravan backup fajl: {}", e.0)))?;
     Ok(kopija)
+}
+
+/// Odbija objekte koje program ne pravi: trigger i view (program nema
+/// nijedan — izvršili bi se nad podacima programa) i tabele kojih nema u
+/// shemi (uključujući virtuelne). Indeksi se ne provjeravaju.
+fn provjeri_objekte(db: &Db) -> R<()> {
+    let objekti = db.all(
+        "SELECT type, name FROM sqlite_master WHERE type IN ('trigger', 'view', 'table') ORDER BY type DESC, rowid",
+        p![],
+    )?;
+    let izvrsni: Vec<String> = objekti
+        .iter()
+        .filter(|o| o["type"] == "trigger" || o["type"] == "view")
+        .map(|o| format!("{} {}", js::to_string(&o["type"]), js::to_string(&o["name"])))
+        .collect();
+    if !izvrsni.is_empty() {
+        baci!("Fajl sadrži trigger ili view ({}), a Kasa baza ih nema.", izvrsni.join(", "));
+    }
+    let sheme = baza::tabele_sheme();
+    let mut strane: Vec<String> = objekti
+        .iter()
+        .filter(|o| o["type"] == "table")
+        .map(|o| js::to_string(&o["name"]))
+        .filter(|n| !sheme.contains(n) && !n.starts_with("sqlite_"))
+        .collect();
+    // JS `sort()` poredi UTF-16 jedinice; imena tabela su ASCII.
+    strane.sort();
+    if !strane.is_empty() {
+        baci!("Fajl sadrži tabele kojih nema u Kasa bazi: {}.", strane.join(", "));
+    }
+    Ok(())
 }
 
 /// Upiše sve iz -wal u glavni fajl i prebaci bazu u DELETE journal mode.
@@ -392,12 +403,9 @@ fn replace_db_file(source_path: &Path, db_path: &Path) -> R<()> {
 pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
     Some(match kanal {
         "tring:init" => init(b),
-        "tring:printReceipt" => print_receipt(b, &a[0]),
-        "tring:printRefund" => print_refund(b, &a[0]),
         "tring:xReport" => x_report(b),
         "tring:zReport" => z_report(b),
         "tring:periodicReport" => periodic_report(b, &a[0], &a[1]),
-        "tring:writeArticle" => write_article(b, &a[0]),
         "tring:getLogs" => Ok(b.tring.get_logs()),
         "tring:clearLogs" => {
             b.tring.clear_logs();

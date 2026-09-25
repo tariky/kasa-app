@@ -9,7 +9,8 @@ use crate::greska::{self, Greska, R};
 use crate::js;
 use crate::p;
 use crate::sql::Db;
-use crate::{baci, Args, Backend};
+use crate::katalog::razlicito;
+use crate::{audit, baci, Args, Backend};
 
 /// Tolerancija pri poređenju cijena (fening).
 const EPS: f64 = 0.001;
@@ -340,6 +341,29 @@ fn cijene_artikala(db: &Db, product_ids: &[Value]) -> R<Cijene> {
         }
     }
     Ok(m)
+}
+
+/// Trag svake promjene cijene u šifarniku od snimka `prije` (cijene_artikala) —
+/// primka je mijenja nivelacijom, bez zalihe direktno, a brisanje je vraća.
+/// U pregledu (poništena transakcija) nestaje zajedno s ostalim.
+fn audit_cijena_primke(db: &Db, korisnik: Option<i64>, prije: &Cijene, izvor: &str, primka_id: &Value) -> R<()> {
+    let ids: Vec<Value> = prije.red.iter().map(|(id, _)| id.clone()).collect();
+    let sada = cijene_artikala(db, &ids)?;
+    for (product_id, stara_cijena) in &prije.red {
+        let nova = sada.red.iter().find(|(id, _)| kljuc(id) == kljuc(product_id)).map(|(_, c)| c);
+        if let Some(nova_cijena) = nova.filter(|n| razlicito(n, stara_cijena)) {
+            audit::zapisi(
+                db,
+                korisnik,
+                "artikal:cijena",
+                json!({
+                    "productId": product_id, "staraCijena": stara_cijena, "novaCijena": nova_cijena,
+                    "izvor": izvor, "primkaId": js::f(js::to_number(primka_id)),
+                }),
+            )?;
+        }
+    }
+    Ok(())
 }
 
 /// Stavke nivelacije za promjene cijene u prodaji od snimka `prije` do sada:
@@ -770,6 +794,8 @@ pub fn is_dobavljac_used(db: &Db, naziv: &Value, id_broj: &Value, pdv_broj: &Val
 struct Dan {
     danas: String,
     godina: i32,
+    /// Prijavljeni korisnik za audit (sesija u trenutku poziva).
+    korisnik: Option<i64>,
 }
 
 fn get(db: &Db, id: &Value) -> R<Value> {
@@ -866,6 +892,7 @@ fn zaglavlje(data: &Value) -> [Value; 5] {
 // logika, pa najava na ekranu ne može odstupiti od onoga što spremanje uradi.
 fn unesi_primku(db: &Db, dan: &Dan, data: &Value) -> R<Value> {
     let broj_primke = validiraj_primku(db, data, &Value::Null)?;
+    let cijene_prije = cijene_artikala(db, &niz(&data["stavke"]).iter().map(|s| ili_null(polje(s, "productId"))).collect::<Vec<_>>())?;
     let danas = Value::from(dan.danas.clone());
     let datum = js::or(&data["datum"], &danas).clone();
     let [dn, di, da, na, bf] = zaglavlje(data);
@@ -892,6 +919,7 @@ fn unesi_primku(db: &Db, dan: &Dan, data: &Value) -> R<Value> {
     upisi_cijene(db, &sve)?;
     create_nivelacija(db, dan, &primka_id, &nivelacija, None)?;
     zapisi_promjene_cijena(db, "primka", &primka_id, &PriceChange::za_historiju(&sve))?;
+    audit_cijena_primke(db, dan.korisnik, &cijene_prije, "primka", &primka_id)?;
 
     Ok(json!({ "id": primka_id, "nivelacijaCreated": !nivelacija.is_empty() }))
 }
@@ -959,6 +987,8 @@ fn izmijeni_primku(db: &Db, dan: &Dan, data: &Value) -> R<Value> {
         insert_stavka_i_ulaz(db, &id, stavka, stara, &datum_ulaza)?;
     }
 
+    audit_cijena_primke(db, dan.korisnik, &prije, "primka:izmjena", &id)?;
+
     Ok(json!({ "id": id, "nivelacijaCreated": !promjene.is_empty() }))
 }
 
@@ -1006,6 +1036,7 @@ fn obrisi_primku(db: &Db, dan: &Dan, id: &Value) -> R<Value> {
     }
 
     db.run("DELETE FROM primke WHERE id = ?", p![id])?;
+    audit_cijena_primke(db, dan.korisnik, &prije, "primka:brisanje", id)?;
     Ok(Value::Null)
 }
 
@@ -1156,7 +1187,7 @@ fn report_get_data(db: &Db, tip: &Value, from: &Value, to: &Value) -> R<Value> {
 }
 
 pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
-    let dan = Dan { danas: b.sat.danas(), godina: b.sat.godina() };
+    let dan = Dan { danas: b.sat.danas(), godina: b.sat.godina(), korisnik: b.sesija.id() };
     let db = match b.db() {
         Ok(db) => db,
         Err(e) => return Some(Err(e)),

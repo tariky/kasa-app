@@ -22,6 +22,7 @@ pub mod petlja;
 pub mod sesija;
 pub mod audit;
 pub mod provjera_racuna;
+pub mod cuvanje;
 
 // Domene (po grupama kanala)
 pub mod korisnici;
