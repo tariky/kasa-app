@@ -38,7 +38,7 @@
 
 | Fajl | Odgovornost |
 |---|---|
-| `src/lib/dokumentPostavke.ts` (novi) | tip, zadane vrijednosti, ključevi, parse/serialize, `formatBroja`, `zadanoZaKupca`, `primijeniRabatKupca`, `pecatZa`, `formatRabat` |
+| `src/lib/dokumentPostavke.ts` (novi) | tip, zadane vrijednosti, ključevi, parse/serialize, `formatBroja`, `zadanoZaKupca`, `primijeniRabatKupca`, `pecatZa`, `formatRabat`, `nastavakNumeracije` (backend) |
 | `src/lib/dokumentPostavke.test.ts` (novi) | unit testovi |
 | `src/lib/pdv.ts` (novi) | `PDV_STOPA_E_PCT`, `PDV_FAKTOR_E` |
 | `src/lib/stampa.ts` (novi) | `ucitajDokumentPostavke()`, `ucitajZaStampu()` (renderer, `window.api`) |
@@ -558,6 +558,126 @@ export function formatBrojNaloga(n: { broj: number; godina: number }, f: FormatB
 - [ ] **Step 6:** Commit `feat(dokumenti): format broja ponude i naloga iz postavki`.
 
 ---
+
+### Task 3a: Nastavak numeracije iz starog programa
+
+**Files:**
+- Modify: `src/lib/dokumentPostavke.ts` (+ test), `src/lib/ponuda.ts:47-51`, `src/lib/proizvodnja.ts:37-40`, `src-tauri/backend/src/ponude.rs:54-57`, `src-tauri/backend/src/proizvodnja.rs:55-58`
+- Test: `src/lib/ponuda.test.ts`, `src/lib/proizvodnja.test.ts`, `src/ipc/ugovor/ponude.ugovor.test.ts`, `src/ipc/ugovor/proizvodnja.ugovor.test.ts`
+
+**Interfaces:**
+- Consumes: Task 1.
+- Produces:
+  - `DokumentPostavke.ponuda.nastavak` i `DokumentPostavke.nalog.nastavak`: `{ broj: number; godina: number } | null`
+  - ključevi `dokumenti.ponuda.nastavakBroj`, `dokumenti.ponuda.nastavakGodina`, `dokumenti.nalog.nastavakBroj`, `dokumenti.nalog.nastavakGodina` (u `KLJUCEVI_DOKUMENATA`)
+  - `nastavakNumeracije(db: SqlDb, dok: 'ponuda' | 'nalog', godina: number): number` u `src/lib/dokumentPostavke.ts` — 0 kad nema nastavka za tu godinu
+
+- [ ] **Step 1: Testovi**
+
+U `dokumentPostavke.test.ts`:
+```ts
+test('nastavak numeracije se čita samo kad su broj i godina ispravni', () => {
+  expect(procitajDokumentPostavke({}).ponuda.nastavak).toBeNull();
+  expect(procitajDokumentPostavke({ 'dokumenti.ponuda.nastavakBroj': '12', 'dokumenti.ponuda.nastavakGodina': '2026' }).ponuda.nastavak)
+    .toEqual({ broj: 12, godina: 2026 });
+  expect(procitajDokumentPostavke({ 'dokumenti.ponuda.nastavakBroj': '12' }).ponuda.nastavak).toBeNull();
+  expect(procitajDokumentPostavke({ 'dokumenti.nalog.nastavakBroj': '0', 'dokumenti.nalog.nastavakGodina': '2026' }).nalog.nastavak).toBeNull();
+  expect(procitajDokumentPostavke({ 'dokumenti.nalog.nastavakBroj': '', 'dokumenti.nalog.nastavakGodina': '' }).nalog.nastavak).toBeNull();
+});
+```
+(Postojeći test „uKljuceve i procitaj su inverzni“ mora i dalje proći — `uKljuceve` za `null` nastavak piše `''` u oba ključa.)
+
+U `ponuda.test.ts` (koristi postojeći `db` i `ubaciPonudu` iz fajla):
+```ts
+const postaviNastavak = (broj: string, godina: string) => {
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('dokumenti.ponuda.nastavakBroj', ?)").run(broj);
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('dokumenti.ponuda.nastavakGodina', ?)").run(godina);
+};
+
+test('nastavak iz starog programa: prva ponuda dobija broj iza upisanog', () => {
+  postaviNastavak('12', '2026');
+  expect(nextBrojPonude(db, 2026)).toBe(13);
+});
+
+test('nastavak manji od baze se ignoriše', () => {
+  postaviNastavak('2', '2026');
+  ubaciPonudu(5, 2026);
+  expect(nextBrojPonude(db, 2026)).toBe(6);
+});
+
+test('nastavak važi samo za svoju godinu', () => {
+  postaviNastavak('12', '2025');
+  expect(nextBrojPonude(db, 2026)).toBe(1);
+});
+```
+Isto za `nextBrojNaloga` u `proizvodnja.test.ts` s ključevima `dokumenti.nalog.*`. (Ako test-baza nema tabelu `settings`, fajl koristi `schema` — provjeri; `settings` je u `schema.ts`.)
+
+Ugovorni: u `ponude.ugovor.test.ts` — `settings:set` za oba ključa (`'12'`, tekuća godina iz `new Date().getFullYear()`), pa `ponuda:nextBroj` → `{ broj: 13, godina }`, i `ponuda:create` upiše ponudu s `broj = 13`. Isto u `proizvodnja.ugovor.test.ts` za `nalog:nextBroj` / `nalog:create`. (Pogledaj kako postojeći testovi u tim fajlovima zovu `create` i preuzmi isti payload.)
+
+- [ ] **Step 2:** FAIL.
+
+- [ ] **Step 3: TS**
+
+`dokumentPostavke.ts` — tip: `ponuda: { …; nastavak: { broj: number; godina: number } | null }`, `nalog: { broj: FormatBroja; nastavak: … | null }`; zadano `null`. Ključevi u `K`: `ponudaNastavakBroj: 'dokumenti.ponuda.nastavakBroj'`, `ponudaNastavakGodina: 'dokumenti.ponuda.nastavakGodina'`, `nalogNastavakBroj`, `nalogNastavakGodina` (analogno). Čitanje:
+```ts
+function nastavak(broj: string | null | undefined, godina: string | null | undefined) {
+  const b = cijeli(broj, 1, 999999);
+  const g = cijeli(godina, 2000, 2999);
+  return b != null && g != null ? { broj: b, godina: g } : null;
+}
+```
+`uKljuceve`: `String(n?.broj ?? '')` / `String(n?.godina ?? '')` (za `null` oba `''`).
+Backend helper (isti fajl, bez `window`):
+```ts
+/** Najveći broj iz starog programa za godinu, ili 0. Čita se iz settings — radi i u Electron i u test bazi. */
+export function nastavakNumeracije(db: { prepare(sql: string): { get(...a: unknown[]): unknown } }, dok: 'ponuda' | 'nalog', godina: number): number {
+  const v = (k: string) => (db.prepare('SELECT value FROM settings WHERE key = ?').get(k) as { value: string } | undefined)?.value;
+  const n = nastavak(v(`dokumenti.${dok}.nastavakBroj`), v(`dokumenti.${dok}.nastavakGodina`));
+  return n && n.godina === godina ? n.broj : 0;
+}
+```
+`ponuda.ts`:
+```ts
+/** Sljedeći redni broj ponude u godini — od 1, ili iza posljednjeg broja iz starog programa. */
+export function nextBrojPonude(db: SqlDb, godina: number): number {
+  const row = db.prepare('SELECT MAX(broj) AS maxBroj FROM ponude WHERE godina = ?')
+    .get(godina) as { maxBroj: number | null };
+  return Math.max(row.maxBroj ?? 0, nastavakNumeracije(db, 'ponuda', godina)) + 1;
+}
+```
+Isto `nextBrojNaloga` s `'nalog'`.
+
+- [ ] **Step 4:** `bun test src/lib src/ipc/ugovor/ponude.ugovor.test.ts src/ipc/ugovor/proizvodnja.ugovor.test.ts` → PASS.
+
+- [ ] **Step 5: Rust** — u `ponude.rs` (ili zajednički modul ako postoji helper za settings; grep `FROM settings WHERE key` u `src-tauri/backend/src`):
+```rust
+/// Najveći broj iz starog programa za godinu, ili 0 — par `nastavakNumeracije` u dokumentPostavke.ts.
+pub fn nastavak_numeracije(db: &Db, dok: &str, godina: &Value) -> R<i64> {
+    let v = |k: String| -> R<Option<String>> {
+        Ok(db.get("SELECT value FROM settings WHERE key = ?", p![k])?.and_then(|r| r["value"].as_str().map(str::to_string)))
+    };
+    let cijeli = |s: Option<String>, min: i64, max: i64| -> Option<i64> {
+        let t = s?.trim().to_string();
+        if t.is_empty() || !t.chars().all(|c| c.is_ascii_digit()) { return None; }
+        t.parse::<i64>().ok().filter(|n| (min..=max).contains(n))
+    };
+    let broj = cijeli(v(format!("dokumenti.{dok}.nastavakBroj"))?, 1, 999_999);
+    let god = cijeli(v(format!("dokumenti.{dok}.nastavakGodina"))?, 2000, 2999);
+    Ok(match (broj, god) {
+        (Some(b), Some(g)) if Some(g) == godina.as_i64() => b,
+        _ => 0,
+    })
+}
+
+pub fn next_broj_ponude(db: &Db, godina: &Value) -> R<i64> {
+    let max = db.val("SELECT MAX(broj) AS maxBroj FROM ponude WHERE godina = ?", &[godina.clone()])?;
+    Ok(max.as_i64().unwrap_or(0).max(nastavak_numeracije(db, "ponuda", godina)?) + 1)
+}
+```
+`proizvodnja.rs` `next_broj_naloga`: isto s `crate::ponude::nastavak_numeracije(db, "nalog", godina)?` (ili gdje god je helper smješten). `godina` može stići kao broj — `as_i64()` ga pokriva.
+
+- [ ] **Step 6:** `bun run test:rust 2>&1 | tail -5` → novi testovi prolaze, ništa staro ne pada.
+- [ ] **Step 7:** Commit `feat(dokumenti): nastavak numeracije ponuda i naloga iz starog programa`.
 
 ### Task 4: Kupac — tri zadane vrijednosti u oba backenda
 
@@ -1352,6 +1472,7 @@ const spremi = async () => {
 1. **Faktura** — „Rok plaćanja (dana)“ (numeric, prazno = „Bez roka“, placeholder „Bez roka“), „Način plaćanja“ (Select `NACINI_PLACANJA`), „Napomena na fakturi“ (textarea 3 reda; napomena: „Upisuje se u svaku novu fakturu; može se promijeniti na fakturi. Faktura iz ponude i dalje piše „Po ponudi br. …“.“).
 2. **Ponuda** — „Važi (dana)“ (1–365), „Način plaćanja pri konverziji“ (Select), „Uslovi ponude“ (textarea; napomena: „Ispisuje se iza „Ponuda važi do …“.“), „Prefiks broja“ + „Broj cifara“ (Select 0–6, 0 = „bez nula“) s živim primjerom: `Primjer: {formatBroja({ broj: 3, godina: new Date().getFullYear() }, forma.ponuda.broj)}`.
 3. **Radni nalog** — „Prefiks broja“ + primjer `formatBroja({ broj: 3, godina }, forma.nalog.broj)`.
+   - U sekcijama Ponuda i Radni nalog: polje „Posljednji broj iz starog programa“ (numeric, prazno = nema nastavka; napomena: „Za firme koje prelaze s drugog programa. Važi samo za {tekuća godina}.“). U formi: `nastavak = broj ? { broj, godina: new Date().getFullYear() } : null`. Ispod: „Sljedeća ponuda: {formatBrojPonude(await window.api.getNextBrojPonude(), forma.ponuda.broj)}“ — učitaj pri mountu i ponovo nakon spremanja (provjeri tačno ime metode za `ponuda:nextBroj`/`nalog:nextBroj` u `src/ipc/api.ts`). Ako je nakon spremanja sljedeći broj > upisani + 1: siva napomena „U programu već postoji veći broj — nastavlja se od njega.“
 4. **Izgled dokumenata** — `PrekidacRed` „Prikaži šifru artikla“, „Prikaži jedinicu mjere“ (opis: „Kolona Rabat se sama pojavi kad neka stavka ima rabat.“); „Tekst u podnožju“ (textarea 2 reda, napomena „Npr. upis u sudski registar. Ispisuje se na dnu svake stranice svih dokumenata.“).
 5. **Potpis i pečat** — `SlikaBirac` (slika pečata; napomena „PNG sa providnom pozadinom izgleda najbolje.“) + Slider veličine (`PECAT_VELICINA`, kao slider loga u FirmaGrupi, s „Vrati zadano“); `PrekidacRed` po dokumentu iz `DOKUMENTI_SA_PECATOM` („Pečat na fakturi / ponudi / otpremnici / računu“, `disabled` dok nema slike); zatim tabela naziva linija: za svaki `DOKUMENTI_SA_POTPISOM` red s nazivom dokumenta i dva `Input`-a (lijevo/desno), placeholder = zadani naziv iz `ZADANE_DOKUMENT_POSTAVKE.potpisi[d]`.
 

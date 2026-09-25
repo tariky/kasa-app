@@ -18,7 +18,7 @@ Ovo je podprojekt 1 od 3. Podprojekt 2 (Kasa: zadani način plaćanja, auto-otva
 - Linija „Izrađeno programom Atlas“ ostaje (brend).
 - Stopa PDV-a nije postavka (zakonski 17 %); samo se `1.17`/`17` sa ~6 mjesta skuplja u konstantu.
 - Broj fakture ostaje jednak BF broju (prilog to traži); otpremnica i dalje nema svoj broj.
-- Godišnji reset numeracije ponuda i naloga se ne mijenja; mijenja se samo prikazni oblik.
+- Godišnji reset numeracije ponuda i naloga se ne mijenja (nastavak iz starog programa važi samo za tekuću godinu, vidi 1a).
 - Prekidači kolona po dokumentu (isti prekidači važe za sve dokumente).
 - Barkodovi s vage.
 
@@ -46,6 +46,21 @@ Sve preko postojećih `settings:get/set` (oba backenda ih već imaju) — bez no
 | `dokumenti.kolone.jm` | `true`/`false` | `true` | |
 
 Zadane potpisne linije (današnje): faktura „Izdao“/„Primio“, ponuda i račun „Potpis izdavaoca“/„Potpis primaoca“, otpremnica „Robu izdao“/„Robu primio“, nalog „Izradio“/„Preuzeo“. Prazno polje → zadani naziv (linija se ne može ukloniti).
+
+## 1a. Nastavak numeracije iz starog programa
+
+Firma koja prelazi sa drugog programa nastavlja brojeve ponuda i radnih naloga u tekućoj godini.
+
+| Ključ | Tip | Zadano |
+|---|---|---|
+| `dokumenti.ponuda.nastavakBroj` / `dokumenti.ponuda.nastavakGodina` | cijeli broj ≥ 1 / godina | prazno (nema nastavka) |
+| `dokumenti.nalog.nastavakBroj` / `dokumenti.nalog.nastavakGodina` | isto | prazno |
+
+- Sljedeći broj = `max(najveći broj u bazi za godinu, nastavakBroj ako je nastavakGodina == godina) + 1`. Ništa se ne upisuje u tabele ponuda/naloga (nema lažnih zapisa); duplikat ne može nastati.
+- Nastavak važi samo za godinu u kojoj je upisan — nova godina kreće od 1.
+- Računa se u backendu (`nextBrojPonude`, `nextBrojNaloga` u `src/lib` i `next_broj_ponude`, `next_broj_naloga` u Rustu), pa važi i za kanale `ponuda:nextBroj`, `nalog:nextBroj` i za upis nove ponude/naloga.
+- UI (Postavke › Dokumenti, sekcije Ponuda i Radni nalog): polje „Posljednji broj iz starog programa“; pri spremanju se godina postavi na tekuću; prazno polje briše nastavak. Ispod polja stoji „Sljedeća ponuda: P-013/2026“ (iz `ponuda:nextBroj` nakon spremanja). Ako je u bazi već veći broj od upisanog, poruka „U programu već postoji veći broj — nastavlja se od njega.“
+- Faktura (broj = BF s fiskalnog uređaja), otpremnica (nema broj) i primka (broj se već može ručno upisati, a sljedeći se računa od najvećeg) ovo ne trebaju.
 
 ## 2. Kupac
 
@@ -99,7 +114,7 @@ Tabela `kupci` dobija tri NULL kolone: `rokPlacanjaDana INTEGER`, `nacinPlacanja
 ## 7. Testiranje
 
 - **Unit (`bun test`):** `dokumentPostavke.test.ts` — parsiranje svih ključeva, nevažeće → zadano, limiti teksta; `formatBroja` (prefiks, nule, prazan prefiks); `zadanoZaKupca` (kupac gazi globalno, NULL pada na globalno, bez kupca); `primijeniRabatKupca` (dira samo 0 %). Format rabata za štampu.
-- **Ugovorni (`bun test src/ipc/ugovor` i `bun run test:rust`):** kupac create/update/getAll s novim poljima, validacija (rabat 101, dani −1, nepoznat način → greška), prazno → NULL; migracija baze bez novih kolona; nova poruka `deletePonuda`.
+- **Ugovorni (`bun test src/ipc/ugovor` i `bun run test:rust`):** `ponuda:nextBroj`/`nalog:nextBroj` i upis nove ponude/naloga s nastavkom (veći od baze, manji od baze, druga godina); kupac create/update/getAll s novim poljima, validacija (rabat 101, dani −1, nepoznat način → greška), prazno → NULL; migracija baze bez novih kolona; nova poruka `deletePonuda`.
 - **PDF render test:** svaki od 5 dokumenata se renderuje (`pdf(...).toBuffer()`) sa zadanim postavkama i sa „sve uključeno“ (pečat, podnožje, šifra, bez JM, rabat s decimalama) bez greške.
 - **Vizuelno:** preview screenshot grupe Dokumenti i jedne fakture/ponude (postupak iz memorije: statički Vite build + headless chromium); korisnik provjerava štampu u Electronu.
 - Lint: bez novih kategorija grešaka u dodirnutim fajlovima.
