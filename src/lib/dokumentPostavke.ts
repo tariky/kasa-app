@@ -3,6 +3,7 @@
  * `dokumenti.*` u tabeli settings. Ključ koji nikad nije spremljen daje zadanu
  * vrijednost, pa dokument bez podešavanja izgleda kao prije ovih postavki.
  */
+import type { SqlDb } from './sqldb';
 
 export type NacinPlacanja = 'Gotovina' | 'Kartica' | 'Virman' | 'Ček';
 export const NACINI_PLACANJA: NacinPlacanja[] = ['Gotovina', 'Kartica', 'Virman', 'Ček'];
@@ -14,11 +15,13 @@ export const DOKUMENTI_SA_PECATOM: DokumentSaPecatom[] = ['faktura', 'ponuda', '
 
 export interface PotpisLinije { lijevo: string; desno: string }
 export interface FormatBroja { prefiks: string; cifara: number }
+/** Posljednji broj iz starog programa — numeracija u toj godini nastavlja iza njega. */
+export interface NastavakNumeracije { broj: number; godina: number }
 
 export interface DokumentPostavke {
   faktura: { rokDana: number | null; nacinPlacanja: NacinPlacanja; napomena: string };
-  ponuda: { vaziDana: number; uslovi: string; nacinPlacanja: NacinPlacanja; broj: FormatBroja };
-  nalog: { broj: FormatBroja };
+  ponuda: { vaziDana: number; uslovi: string; nacinPlacanja: NacinPlacanja; broj: FormatBroja; nastavak: NastavakNumeracije | null };
+  nalog: { broj: FormatBroja; nastavak: NastavakNumeracije | null };
   podnozje: string;
   potpisi: Record<DokumentSaPotpisom, PotpisLinije>;
   pecat: { slika: string; velicina: number; na: Record<DokumentSaPecatom, boolean> };
@@ -36,8 +39,9 @@ export const ZADANE_DOKUMENT_POSTAVKE: DokumentPostavke = {
     uslovi: 'Cijene su izražene u KM sa uračunatim PDV-om.',
     nacinPlacanja: 'Gotovina',
     broj: { prefiks: '', cifara: 0 },
+    nastavak: null,
   },
-  nalog: { broj: { prefiks: 'RN-', cifara: 0 } },
+  nalog: { broj: { prefiks: 'RN-', cifara: 0 }, nastavak: null },
   podnozje: '',
   potpisi: {
     faktura: { lijevo: 'Izdao', desno: 'Primio' },
@@ -59,7 +63,11 @@ const K = {
   ponudaNacin: 'dokumenti.ponuda.nacinPlacanja',
   ponudaPrefiks: 'dokumenti.ponuda.prefiks',
   ponudaCifara: 'dokumenti.ponuda.cifara',
+  ponudaNastavakBroj: 'dokumenti.ponuda.nastavakBroj',
+  ponudaNastavakGodina: 'dokumenti.ponuda.nastavakGodina',
   nalogPrefiks: 'dokumenti.nalog.prefiks',
+  nalogNastavakBroj: 'dokumenti.nalog.nastavakBroj',
+  nalogNastavakGodina: 'dokumenti.nalog.nastavakGodina',
   podnozje: 'dokumenti.podnozje',
   pecat: 'dokumenti.pecat',
   pecatVelicina: 'dokumenti.pecatVelicina',
@@ -99,6 +107,13 @@ function prekidac(v: string | null | undefined, zadano: boolean): boolean {
 
 const jeSlika = (v: string) => v.startsWith('data:image/');
 
+/** Nastavak važi samo kad su i broj i godina ispravni. */
+function nastavak(broj: string | null | undefined, godina: string | null | undefined): NastavakNumeracije | null {
+  const b = cijeli(broj, 1, 999999);
+  const g = cijeli(godina, 2000, 2999);
+  return b != null && g != null ? { broj: b, godina: g } : null;
+}
+
 export function procitajDokumentPostavke(raw: Raw): DokumentPostavke {
   const Z = ZADANE_DOKUMENT_POSTAVKE;
   const potpis = (d: DokumentSaPotpisom, s: keyof PotpisLinije) =>
@@ -118,8 +133,12 @@ export function procitajDokumentPostavke(raw: Raw): DokumentPostavke {
         prefiks: tekst(raw[K.ponudaPrefiks], Z.ponuda.broj.prefiks, LIMITI.prefiks),
         cifara: cijeli(raw[K.ponudaCifara], 0, CIFARA_MAX) ?? 0,
       },
+      nastavak: nastavak(raw[K.ponudaNastavakBroj], raw[K.ponudaNastavakGodina]),
     },
-    nalog: { broj: { prefiks: tekst(raw[K.nalogPrefiks], Z.nalog.broj.prefiks, LIMITI.prefiks), cifara: 0 } },
+    nalog: {
+      broj: { prefiks: tekst(raw[K.nalogPrefiks], Z.nalog.broj.prefiks, LIMITI.prefiks), cifara: 0 },
+      nastavak: nastavak(raw[K.nalogNastavakBroj], raw[K.nalogNastavakGodina]),
+    },
     podnozje: tekst(raw[K.podnozje], Z.podnozje, LIMITI.podnozje),
     potpisi: Object.fromEntries(DOKUMENTI_SA_POTPISOM.map(d => [d, { lijevo: potpis(d, 'lijevo'), desno: potpis(d, 'desno') }])) as DokumentPostavke['potpisi'],
     pecat: {
@@ -142,7 +161,11 @@ export function uKljuceve(p: DokumentPostavke): Record<string, string> {
     [K.ponudaNacin]: p.ponuda.nacinPlacanja,
     [K.ponudaPrefiks]: p.ponuda.broj.prefiks,
     [K.ponudaCifara]: String(p.ponuda.broj.cifara),
+    [K.ponudaNastavakBroj]: String(p.ponuda.nastavak?.broj ?? ''),
+    [K.ponudaNastavakGodina]: String(p.ponuda.nastavak?.godina ?? ''),
     [K.nalogPrefiks]: p.nalog.broj.prefiks,
+    [K.nalogNastavakBroj]: String(p.nalog.nastavak?.broj ?? ''),
+    [K.nalogNastavakGodina]: String(p.nalog.nastavak?.godina ?? ''),
     [K.podnozje]: p.podnozje,
     [K.pecat]: p.pecat.slika,
     [K.pecatVelicina]: String(p.pecat.velicina),
@@ -160,6 +183,16 @@ export function uKljuceve(p: DokumentPostavke): Record<string, string> {
 /** „P-003/2026“ — broj se nulama dopunjava do `cifara`, duži broj ostaje cijel. */
 export function formatBroja(n: { broj: number; godina: number }, f: FormatBroja): string {
   return `${f.prefiks}${String(n.broj).padStart(f.cifara, '0')}/${n.godina}`;
+}
+
+/**
+ * Najveći broj iz starog programa za godinu, ili 0. Čita se direktno iz settings —
+ * radi i u Electron main procesu i u test bazi.
+ */
+export function nastavakNumeracije(db: SqlDb, dok: 'ponuda' | 'nalog', godina: number): number {
+  const v = (k: string) => (db.prepare('SELECT value FROM settings WHERE key = ?').get(k) as { value: string } | undefined)?.value;
+  const n = nastavak(v(`dokumenti.${dok}.nastavakBroj`), v(`dokumenti.${dok}.nastavakGodina`));
+  return n && n.godina === godina ? n.broj : 0;
 }
 
 /** Polja kupca iz šifarnika koja nose zadane vrijednosti; NULL = koristi globalno. */

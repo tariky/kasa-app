@@ -52,9 +52,10 @@ fn stanje_artikla(db: &Db, product_id: &Value) -> R<Value> {
 
 // ── numeracija ───────────────────────────────────────────
 
+/// Sljedeći redni broj naloga u godini — od 1, ili iza posljednjeg broja iz starog programa.
 pub fn next_broj_naloga(db: &Db, godina: &Value) -> R<i64> {
     let max = db.val("SELECT MAX(broj) AS maxBroj FROM radni_nalozi WHERE godina = ?", &[godina.clone()])?;
-    Ok(max.as_i64().unwrap_or(0) + 1)
+    Ok(max.as_i64().unwrap_or(0).max(crate::ponude::nastavak_numeracije(db, "nalog", godina)?) + 1)
 }
 
 pub fn format_broj_naloga(n: &Value) -> String {

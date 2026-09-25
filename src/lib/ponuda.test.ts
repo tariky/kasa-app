@@ -59,6 +59,27 @@ test('nova godina resetuje brojanje od 1', () => {
   expect(nextBrojPonude(db, 2026)).toBe(1);
 });
 
+const postaviNastavak = (broj: string, godina: string) => {
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('dokumenti.ponuda.nastavakBroj', ?)").run(broj);
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('dokumenti.ponuda.nastavakGodina', ?)").run(godina);
+};
+
+test('nastavak iz starog programa: prva ponuda dobija broj iza upisanog', () => {
+  postaviNastavak('12', '2026');
+  expect(nextBrojPonude(db, 2026)).toBe(13);
+});
+
+test('nastavak manji od baze se ignoriše', () => {
+  postaviNastavak('2', '2026');
+  ubaciPonudu(5, 2026);
+  expect(nextBrojPonude(db, 2026)).toBe(6);
+});
+
+test('nastavak važi samo za svoju godinu', () => {
+  postaviNastavak('12', '2025');
+  expect(nextBrojPonude(db, 2026)).toBe(1);
+});
+
 test('format broja ponude je broj/godina', () => {
   expect(formatBrojPonude({ broj: 3, godina: 2026 })).toBe('3/2026');
 });

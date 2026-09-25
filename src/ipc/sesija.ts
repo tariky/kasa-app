@@ -56,6 +56,9 @@ export const POSTAVKE_ZA_ADMINA: ReadonlySet<string> = new Set([
   'ui.skala',
   // LicencaGrupa
   'ui.showGenerator',
+  // Dokumenti — nastavak numeracije iz starog programa
+  'dokumenti.ponuda.nastavakBroj', 'dokumenti.ponuda.nastavakGodina',
+  'dokumenti.nalog.nastavakBroj', 'dokumenti.nalog.nastavakGodina',
 ]);
 
 /**

@@ -115,6 +115,16 @@ describe('nalog:nextBroj', () => {
     await narudzba(kupacId, { datum: `${GODINA - 1}-12-31` });
     expect(await b.call('nalog:nextBroj')).toEqual({ broj: 2, godina: GODINA });
   });
+
+  test('nastavak iz starog programa: sljedeći broj je iza upisanog, create ga upiše', async () => {
+    await b.call('settings:set', 'dokumenti.nalog.nastavakBroj', '12');
+    await b.call('settings:set', 'dokumenti.nalog.nastavakGodina', String(GODINA));
+    expect(await b.call('nalog:nextBroj')).toEqual({ broj: 13, godina: GODINA });
+
+    const id = await narudzba(dodajKupca());
+    expect(red('SELECT broj, godina FROM radni_nalozi WHERE id = ?', id)).toEqual({ broj: 13, godina: GODINA });
+    expect(await b.call('nalog:nextBroj')).toEqual({ broj: 14, godina: GODINA });
+  });
 });
 
 // ─── nalog:create ───────────────────────────────────────────

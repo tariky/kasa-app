@@ -5,7 +5,7 @@ import { localDateStr } from './novac';
 import { buildTringRacun } from './tringRacun';
 import { provjeriStavke } from './provjeraRacuna';
 import { provjeriNacinPlacanja } from './placanje';
-import { formatBroja, ZADANE_DOKUMENT_POSTAVKE, type FormatBroja } from './dokumentPostavke';
+import { formatBroja, nastavakNumeracije, ZADANE_DOKUMENT_POSTAVKE, type FormatBroja } from './dokumentPostavke';
 
 export interface PonudaStavka {
   productId: number;
@@ -45,11 +45,11 @@ export function danaIzmedju(od: string, do_: string): number {
   return Math.round((b - a) / 86400000);
 }
 
-/** Sljedeći redni broj ponude u godini — brojanje kreće od 1 svake godine. */
+/** Sljedeći redni broj ponude u godini — od 1, ili iza posljednjeg broja iz starog programa. */
 export function nextBrojPonude(db: SqlDb, godina: number): number {
   const row = db.prepare('SELECT MAX(broj) AS maxBroj FROM ponude WHERE godina = ?')
     .get(godina) as { maxBroj: number | null };
-  return (row.maxBroj ?? 0) + 1;
+  return Math.max(row.maxBroj ?? 0, nastavakNumeracije(db, 'ponuda', godina)) + 1;
 }
 
 /** Prikazni oblik broja ponude, npr. "3/2026" ili "P-003/2026" s formatom iz postavki. */

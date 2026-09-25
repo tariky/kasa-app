@@ -52,7 +52,7 @@ fn get_tring(db: &Db) -> R<Value> {
 }
 
 /// `postavka(key)` — vrijednost ili null.
-fn postavka(db: &Db, kljuc: &str) -> R<Value> {
+pub(crate) fn postavka(db: &Db, kljuc: &str) -> R<Value> {
     db.val("SELECT value FROM settings WHERE key = ?", p![kljuc])
 }
 

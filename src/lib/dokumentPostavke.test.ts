@@ -101,6 +101,17 @@ describe('procitajDokumentPostavke', () => {
   });
 });
 
+describe('nastavak numeracije', () => {
+  test('nastavak numeracije se čita samo kad su broj i godina ispravni', () => {
+    expect(procitajDokumentPostavke({}).ponuda.nastavak).toBeNull();
+    expect(procitajDokumentPostavke({ 'dokumenti.ponuda.nastavakBroj': '12', 'dokumenti.ponuda.nastavakGodina': '2026' }).ponuda.nastavak)
+      .toEqual({ broj: 12, godina: 2026 });
+    expect(procitajDokumentPostavke({ 'dokumenti.ponuda.nastavakBroj': '12' }).ponuda.nastavak).toBeNull();
+    expect(procitajDokumentPostavke({ 'dokumenti.nalog.nastavakBroj': '0', 'dokumenti.nalog.nastavakGodina': '2026' }).nalog.nastavak).toBeNull();
+    expect(procitajDokumentPostavke({ 'dokumenti.nalog.nastavakBroj': '', 'dokumenti.nalog.nastavakGodina': '' }).nalog.nastavak).toBeNull();
+  });
+});
+
 describe('formatBroja', () => {
   test('bez prefiksa i nula = današnji oblik', () => {
     expect(formatBroja({ broj: 12, godina: 2026 }, { prefiks: '', cifara: 0 })).toBe('12/2026');

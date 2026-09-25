@@ -57,6 +57,30 @@ test('broj naloga kreće od 1 svake godine', () => {
   expect(formatBrojNaloga({ broj: 2, godina: 2026 }, { prefiks: '', cifara: 0 })).toBe('2/2026');
 });
 
+const postaviNastavak = (broj: string, godina: string) => {
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('dokumenti.nalog.nastavakBroj', ?)").run(broj);
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('dokumenti.nalog.nastavakGodina', ?)").run(godina);
+};
+
+test('nastavak iz starog programa: prvi nalog dobija broj iza upisanog', () => {
+  postaviNastavak('12', '2026');
+  expect(nextBrojNaloga(db, 2026)).toBe(13);
+  const k = dodajKupca(db);
+  expect(createNalog(db, { vrsta: 'narudzba', korisnikId: 1, kupacId: k, opis: 'Ormar', datum: '2026-09-23' }).broj).toBe(13);
+});
+
+test('nastavak naloga manji od baze se ignoriše', () => {
+  const k = dodajKupca(db);
+  for (let i = 0; i < 3; i++) createNalog(db, { vrsta: 'narudzba', korisnikId: 1, kupacId: k, opis: 'X', datum: '2026-09-23' });
+  postaviNastavak('2', '2026');
+  expect(nextBrojNaloga(db, 2026)).toBe(4);
+});
+
+test('nastavak naloga važi samo za svoju godinu', () => {
+  postaviNastavak('12', '2025');
+  expect(nextBrojNaloga(db, 2026)).toBe(1);
+});
+
 // ── kreiranje ────────────────────────────────────────────
 test('narudžba traži kupca i opis', () => {
   expect(() => createNalog(db, { vrsta: 'narudzba', korisnikId: 1, opis: 'X' })).toThrow('Kupac');

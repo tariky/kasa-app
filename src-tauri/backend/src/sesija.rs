@@ -65,6 +65,9 @@ pub const POSTAVKE_ZA_ADMINA: &[&str] = &[
     "ui.skala",
     // LicencaGrupa
     "ui.showGenerator",
+    // Dokumenti — nastavak numeracije iz starog programa
+    "dokumenti.ponuda.nastavakBroj", "dokumenti.ponuda.nastavakGodina",
+    "dokumenti.nalog.nastavakBroj", "dokumenti.nalog.nastavakGodina",
 ];
 
 /// Postavke koje settings:get nikad ne vraća (ide null). Stanje blokade PIN-a

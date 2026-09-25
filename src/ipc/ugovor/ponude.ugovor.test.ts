@@ -95,6 +95,16 @@ describe('ponuda:nextBroj', () => {
     await napraviPonudu();
     expect(await b.call('ponuda:nextBroj')).toEqual({ broj: 3, godina: GODINA });
   });
+
+  test('nastavak iz starog programa: sljedeći broj je iza upisanog, create ga upiše', async () => {
+    await b.call('settings:set', 'dokumenti.ponuda.nastavakBroj', '12');
+    await b.call('settings:set', 'dokumenti.ponuda.nastavakGodina', String(GODINA));
+    expect(await b.call('ponuda:nextBroj')).toEqual({ broj: 13, godina: GODINA });
+
+    const { id } = await napraviPonudu();
+    expect(red('SELECT broj, godina FROM ponude WHERE id = ?', id)).toEqual({ broj: 13, godina: GODINA });
+    expect(await b.call('ponuda:nextBroj')).toEqual({ broj: 14, godina: GODINA });
+  });
 });
 
 // ─── ponuda:create ──────────────────────────────────────────

@@ -6,7 +6,7 @@ import { izracunajTotale, upisiRacun } from './racun';
 import { provjeriNacinPlacanja } from './placanje';
 import { buildTringRacun } from './tringRacun';
 import { konvertujPonudu, type KonverzijaDeps, type KonverzijaResult } from './ponuda';
-import { formatBroja, ZADANE_DOKUMENT_POSTAVKE, type FormatBroja } from './dokumentPostavke';
+import { formatBroja, nastavakNumeracije, ZADANE_DOKUMENT_POSTAVKE, type FormatBroja } from './dokumentPostavke';
 import type {
   NalogStatus, NalogVrsta, NormativStavka, RadniNalog, RadniNalogStavka,
 } from '@/types';
@@ -36,10 +36,11 @@ const round4 = (n: number) => Math.round(n * 10000) / 10000;
 
 // ── numeracija ───────────────────────────────────────────
 
+/** Sljedeći redni broj naloga u godini — od 1, ili iza posljednjeg broja iz starog programa. */
 export function nextBrojNaloga(db: SqlDb, godina: number): number {
   const row = db.prepare('SELECT MAX(broj) AS maxBroj FROM radni_nalozi WHERE godina = ?')
     .get(godina) as { maxBroj: number | null };
-  return (row.maxBroj ?? 0) + 1;
+  return Math.max(row.maxBroj ?? 0, nastavakNumeracije(db, 'nalog', godina)) + 1;
 }
 
 /** Prikazni oblik broja naloga, npr. "RN-2/2026" ili format iz postavki. */
