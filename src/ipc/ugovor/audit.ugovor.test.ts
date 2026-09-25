@@ -24,10 +24,6 @@ function audit(db: Database = b.db): Zapis[] {
     });
 }
 
-function red(sql: string, ...params: any[]): any {
-  return b.db.prepare(sql).get(...params);
-}
-
 function dodajArtikal(sifra: string, cijena: number): number {
   return Number(b.db.prepare(
     "INSERT INTO products (sifra, naziv, jm, cijena, pdvStopa, plu) VALUES (?, ?, 'kom', ?, 'E', 1)"
@@ -36,12 +32,6 @@ function dodajArtikal(sifra: string, cijena: number): number {
 
 function dodajKorisnika(ime: string, pin: string, uloga: 'admin' | 'kasir' = 'kasir'): number {
   return Number(b.db.prepare('INSERT INTO users (ime, pin, uloga) VALUES (?, ?, ?)').run(ime, hesirajPin(pin), uloga).lastInsertRowid);
-}
-
-function sada(): string {
-  const d = new Date();
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
 async function rucniRacun(broj: string, cijena = 3): Promise<number> {

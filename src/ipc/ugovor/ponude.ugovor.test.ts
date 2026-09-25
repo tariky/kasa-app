@@ -291,6 +291,7 @@ describe('ponuda:create / ponuda:update — provjera stavki', () => {
         .rejects.toThrow(poruka);
     }
     await expect(b.call('ponuda:create', { kupacId, stavke: [null] })).rejects.toThrow('Neispravna stavka računa');
+    await expect(b.call('ponuda:create', { kupacId, stavke: { length: 1 } })).rejects.toThrow('Neispravna stavka računa');
     expect(broj('SELECT COUNT(*) AS n FROM ponude')).toBe(0);
     expect(broj('SELECT COUNT(*) AS n FROM ponuda_stavke')).toBe(0);
   });

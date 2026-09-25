@@ -45,7 +45,8 @@ export interface ProvjerenaStavka {
  * biti cijeli broj) i vrati je svedenu na polja ugovora. Prazna lista nije
  * greška ovdje: poruku za nju daje pozivalac.
  */
-export function provjeriStavke(db: SqlDb, stavke: unknown[]): ProvjerenaStavka[] {
+export function provjeriStavke(db: SqlDb, stavke: unknown): ProvjerenaStavka[] {
+  if (!Array.isArray(stavke)) throw new Error('Neispravna stavka računa');
   const artikal = db.prepare('SELECT sifra, naziv, jm, plu, tip, pdvStopa FROM products WHERE id = ?');
   return stavke.map((s) => {
     if (!s || typeof s !== 'object' || Array.isArray(s)) throw new Error('Neispravna stavka računa');
