@@ -217,6 +217,26 @@ export function zadanoZaKupca(
   };
 }
 
+/** Rok u danima → izbor u dijalogu fakture: brzi chip ako postoji, inače tačan datum. */
+export function rokUIzbor(dana: number | null, brzi: readonly number[]): { rok: number | 'datum' | null; dana: number | null } {
+  if (dana == null) return { rok: null, dana: null };
+  return { rok: brzi.includes(dana) ? dana : 'datum', dana };
+}
+
+/**
+ * Zadane vrijednosti fakture prema tome odakle je nastala: skica čuva sve svoje (null),
+ * faktura iz ponude uzima rok i način kupca ali ne rabat — stavke nose rabat iz ponude.
+ */
+export function zadanoZaFakturu(
+  kupac: KupacZadano | null | undefined,
+  p: DokumentPostavke,
+  izvor: 'nova' | 'ponuda' | 'skica',
+): { rokDana: number | null; nacinPlacanja: NacinPlacanja; rabat: number } | null {
+  if (izvor === 'skica') return null;
+  const z = zadanoZaKupca(kupac, p, 'faktura');
+  return izvor === 'ponuda' ? { ...z, rabat: 0 } : z;
+}
+
 /** Rabat kupca dobijaju samo stavke bez rabata — ručno upisan rabat ostaje. */
 export function primijeniRabatKupca<T extends { rabat: number }>(stavke: T[], rabat: number): T[] {
   if (!(rabat > 0)) return stavke;

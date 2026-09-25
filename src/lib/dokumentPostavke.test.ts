@@ -1,7 +1,7 @@
 import { test, expect, describe } from 'bun:test';
 import {
   ZADANE_DOKUMENT_POSTAVKE as Z, KLJUCEVI_DOKUMENATA, procitajDokumentPostavke, uKljuceve,
-  formatBroja, zadanoZaKupca, primijeniRabatKupca, pecatZa, formatRabat,
+  formatBroja, zadanoZaKupca, primijeniRabatKupca, pecatZa, formatRabat, rokUIzbor, zadanoZaFakturu,
 } from './dokumentPostavke';
 
 describe('procitajDokumentPostavke', () => {
@@ -177,4 +177,24 @@ describe('formatRabat', () => {
   test('zaokružuje kao round2 (1.005 → 1,01%)', () => {
     expect(formatRabat(1.005)).toBe('1,01%');
   });
+});
+
+describe('rokUIzbor', () => {
+  const BRZI = [8, 15, 30, 60] as const;
+  test('bez roka', () => expect(rokUIzbor(null, BRZI)).toEqual({ rok: null, dana: null }));
+  test('brzi izbor', () => expect(rokUIzbor(30, BRZI)).toEqual({ rok: 30, dana: 30 }));
+  test('ostali dani idu na datum', () => expect(rokUIzbor(45, BRZI)).toEqual({ rok: 'datum', dana: 45 }));
+  test('0 dana = danas, kao datum', () => expect(rokUIzbor(0, BRZI)).toEqual({ rok: 'datum', dana: 0 }));
+});
+
+describe('zadanoZaFakturu', () => {
+  const p = procitajDokumentPostavke({ 'dokumenti.faktura.rokDana': '15' });
+  const kupac = { rokPlacanjaDana: 30, nacinPlacanja: 'Kartica', rabat: 5 };
+  test('nova faktura: sve od kupca', () =>
+    expect(zadanoZaFakturu(kupac, p, 'nova')).toEqual({ rokDana: 30, nacinPlacanja: 'Kartica', rabat: 5 }));
+  test('iz ponude: rok i način od kupca, rabat ne', () =>
+    expect(zadanoZaFakturu(kupac, p, 'ponuda')).toEqual({ rokDana: 30, nacinPlacanja: 'Kartica', rabat: 0 }));
+  test('skica: ništa', () => expect(zadanoZaFakturu(kupac, p, 'skica')).toBeNull());
+  test('ručno upisana firma (nema u šifarniku): globalno', () =>
+    expect(zadanoZaFakturu(undefined, p, 'nova')).toEqual({ rokDana: 15, nacinPlacanja: 'Virman', rabat: 0 }));
 });
