@@ -57,11 +57,36 @@ interface CitljivaBaza {
 /** `YYYY-MM-DD` ili null (prazna, zatvorena ili nedostupna baza nisu greška). */
 export function najnovijiDatumIzBaze(db: CitljivaBaza): string | null {
   try {
-    const d = (db.prepare(UPIT_NAJNOVIJI_DATUM).get() as { d?: unknown } | null | undefined)?.d;
-    return typeof d === 'string' && DATUM.test(d) ? d : null;
+    return procitajDatum(db);
   } catch {
     return null;
   }
+}
+
+function procitajDatum(db: CitljivaBaza): string | null {
+  const d = (db.prepare(UPIT_NAJNOVIJI_DATUM).get() as { d?: unknown } | null | undefined)?.d;
+  return typeof d === 'string' && DATUM.test(d) ? d : null;
+}
+
+/** Pročitani datumi po konekciji; nova konekcija (restore, ponovno otvaranje) čita ponovo. */
+const datumPoKonekciji = new WeakMap<object, string | null>();
+
+/**
+ * Kao `najnovijiDatumIzBaze`, ali jednom po konekciji: upit prolazi kroz sve
+ * račune (~56 ms na 300k), a zove se pri svakom licenciranom kanalu. Računi
+ * nastali kasnije nose sat računara, koji ionako ulazi u efektivni datum.
+ * Neuspjelo čitanje se ne pamti. Rust: `DatumIzBaze` u licenca.rs.
+ */
+export function najnovijiDatumIzBazeJednom(db: CitljivaBaza): string | null {
+  if (datumPoKonekciji.has(db)) return datumPoKonekciji.get(db) ?? null;
+  let d: string | null;
+  try {
+    d = procitajDatum(db);
+  } catch {
+    return null;
+  }
+  datumPoKonekciji.set(db, d);
+  return d;
 }
 
 export function izracunajStanje(

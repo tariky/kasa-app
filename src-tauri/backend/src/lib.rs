@@ -90,6 +90,8 @@ pub struct Backend {
     pub odobrena_putanja: Mutex<Option<String>>,
     /// Prijavljeni korisnik i budžet promjena PIN-a (vidi sesija.rs).
     pub sesija: sesija::Sesija,
+    /// Najnoviji datum iz baze za licencu, jednom po otvaranju baze.
+    pub datum_iz_baze: licenca::DatumIzBaze,
 }
 
 impl Backend {
@@ -106,6 +108,7 @@ impl Backend {
             provjera_licence,
             odobrena_putanja: Mutex::new(None),
             sesija: sesija::Sesija::default(),
+            datum_iz_baze: licenca::DatumIzBaze::default(),
         })
     }
 
@@ -134,6 +137,7 @@ impl Backend {
 
     pub fn zatvori_db(&self) {
         self.db.zatvori();
+        self.datum_iz_baze.zaboravi();
     }
 
     /// Zatvori bazu kad dođe red (restart, izlaz iz programa) — nikad usred
@@ -141,6 +145,7 @@ impl Backend {
     pub fn zatvori_db_u_redu(&self) {
         let _z = self.petlja.uzmi(self.tiket());
         self.db.zatvori();
+        self.datum_iz_baze.zaboravi();
     }
 
     /// Sistemski dijalozi; dok su otvoreni, drugi pozivi rade (kao `await dialog...`).

@@ -2,7 +2,7 @@ import { test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { generateKeyPairSync } from 'node:crypto';
 import { izdajLicencu } from './licenca';
-import { izracunajStanje, efektivniDanas, najnovijiDatumIzBaze, smijeRaditi, razlikaDana, opisLicence, brojDana, razlogBlokade, kanalPodLicencom, type StanjeLicence } from './licencaStanje';
+import { izracunajStanje, efektivniDanas, najnovijiDatumIzBaze, najnovijiDatumIzBazeJednom, smijeRaditi, razlikaDana, opisLicence, brojDana, razlogBlokade, kanalPodLicencom, type StanjeLicence } from './licencaStanje';
 
 const { privateKey, publicKey } = generateKeyPairSync('ed25519');
 const token = izdajLicencu({ klijent: 'Pekara', vrijediDo: '2026-10-31', izdana: '2026-10-01' }, privateKey);
@@ -86,6 +86,35 @@ test('najnoviji datum iz baze: nedostupna baza nije greška', () => {
   const zatvorena = baza();
   zatvorena.close();
   expect(najnovijiDatumIzBaze(zatvorena)).toBeNull();
+});
+
+test('najnoviji datum iz baze se čita jednom po konekciji', () => {
+  const db = baza();
+  db.exec("INSERT INTO orders (createdAt) VALUES ('2026-11-20 10:00:00')");
+  let upita = 0;
+  const brojac = { prepare: (sql: string) => { upita++; return db.prepare(sql); } };
+  expect(najnovijiDatumIzBazeJednom(brojac)).toBe('2026-11-20');
+  db.exec("INSERT INTO orders (createdAt) VALUES ('2026-11-25 10:00:00')");
+  expect(najnovijiDatumIzBazeJednom(brojac)).toBe('2026-11-20');
+  expect(najnovijiDatumIzBazeJednom(brojac)).toBe('2026-11-20');
+  expect(upita).toBe(1);
+
+  // Nova konekcija (closeDb → getDb, restore) čita ponovo.
+  const nova = { prepare: (sql: string) => { upita++; return db.prepare(sql); } };
+  expect(najnovijiDatumIzBazeJednom(nova)).toBe('2026-11-25');
+  expect(upita).toBe(2);
+
+  // Prazna baza se pamti; neuspjelo čitanje ne.
+  const prazna = { prepare: (sql: string) => { upita++; return baza().prepare(sql); } };
+  expect(najnovijiDatumIzBazeJednom(prazna)).toBeNull();
+  expect(najnovijiDatumIzBazeJednom(prazna)).toBeNull();
+  expect(upita).toBe(3);
+  const zatvorena = baza();
+  zatvorena.close();
+  const nedostupna = { prepare: (sql: string) => { upita++; return zatvorena.prepare(sql); } };
+  expect(najnovijiDatumIzBazeJednom(nedostupna)).toBeNull();
+  expect(najnovijiDatumIzBazeJednom(nedostupna)).toBeNull();
+  expect(upita).toBe(5);
 });
 
 test('razlika dana preko promjene ljetnog računanja vremena', () => {

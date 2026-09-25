@@ -7,7 +7,7 @@
 //! istek je najveći od sata, `zadnjiDatum` i najnovijeg računa u bazi.
 //! Moduli i kanal → moduli: `src/lib/moduliKatalog.json`.
 
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use base64::engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig};
 use base64::engine::DecodePaddingMode;
@@ -204,11 +204,39 @@ const UPIT_NAJNOVIJI_DATUM: &str = "
 
 /// `najnovijiDatumIzBaze`: `YYYY-MM-DD` ili `None` (nedostupna baza nije greška).
 pub fn najnoviji_datum_iz_baze(db: &Db) -> Option<String> {
-    db.val(UPIT_NAJNOVIJI_DATUM, &[]).ok()?.as_str().filter(|d| datum_ok(d)).map(str::to_string)
+    procitaj_datum(db).ok().flatten()
+}
+
+fn procitaj_datum(db: &Db) -> R<Option<String>> {
+    Ok(db.val(UPIT_NAJNOVIJI_DATUM, &[])?.as_str().filter(|d| datum_ok(d)).map(str::to_string))
+}
+
+/// `najnovijiDatumIzBazeJednom`: najnoviji datum iz baze, pročitan jednom po
+/// otvaranju baze — upit prolazi kroz sve račune (~56 ms na 300k), a zove se
+/// pri svakom licenciranom kanalu. Računi nastali kasnije nose sat računara,
+/// koji ionako ulazi u efektivni datum. `Backend::zatvori_db*` ga zaboravi
+/// (restore), a neuspjelo čitanje se ne pamti.
+#[derive(Default)]
+pub struct DatumIzBaze(Mutex<Option<Option<String>>>);
+
+impl DatumIzBaze {
+    pub fn procitaj(&self, db: &Db) -> Option<String> {
+        let mut zapamceno = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(d) = zapamceno.as_ref() {
+            return d.clone();
+        }
+        let d = procitaj_datum(db).ok()?;
+        *zapamceno = Some(d.clone());
+        d
+    }
+
+    pub fn zaboravi(&self) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
 }
 
 fn danas_za_licencu(b: &Backend, z: &Value) -> String {
-    let iz_baze = b.db().ok().and_then(najnoviji_datum_iz_baze);
+    let iz_baze = b.db().ok().and_then(|db| b.datum_iz_baze.procitaj(db));
     efektivni_danas(&b.sat.danas(), z["zadnjiDatum"].as_str(), iz_baze.as_deref())
 }
 
@@ -532,6 +560,36 @@ mod tests {
         assert_eq!(najnoviji_datum_iz_baze(&db).as_deref(), Some("2026-11-21"));
         db.run("INSERT INTO cash_movements (tip, iznos, korisnikId, tringStatus, createdAt) VALUES ('polog', 1, 1, 'ok', 'smeće')", &[]).unwrap();
         assert_eq!(najnoviji_datum_iz_baze(&db).as_deref(), Some("2026-11-21"));
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn datum_iz_baze_jednom_po_otvaranju() {
+        let dir = std::env::temp_dir().join(format!("kasa-licenca-jednom-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = Db::aktivna(&dir.join("kasa.db"), std::sync::Arc::new(crate::petlja::Petlja::nova())).unwrap();
+        let polog = |kad: &str| {
+            db.run("INSERT INTO cash_movements (tip, iznos, korisnikId, tringStatus, createdAt) VALUES ('polog', 1, 1, 'ok', ?)", &[json!(kad)])
+                .unwrap();
+        };
+        let d = DatumIzBaze::default();
+        assert_eq!(d.procitaj(&db), None);
+        // Prazna baza se pamti — upit se ne ponavlja ni kad se pojavi novi zapis.
+        polog("2026-11-20 10:00:00");
+        assert_eq!(d.procitaj(&db), None);
+        d.zaboravi();
+        assert_eq!(d.procitaj(&db).as_deref(), Some("2026-11-20"));
+        polog("2026-11-25 10:00:00");
+        assert_eq!(d.procitaj(&db).as_deref(), Some("2026-11-20"));
+        d.zaboravi();
+        assert_eq!(d.procitaj(&db).as_deref(), Some("2026-11-25"));
+        // Neuspjelo čitanje se ne pamti.
+        db.exec("ALTER TABLE cash_movements RENAME TO cm").unwrap();
+        d.zaboravi();
+        assert_eq!(d.procitaj(&db), None);
+        db.exec("ALTER TABLE cm RENAME TO cash_movements").unwrap();
+        assert_eq!(d.procitaj(&db).as_deref(), Some("2026-11-25"));
         drop(db);
         let _ = std::fs::remove_dir_all(&dir);
     }

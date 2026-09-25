@@ -10,7 +10,7 @@ import { lokalniDatum } from '../lib/licenca';
 import { LICENCA_JAVNI_KLJUC } from '../lib/licencaJavniKljuc';
 import { uredjajId } from '../lib/uredjaj';
 import { getDb } from '../database/db';
-import { izracunajStanje, efektivniDanas, kanalPodLicencom, najnovijiDatumIzBaze, razlogBlokade, type LicencaInfo } from '../lib/licencaStanje';
+import { izracunajStanje, efektivniDanas, kanalPodLicencom, najnovijiDatumIzBazeJednom, razlogBlokade, type LicencaInfo } from '../lib/licencaStanje';
 
 interface Zapis {
   token?: string;
@@ -38,10 +38,14 @@ function zapisi(z: Zapis): void {
   writeFileSync(putanja(), JSON.stringify(z, null, 2));
 }
 
-/** Najnoviji dan iz baze; baza koja se ne da otvoriti ne ruši provjeru licence. */
+/**
+ * Najnoviji dan iz baze, pročitan jednom po otvaranju baze (getDb() posle
+ * closeDb() daje novu konekciju, pa i restore čita ponovo); baza koja se ne
+ * da otvoriti ne ruši provjeru licence.
+ */
 function datumIzBaze(): string | null {
   try {
-    return najnovijiDatumIzBaze(getDb());
+    return najnovijiDatumIzBazeJednom(getDb());
   } catch {
     return null;
   }
