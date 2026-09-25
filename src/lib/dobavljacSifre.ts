@@ -23,17 +23,10 @@ export function uSiframaDobavljaca(p: Pick<Product, 'sifreDobavljaca'>, rijec: s
 }
 
 /**
- * Pretraga artikala u stavkama ulaza: svaka riječ mora stajati u nazivu, šifri, barkodu
- * ili šifri dobavljača. Artikal čiju tačnu šifru ima izabrani dobavljač ulaza
+ * Bonus za pretragu u stavkama ulaza: artikal čiju tačnu šifru ima izabrani dobavljač ulaza
  * (`sifreIzabranog`: productId → šifra) ide prvi — to je red s njegove fakture.
  */
-export function pretraziZaUlaz(products: Product[], q: string, sifreIzabranog?: Map<number, string>, max = 12): Product[] {
-  const s = q.trim().toLowerCase();
-  if (!s) return [];
-  const rijeci = s.split(/\s+/);
-  const pogoci = products.filter(p => rijeci.every(r =>
-    p.naziv.toLowerCase().includes(r) || p.sifra.toLowerCase().includes(r)
-    || (p.barkod ?? '').toLowerCase().includes(r) || uSiframaDobavljaca(p, r)));
-  const tacan = (p: Product) => sifreIzabranog?.get(p.id)?.toLowerCase() === s;
-  return [...pogoci.filter(tacan), ...pogoci.filter(p => !tacan(p))].slice(0, max);
+export function bonusSifreIzabranog(sifreIzabranog?: Map<number, string>) {
+  return (p: Pick<Product, 'id'>, upit: string): number =>
+    sifreIzabranog?.get(p.id)?.toLowerCase() === upit.trim().toLowerCase() ? 1000 : 0;
 }

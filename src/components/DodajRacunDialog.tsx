@@ -14,6 +14,7 @@ import {
 import { Kupac, Product } from '@/types';
 import { izracunajTotale, iznosStavke } from '@/lib/racun';
 import { cn, formatKM } from '@/lib/utils';
+import { PretragaProizvoda } from '@/components/PretragaProizvoda';
 
 interface StavkaUnos {
   product: Product;
@@ -137,9 +138,6 @@ export default function DodajRacunDialog({ open, onOpenChange, korisnikId, onSav
   const [brojFiskalnog, setBrojFiskalnog] = useState('');
   const [datum, setDatum] = useState(nowLocalInput());
   const [nacinPlacanja, setNacinPlacanja] = useState<PaymentType>('Gotovina');
-  const [query, setQuery] = useState('');
-  const [results, setResults] = useState<Product[]>([]);
-  const [activeIdx, setActiveIdx] = useState(0);
   const [stavke, setStavke] = useState<StavkaUnos[]>([]);
   const [kupacOpen, setKupacOpen] = useState(false);
   const [kupacQuery, setKupacQuery] = useState('');
@@ -154,7 +152,6 @@ export default function DodajRacunDialog({ open, onOpenChange, korisnikId, onSav
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const resultRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const kupacRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   useEffect(() => {
@@ -168,21 +165,13 @@ export default function DodajRacunDialog({ open, onOpenChange, korisnikId, onSav
     [stavke]
   );
 
-  const search = async (q: string) => {
-    setQuery(q);
-    setActiveIdx(0);
-    if (!q.trim()) { setResults([]); return; }
-    const found = await window.api.searchProducts(q);
-    setResults(found);
-  };
-
-  const addProduct = (p: Product) => {
+  const addProduct = (p: Product, kol: number | null) => {
+    const k = kol ?? 1;
     setStavke(prev => {
       const existing = prev.find(s => s.product.id === p.id);
-      if (existing) return prev.map(s => s.product.id === p.id ? { ...s, kolicina: s.kolicina + 1 } : s);
-      return [...prev, { product: p, kolicina: 1, rabat: 0, cijena: p.cijena }];
+      if (existing) return prev.map(s => s.product.id === p.id ? { ...s, kolicina: Math.round((s.kolicina + k) * 1000) / 1000 } : s);
+      return [...prev, { product: p, kolicina: k, rabat: 0, cijena: p.cijena }];
     });
-    setQuery(''); setResults([]); setActiveIdx(0);
   };
 
   const updateStavka = (id: number, patch: Partial<StavkaUnos>) => {
@@ -217,7 +206,7 @@ export default function DodajRacunDialog({ open, onOpenChange, korisnikId, onSav
 
   const reset = () => {
     setBrojFiskalnog(''); setDatum(nowLocalInput()); setNacinPlacanja('Gotovina');
-    setQuery(''); setResults([]); setActiveIdx(0); setStavke([]);
+    setStavke([]);
     setKupacOpen(false);
     setKupacQuery(''); setKupacResults([]); setKupacActiveIdx(0); setKupacIzSifarnika(false);
     setKupacNaziv(''); setKupacIdBroj(''); setKupacAdresa(''); setKupacGrad(''); setKupacPostanskiBroj('');
@@ -261,10 +250,10 @@ export default function DodajRacunDialog({ open, onOpenChange, korisnikId, onSav
       <DialogContent
         className="max-w-3xl max-h-[92vh] p-0 gap-0 overflow-hidden flex flex-col"
         onEscapeKeyDown={(e) => {
-          // Prvi Escape zatvara otvorenu listu rezultata, tek drugi zatvara dijalog.
-          if (results.length > 0 || kupacResults.length > 0) {
+          // Prvi Escape zatvara otvorenu listu kupaca, tek drugi zatvara dijalog
+          // (lista artikala je Radix sloj iznad dijaloga i sama hvata Escape).
+          if (kupacResults.length > 0) {
             e.preventDefault();
-            setResults([]);
             setKupacResults([]);
           }
         }}
@@ -346,40 +335,10 @@ export default function DodajRacunDialog({ open, onOpenChange, korisnikId, onSav
             <div>
               <div className="flex items-center justify-between mb-2">
                 <Eyebrow>Stavke</Eyebrow>
-                {results.length > 0 && <ComboHint verb="dodaj" />}
               </div>
 
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400 pointer-events-none" />
-                <Input
-                  className="pl-9 h-9 text-[12.5px]"
-                  value={query}
-                  onChange={e => search(e.target.value)}
-                  onKeyDown={comboKeyHandler({
-                    items: results, activeIdx, setActiveIdx, onPick: addProduct, refs: resultRefs,
-                  })}
-                  placeholder="Pretraži šifru, barkod ili naziv artikla…"
-                />
-              </div>
-
-              <ComboList
-                items={results}
-                activeIdx={activeIdx}
-                setActiveIdx={setActiveIdx}
-                onPick={addProduct}
-                refs={resultRefs}
-                render={(p) => (
-                  <>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-[12.5px] font-medium text-slate-700 truncate">{p.naziv}</p>
-                      <p className="font-mono text-[10px] text-slate-400 mt-0.5">{p.sifra}</p>
-                    </div>
-                    <span className="font-mono text-[12px] font-semibold text-slate-700 tabular-nums flex-shrink-0">
-                      {formatKM(p.cijena)}
-                    </span>
-                  </>
-                )}
-              />
+              <PretragaProizvoda tipovi={['artikal', 'usluga']} onIzaberi={addProduct} nedavnoKljuc="racun"
+                placeholder="Šifra, barkod ili naziv artikla" />
             </div>
 
             {stavke.length === 0 ? (

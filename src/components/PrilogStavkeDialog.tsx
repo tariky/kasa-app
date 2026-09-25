@@ -1,13 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { DecimalInput } from '@/components/ui/decimal-input';
 import { Label } from '@/components/ui/label';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Search, Trash2, Check, AlertTriangle } from 'lucide-react';
+import { Trash2, Check, AlertTriangle } from 'lucide-react';
+import { PretragaProizvoda } from '@/components/PretragaProizvoda';
 import { sumaPriloga, prilogKompletan } from '@/lib/prilog';
 import { iznosStavke } from '@/lib/racun';
 import { round2 } from '@/lib/novac';
@@ -39,17 +39,14 @@ interface PrilogStavkeDialogProps {
  */
 export default function PrilogStavkeDialog({ open, onOpenChange, order, onSaved }: PrilogStavkeDialogProps) {
   const [stavke, setStavke] = useState<StavkaRed[]>([]);
-  const [query, setQuery] = useState('');
-  const [results, setResults] = useState<Product[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const readOnly = order.status !== 'completed';
 
   useEffect(() => {
     if (!open) return;
-    setQuery(''); setResults([]); setError(null); setBusy(false);
+    setError(null); setBusy(false);
     window.api.getPrilogStavke(order.id)
       .then(rows => setStavke(rows.map((r: any) => ({
         productId: r.productId,
@@ -64,34 +61,20 @@ export default function PrilogStavkeDialog({ open, onOpenChange, order, onSaved 
       .catch((err: any) => { setStavke([]); setError(err?.message || 'Greška pri čitanju stavki'); });
   }, [open, order.id]);
 
-  // Pretraga proizvoda — isti debounce obrazac kao na kasi.
-  useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (!query.trim()) { setResults([]); return; }
-    debounceRef.current = setTimeout(async () => {
-      try {
-        const found = await window.api.searchProducts(query.trim());
-        // Zbirna stavka je fiskalizovana sa stopom E — samo takvi proizvodi smiju u prilog.
-        setResults(found.filter((p: Product) => p.pdvStopa === 'E'));
-      } catch { setResults([]); }
-    }, 250);
-    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
-  }, [query]);
-
   const suma = useMemo(() => sumaPriloga(stavke), [stavke]);
   const kompletan = useMemo(() => prilogKompletan(order.ukupno, stavke), [order.ukupno, stavke]);
   const razlika = round2(suma - order.ukupno);
 
-  const addProduct = (p: Product) => {
+  const addProduct = (p: Product, kol: number | null) => {
+    const k = kol ?? 1;
     setStavke(prev => {
       const existing = prev.find(s => s.productId === p.id);
-      if (existing) return prev.map(s => s.productId === p.id ? { ...s, kolicina: s.kolicina + 1 } : s);
+      if (existing) return prev.map(s => s.productId === p.id ? { ...s, kolicina: Math.round((s.kolicina + k) * 1000) / 1000 } : s);
       return [...prev, {
         productId: p.id, naziv: p.naziv, jm: p.jm || 'kom', sifra: p.sifra, tip: p.tip,
-        kolicina: 1, cijena: p.cijena, pdvStopa: p.pdvStopa,
+        kolicina: k, cijena: p.cijena, pdvStopa: p.pdvStopa,
       }];
     });
-    setQuery(''); setResults([]);
   };
 
   const updateStavka = (productId: number, patch: Partial<StavkaRed>) =>
@@ -132,30 +115,9 @@ export default function PrilogStavkeDialog({ open, onOpenChange, order, onSaved 
         {!readOnly && (
           <div>
             <Label>Dodaj stavku</Label>
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-              <Input
-                className="pl-9"
-                value={query}
-                onChange={e => setQuery(e.target.value)}
-                placeholder="Pretraži šifru, barkod ili naziv (samo PDV stopa E)..."
-              />
-            </div>
-            {results.length > 0 && (
-              <div className="border rounded-md mt-1 max-h-40 overflow-auto">
-                {results.map(p => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    onClick={() => addProduct(p)}
-                    className="w-full text-left px-3 py-2 hover:bg-slate-100 flex justify-between text-sm"
-                  >
-                    <span>{p.naziv} <span className="text-slate-400">({p.sifra})</span></span>
-                    <span className="font-mono">{formatKM(p.cijena)}</span>
-                  </button>
-                ))}
-              </div>
-            )}
+            {/* Zbirna stavka je fiskalizovana sa stopom E — samo takvi proizvodi smiju u prilog. */}
+            <PretragaProizvoda tipovi={['artikal', 'usluga']} filter={p => p.pdvStopa === 'E'} onIzaberi={addProduct}
+              nedavnoKljuc="prilog" placeholder="Šifra, barkod ili naziv (samo PDV stopa E)" />
           </div>
         )}
 

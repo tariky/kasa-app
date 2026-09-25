@@ -17,6 +17,7 @@ import {
 import { iznosStavke } from '@/lib/racun';
 import { formatKM, cn, porukaGreske } from '@/lib/utils';
 import type { Kupac, Product } from '@/types';
+import { PretragaProizvoda } from '@/components/PretragaProizvoda';
 
 type PaymentType = 'Gotovina' | 'Kartica' | 'Virman' | 'Ček';
 type Mode = 'stavke' | 'iznos';
@@ -66,9 +67,6 @@ export default function PrilogRacunDialog({ open, onOpenChange, korisnikId, onSu
   const [veza, setVeza] = useState(PRILOG_VEZA_DEFAULT);
   const [nacinPlacanja, setNacinPlacanja] = useState<PaymentType>('Gotovina');
 
-  const [query, setQuery] = useState('');
-  const [results, setResults] = useState<Product[]>([]);
-  const [focusedIndex, setFocusedIndex] = useState(-1);
 
   const [kupacNaziv, setKupacNaziv] = useState('');
   const [kupacIdBroj, setKupacIdBroj] = useState('');
@@ -89,14 +87,11 @@ export default function PrilogRacunDialog({ open, onOpenChange, korisnikId, onSu
   const searchRef = useRef<HTMLInputElement>(null);
   const iznosRef = useRef<HTMLInputElement>(null);
   const kupacSearchRef = useRef<HTMLInputElement>(null);
-  const resultsRef = useRef<HTMLDivElement>(null);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!open) return;
     setMode('stavke'); setStavke([]); setRucniIznos(null); setNacinPlacanja('Gotovina');
     setOpis(PRILOG_OPIS_DEFAULT); setVeza(PRILOG_VEZA_DEFAULT);
-    setQuery(''); setResults([]); setFocusedIndex(-1);
     setKupacNaziv(''); setKupacIdBroj(''); setKupacAdresa(''); setKupacGrad(''); setKupacPostanskiBroj('');
     setKupacSearch(''); setManualKupac(false);
     setError(null); setBusy(false);
@@ -106,21 +101,6 @@ export default function PrilogRacunDialog({ open, onOpenChange, korisnikId, onSu
       .catch(() => setPredvidjeniBroj(null));
     window.api.getKupci().then(setAllKupci).catch(() => setAllKupci([]));
   }, [open]);
-
-  // Pretraga proizvoda — isti debounce obrazac kao na kasi. Zbirna stavka je
-  // fiskalizovana sa stopom E, pa samo takvi proizvodi smiju u prilog.
-  useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (!query.trim()) { setResults([]); setFocusedIndex(-1); return; }
-    debounceRef.current = setTimeout(async () => {
-      try {
-        const found = await window.api.searchProducts(query.trim());
-        setResults(found.filter((p: Product) => p.pdvStopa === 'E'));
-        setFocusedIndex(-1);
-      } catch { setResults([]); }
-    }, 250);
-    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
-  }, [query]);
 
   const sumaStavki = useMemo(
     () => sumaPriloga(stavke.map(s => ({ productId: s.productId, kolicina: s.kolicina, cijena: s.cijena, pdvStopa: s.pdvStopa }))),
@@ -145,16 +125,16 @@ export default function PrilogRacunDialog({ open, onOpenChange, korisnikId, onSu
     }
   }, [zadnjiBrojUnos]);
 
-  const addProduct = useCallback((p: Product) => {
+  const addProduct = useCallback((p: Product, kol: number | null) => {
+    const k = kol ?? 1;
     setStavke(prev => {
       const existing = prev.find(s => s.productId === p.id);
-      if (existing) return prev.map(s => s.productId === p.id ? { ...s, kolicina: s.kolicina + 1 } : s);
+      if (existing) return prev.map(s => s.productId === p.id ? { ...s, kolicina: Math.round((s.kolicina + k) * 1000) / 1000 } : s);
       return [...prev, {
         productId: p.id, naziv: p.naziv, jm: p.jm || 'kom', sifra: p.sifra,
-        kolicina: 1, cijena: p.cijena, pdvStopa: p.pdvStopa,
+        kolicina: k, cijena: p.cijena, pdvStopa: p.pdvStopa,
       }];
     });
-    setQuery(''); setResults([]); setFocusedIndex(-1);
     searchRef.current?.focus();
   }, []);
 
@@ -169,33 +149,6 @@ export default function PrilogRacunDialog({ open, onOpenChange, korisnikId, onSu
   const removeStavka = (productId: number) => {
     setStavke(prev => prev.filter(s => s.productId !== productId));
     searchRef.current?.focus();
-  };
-
-  const handleSearchKeyDown = async (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-      e.preventDefault();
-      if (results.length === 0) return;
-      const next = e.key === 'ArrowDown'
-        ? (focusedIndex < results.length - 1 ? focusedIndex + 1 : 0)
-        : (focusedIndex > 0 ? focusedIndex - 1 : results.length - 1);
-      setFocusedIndex(next);
-      (resultsRef.current?.children[next] as HTMLElement | undefined)?.scrollIntoView({ block: 'nearest' });
-      return;
-    }
-    if (e.key === 'Escape' && query) {
-      e.preventDefault();
-      setQuery(''); setResults([]); setFocusedIndex(-1);
-      return;
-    }
-    if (e.key !== 'Enter') return;
-    e.preventDefault();
-    if (focusedIndex >= 0 && focusedIndex < results.length) { addProduct(results[focusedIndex]); return; }
-    const q = query.trim();
-    if (!q) return;
-    // Bez izbora strelicama: tačan pogodak šifre/barkoda, pa jedini rezultat.
-    const exact = results.find(p => p.sifra === q || p.barkod === q);
-    if (exact) addProduct(exact);
-    else if (results.length === 1) addProduct(results[0]);
   };
 
   const q = kupacSearch.trim().toLowerCase();
@@ -346,49 +299,9 @@ export default function PrilogRacunDialog({ open, onOpenChange, korisnikId, onSu
             {mode === 'stavke' ? (
               <>
                 <div className="px-6 pb-3 pt-5">
-                  <div className="relative">
-                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                    <Input
-                      ref={searchRef}
-                      autoFocus
-                      value={query}
-                      onChange={e => setQuery(e.target.value)}
-                      onKeyDown={handleSearchKeyDown}
-                      placeholder="Pretraži šifru, barkod ili naziv artikla..."
-                      className="h-11 rounded-xl pl-9 text-sm"
-                    />
-                  </div>
-
-                  {results.length > 0 && (
-                    <div
-                      ref={resultsRef}
-                      className="mt-1.5 max-h-56 overflow-auto rounded-xl border border-slate-100 bg-white shadow-sm"
-                    >
-                      {results.map((p, i) => (
-                        <button
-                          key={p.id}
-                          type="button"
-                          onClick={() => addProduct(p)}
-                          onMouseEnter={() => setFocusedIndex(i)}
-                          className={cn(
-                            'flex w-full items-center justify-between gap-3 border-b border-slate-50 px-4 py-2.5 text-left last:border-b-0',
-                            focusedIndex === i ? 'bg-blue-50' : 'hover:bg-slate-50',
-                          )}
-                        >
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate text-[13px] font-medium text-slate-800">{p.naziv}</span>
-                            <span className="block truncate font-mono text-[11px] text-slate-400">
-                              {p.sifra}{p.jm ? ` · ${p.jm}` : ''}
-                              {p.stanje != null ? ` · stanje ${p.stanje}` : ''}
-                            </span>
-                          </span>
-                          <span className="shrink-0 font-mono text-[12.5px] tabular-nums text-slate-600">
-                            {formatKM(p.cijena)}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
+                  {/* Zbirna stavka je fiskalizovana sa stopom E, pa samo takvi proizvodi smiju u prilog. */}
+                  <PretragaProizvoda tipovi={['artikal', 'usluga']} filter={p => p.pdvStopa === 'E'} onIzaberi={addProduct}
+                    inputRef={searchRef} autoFocus nedavnoKljuc="prilog" placeholder="Šifra, barkod ili naziv artikla" />
                 </div>
 
                 {/* Stavke */}

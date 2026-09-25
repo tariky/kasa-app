@@ -6,11 +6,11 @@ import { uNetto } from '@/lib/pdvUnos';
 import { useUnosBezPdv } from '@/hooks/useUnosBezPdv';
 import { jePloca, komUM2 } from '@/lib/ploca';
 import { cn, formatKM, parseDecimal } from '@/lib/utils';
-import { Input } from '@/components/ui/input';
 import { DecimalInput } from '@/components/ui/decimal-input';
 import { Key } from '@/components/ui/ledger';
-import { Search, X, Plus } from 'lucide-react';
-import { pretraziZaUlaz } from '@/lib/dobavljacSifre';
+import { X, Plus } from 'lucide-react';
+import { bonusSifreIzabranog } from '@/lib/dobavljacSifre';
+import { PretragaProizvoda } from '@/components/PretragaProizvoda';
 
 export interface UlazStavkeHandle {
   /** Doda prazan red (ako zadnji nije već prazan) i stavi fokus na njegovu pretragu. */
@@ -34,9 +34,6 @@ export const UlazStavkeEditor = forwardRef<UlazStavkeHandle, {
   /** Šifre izabranog dobavljača ulaza (productId → šifra): tačan pogodak ide prvi u pretrazi. */
   sifreDobavljaca?: Map<number, string>;
 }>(function UlazStavkeEditor({ rows, onChange, products, sifreDobavljaca }, ref) {
-  const [query, setQuery] = useState<Record<number, string>>({});
-  const [active, setActive] = useState(0);
-  const [openRow, setOpenRow] = useState<number | null>(null);
   const inputs = useRef<Map<string, HTMLInputElement>>(new Map());
   const pendingFocus = useRef<string | null>(null);
   // Prodajna se kuca sa ili bez PDV-a za cijeli ulaz (jedna faktura = jedan način);
@@ -77,10 +74,13 @@ export const UlazStavkeEditor = forwardRef<UlazStavkeHandle, {
   const noviRed = () => { const i = dodajRed(); pendingFocus.current = key(i, 'artikal'); if (i < rows.length) focus(i, 'artikal'); };
   useImperativeHandle(ref, () => ({ noviRed }));
 
-  const odaberi = (i: number, p: Product) => {
-    set(i, { productId: p.id, cijena: trebaProdajnu(p) ? String(p.cijena) : '', cijenaUnos: undefined });
-    setQuery(q => ({ ...q, [i]: '' })); setOpenRow(null);
-    pendingFocus.current = key(i, 'kolicina');
+  /** Uz "3*…" količina je već upisana, pa fokus preskače na nabavnu. */
+  const odaberi = (i: number, p: Product, kol: number | null) => {
+    set(i, {
+      productId: p.id, cijena: trebaProdajnu(p) ? String(p.cijena) : '', cijenaUnos: undefined,
+      ...(kol != null ? { kolicina: String(kol).replace('.', ',') } : {}),
+    });
+    pendingFocus.current = key(i, kol != null ? 'nabavna' : 'kolicina');
   };
 
   const poljaReda = (p: Product | undefined): Polje[] => (trebaProdajnu(p) ? ['kolicina', 'nabavna', 'rabat', 'prodajna'] : ['kolicina', 'nabavna', 'rabat']);
@@ -95,15 +95,7 @@ export const UlazStavkeEditor = forwardRef<UlazStavkeHandle, {
     noviRed();
   };
 
-  const rezultati = useMemo(() => (openRow != null ? pretraziZaUlaz(products, query[openRow] ?? '', sifreDobavljaca) : []), [openRow, query, products, sifreDobavljaca]);
-
-  const onSearchKey = (i: number, e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Escape') { if (query[i]) { setQuery(q => ({ ...q, [i]: '' })); } return; }
-    if (rezultati.length === 0) return;
-    if (e.key === 'ArrowDown') { e.preventDefault(); setActive(a => Math.min(rezultati.length - 1, a + 1)); }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(a => Math.max(0, a - 1)); }
-    else if (e.key === 'Enter') { e.preventDefault(); odaberi(i, rezultati[active]); }
-  };
+  const bonus = useMemo(() => bonusSifreIzabranog(sifreDobavljaca), [sifreDobavljaca]);
 
   const fali = (i: number, sta: Nedostaje) => { const s = redStatus(rows[i], products); return s.stanje === 'nepotpun' && s.nedostaje.includes(sta); };
 
@@ -148,7 +140,7 @@ export const UlazStavkeEditor = forwardRef<UlazStavkeHandle, {
                 <td className={cn(TD, 'text-right pr-2 pt-[11px] font-mono text-[10.5px] tabular-nums text-slate-300')}>{i + 1}</td>
                 <td className={cn(TD, 'px-2 min-w-[220px]')}>
                   {p ? (
-                    <button type="button" onClick={() => { set(i, { productId: null, cijena: '', cijenaUnos: undefined }); setOpenRow(i); pendingFocus.current = key(i, 'artikal'); }}
+                    <button type="button" onClick={() => { set(i, { productId: null, cijena: '', cijenaUnos: undefined }); pendingFocus.current = key(i, 'artikal'); }}
                       title="Promijeni artikal"
                       className="w-full text-left rounded-md px-2 py-1 -mx-2 hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50">
                       <span className="block text-[12.5px] font-medium text-slate-800 leading-snug">{p.naziv}</span>
@@ -159,31 +151,10 @@ export const UlazStavkeEditor = forwardRef<UlazStavkeHandle, {
                       </span>
                     </button>
                   ) : (
-                    <div className="relative">
-                      <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400 pointer-events-none" />
-                      <Input ref={reg(i, 'artikal')} value={query[i] ?? ''} role="combobox" aria-label={`Artikal red ${i + 1}`}
-                        aria-expanded={openRow === i && rezultati.length > 0} aria-autocomplete="list"
-                        onChange={e => { setQuery(q => ({ ...q, [i]: e.target.value })); setOpenRow(i); setActive(0); }}
-                        onFocus={() => setOpenRow(i)} onBlur={() => setTimeout(() => setOpenRow(o => (o === i ? null : o)), 120)}
-                        onKeyDown={e => onSearchKey(i, e)}
-                        placeholder="Naziv, šifra, barkod ili šifra dobavljača…"
-                        className={cn('pl-8 h-8 text-[12.5px] bg-slate-50 focus-visible:bg-white', fali(i, 'artikal') && MISSING)} />
-                      {openRow === i && rezultati.length > 0 && (
-                        <ul role="listbox" className="absolute left-0 z-20 mt-1 w-[min(520px,90vw)] rounded-lg border border-slate-200 bg-white shadow-lg shadow-slate-900/10 max-h-64 overflow-auto py-1">
-                          {rezultati.map((m, k) => (
-                            <li key={m.id} role="option" aria-selected={k === active}
-                              onMouseEnter={() => setActive(k)} onMouseDown={e => e.preventDefault()} onClick={() => odaberi(i, m)}
-                              className={cn('flex items-center gap-3 px-3 py-2 text-[12px] cursor-pointer', k === active ? 'bg-blue-50 text-slate-900' : 'text-slate-700')}>
-                              <span className="font-mono text-[11px] text-slate-400 w-[72px] flex-shrink-0 truncate">{m.sifra}</span>
-                              <span className="min-w-0 flex-1 truncate">{m.naziv}</span>
-                              {m.tip === 'materijal'
-                                ? <span className="text-[10px] font-semibold text-violet-500 flex-shrink-0">materijal</span>
-                                : <span className="font-mono text-[11px] tabular-nums text-slate-400 flex-shrink-0">{formatKM(m.cijena)}</span>}
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </div>
+                    <PretragaProizvoda stavke={products} bonus={bonus} onIzaberi={(p, kol) => odaberi(i, p, kol)}
+                      inputRef={reg(i, 'artikal')} velicina="sm" minSirinaListe={560} akcija="izaberi" nedavnoKljuc="ulaz"
+                      placeholder="Naziv, šifra, barkod ili šifra dobavljača…" ariaLabel={`Artikal red ${i + 1}`}
+                      poljeClassName={cn(fali(i, 'artikal') && 'border-amber-300 bg-amber-50/40')} />
                   )}
                 </td>
                 <td className={cn(TD, 'px-2')}>

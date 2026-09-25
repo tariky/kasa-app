@@ -1,5 +1,6 @@
 import { test, expect } from 'bun:test';
-import { pretraziZaUlaz, uPayload, uRedove, uSiframaDobavljaca } from './dobavljacSifre';
+import { bonusSifreIzabranog, uPayload, uRedove, uSiframaDobavljaca } from './dobavljacSifre';
+import { poljaProizvoda, pretrazi } from './pretraga';
 import type { Product } from '@/types';
 
 test('uPayload preskače redove bez dobavljača, a praznu šifru šalje kao null', () => {
@@ -24,13 +25,15 @@ test('uSiframaDobavljaca traži podstring bez obzira na velika slova', () => {
 const art = (id: number, naziv: string, extra: Partial<Product> = {}) =>
   ({ id, sifra: `A${id}`, naziv, jm: 'kom', cijena: 1, pdvStopa: 'E', tip: 'artikal', createdAt: '', updatedAt: '', ...extra }) as Product;
 
-test('pretraziZaUlaz nalazi po šifri dobavljača i stavlja tačnu šifru izabranog dobavljača prvu', () => {
+test('pretraga ulaza nalazi po šifri dobavljača, a tačna šifra izabranog dobavljača ide prva', () => {
   const lista = [
     art(1, 'Kafa K-10 pakovanje'),
     art(2, 'Čaj', { sifreDobavljaca: 'K-10' }),
     art(3, 'Šećer', { sifreDobavljaca: 'K-100' }),
   ];
-  expect(pretraziZaUlaz(lista, 'k-10').map(p => p.id)).toEqual([1, 2, 3]);
-  expect(pretraziZaUlaz(lista, 'K-10', new Map([[2, 'K-10'], [3, 'K-100']])).map(p => p.id)).toEqual([2, 1, 3]);
-  expect(pretraziZaUlaz(lista, '  ')).toEqual([]);
+  const ids = (q: string, sifre?: Map<number, string>) =>
+    pretrazi(lista, q, poljaProizvoda, { bonus: bonusSifreIzabranog(sifre) }).map(p => p.stavka.id);
+  expect(ids('k-10')).toEqual([1, 2, 3]);
+  expect(ids('K-10', new Map([[2, 'K-10'], [3, 'K-100']]))).toEqual([2, 1, 3]);
+  expect(ids('  ')).toEqual([]);
 });

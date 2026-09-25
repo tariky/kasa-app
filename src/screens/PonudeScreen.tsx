@@ -14,7 +14,7 @@ import { DatePicker } from '@/components/ui/date-picker';
 import { ActionRow, Eyebrow, Key, LedgerHead, SegmentedFilter } from '@/components/ui/ledger';
 import {
   RefreshCw, FileText, AlertTriangle, Printer, Download, Plus, Trash2, Pencil,
-  Receipt, Search, X, Banknote, CreditCard, Building, FileCheck, Hammer,
+  Receipt, X, Banknote, CreditCard, Building, FileCheck, Hammer,
   Send, Check, Ban, CornerDownLeft, ChevronsUpDown, ChevronsLeftRight,
 } from 'lucide-react';
 import { pdf } from '@react-pdf/renderer';
@@ -26,6 +26,8 @@ import { cn, formatKM, formatDate } from '@/lib/utils';
 import { useModuli } from '@/hooks/useModuli';
 import { formatBrojNaloga } from '@/lib/proizvodnja';
 import { LOGO_VELICINA } from '@/lib/firma';
+import { PretragaProizvoda } from '@/components/PretragaProizvoda';
+import type { Product } from '@/types';
 
 /** "8 dana od datuma ponude" — bosanska množina: 1/21/31 dan, ostalo dana. */
 function opisRoka(dana: number): string {
@@ -137,9 +139,6 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
   const [vaziDo, setVaziDo] = useState('');
   const [napomena, setNapomena] = useState('');
   const [stavke, setStavke] = useState<FormStavka[]>([]);
-  const [productQuery, setProductQuery] = useState('');
-  const [productResults, setProductResults] = useState<any[]>([]);
-  const [productIndex, setProductIndex] = useState(0);
   const [formError, setFormError] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -225,8 +224,6 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
     setVaziDo(plusDana(danasnji, DEFAULT_ROK_DANA));
     setNapomena('');
     setStavke([]);
-    setProductQuery('');
-    setProductResults([]);
     setFormError('');
     setKupci(await window.api.getKupci());
     setFormOpen(true);
@@ -248,52 +245,23 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
       rabat: s.rabat || 0,
       pdvStopa: s.pdvStopa,
     })));
-    setProductQuery('');
-    setProductResults([]);
     setFormError('');
     setKupci(await window.api.getKupci());
     setFormOpen(true);
   }, []);
 
-  const searchProducts = async (q: string) => {
-    setProductQuery(q);
-    setProductIndex(0);
-    if (q.trim().length < 2) { setProductResults([]); return; }
-    setProductResults(await window.api.searchProducts(q.trim()));
-  };
-
-  const addStavka = (p: any) => {
+  const addStavka = (p: Product, kol: number | null) => {
+    const k = kol ?? 1;
     setStavke(prev => {
       const existing = prev.find(s => s.productId === p.id);
       if (existing) {
-        return prev.map(s => s.productId === p.id ? { ...s, kolicina: s.kolicina + 1 } : s);
+        return prev.map(s => s.productId === p.id ? { ...s, kolicina: Math.round((s.kolicina + k) * 1000) / 1000 } : s);
       }
       return [...prev, {
         productId: p.id, naziv: p.naziv, jm: p.jm || 'kom',
-        kolicina: 1, cijena: p.cijena, rabat: 0, pdvStopa: p.pdvStopa,
+        kolicina: k, cijena: p.cijena, rabat: 0, pdvStopa: p.pdvStopa,
       }];
     });
-    setProductQuery('');
-    setProductResults([]);
-    setProductIndex(0);
-  };
-
-  /** Strelice biraju artikal, Enter ga dodaje — pretraga radi bez miša. */
-  const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (productResults.length === 0) return;
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      setProductIndex(i => Math.min(productResults.length - 1, i + 1));
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      setProductIndex(i => Math.max(0, i - 1));
-    } else if (e.key === 'Enter') {
-      e.preventDefault();
-      addStavka(productResults[productIndex]);
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      setProductResults([]);
-    }
   };
 
   const savePonuda = async () => {
@@ -955,37 +923,8 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
             {/* Stavke */}
             <div className="space-y-2">
               <Eyebrow className="block">Stavke</Eyebrow>
-              <div className="relative">
-                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                <Input
-                  value={productQuery}
-                  onChange={e => searchProducts(e.target.value)}
-                  onKeyDown={handleSearchKeyDown}
-                  placeholder="Pretraži artikle (naziv, šifra, barkod) — ↑↓ bira, ↵ dodaje"
-                  className="h-9 pl-9 text-[13px]"
-                />
-                {productResults.length > 0 && (
-                  <div className="absolute z-50 top-full mt-1 left-0 right-0 bg-white border border-slate-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
-                    {productResults.map((p, i) => (
-                      <button
-                        key={p.id}
-                        onClick={() => addStavka(p)}
-                        onMouseEnter={() => setProductIndex(i)}
-                        className={cn(
-                          'w-full flex items-center justify-between px-3 py-2 text-left transition-colors',
-                          i === productIndex ? 'bg-blue-50/80' : 'hover:bg-slate-50',
-                        )}
-                      >
-                        <div>
-                          <p className="text-[12px] font-medium text-slate-700">{p.naziv}</p>
-                          <p className="text-[10px] text-slate-400 font-mono">{p.sifra} · stanje: {p.stanje}</p>
-                        </div>
-                        <span className="text-[12px] font-mono font-semibold text-slate-700">{formatKM(p.cijena)}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
+              <PretragaProizvoda tipovi={['artikal', 'usluga']} onIzaberi={addStavka} nedavnoKljuc="ponuda"
+                placeholder="Dodaj artikal ili uslugu: naziv, šifra ili barkod" />
 
               {stavke.length > 0 && (
                 <div className="border border-slate-100 rounded-lg divide-y divide-slate-50">

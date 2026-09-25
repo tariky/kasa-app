@@ -1,15 +1,18 @@
 // src/components/proizvodnja/StavkeUtroska.tsx
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import type { RadniNalogStavka } from '@/types';
+import type { Product, RadniNalogStavka } from '@/types';
 import type { NalogStavkaInput, KalkulacijaStavka } from '@/lib/proizvodnja';
 import { jePloca, napomenaUElemente } from '@/lib/ploca';
 import { cn, formatKM, parseDecimal } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import type { PretragaStavkiHandle } from '@/components/ui/pretraga-stavki';
+import { PretragaProizvoda } from '@/components/PretragaProizvoda';
+import { uvecajKolicinu } from '@/lib/pretraga';
 import { DecimalInput } from '@/components/ui/decimal-input';
 import { Eyebrow, Key, mod } from '@/components/ui/ledger';
 import { ElementiDialog } from './ElementiDialog';
-import { Search, X, Ruler, Save, AlertTriangle, Lock } from 'lucide-react';
+import { X, Ruler, Save, AlertTriangle, Lock } from 'lucide-react';
 
 export interface StavkaDraft {
   materijalId: number; naziv: string; sifra: string; jm: string;
@@ -47,14 +50,10 @@ export const StavkeUtroska = forwardRef<StavkeHandle, {
 }>(function StavkeUtroska({ nalogId, stavke, uredivo, kalkStavke, onSave, onDirtyChange }, ref) {
   const [draft, setDraft] = useState<StavkaDraft[]>(stavke.map(izStavke));
   const [dirty, setDirty] = useState(false);
-  const [query, setQuery] = useState('');
-  const [results, setResults] = useState<any[]>([]);
-  const [active, setActive] = useState(0);
   const [elementiZa, setElementiZa] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const searchRef = useRef<HTMLInputElement>(null);
+  const searchRef = useRef<PretragaStavkiHandle>(null);
   const kolRefs = useRef<Map<number, HTMLInputElement>>(new Map());
   const focusAfterAdd = useRef<number | null>(null);
 
@@ -70,12 +69,6 @@ export const StavkeUtroska = forwardRef<StavkeHandle, {
   // Nalog je izgubio uređivost (npr. završen) — odbaci draft i otključaj dirty.
   useEffect(() => { if (!uredivo) { setDirty(false); setDraft(stavke.map(izStavke)); } }, [uredivo]);
 
-  useEffect(() => {
-    if (debounce.current) clearTimeout(debounce.current);
-    if (!query.trim()) { setResults([]); setActive(0); return; }
-    debounce.current = setTimeout(async () => { setResults(await window.api.searchMaterijal(query.trim())); setActive(0); }, 150);
-  }, [query]);
-
   // Nova stavka: fokus ide pravo na količinu, jer je to sljedeće što se kuca.
   useEffect(() => {
     if (focusAfterAdd.current == null) return;
@@ -90,17 +83,21 @@ export const StavkeUtroska = forwardRef<StavkeHandle, {
     return m;
   }, [kalkStavke]);
 
-  const dodaj = (m: any) => {
+  /** Uz "3*…" količina je već upisana pa fokus ostaje u pretrazi; inače ide na količinu. */
+  const dodaj = (m: Product, kol: number | null) => {
     const postoji = draft.some(x => x.materijalId === m.id);
+    const k = kol != null ? String(kol).replace('.', ',') : '';
     if (!postoji) {
       setDraft(d => [...d, {
-        materijalId: m.id, naziv: m.naziv, sifra: m.sifra, jm: m.jm, kolicina: '', napomena: '',
+        materijalId: m.id, naziv: m.naziv, sifra: m.sifra, jm: m.jm, kolicina: k, napomena: '',
         stanje: m.stanje ?? 0, plocaSirina: m.plocaSirina, plocaVisina: m.plocaVisina,
       }]);
-      setDirty(true);
+    } else if (k) {
+      setDraft(d => d.map(x => (x.materijalId === m.id ? { ...x, kolicina: uvecajKolicinu(x.kolicina, kol!) } : x)));
     }
+    if (!postoji || k) setDirty(true);
+    if (k) return;
     focusAfterAdd.current = m.id;
-    setQuery(''); setResults([]);
     if (postoji) { const el = kolRefs.current.get(m.id); el?.focus(); el?.select(); }
   };
   const set = (i: number, patch: Partial<StavkaDraft>) => { setDraft(d => d.map((s, j) => (j === i ? { ...s, ...patch } : s))); setDirty(true); };
@@ -128,15 +125,6 @@ export const StavkeUtroska = forwardRef<StavkeHandle, {
 
   useImperativeHandle(ref, () => ({ save: spremi, focusSearch: () => searchRef.current?.focus() }));
 
-  const onSearchKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    // Esc s upitom briše upit; bez upita dijalog sam skida fokus s polja (vidi onEscapeKeyDown).
-    if (e.key === 'Escape') { if (query) { setQuery(''); setResults([]); } return; }
-    if (results.length === 0) return;
-    if (e.key === 'ArrowDown') { e.preventDefault(); setActive(a => Math.min(results.length - 1, a + 1)); }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(a => Math.max(0, a - 1)); }
-    else if (e.key === 'Enter') { e.preventDefault(); dodaj(results[active]); }
-  };
-
   const zamrznuto = !uredivo && (kalkStavke?.some(s => s.zamrznuto) ?? false);
 
   return (
@@ -159,26 +147,8 @@ export const StavkeUtroska = forwardRef<StavkeHandle, {
       </div>
 
       {uredivo && (
-        <div className="relative mt-1 mb-2">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400 pointer-events-none" />
-          <Input ref={searchRef} value={query} onChange={e => setQuery(e.target.value)} onKeyDown={onSearchKey}
-            placeholder="Dodaj materijal — naziv ili šifra…" aria-label="Dodaj materijal"
-            role="combobox" aria-expanded={results.length > 0} aria-autocomplete="list"
-            className="pl-9 pr-10 h-9 text-[12.5px] bg-slate-50 border-slate-200 focus-visible:bg-white" />
-          {!query && <Key className="absolute right-2.5 top-1/2 -translate-y-1/2 ml-0">/</Key>}
-          {results.length > 0 && (
-            <ul role="listbox" className="absolute left-0 right-0 top-full z-20 mt-1 rounded-lg border border-slate-200 bg-white shadow-lg shadow-slate-900/10 max-h-64 overflow-auto py-1">
-              {results.map((m, i) => (
-                <li key={m.id} role="option" aria-selected={i === active}
-                  onMouseEnter={() => setActive(i)} onMouseDown={e => e.preventDefault()} onClick={() => dodaj(m)}
-                  className={cn('flex items-center gap-3 px-3 py-2 text-[12px] cursor-pointer', i === active ? 'bg-blue-50 text-slate-900' : 'text-slate-700')}>
-                  <span className="min-w-0 flex-1 truncate"><span className="font-mono text-[11px] text-slate-400 mr-2">{m.sifra}</span>{m.naziv}</span>
-                  <span className={cn('flex-shrink-0 font-mono text-[11px] tabular-nums', (m.stanje ?? 0) <= 0 ? 'text-rose-500' : 'text-slate-400')}>{m.stanje} {m.jm}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+        <PretragaProizvoda ref={searchRef} tipovi={['materijal']} onIzaberi={dodaj} nedavnoKljuc="materijal"
+          precica="/" placeholder="Dodaj materijal: naziv ili šifra" ariaLabel="Dodaj materijal" className="mt-1 mb-2" />
       )}
 
       {draft.length === 0 ? (

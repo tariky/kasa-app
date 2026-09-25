@@ -1,5 +1,5 @@
 // src/components/proizvodnja/NormativiTab.tsx
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { NormativStavka, Product } from '@/types';
 import { cn, parseDecimal } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -7,6 +7,8 @@ import { Input } from '@/components/ui/input';
 import { DecimalInput } from '@/components/ui/decimal-input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Eyebrow } from '@/components/ui/ledger';
+import { PretragaProizvoda } from '@/components/PretragaProizvoda';
+import { uvecajKolicinu } from '@/lib/pretraga';
 import { Search, X, Save, ClipboardList, AlertTriangle } from 'lucide-react';
 
 interface Red { materijalId: number; naziv: string; sifra: string; jm: string; kolicina: string; napomena: string }
@@ -18,11 +20,7 @@ export function NormativiTab() {
   const [productId, setProductId] = useState<number | null>(null);
   const [redovi, setRedovi] = useState<Red[]>([]);
   const [dirty, setDirty] = useState(false);
-  const [query, setQuery] = useState('');
-  const [results, setResults] = useState<any[]>([]);
   const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const latestQuery = useRef('');
 
   useEffect(() => { window.api.getProducts('artikal').then(setArtikli); }, []);
 
@@ -38,25 +36,12 @@ export function NormativiTab() {
     }
   };
 
-  useEffect(() => {
-    if (debounce.current) clearTimeout(debounce.current);
-    const q = query.trim();
-    latestQuery.current = q;
-    if (!q) { setResults([]); return; }
-    debounce.current = setTimeout(async () => {
-      try {
-        const r = await window.api.searchMaterijal(q);
-        if (latestQuery.current === q) setResults(r);
-      } catch {
-        if (latestQuery.current === q) setResults([]);
-      }
-    }, 150);
-    return () => { if (debounce.current) clearTimeout(debounce.current); };
-  }, [query]);
-
-  const dodaj = (m: any) => {
-    setRedovi(r => r.some(x => x.materijalId === m.id) ? r : [...r, { materijalId: m.id, naziv: m.naziv, sifra: m.sifra, jm: m.jm, kolicina: '', napomena: '' }]);
-    setDirty(true); setQuery(''); setResults([]);
+  const dodaj = (m: Product, kol: number | null) => {
+    const k = kol != null ? String(kol).replace('.', ',') : '';
+    setRedovi(r => r.some(x => x.materijalId === m.id)
+      ? (k ? r.map(x => (x.materijalId === m.id ? { ...x, kolicina: uvecajKolicinu(x.kolicina, kol!) } : x)) : r)
+      : [...r, { materijalId: m.id, naziv: m.naziv, sifra: m.sifra, jm: m.jm, kolicina: k, napomena: '' }]);
+    setDirty(true);
   };
   const set = (i: number, patch: Partial<Red>) => { setRedovi(r => r.map((x, j) => (j === i ? { ...x, ...patch } : x))); setDirty(true); };
 
@@ -101,18 +86,9 @@ export function NormativiTab() {
               <Eyebrow>Normativ za 1 kom</Eyebrow>
               <h3 className="text-[16px] font-semibold text-slate-800 mt-0.5">{odabrani.naziv}</h3>
             </div>
-            <div className="px-5 py-2 relative">
-              <Search className="absolute left-8 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
-              <Input value={query} onChange={e => setQuery(e.target.value)} placeholder="Dodaj materijal…" className="pl-8 h-8 text-[12.5px] bg-slate-50" />
-              {results.length > 0 && (
-                <div className="absolute left-5 right-5 top-full z-20 mt-1 rounded-lg border border-slate-200 bg-white shadow-lg max-h-56 overflow-auto">
-                  {results.map(m => (
-                    <button key={m.id} onClick={() => dodaj(m)} className="w-full flex items-center justify-between px-3 py-2 text-left hover:bg-slate-50 text-[12px]">
-                      <span><span className="font-mono text-slate-400 mr-2">{m.sifra}</span>{m.naziv}</span><span className="text-[11px] text-slate-400">{m.jm}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
+            <div className="px-5 py-2">
+              <PretragaProizvoda tipovi={['materijal']} onIzaberi={dodaj} nedavnoKljuc="materijal"
+                velicina="sm" placeholder="Dodaj materijal: naziv ili šifra" />
             </div>
             <ScrollArea className="flex-1">
               <div className="divide-y divide-slate-50">
