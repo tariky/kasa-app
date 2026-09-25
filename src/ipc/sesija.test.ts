@@ -129,6 +129,40 @@ describe('OgranicenjePokusaja', () => {
   });
 });
 
+describe('OgranicenjePokusaja — sat vraćen unazad', () => {
+  const stanje = (o: OgranicenjePokusaja) => { try { o.provjeri(); return ''; } catch (e: any) { return e.message; } };
+
+  test('neuspjesi "iz budućnosti" se svedu na sada: ne produžuju ni prozor ni eskalaciju', () => {
+    const DAN = 86_400_000;
+    let sada = 10 * DAN;
+    let zapis: string | null = JSON.stringify({
+      neuspjesi: [sada + DAN, sada + DAN, sada + DAN, sada + DAN, sada + DAN], trajanje: 900_000, blokiranDo: sada + DAN + 900_000,
+    });
+    const skladiste = { ucitaj: () => zapis, spremi: (s: string) => { zapis = s; } };
+    const o = new OgranicenjePokusaja(() => sada, skladiste);
+    expect(stanje(o)).toBe(porukaBlokade(900_000));
+    // Upisano stanje više nema ništa poslije "sada".
+    const s = JSON.parse(zapis!);
+    expect(s.neuspjesi).toEqual([sada, sada, sada, sada, sada]);
+    expect(s.blokiranDo).toBe(sada + 900_000);
+    // Blokada ističe za 15 min, eskalacija 60 min nakon "sada" — ne tek za dan.
+    sada += 900_000;
+    expect(stanje(o)).toBe('');
+    sada += 60 * 60_000 - 900_000;
+    o.neuspjeh();
+    expect(stanje(o)).toBe('');
+    expect(JSON.parse(zapis!)).toEqual({ neuspjesi: [sada], trajanje: 0, blokiranDo: 0 });
+  });
+
+  test('i neuspjeh() odmah svodi buduće zapise', () => {
+    let zapis: string | null = JSON.stringify({ neuspjesi: [5e12], trajanje: 60_000, blokiranDo: 5e12 });
+    const skladiste = { ucitaj: () => zapis, spremi: (s: string) => { zapis = s; } };
+    const o = new OgranicenjePokusaja(() => 1e12, skladiste);
+    o.neuspjeh();
+    expect(JSON.parse(zapis!)).toEqual({ neuspjesi: [1e12, 1e12], trajanje: 120_000, blokiranDo: 1e12 + 120_000 });
+  });
+});
+
 describe('OgranicenjePromjenaPina', () => {
   test('3 promjene po korisniku u 10 min', () => {
     let sada = 0;

@@ -135,15 +135,31 @@ function uMemoriji(): SkladisteBlokade {
 
 const konacan = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x);
 
-/** Neispravan ili nepostojeći zapis = čisto stanje (bez blokade). */
-function procitajStanje(json: string | null): StanjeBlokade {
+/**
+ * Stanje iz skladišta, svedeno na `sada`. Neispravan ili nepostojeći zapis =
+ * čisto stanje (bez blokade). Sat vraćen unazad ne smije produžiti ni prozor
+ * ni eskalaciju: neuspjeh "iz budućnosti" postaje `sada`, a blokada traje
+ * najviše NAJDUZA_BLOKADA_MS od `sada`. `svedeno` = nešto je promijenjeno i
+ * treba ga upisati.
+ */
+function procitajStanje(json: string | null, sada: number): { s: StanjeBlokade; svedeno: boolean } {
+  let s: StanjeBlokade = { neuspjesi: [], trajanje: 0, blokiranDo: 0 };
   try {
-    const s = JSON.parse(json ?? '');
-    if (Array.isArray(s?.neuspjesi) && s.neuspjesi.every(konacan) && konacan(s.trajanje) && konacan(s.blokiranDo)) {
-      return { neuspjesi: s.neuspjesi, trajanje: s.trajanje, blokiranDo: s.blokiranDo };
+    const z = JSON.parse(json ?? '');
+    if (Array.isArray(z?.neuspjesi) && z.neuspjesi.every(konacan) && konacan(z.trajanje) && konacan(z.blokiranDo)) {
+      s = { neuspjesi: z.neuspjesi, trajanje: z.trajanje, blokiranDo: z.blokiranDo };
     }
   } catch { /* nije JSON */ }
-  return { neuspjesi: [], trajanje: 0, blokiranDo: 0 };
+  let svedeno = false;
+  if (s.neuspjesi.some(x => x > sada)) {
+    s.neuspjesi = s.neuspjesi.map(x => Math.min(x, sada));
+    svedeno = true;
+  }
+  if (s.blokiranDo > sada + NAJDUZA_BLOKADA_MS) {
+    s.blokiranDo = sada + NAJDUZA_BLOKADA_MS;
+    svedeno = true;
+  }
+  return { s, svedeno };
 }
 
 export class OgranicenjePokusaja {
@@ -156,19 +172,12 @@ export class OgranicenjePokusaja {
     this.skladiste.spremi(JSON.stringify(s));
   }
 
-  /**
-   * Baca grešku dok traje blokada — tada se PIN ni ne provjerava. Blokada koja
-   * bi trajala duže od najduže (sat vraćen unazad) skrati se na najdužu.
-   */
+  /** Baca grešku dok traje blokada — tada se PIN ni ne provjerava. */
   provjeri(): void {
     const t = this.sada();
-    const s = procitajStanje(this.skladiste.ucitaj());
-    let preostalo = s.blokiranDo - t;
-    if (preostalo > NAJDUZA_BLOKADA_MS) {
-      s.blokiranDo = t + NAJDUZA_BLOKADA_MS;
-      this.spremi(s);
-      preostalo = NAJDUZA_BLOKADA_MS;
-    }
+    const { s, svedeno } = procitajStanje(this.skladiste.ucitaj(), t);
+    if (svedeno) this.spremi(s);
+    const preostalo = s.blokiranDo - t;
     if (preostalo > 0) throw new Error(porukaBlokade(preostalo));
   }
 
@@ -180,7 +189,7 @@ export class OgranicenjePokusaja {
    */
   neuspjeh(): void {
     const t = this.sada();
-    let s = procitajStanje(this.skladiste.ucitaj());
+    let { s } = procitajStanje(this.skladiste.ucitaj(), t);
     const zadnji = s.neuspjesi.at(-1);
     if (zadnji === undefined || t - zadnji >= SMIRENJE_MS) s = { neuspjesi: [], trajanje: 0, blokiranDo: 0 };
     s.neuspjesi = s.neuspjesi.filter(x => t - x < SMIRENJE_MS);
