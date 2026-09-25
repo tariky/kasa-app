@@ -1,5 +1,5 @@
 import type * as Tring from '@/services/tring';
-import { provjeriReklamaciju } from '@/services/tring';
+import { provjeriReklamaciju } from '../services/tring';
 import type { SqlDb } from './sqldb';
 import { parseFiskalniBroj } from './fiskalni';
 import { buildTringReklamacija } from './tringRacun';
