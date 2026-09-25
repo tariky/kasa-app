@@ -63,7 +63,7 @@ function uPoljuZaUnos(t: EventTarget | null): boolean {
 
 const poljaKupca = (k: Kupac) => ({ naziv: k.naziv, sifra: k.idBroj, dodatno: [k.adresa, k.grad].filter(Boolean).join(' ') });
 
-export default function KasaScreen() {
+export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [zadnje, setZadnje] = useState<{ id: number; n: number } | null>(null);
   const [paymentType, setPaymentType] = useState<PaymentType>('Gotovina');
@@ -1089,6 +1089,7 @@ export default function KasaScreen() {
       <FakturaDialog
         open={prilogOpen}
         onOpenChange={setPrilogOpen}
+        uloga={uloga}
         skica={otvorenaSkica}
         onSkicePromijenjene={(spremljena) => {
           loadSkiceFaktura();

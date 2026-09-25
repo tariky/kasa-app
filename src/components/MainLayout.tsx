@@ -186,11 +186,11 @@ export default function MainLayout({ user, licenca, onLogout }: Props) {
             (1440px + 64px sidebar = 1504px), a sa strane ostaje pozadina. */}
         <div className="flex-1 min-h-0 overflow-hidden bg-slate-100">
           <div className="mx-auto h-full w-full max-w-[1440px] overflow-hidden bg-white min-[1504px]:border-x min-[1504px]:border-slate-200 min-[1504px]:shadow-sm">
-            {screen === 'kasa' && <KasaScreen />}
+            {screen === 'kasa' && <KasaScreen uloga={user.uloga} />}
             {screen === 'skladiste' && <SkladisteScreen />}
             {screen === 'sifarnik' && <SifarnikScreen />}
             {screen === 'narudzbe' && <NarudzbeScreen uloga={user.uloga} />}
-            {screen === 'ponude' && <PonudeScreen />}
+            {screen === 'ponude' && <PonudeScreen uloga={user.uloga} />}
             {screen === 'proizvodnja' && <ProizvodnjaScreen uloga={user.uloga} initialNalogId={openNalogId} />}
             {screen === 'izvjestaji' && <IzvjestajiScreen uloga={user.uloga} />}
             {screen === 'generator' && <GeneratorScreen />}

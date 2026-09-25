@@ -128,6 +128,8 @@ const izIso = (iso: string) => { const [y, m, d] = iso.split('-').map(Number); r
 interface FakturaDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Posljednji fiskalni broj (kad ga baza ne zna) upisuje samo administrator. */
+  uloga: 'admin' | 'kasir';
   /** Faktura po ponudi — preskače izbor firme. */
   pocetno?: FakturaPocetno | null;
   /** Nastavak spremljene skice; ima prednost pred `pocetno`. */
@@ -148,7 +150,7 @@ interface FakturaDialogProps {
  * stvarne stavke idu na fakturu koja nosi isti broj. Tok ima dva koraka — prvo
  * firma (uvijek obavezna), pa stavke ili ručni iznos i način plaćanja.
  */
-export default function FakturaDialog({ open, onOpenChange, pocetno, skica, onSkicePromijenjene, onSuccess }: FakturaDialogProps) {
+export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skica, onSkicePromijenjene, onSuccess }: FakturaDialogProps) {
   const [korak, setKorak] = useState<Korak>('firma');
   const [firma, setFirma] = useState<Firma | null>(null);
   /** Ručni unos / uređivanje firme; null = pretraga šifarnika. */
@@ -665,24 +667,30 @@ export default function FakturaDialog({ open, onOpenChange, pocetno, skica, onSk
                   <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5">
                     <p className="text-[12px] font-medium text-amber-800">Nepoznat broj sljedećeg isječka</p>
                     <p className="mt-0.5 text-[11.5px] leading-snug text-amber-700">
-                      U bazi nema fiskalizovanih računa. Upišite posljednji broj sa uređaja.
+                      {uloga === 'admin'
+                        ? 'U bazi nema fiskalizovanih računa. Upišite posljednji broj sa uređaja.'
+                        : 'U bazi nema fiskalizovanih računa. Posljednji broj sa uređaja upisuje administrator (Postavke → Fiskalni uređaj).'}
                     </p>
-                    <div className="mt-2 flex items-center gap-2">
-                      <Input
-                        value={zadnjiBrojUnos}
-                        onChange={e => setZadnjiBrojUnos(e.target.value.replace(/\D/g, ''))}
-                        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); spremiZadnjiBroj(); } }}
-                        inputMode="numeric"
-                        maxLength={9}
-                        placeholder="npr. 127"
-                        aria-label="Posljednji izdati fiskalni broj"
-                        className="h-8 w-28 rounded-lg border-amber-200 bg-white px-2 font-mono text-[13px] tabular-nums"
-                      />
-                      <Button size="sm" variant="outline" className="h-8 text-[12px]" disabled={!zadnjiBrojUnos} onClick={spremiZadnjiBroj}>
-                        Sačuvaj broj
-                      </Button>
-                    </div>
-                    {zadnjiBrojGreska && <p className="mt-1.5 text-[11px] text-red-600">{zadnjiBrojGreska}</p>}
+                    {uloga === 'admin' && (
+                      <>
+                        <div className="mt-2 flex items-center gap-2">
+                          <Input
+                            value={zadnjiBrojUnos}
+                            onChange={e => setZadnjiBrojUnos(e.target.value.replace(/\D/g, ''))}
+                            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); spremiZadnjiBroj(); } }}
+                            inputMode="numeric"
+                            maxLength={9}
+                            placeholder="npr. 127"
+                            aria-label="Posljednji izdati fiskalni broj"
+                            className="h-8 w-28 rounded-lg border-amber-200 bg-white px-2 font-mono text-[13px] tabular-nums"
+                          />
+                          <Button size="sm" variant="outline" className="h-8 text-[12px]" disabled={!zadnjiBrojUnos} onClick={spremiZadnjiBroj}>
+                            Sačuvaj broj
+                          </Button>
+                        </div>
+                        {zadnjiBrojGreska && <p className="mt-1.5 text-[11px] text-red-600">{zadnjiBrojGreska}</p>}
+                      </>
+                    )}
                   </div>
                 )}
 

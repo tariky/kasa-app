@@ -136,7 +136,7 @@ const poljaPonude = (p: PonudaRow): PoljaPretrage => ({
   dodatno: [formatBrojPonude(p), p.korisnikIme].join(' '),
 });
 
-export default function PonudeScreen() {
+export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
   const [ponude, setPonude] = useState<PonudaRow[]>([]);
   const [selected, setSelected] = useState<PonudaRow | null>(null);
   const [filter, setFilter] = useState<Filter>('sve');
@@ -1108,6 +1108,7 @@ export default function PonudeScreen() {
       <FakturaDialog
         open={fakturaOpen}
         onOpenChange={setFakturaOpen}
+        uloga={uloga}
         pocetno={faktura}
         onSkicePromijenjene={(spremljena) => {
           if (spremljena) setMsg({ type: 'success', text: `Faktura po ponudi ${faktura?.ponudaOznaka ?? ''} spremljena kao skica — nastavite je na Kasi, u Spremljenim.` });
