@@ -2,6 +2,7 @@ import React from 'react';
 import { Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
 import { Primka, PrimkaStavka } from '@/types';
 import { kalkulacijaStavke } from '@/lib/kalkulacija';
+import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
 import { POTPIS_AUTORA } from '@/lib/brend';
 import { kontaktFirme } from '@/lib/firma';
@@ -403,7 +404,7 @@ export function UlazPdf({ primka, firma }: UlazPdfProps) {
               <Text style={s.pdvDataCell}>PDV</Text>
               <Text style={s.pdvDataCell}>{fmt(totPrVr)}</Text>
               <Text style={s.pdvDataCell}>{fmt(totIzPdv)}</Text>
-              <Text style={s.pdvDataCell}>17,00   {fmt(totMpVr)}</Text>
+              <Text style={s.pdvDataCell}>{`${PDV_STOPA_E_PCT},00   `}{fmt(totMpVr)}</Text>
             </View>
             <View style={s.pdvSumRow}>
               <Text style={[s.pdvDataCell, { fontFamily: FB, fontWeight: 700 }]} />

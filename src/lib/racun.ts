@@ -1,5 +1,6 @@
 import type { SqlDb } from './sqldb';
 import { round2 } from './novac';
+import { PDV_FAKTOR_E } from './pdv';
 
 export interface RacunStavka {
   cijena: number;
@@ -28,7 +29,7 @@ export function iznosStavke(s: RacunStavka): number {
 export function pdvStavke(s: RacunStavka): number {
   if (s.pdvStopa !== 'E') return 0;
   const iznos = iznosStavke(s);
-  return iznos - iznos / 1.17;
+  return iznos - iznos / PDV_FAKTOR_E;
 }
 
 /**

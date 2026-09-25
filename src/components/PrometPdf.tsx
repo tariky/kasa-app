@@ -4,6 +4,7 @@ import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
 import { POTPIS_AUTORA } from '@/lib/brend';
 import { kontaktFirme } from '@/lib/firma';
 import { opisPlacanja } from '@/lib/placanje';
+import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 
 export interface PrometPdfProps {
   orders: any[];
@@ -174,7 +175,7 @@ export function PrometPdf({ orders, dateFrom, dateTo, firma }: PrometPdfProps) {
               <Text style={s.summaryValue}>{fmt(ukupnaOsnovica)} KM</Text>
             </View>
             <View style={s.summaryLine}>
-              <Text style={s.summaryLabel}>PDV (17%):</Text>
+              <Text style={s.summaryLabel}>{`PDV (${PDV_STOPA_E_PCT}%):`}</Text>
               <Text style={s.summaryValue}>{fmt(ukupniPDV)} KM</Text>
             </View>
             <View style={s.summaryLine}>

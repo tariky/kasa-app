@@ -8,6 +8,8 @@
 // Materijal staje na nabavnoj — ta cijena ulazi u prosječnu nabavnu i utrošak na nalogu.
 // Jedan izvor istine za dijalog, PDF-ove i izvještaje; bez React-a.
 
+import { PDV_STOPA_E_PCT } from './pdv';
+
 export interface StavkaZaKalkulaciju {
   kolicina: number;
   /** Fakturna cijena po jedinici, bez PDV-a, prije rabata. */
@@ -22,7 +24,7 @@ export interface StavkaZaKalkulaciju {
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
-export const pdvStopaPct = (stopa: string) => (stopa === 'E' ? 17 : 0);
+export const pdvStopaPct = (stopa: string) => (stopa === 'E' ? PDV_STOPA_E_PCT : 0);
 
 export function fakturnaVrijednost(s: Pick<StavkaZaKalkulaciju, 'kolicina' | 'nabavnaCijena'>): number {
   return s.kolicina * (s.nabavnaCijena || 0);

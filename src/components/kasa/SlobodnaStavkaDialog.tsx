@@ -6,6 +6,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
 } from '@/components/ui/dialog';
 import { cn, parseDecimal } from '@/lib/utils';
+import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 import type { Product } from '@/types';
 import { useCijenaUnos } from '@/hooks/useCijenaUnos';
 import { CijenaPdvPolje } from '@/components/CijenaPdvPolje';
@@ -14,7 +15,7 @@ import { CijenaPdvPolje } from '@/components/CijenaPdvPolje';
 const NAZIV_MAX = 32;
 
 const STOPE: { value: 'E' | 'K'; label: string }[] = [
-  { value: 'E', label: 'E · 17%' },
+  { value: 'E', label: `E · ${PDV_STOPA_E_PCT}%` },
   { value: 'K', label: 'K · 0%' },
 ];
 

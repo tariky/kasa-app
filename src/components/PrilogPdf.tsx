@@ -4,6 +4,7 @@ import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
 import { POTPIS_AUTORA } from '@/lib/brend';
 import { iznosStavke, pdvStavke } from '@/lib/racun';
 import { round2 } from '@/lib/novac';
+import { PDV_FAKTOR_E, PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { prilogNaziv } from '@/lib/prilog';
 import { formatDatumValute } from '@/lib/valuta';
 import { logoVelicina, kontaktFirme, ziroRacuniPozicija } from '@/lib/firma';
@@ -200,7 +201,7 @@ export function PrilogPdf({ order, firma, stavke }: PrilogPdfProps) {
   const linije = stavke.map(si => ({
     ...si,
     rabat: si.rabat ?? 0,
-    cijenaBezPdv: si.pdvStopa === 'E' ? round2(si.cijena / 1.17) : round2(si.cijena),
+    cijenaBezPdv: si.pdvStopa === 'E' ? round2(si.cijena / PDV_FAKTOR_E) : round2(si.cijena),
     iznos: iznosStavke({ cijena: si.cijena, kolicina: si.kolicina, rabat: si.rabat ?? 0, pdvStopa: si.pdvStopa }),
     pdv: pdvStavke({ cijena: si.cijena, kolicina: si.kolicina, rabat: si.rabat ?? 0, pdvStopa: si.pdvStopa }),
   }));
@@ -329,7 +330,7 @@ export function PrilogPdf({ order, firma, stavke }: PrilogPdfProps) {
               <Text style={s.totalsValue}>{formatKM(osnovica)}</Text>
             </View>
             <View style={s.totalsRow}>
-              <Text style={s.totalsLabel}>PDV 17%</Text>
+              <Text style={s.totalsLabel}>{`PDV ${PDV_STOPA_E_PCT}%`}</Text>
               <Text style={s.totalsValue}>{formatKM(pdvIznos)}</Text>
             </View>
             <View style={s.totalsFinalRow}>

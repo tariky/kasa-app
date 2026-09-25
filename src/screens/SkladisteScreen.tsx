@@ -5,6 +5,7 @@ import { useCijenaUnos } from '@/hooks/useCijenaUnos';
 import { CijenaPdvPolje } from '@/components/CijenaPdvPolje';
 import { useProizvodnja } from '@/hooks/useProizvodnja';
 import { jePloca, m2UKom } from '@/lib/ploca';
+import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { DecimalInput } from '@/components/ui/decimal-input';
@@ -303,7 +304,7 @@ function ArtikalDialog({
                 <div className="space-y-1.5">
                   <Eyebrow className="block">PDV stopa</Eyebrow>
                   <div className="grid grid-cols-2 gap-1 rounded-lg bg-slate-200/60 p-0.5" role="radiogroup" aria-label="PDV stopa">
-                    {([['E', '17 %'], ['K', '0 %']] as const).map(([s, pct]) => (
+                    {([['E', `${PDV_STOPA_E_PCT} %`], ['K', '0 %']] as const).map(([s, pct]) => (
                       <button key={s} type="button" role="radio" aria-checked={form.pdvStopa === s}
                         onClick={() => setForm({ pdvStopa: s })}
                         className={cn(
@@ -571,7 +572,7 @@ function ArtikliTab({
                     </td>
                     <td className={cn(td, 'hidden lg:table-cell px-3 text-center font-mono text-[11px] whitespace-nowrap')}>
                       <span className="font-semibold text-slate-600">{p.pdvStopa}</span>
-                      <span className="text-slate-400"> {p.pdvStopa === 'E' ? '17%' : '0%'}</span>
+                      <span className="text-slate-400"> {p.pdvStopa === 'E' ? `${PDV_STOPA_E_PCT}%` : '0%'}</span>
                     </td>
                     <td className={cn(td, 'px-3 text-right font-mono text-[12.5px] font-semibold tabular-nums text-slate-800 whitespace-nowrap')}>
                       {formatKM(p.cijena)}

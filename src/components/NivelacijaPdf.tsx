@@ -4,6 +4,7 @@ import { Nivelacija, NivelacijaStavka } from '@/types';
 import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
 import { POTPIS_AUTORA } from '@/lib/brend';
 import { kontaktFirme } from '@/lib/firma';
+import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 
 export interface NivelacijaPdfProps {
   nivelacija: Nivelacija;
@@ -183,7 +184,7 @@ export function NivelacijaPdf({ nivelacija, firma }: NivelacijaPdfProps) {
 
   const pdvNaRazliku = stavke
     .filter(st => st.pdvStopa === 'E')
-    .reduce((a, st) => a + st.ukupnaRazlika, 0) * 17 / 117;
+    .reduce((a, st) => a + st.ukupnaRazlika, 0) * PDV_STOPA_E_PCT / (100 + PDV_STOPA_E_PCT);
 
   const pad = (n: number) => String(n).padStart(2, '0');
   const d = new Date();
@@ -300,7 +301,7 @@ export function NivelacijaPdf({ nivelacija, firma }: NivelacijaPdfProps) {
               <Text style={s.summaryValue}>{fmt(totNegativna)} KM</Text>
             </View>
             <View style={s.summaryLine}>
-              <Text style={s.summaryLabel}>PDV na razliku (17%):</Text>
+              <Text style={s.summaryLabel}>{`PDV na razliku (${PDV_STOPA_E_PCT}%):`}</Text>
               <Text style={s.summaryValue}>{fmt(pdvNaRazliku)} KM</Text>
             </View>
             <View style={s.summaryLineBold}>

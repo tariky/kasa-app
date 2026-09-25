@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { GrupaZaglavlje, IshodPoruka, PrekidacRed, Sekcija, type Ishod } from './dijelovi';
+import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 
 type Kljuc =
   | 'kasa.pologPrompt'
@@ -69,7 +70,7 @@ export default function KasaGrupa() {
           <PrekidacRed
             {...p('cijene.unosBezPdv')}
             naslov="Cijenu upisujem bez PDV-a"
-            opis="Polje za cijenu kreće na „bez PDV-a“ i aplikacija dodaje 17 % (stopa E). Uz svako polje se može prebaciti na „sa PDV-om“."
+            opis={`Polje za cijenu kreće na „bez PDV-a“ i aplikacija dodaje ${PDV_STOPA_E_PCT} % (stopa E). Uz svako polje se može prebaciti na „sa PDV-om“.`}
             onChange={async (v) => {
               await postavi('cijene.unosBezPdv', v);
               setPdvPotvrda({

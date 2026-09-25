@@ -6,6 +6,7 @@ import type { FirmaSettings } from '@/types';
 import type { KnjigovodjaIzvjestaj } from '@/lib/knjigovodja/obracun';
 import { prikazPerioda } from '@/lib/knjigovodja/period';
 import { mnozina } from '@/lib/utils';
+import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 
 const F = PDF_FONT_FAMILY;
 const FB = PDF_FONT_FAMILY_BOLD;
@@ -66,8 +67,8 @@ export function KnjigovodjaPdf({ izvjestaj: iz, firma, izvezeno }: KnjigovodjaPd
 
         <View style={s.sekcija}>
           <Text style={s.sekcijaNaslov}>Promet ({z.promet.brojRacuna} {mnozina(z.promet.brojRacuna, ['račun', 'računa', 'računa'])})</Text>
-          <Red label="Osnovica 17%" value={km(z.promet.osnovicaE)} />
-          <Red label="PDV 17%" value={km(z.promet.pdvE)} />
+          <Red label={`Osnovica ${PDV_STOPA_E_PCT}%`} value={km(z.promet.osnovicaE)} />
+          <Red label={`PDV ${PDV_STOPA_E_PCT}%`} value={km(z.promet.pdvE)} />
           <Red label="Oslobođeno PDV-a (K)" value={km(z.promet.iznosK)} />
           <Red label="Gotovina" value={km(z.promet.gotovina)} />
           <Red label="Kartica" value={km(z.promet.kartica)} />
@@ -78,8 +79,8 @@ export function KnjigovodjaPdf({ izvjestaj: iz, firma, izvezeno }: KnjigovodjaPd
 
         <View style={s.sekcija}>
           <Text style={s.sekcijaNaslov}>Reklamacije ({z.reklamacije.broj})</Text>
-          <Red label="Osnovica 17%" value={km(z.reklamacije.osnovicaE)} />
-          <Red label="PDV 17%" value={km(z.reklamacije.pdvE)} />
+          <Red label={`Osnovica ${PDV_STOPA_E_PCT}%`} value={km(z.reklamacije.osnovicaE)} />
+          <Red label={`PDV ${PDV_STOPA_E_PCT}%`} value={km(z.reklamacije.pdvE)} />
           <Red label="Oslobođeno PDV-a (K)" value={km(z.reklamacije.iznosK)} />
           <Red label="Ukupno reklamacije" value={km(z.reklamacije.ukupno)} jak />
           <Red label="Neto promet" value={km(z.neto)} jak />

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Product } from '@/types';
 import { cn, formatKM, porukaGreske } from '@/lib/utils';
+import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { useCijenaUnos } from '@/hooks/useCijenaUnos';
 import { CijenaPdvPolje } from '@/components/CijenaPdvPolje';
 import { Button } from '@/components/ui/button';
@@ -100,7 +101,7 @@ function UslugaDialog({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="E">E — 17%</SelectItem>
+                  <SelectItem value="E">E — {PDV_STOPA_E_PCT}%</SelectItem>
                   <SelectItem value="K">K — 0%</SelectItem>
                 </SelectContent>
               </Select>
@@ -244,7 +245,7 @@ export function UslugeTab({ usluge, onReload }: { usluge: Product[]; onReload: (
                   </td>
                   <td className={cn(td, 'hidden lg:table-cell px-3 text-center font-mono text-[11px] whitespace-nowrap')}>
                     <span className="font-semibold text-slate-600">{p.pdvStopa}</span>
-                    <span className="text-slate-400"> {p.pdvStopa === 'E' ? '17%' : '0%'}</span>
+                    <span className="text-slate-400"> {p.pdvStopa === 'E' ? `${PDV_STOPA_E_PCT}%` : '0%'}</span>
                   </td>
                   <td className={cn(td, 'px-3 text-right font-mono text-[12.5px] font-semibold tabular-nums text-slate-800 whitespace-nowrap')}>
                     {formatKM(p.cijena)}

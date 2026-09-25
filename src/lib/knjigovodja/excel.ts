@@ -2,6 +2,7 @@
 // dolaze gotovi iz obracun.ts; ovdje je samo raspored i format.
 import ExcelJS from 'exceljs';
 import type { FirmaSettings } from '@/types';
+import { PDV_STOPA_E_PCT } from '../pdv';
 import { prikazPerioda } from './period';
 import { NAZIVI_LISTOVA } from './listovi';
 import type { KnjigovodjaIzvjestaj, VrstaUpozorenja } from './obracun';
@@ -146,8 +147,8 @@ export async function napraviExcel(
   list(wb, L.rekapitulacija, ctx, [
     { naslov: 'Datum', sirina: 12, v: r => datum(r.datum), format: 'datum' },
     { naslov: 'Broj računa', sirina: 10, v: r => r.brojRacuna, format: 'broj', zbir: true },
-    { naslov: 'Osnovica 17%', sirina: 14, v: r => r.osnovicaE, format: 'km', zbir: true },
-    { naslov: 'PDV 17%', sirina: 12, v: r => r.pdvE, format: 'km', zbir: true },
+    { naslov: `Osnovica ${PDV_STOPA_E_PCT}%`, sirina: 14, v: r => r.osnovicaE, format: 'km', zbir: true },
+    { naslov: `PDV ${PDV_STOPA_E_PCT}%`, sirina: 12, v: r => r.pdvE, format: 'km', zbir: true },
     { naslov: 'Oslobođeno (K)', sirina: 14, v: r => r.iznosK, format: 'km', zbir: true },
     { naslov: 'Ukupno', sirina: 14, v: r => r.ukupno, format: 'km', zbir: true },
     { naslov: 'Gotovina', sirina: 13, v: r => r.gotovina, format: 'km', zbir: true },
@@ -163,8 +164,8 @@ export async function napraviExcel(
     { naslov: 'Fiskalni broj', sirina: 12, v: r => r.fiskalniBroj },
     { naslov: 'Kupac', sirina: 26, v: r => r.kupac },
     { naslov: 'JIB kupca', sirina: 16, v: r => r.jib },
-    { naslov: 'Osnovica 17%', sirina: 14, v: r => r.osnovicaE, format: 'km', zbir: true },
-    { naslov: 'PDV 17%', sirina: 12, v: r => r.pdvE, format: 'km', zbir: true },
+    { naslov: `Osnovica ${PDV_STOPA_E_PCT}%`, sirina: 14, v: r => r.osnovicaE, format: 'km', zbir: true },
+    { naslov: `PDV ${PDV_STOPA_E_PCT}%`, sirina: 12, v: r => r.pdvE, format: 'km', zbir: true },
     { naslov: 'Oslobođeno (K)', sirina: 14, v: r => r.iznosK, format: 'km', zbir: true },
     { naslov: 'Ukupno', sirina: 14, v: r => r.ukupno, format: 'km', zbir: true },
     { naslov: 'Način plaćanja', sirina: 28, v: r => r.placanje },
@@ -178,8 +179,8 @@ export async function napraviExcel(
     { naslov: 'Fiskalni broj računa', sirina: 14, v: r => r.fiskalniBroj },
     { naslov: 'Datum računa', sirina: 17, v: r => datum(r.datumOriginala), format: 'datumVrijeme' },
     { naslov: 'Kupac', sirina: 24, v: r => r.kupac },
-    { naslov: 'Osnovica 17%', sirina: 14, v: r => r.osnovicaE, format: 'km', zbir: true },
-    { naslov: 'PDV 17%', sirina: 12, v: r => r.pdvE, format: 'km', zbir: true },
+    { naslov: `Osnovica ${PDV_STOPA_E_PCT}%`, sirina: 14, v: r => r.osnovicaE, format: 'km', zbir: true },
+    { naslov: `PDV ${PDV_STOPA_E_PCT}%`, sirina: 12, v: r => r.pdvE, format: 'km', zbir: true },
     { naslov: 'Oslobođeno (K)', sirina: 14, v: r => r.iznosK, format: 'km', zbir: true },
     { naslov: 'Ukupno', sirina: 14, v: r => r.ukupno, format: 'km', zbir: true },
     { naslov: 'Način plaćanja', sirina: 24, v: r => r.placanje },

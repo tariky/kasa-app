@@ -12,6 +12,7 @@ import { PretragaProizvoda } from '@/components/PretragaProizvoda';
 import { cn, formatKM, parseDecimal } from '@/lib/utils';
 import { localDateStr, prijedloziApoena, round2 } from '@/lib/novac';
 import { izracunajTotale } from '@/lib/racun';
+import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { nemaNaStanju } from '@/lib/izborArtikala';
 import {
   dodajUKosaricu, dodajSlobodnuStavku, restoreCart, postaviRabat, postaviRabatNaSve, postaviKolicinu, stavkeTekst,
@@ -666,7 +667,7 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
             <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 border-t border-dashed border-slate-700 pt-2.5 text-[11.5px] text-slate-400">
               <span>Osnovica</span>
               <span className="text-right font-mono tabular-nums text-slate-300">{formatKM(total - pdvAmount)}</span>
-              <span>PDV 17%</span>
+              <span>PDV {PDV_STOPA_E_PCT}%</span>
               <span className="text-right font-mono tabular-nums text-slate-300">{formatKM(pdvAmount)}</span>
               {ustedaRabat > 0 && (
                 <>

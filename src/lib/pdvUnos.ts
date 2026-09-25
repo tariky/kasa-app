@@ -1,5 +1,6 @@
 import { round2 } from './novac';
 import { parseDecimal } from './utils';
+import { PDV_FAKTOR_E } from './pdv';
 
 /**
  * Konverzija između netto i bruto cijene pri *unosu* artikla ili usluge.
@@ -7,9 +8,9 @@ import { parseDecimal } from './utils';
  * prevode ono što korisnik ukuca kad upisuje cijenu bez PDV-a.
  *
  * Stopa 'E' je 17 %, stopa 'K' je oslobođena PDV-a pa se ne dira. Faktor
- * 1.17 se namjerno drži u istom obliku kao u `src/lib/racun.ts`.
+ * dolazi iz `src/lib/pdv.ts`, isti kao u `src/lib/racun.ts`.
  */
-const FAKTOR_E = 1.17;
+const FAKTOR_E = PDV_FAKTOR_E;
 
 /** Netto (bez PDV-a) → bruto (sa PDV-om). */
 export function uBruto(netto: number, pdvStopa: 'E' | 'K'): number {

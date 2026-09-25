@@ -15,6 +15,7 @@ import KnjigovodjaTab from '@/components/izvjestaji/KnjigovodjaTab';
 import ZIzvjestajDialog from '@/components/izvjestaji/ZIzvjestajDialog';
 import { cn, formatKM, formatDateTime, formatDate } from '@/lib/utils';
 import { nabavnaVrijednost } from '@/lib/kalkulacija';
+import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { Order, Primka } from '@/types';
 import { pdf } from '@react-pdf/renderer';
 import { NivelacijaPdf } from '@/components/NivelacijaPdf';
@@ -462,7 +463,7 @@ export default function IzvjestajiScreen({ uloga }: { uloga: string }) {
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                 <Stat label="Prodaja" value={formatKM(ukupnaProdaja)} note={`${brojRacuna} računa`} strong />
                 <Stat label="Osnovica" value={formatKM(ukupnaOsnovica)} note="bez PDV-a" />
-                <Stat label="PDV (17%)" value={formatKM(ukupniPDV)} />
+                <Stat label={`PDV (${PDV_STOPA_E_PCT}%)`} value={formatKM(ukupniPDV)} />
                 <Stat label="Reklamacije" value={formatKM(ukupneReklamacije)} note={`${refundedOrders.length} storniranih`}
                   tone={ukupneReklamacije > 0 ? 'negative' : 'default'} />
               </div>

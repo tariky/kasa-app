@@ -4,6 +4,7 @@ import { pdf } from '@react-pdf/renderer';
 import type { Order } from '@/types';
 import { cn, formatKM, formatDateTime } from '@/lib/utils';
 import { iznosStavke } from '@/lib/racun';
+import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { prilogKompletan, sumaPriloga } from '@/lib/prilog';
 import { formatDatumValute } from '@/lib/valuta';
 import { gotovinskiIznos } from '@/lib/drawer';
@@ -445,7 +446,7 @@ export function RacunDetailDialog({ orderId, redoslijed, uloga, onClose, onNavig
                       <span className="font-mono tabular-nums text-slate-700">{formatKM(order.ukupno - order.pdvIznos)}</span>
                     </div>
                     <div className="flex items-center justify-between gap-3 text-[12px] min-h-[26px]">
-                      <span className="text-slate-500">PDV 17 %</span>
+                      <span className="text-slate-500">PDV {PDV_STOPA_E_PCT} %</span>
                       <span className="font-mono tabular-nums text-slate-700">{formatKM(order.pdvIznos)}</span>
                     </div>
                     <div className="mt-3 pt-3 border-t border-slate-200/80 flex items-baseline justify-between gap-3">

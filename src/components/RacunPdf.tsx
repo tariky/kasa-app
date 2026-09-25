@@ -6,6 +6,7 @@ import { POTPIS_AUTORA, POTPIS_AUTORA_EN } from '@/lib/brend';
 import { pdvStavke, iznosStavke } from '@/lib/racun';
 import { opisPlacanja } from '@/lib/placanje';
 import { uNetto } from '@/lib/pdvUnos';
+import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { formatDatumValute } from '@/lib/valuta';
 import { logoVelicina, kontaktFirme } from '@/lib/firma';
 
@@ -50,7 +51,7 @@ const translations = {
     colVat: 'PDV',
     colAmount: 'Iznos sa PDV-om',
     subtotal: 'Osnovica',
-    vat: 'PDV (17%)',
+    vat: `PDV (${PDV_STOPA_E_PCT}%)`,
     total: 'UKUPNO',
     refund: 'Reklamacija',
     refundNumber: 'Broj',
@@ -82,7 +83,7 @@ const translations = {
     colVat: 'VAT',
     colAmount: 'Amount incl. VAT',
     subtotal: 'Subtotal',
-    vat: 'VAT (17%)',
+    vat: `VAT (${PDV_STOPA_E_PCT}%)`,
     total: 'TOTAL',
     refund: 'Refund',
     refundNumber: 'Number',

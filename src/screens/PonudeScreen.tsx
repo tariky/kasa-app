@@ -22,6 +22,7 @@ import { PonudaPdf } from '@/components/PonudaPdf';
 import { filtriraj, type PoljaPretrage } from '@/lib/pretraga';
 import { formatBrojPonude, efektivniStatus, plusDana, danaIzmedju, DEFAULT_ROK_DANA } from '@/lib/ponuda';
 import { izracunajTotale, pdvStavke } from '@/lib/racun';
+import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { localDateStr } from '@/lib/novac';
 import { cn, formatKM, formatDate } from '@/lib/utils';
 import { useModuli } from '@/hooks/useModuli';
@@ -819,7 +820,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
                   <span className="font-mono tabular-nums text-slate-600">{formatKM(selected.ukupno - selected.pdvIznos)}</span>
                 </div>
                 <div className="flex items-center justify-between text-[11.5px] mt-1">
-                  <span className="text-slate-400">PDV (17%)</span>
+                  <span className="text-slate-400">PDV ({PDV_STOPA_E_PCT}%)</span>
                   <span className="font-mono tabular-nums text-slate-600">{formatKM(selected.pdvIznos)}</span>
                 </div>
                 <div className="mt-2.5 pt-2.5 border-t border-slate-100 flex items-baseline justify-between">

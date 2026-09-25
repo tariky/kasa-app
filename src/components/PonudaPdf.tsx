@@ -5,6 +5,7 @@ import { formatBrojPonude } from '@/lib/ponuda';
 import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
 import { POTPIS_AUTORA } from '@/lib/brend';
 import { logoVelicina, kontaktFirme } from '@/lib/firma';
+import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 
 export interface PonudaPdfProps {
   ponuda: {
@@ -466,7 +467,7 @@ export function PonudaPdf({ ponuda, firma }: PonudaPdfProps) {
               <Text style={s.totalsValue}>{formatKM(osnovica)}</Text>
             </View>
             <View style={s.totalsRow}>
-              <Text style={s.totalsLabel}>PDV (17%)</Text>
+              <Text style={s.totalsLabel}>{`PDV (${PDV_STOPA_E_PCT}%)`}</Text>
               <Text style={s.totalsValue}>{formatKM(pdvIznos)}</Text>
             </View>
             <View style={s.totalsFinalRow}>

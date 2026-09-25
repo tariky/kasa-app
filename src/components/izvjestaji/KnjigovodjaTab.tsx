@@ -8,6 +8,7 @@ import { KnjigovodjaPdf } from '@/components/KnjigovodjaPdf';
 import { useModuli } from '@/hooks/useModuli';
 import { cn, formatKM, mnozina, porukaGreske } from '@/lib/utils';
 import { localDateStr } from '@/lib/novac';
+import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { obracunaj, type KnjigovodjaIzvjestaj, type Moduli } from '@/lib/knjigovodja/obracun';
 import { listoviIzvjestaja } from '@/lib/knjigovodja/listovi';
 import { imeFajla, periodMjeseca, prikazDatuma, prikazPerioda, prosliMjesec, type Period } from '@/lib/knjigovodja/period';
@@ -200,7 +201,7 @@ export default function KnjigovodjaTab() {
               <Kartica naziv="Promet" iznos={z?.promet.ukupno ?? 0} ceka={ceka}>
                 {z && <>
                   <Detalj label={mnozina(z.promet.brojRacuna, ['Račun', 'Računa', 'Računa'])} value={String(z.promet.brojRacuna)} />
-                  <Detalj label="PDV 17%" value={formatKM(z.promet.pdvE)} />
+                  <Detalj label={`PDV ${PDV_STOPA_E_PCT}%`} value={formatKM(z.promet.pdvE)} />
                   {z.promet.iznosK !== 0 && <Detalj label="Oslobođeno PDV-a (K)" value={formatKM(z.promet.iznosK)} />}
                 </>}
               </Kartica>
@@ -208,7 +209,7 @@ export default function KnjigovodjaTab() {
               <Kartica naziv="Reklamacije" iznos={z?.reklamacije.ukupno ?? 0} ceka={ceka} negativno>
                 {z && <>
                   <Detalj label="Broj" value={String(z.reklamacije.broj)} />
-                  <Detalj label="PDV 17%" value={formatKM(z.reklamacije.pdvE)} />
+                  <Detalj label={`PDV ${PDV_STOPA_E_PCT}%`} value={formatKM(z.reklamacije.pdvE)} />
                 </>}
               </Kartica>
 
