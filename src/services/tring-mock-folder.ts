@@ -102,8 +102,14 @@ export function startMockTringFolder(
         brojac++;
         logReceipt(komanda === "sfr" ? "FISKALNI RAČUN (folder)" : "REKLAMIRANI RAČUN (folder)", String(brojac), body);
         const d = new Date();
+        // ERP nema jedinstven parser za sve stare forme: gotovinska forma
+        // (disiz/prracung) traži xsd:long, dok veleprodajna faktura
+        // (pr_fakture/prracunf) traži xsd:int. Veleprodajni fiskalni zahtjev
+        // šalje jednu zbirnu stavku "Promet po fakturi", pa ga možemo
+        // pouzdano razlikovati bez promjene FoxPro binarnih formi.
+        const brojTip = /<Naziv>\s*Promet po fakturi\s*<\/Naziv>/i.test(body) ? "int" : "long";
         odgovori = [
-          { naziv: "BrojFiskalnogRacuna", tip: "long", vrijednost: String(brojac) },
+          { naziv: "BrojFiskalnogRacuna", tip: brojTip, vrijednost: String(brojac) },
           { naziv: "DatumFiskalnogRacuna", tip: "string", vrijednost: `${d.getDate()}.${d.getMonth() + 1}.${String(d.getFullYear()).slice(2)}` },
           { naziv: "VrijemeFiskalnogRacuna", tip: "string", vrijednost: `${d.getHours()}:${String(d.getMinutes()).padStart(2, "0")}` },
         ];
