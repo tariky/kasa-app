@@ -31,6 +31,12 @@ export function pdvStavke(s: RacunStavka): number {
   return iznos - iznos / 1.17;
 }
 
+/**
+ * Koliko iznos koji pošalje ekran smije odstupati od iznosa izračunatog iz
+ * stavki (pola feninga; iznad toga backend odbija račun).
+ */
+export const TOLERANCIJA_IZNOSA = 0.005;
+
 export function izracunajTotale(stavke: RacunStavka[]): { ukupno: number; pdvIznos: number } {
   const ukupno = round2(stavke.reduce((sum, s) => sum + iznosStavke(s), 0));
   const pdvIznos = round2(stavke.reduce((sum, s) => sum + pdvStavke(s), 0));

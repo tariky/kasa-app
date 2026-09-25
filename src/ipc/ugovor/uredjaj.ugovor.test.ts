@@ -96,7 +96,7 @@ describe('tring:init', () => {
 
 describe('order:finalize → /sfr', () => {
   test('štampa račun i vraća broj fiskalnog računa', async () => {
-    const r = await b.call('order:finalize', { stavke: [kasaArtikal()], ukupno: 5, pdvIznos: 0, nacinPlacanja: 'Gotovina' });
+    const r = await b.call('order:finalize', { stavke: [kasaArtikal()], ukupno: 5, pdvIznos: 0.73, nacinPlacanja: 'Gotovina' });
 
     expect(r).toMatchObject({ success: true, brojFiskalnogRacuna: '101', odgovori: { BrojFiskalnogRacuna: '101' } });
     const { putanja, tijelo } = zadnji();
@@ -116,11 +116,11 @@ describe('order:finalize → /sfr', () => {
 
   test('"Ček" ide uređaju kao Cek, razbijeno plaćanje ide po stavkama, kupac se šalje', async () => {
     const stavka = kasaArtikal();
-    await b.call('order:finalize', { stavke: [stavka], ukupno: 5, pdvIznos: 0, nacinPlacanja: 'Ček' });
+    await b.call('order:finalize', { stavke: [stavka], ukupno: 5, pdvIznos: 0.73, nacinPlacanja: 'Ček' });
     expect(tag(zadnji().tijelo, 'Oznaka')).toBe('Cek');
 
     await b.call('order:finalize', {
-      stavke: [stavka], ukupno: 5, pdvIznos: 0, nacinPlacanja: 'Gotovina',
+      stavke: [stavka], ukupno: 5, pdvIznos: 0.73, nacinPlacanja: 'Gotovina',
       vrstePlacanja: [{ oznaka: 'Gotovina', iznos: 3 }, { oznaka: 'Kartica', iznos: 2 }],
       kupac: { naziv: 'Firma d.o.o.', idBroj: '4200000000001', grad: 'Sarajevo' },
     });
@@ -134,13 +134,13 @@ describe('order:finalize → /sfr', () => {
 
   test('greška uređaja se vraća kao rezultat, ne baca', async () => {
     b.tring.greskaNa('/sfr', 'Suma plaćanja', 524);
-    const r = await b.call('order:finalize', { stavke: [kasaArtikal()], ukupno: 5, pdvIznos: 0, nacinPlacanja: 'Gotovina' });
+    const r = await b.call('order:finalize', { stavke: [kasaArtikal()], ukupno: 5, pdvIznos: 0.73, nacinPlacanja: 'Gotovina' });
     expect(r).toEqual({ success: false, odgovori: {}, error: 'Ukupna suma plaćanja veća od sume računa (Suma plaćanja) [524]' });
   });
 
   test('nepoznat TFS kod: poruka uređaja i kod', async () => {
     b.tring.greskaNa('/sfr', 'Nema papira', 901);
-    const r = await b.call('order:finalize', { stavke: [kasaArtikal()], ukupno: 5, pdvIznos: 0, nacinPlacanja: 'Gotovina' });
+    const r = await b.call('order:finalize', { stavke: [kasaArtikal()], ukupno: 5, pdvIznos: 0.73, nacinPlacanja: 'Gotovina' });
     expect(r.error).toBe('Nema papira [901]');
   });
 });
@@ -149,7 +149,7 @@ describe('order:refundAndPrint → /srr', () => {
   test('šalje reklamaciju s brojem originalnog računa i Gotovina/0', async () => {
     const stavka = kasaArtikal();
     const { id } = await b.call('order:createManual', {
-      stavke: [stavka], ukupno: 5, pdvIznos: 0, nacinPlacanja: 'Gotovina', brojFiskalnogRacuna: '101', createdAt: sada(),
+      stavke: [stavka], ukupno: 5, pdvIznos: 0.73, nacinPlacanja: 'Gotovina', brojFiskalnogRacuna: '101', createdAt: sada(),
     });
     const r = await b.call('order:refundAndPrint', { id });
 

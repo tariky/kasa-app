@@ -208,7 +208,7 @@ describe('sesija', () => {
     await prijavi(b, '1234');
     const p = dodajArtikal('A1');
     const { id } = await b.call('order:createManual', {
-      ukupno: 5, pdvIznos: 0, nacinPlacanja: 'Gotovina', brojFiskalnogRacuna: '1', createdAt: sada(),
+      ukupno: 5, pdvIznos: 0.73, nacinPlacanja: 'Gotovina', brojFiskalnogRacuna: '1', createdAt: sada(),
       stavke: [{ productId: p, kolicina: 1, cijena: 5, rabat: 0, pdvStopa: 'E' }],
     });
     expect(red('SELECT korisnikId FROM orders WHERE id = ?', id).korisnikId).toBe(kasir);
@@ -647,7 +647,7 @@ describe('order:refundAndPrint uz kasa.requirePinRefund', () => {
     await prijavi(b, '1234');
     const p = dodajArtikal('S1', 3);
     racun = (await b.call('order:createManual', {
-      ukupno: 3, pdvIznos: 0, nacinPlacanja: 'Gotovina', brojFiskalnogRacuna: '55', createdAt: sada(),
+      ukupno: 3, pdvIznos: 0.44, nacinPlacanja: 'Gotovina', brojFiskalnogRacuna: '55', createdAt: sada(),
       stavke: [{ productId: p, kolicina: 1, cijena: 3, rabat: 0, pdvStopa: 'E' }],
     })).id;
   });
@@ -679,7 +679,7 @@ describe('order:refundAndPrint uz kasa.requirePinRefund', () => {
     postavka('kasa.requirePinRefund', 'false');
     const p = dodajArtikal('S2', 3);
     const drugi = (await b.call('order:createManual', {
-      ukupno: 3, pdvIznos: 0, nacinPlacanja: 'Gotovina', brojFiskalnogRacuna: '56', createdAt: sada(),
+      ukupno: 3, pdvIznos: 0.44, nacinPlacanja: 'Gotovina', brojFiskalnogRacuna: '56', createdAt: sada(),
       stavke: [{ productId: p, kolicina: 1, cijena: 3, rabat: 0, pdvStopa: 'E' }],
     })).id;
     expect(await b.call('order:refundAndPrint', { id: drugi })).toMatchObject({ success: true });
@@ -711,9 +711,9 @@ describe('korisnikId se uzima iz sesije, ne iz payload-a', () => {
   test('order:finalize, order:createManual, cash:add', async () => {
     const p = dodajArtikal('A1');
     const stavka = { productId: p, sifra: 'A1', naziv: 'Artikal A1', jm: 'kom', plu: 1, cijena: 5, kolicina: 1, rabat: 0, pdvStopa: 'E' };
-    const f = await b.call('order:finalize', { korisnikId: ADMIN, ukupno: 5, pdvIznos: 0, nacinPlacanja: 'Gotovina', stavke: [stavka] });
+    const f = await b.call('order:finalize', { korisnikId: ADMIN, ukupno: 5, pdvIznos: 0.73, nacinPlacanja: 'Gotovina', stavke: [stavka] });
     const m = await b.call('order:createManual', {
-      korisnikId: ADMIN, ukupno: 5, pdvIznos: 0, nacinPlacanja: 'Gotovina', brojFiskalnogRacuna: '900', createdAt: sada(), stavke: [stavka],
+      korisnikId: ADMIN, ukupno: 5, pdvIznos: 0.73, nacinPlacanja: 'Gotovina', brojFiskalnogRacuna: '900', createdAt: sada(), stavke: [stavka],
     });
     const c = await b.call('cash:add', { tip: 'polog', iznos: 20, korisnikId: ADMIN });
     expect(red('SELECT korisnikId FROM orders WHERE id = ?', f.id).korisnikId).toBe(kasir);
@@ -767,7 +767,7 @@ describe('korisnikId se uzima iz sesije, ne iz payload-a', () => {
     const juce = new Date(Date.now() - 24 * 3600_000);
     // Jučerašnji gotovinski račun: današnja ladica ga ne pokriva, pa storno uz override traži polog.
     const { id } = await b.call('order:createManual', {
-      ukupno: 3, pdvIznos: 0, nacinPlacanja: 'Gotovina', brojFiskalnogRacuna: '77', createdAt: datum(juce),
+      ukupno: 3, pdvIznos: 0.44, nacinPlacanja: 'Gotovina', brojFiskalnogRacuna: '77', createdAt: datum(juce),
       stavke: [{ productId: p, kolicina: 1, cijena: 3, rabat: 0, pdvStopa: 'E' }],
     });
     const r = await b.call('order:refundAndPrint', { id, dozvoliPolog: true, korisnikId: ADMIN });

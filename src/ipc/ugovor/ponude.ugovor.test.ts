@@ -271,6 +271,41 @@ describe('ponuda:update', () => {
   });
 });
 
+describe('ponuda:create / ponuda:update — provjera stavki', () => {
+  const lose = (p: number): Array<[Record<string, unknown>, string]> => [
+    [{ kolicina: 0 }, 'Količina mora biti veća od 0'],
+    [{ kolicina: '1' }, 'Količina mora biti veća od 0'],
+    [{ cijena: -1 }, 'Cijena ne može biti negativna'],
+    [{ cijena: null }, 'Cijena mora biti broj'],
+    [{ rabat: 100 }, 'Rabat mora biti između 0 i 100 %'],
+    [{ pdvStopa: 'X' }, 'PDV stopa mora biti E ili K'],
+    [{ productId: 424242 }, 'Proizvod #424242 ne postoji'],
+    [{ productId: `${p}` }, `Proizvod #${p} ne postoji`],
+  ];
+
+  test('create odbija neispravnu stavku i ništa ne upisuje', async () => {
+    const kupacId = dodajKupca();
+    const p = dodajArtikal('Q1', 10);
+    for (const [polje, poruka] of lose(p)) {
+      await expect(b.call('ponuda:create', { kupacId, stavke: [{ ...stavka(p, 1, 10), ...polje }] }), JSON.stringify(polje))
+        .rejects.toThrow(poruka);
+    }
+    await expect(b.call('ponuda:create', { kupacId, stavke: [null] })).rejects.toThrow('Neispravna stavka računa');
+    expect(broj('SELECT COUNT(*) AS n FROM ponude')).toBe(0);
+    expect(broj('SELECT COUNT(*) AS n FROM ponuda_stavke')).toBe(0);
+  });
+
+  test('update odbija neispravnu stavku i ne dira postojeće', async () => {
+    const { id, p } = await napraviPonudu();
+    for (const [polje, poruka] of lose(p)) {
+      await expect(b.call('ponuda:update', id, { stavke: [{ ...stavka(p, 1, 10), ...polje }] }), JSON.stringify(polje))
+        .rejects.toThrow(poruka);
+    }
+    expect(redovi('SELECT kolicina, cijena FROM ponuda_stavke WHERE ponudaId = ?', id)).toEqual([{ kolicina: 2, cijena: 10 }]);
+    expect(red('SELECT ukupno FROM ponude WHERE id = ?', id).ukupno).toBe(20);
+  });
+});
+
 // ─── ponuda:setStatus ───────────────────────────────────────
 
 describe('ponuda:setStatus', () => {

@@ -38,6 +38,7 @@ import {
   type PonudaStatus,
 } from '../lib/ponuda';
 import { buildTringRacun } from '../lib/tringRacun';
+import { pripremiRacun } from '../lib/provjeraRacuna';
 import { addCashMovement, retryCashMovement, getTodayMovements, getDrawerState, getLastPologIznos } from '../lib/cash';
 import { logoVelicina, ziroRacuniPozicija } from '../lib/firma';
 import { dohvatiKnjigovodja } from '../lib/knjigovodja/podaci';
@@ -1079,69 +1080,45 @@ export function registerIpcHandlers(): void {
     return order;
   });
 
-  handle('order:createManual', (unos: {
-    ukupno: number; pdvIznos: number;
-    nacinPlacanja: string; brojFiskalnogRacuna: string; createdAt: string;
-    kupac?: { naziv?: string; idBroj?: string; adresa?: string; grad?: string; postanskiBroj?: string };
-    stavke: Array<{ productId: number; kolicina: number; cijena: number; rabat: number; pdvStopa: string }>;
-  }) => {
-    const data = { ...unos, korisnikId: korisnik().id };
-    if (!data.stavke || data.stavke.length === 0) throw new Error('Račun mora imati najmanje jednu stavku');
-    if (!data.brojFiskalnogRacuna?.trim()) throw new Error('Fiskalni broj je obavezan');
-    if (!data.createdAt?.trim()) throw new Error('Datum računa je obavezan');
+  // Račun izdat mimo programa (npr. dok program nije radio), upisan naknadno.
+  // Stavke, iznosi i plaćanje se provjeravaju kao na kasi (pripremiRacun), ali
+  // stopa i cijena stavke smiju odstupati od današnjeg artikla — prepisuje se
+  // stari isječak.
+  handle('order:createManual', (unos: any) => {
+    const korisnikId = korisnik().id;
+    const r = pripremiRacun(db, unos, { stopaArtikla: false });
+    const broj = typeof unos.brojFiskalnogRacuna === 'string' ? unos.brojFiskalnogRacuna.trim() : '';
+    if (!broj) throw new Error('Fiskalni broj je obavezan');
+    const createdAt = typeof unos.createdAt === 'string' ? unos.createdAt : '';
+    if (!createdAt.trim()) throw new Error('Datum računa je obavezan');
 
-    const existing = db
-      .prepare('SELECT id FROM orders WHERE brojFiskalnogRacuna = ?')
-      .get(data.brojFiskalnogRacuna.trim());
+    const existing = db.prepare('SELECT id FROM orders WHERE brojFiskalnogRacuna = ?').get(broj);
     if (existing) throw new Error('Fiskalni račun sa tim brojem već postoji');
 
-    const createManual = db.transaction(() => {
-      const result = db
-        .prepare(`
-          INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, status,
-            kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj, isManual, createdAt)
-          VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, 1, ?)
-        `)
-        .run(
-          data.korisnikId, data.ukupno, data.pdvIznos, data.nacinPlacanja, data.brojFiskalnogRacuna.trim(),
-          data.kupac?.naziv || null, data.kupac?.idBroj || null, data.kupac?.adresa || null,
-          data.kupac?.grad || null, data.kupac?.postanskiBroj || null, data.createdAt
-        );
-
-      const orderId = result.lastInsertRowid;
-
-      const insertItem = db.prepare(
-        'INSERT INTO order_items (orderId, productId, kolicina, cijena, rabat, pdvStopa) VALUES (?, ?, ?, ?, ?, ?)'
-      );
-      const insertStock = db.prepare(
-        "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId, createdAt) VALUES (?, 'izlaz', ?, 'order', ?, ?)"
-      );
-
-      for (const item of data.stavke) {
-        insertItem.run(orderId, item.productId, item.kolicina, item.cijena, item.rabat, item.pdvStopa);
-        // Only create stock movements for artikli, not services
-        const product = db.prepare('SELECT tip FROM products WHERE id = ?').get(item.productId) as { tip: string } | undefined;
-        if (!product || product.tip !== 'usluga') {
-          insertStock.run(item.productId, item.kolicina, orderId, data.createdAt);
-        }
-      }
-
-      return { id: orderId };
-    });
-
-    return createManual();
+    return db.transaction(() => {
+      const id = insertCompletedOrder(db, {
+        korisnikId, ukupno: r.ukupno, pdvIznos: r.pdvIznos, nacinPlacanja: r.nacinPlacanja,
+        brojFiskalnogRacuna: broj, kupac: r.kupac, stavke: r.stavke, isManual: 1, createdAt,
+      });
+      return { id };
+    })();
   });
 
-  handle('order:finalize', async (unos: {
-    ukupno: number; pdvIznos: number; nacinPlacanja: string;
-    kupac?: { naziv?: string; idBroj?: string; adresa?: string; grad?: string; postanskiBroj?: string };
-    napomena?: string;
-    stavke: Array<{ productId: number; sifra: string; naziv: string; jm: string; plu?: number;
-      cijena: number; kolicina: number; rabat: number; pdvStopa: string }>;
-  }) => {
+  handle('order:finalize', async (unos: unknown) => {
     // Račun izdaje prijavljeni korisnik — korisnikId iz payload-a se ne čita.
-    const data = { ...unos, korisnikId: korisnik().id };
-    if (!data.stavke || data.stavke.length === 0) throw new Error('Račun mora imati najmanje jednu stavku');
+    const korisnikId = korisnik().id;
+    // Sve provjere prije write-ahead zapisa i štampe; iznosi se računaju iz stavki.
+    const r = pripremiRacun(db, unos, { stopaArtikla: true });
+    const data = {
+      korisnikId, ukupno: r.ukupno, pdvIznos: r.pdvIznos,
+      nacinPlacanja: r.nacinPlacanja, vrstePlacanja: r.vrstePlacanja,
+      kupac: r.kupac, napomena: r.napomena,
+      // Uređaj dobija šifru, naziv, JM i PLU artikla iz baze, ne iz payload-a.
+      stavke: r.stavke.map(s => ({
+        productId: s.productId, sifra: s.artikal.sifra, naziv: s.artikal.naziv, jm: s.artikal.jm ?? 'kom',
+        plu: s.artikal.plu ?? 0, cijena: s.cijena, kolicina: s.kolicina, rabat: s.rabat, pdvStopa: s.pdvStopa,
+      })),
+    };
 
     // 1. Write-ahead: persist the snapshot BEFORE printing (committed immediately).
     const pending = db

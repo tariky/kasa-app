@@ -5,6 +5,8 @@ import { validanDatumValute } from './valuta';
 import { round2 } from './novac';
 import { iznosStavke, izracunajTotale } from './racun';
 import { buildTringRacun } from './tringRacun';
+import { provjeriIznoseStavke, provjeriKupca } from './provjeraRacuna';
+import { provjeriNacinPlacanja } from './placanje';
 
 /**
  * Račun po prilogu: fiskalno se kuca jedna zbirna stavka, a stvarne stavke se
@@ -72,10 +74,8 @@ export function prilogKompletan(ukupno: number, stavke: PrilogStavkaUnos[]): boo
 export function validirajPrilogStavke(db: SqlDb, stavke: PrilogStavkaUnos[]): Map<number, string> {
   const tipovi = new Map<number, string>();
   for (const s of stavke) {
-    if (!(s.kolicina > 0)) throw new Error('Količina mora biti veća od 0');
-    if (s.cijena < 0) throw new Error('Cijena ne može biti negativna');
-    const rabat = s.rabat ?? 0;
-    if (!(rabat >= 0 && rabat < 100)) throw new Error('Rabat mora biti između 0 i 100 %');
+    if (!s || typeof s !== 'object') throw new Error('Neispravna stavka računa');
+    provjeriIznoseStavke(s);
     if (s.pdvStopa !== 'E') {
       throw new Error('U prilog smiju samo stavke sa PDV stopom E (zbirna stavka je fiskalizovana sa E)');
     }
@@ -235,10 +235,13 @@ export async function finalizePrilogAndPrint(
   if (!data.korisnikId) throw new Error('Korisnik nije prijavljen');
 
   const stavke = data.stavke ?? [];
+  if (!Array.isArray(stavke)) throw new Error('Neispravna stavka računa');
   // Prije bilo kakve štampe: neispravna stavka ne smije proizvesti papir.
   if (stavke.length > 0) validirajPrilogStavke(db, stavke);
   const iznos = stavke.length > 0 ? sumaPriloga(stavke) : (data.iznos ?? 0);
-  if (!(iznos > 0)) throw new Error('Iznos mora biti veći od 0');
+  if (!(typeof iznos === 'number' && Number.isFinite(iznos) && iznos > 0)) throw new Error('Iznos mora biti veći od 0');
+  const nacinPlacanja = provjeriNacinPlacanja(data.nacinPlacanja);
+  const kupac = provjeriKupca(data.kupac);
   const { datumValute, napomena, ponudaId } = provjeriDodatkeFakture(db, data);
 
   // Naziv stavke mora nositi broj isječka na koji se kuca, a njega uređaj vrati
@@ -261,7 +264,7 @@ export async function finalizePrilogAndPrint(
   // račun; prilogStavke nosi stvarne stavke da se ne izgube pri spašavanju.
   const snapshot = {
     korisnikId: data.korisnikId, ukupno, pdvIznos,
-    nacinPlacanja: data.nacinPlacanja, kupac: data.kupac,
+    nacinPlacanja, kupac,
     stavke: [], prilogBroj: predvidjeniBroj, prilogNaziv: naziv, prilogStavke: stavke,
     datumValute, napomena, ponudaId,
   };
@@ -273,7 +276,7 @@ export async function finalizePrilogAndPrint(
   let result: Tring.TringResponse | null;
   try {
     result = await print(buildTringRacun({
-      ukupno, nacinPlacanja: data.nacinPlacanja, kupac: data.kupac, items: [stavka],
+      ukupno, nacinPlacanja, kupac, items: [stavka],
     }));
   } catch (err) {
     // Izuzetak iz štampe — ništa nije odštampano, počisti write-ahead red.
@@ -308,9 +311,9 @@ export async function finalizePrilogAndPrint(
           datumValute, napomena)
         VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
       `).run(
-        data.korisnikId, ukupno, pdvIznos, data.nacinPlacanja, brojFiskalnogRacuna,
-        data.kupac?.naziv || null, data.kupac?.idBroj || null, data.kupac?.adresa || null,
-        data.kupac?.grad || null, data.kupac?.postanskiBroj || null, prilogBroj, naziv,
+        data.korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna,
+        kupac?.naziv || null, kupac?.idBroj || null, kupac?.adresa || null,
+        kupac?.grad || null, kupac?.postanskiBroj || null, prilogBroj, naziv,
         datumValute, napomena
       );
       orderId = Number(r.lastInsertRowid);

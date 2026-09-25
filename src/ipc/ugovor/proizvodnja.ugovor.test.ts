@@ -867,6 +867,13 @@ describe('nalog:izdajRacun', () => {
     expect(red('SELECT nacinPlacanja FROM orders WHERE id = ?', r.racunId).nacinPlacanja).toBe('Gotovina');
   });
 
+  test('nepoznat način plaćanja se odbija prije štampe', async () => {
+    const { id } = await zavrsenaNarudzba(100);
+    await expect(b.call('nalog:izdajRacun', { id, nacinPlacanja: 'Bitcoin' })).rejects.toThrow('Nepoznat način plaćanja: "Bitcoin"');
+    expect(b.tring.zahtjevi).toEqual([]);
+    expect(red('SELECT COUNT(*) AS n FROM orders').n).toBe(0);
+  });
+
   test('dva istovremena izdavanja za isti nalog: drugo se odbija, štampa se jednom', async () => {
     const { id } = await zavrsenaNarudzba(100);
     const data = { id, korisnikId: ADMIN, nacinPlacanja: 'Gotovina' };

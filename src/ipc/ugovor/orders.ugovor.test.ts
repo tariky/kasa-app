@@ -1,6 +1,7 @@
 // Ugovor za kanale order:* i pending:* — vidi backend.ts.
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
 import { otvoriBackend, type Backend } from './backend';
+import { izracunajTotale } from '../../lib/racun';
 
 let b: Backend;
 
@@ -37,9 +38,10 @@ function stavka(productId: number, kolicina: number, cijena: number) {
   return { productId, kolicina, cijena, rabat: 0, pdvStopa: 'E' };
 }
 
-function racun(stavke: ReturnType<typeof stavka>[], extra: Record<string, unknown> = {}) {
-  const ukupno = stavke.reduce((s, x) => s + x.kolicina * x.cijena, 0);
-  return { korisnikId: ADMIN, ukupno, pdvIznos: 0, nacinPlacanja: 'Gotovina', stavke, ...extra };
+/** Ukupno i PDV kao što ih računa ekran (izracunajTotale) — backend odbija drugačije. */
+function racun(stavke: Array<ReturnType<typeof stavka> & Record<string, unknown>>, extra: Record<string, unknown> = {}) {
+  const { ukupno, pdvIznos } = izracunajTotale(stavke);
+  return { korisnikId: ADMIN, ukupno, pdvIznos, nacinPlacanja: 'Gotovina', stavke, ...extra };
 }
 
 function kasaStavka(productId: number, kolicina: number, cijena: number) {
@@ -411,5 +413,158 @@ describe('pending:*', () => {
     const id = dodajPending({ stavke: [] });
     expect(await b.call('pending:discard', id)).toEqual({ success: true });
     expect(await b.call('pending:list')).toEqual([]);
+  });
+});
+
+// ─── Provjera računa prije štampe ───────────────────────────
+// Iznosi se računaju u backendu iz stavki (izracunajTotale); ništa se ne
+// štampa i ništa ne upisuje dok stavke, iznosi i plaćanje nisu ispravni.
+
+describe('provjera računa prije štampe (order:finalize, order:createManual)', () => {
+  /** Stavka s jednim pokvarenim poljem i poruka koju backend mora vratiti. */
+  function losaPolja(p: number): Array<[Record<string, unknown>, string]> {
+    return [
+      [{ kolicina: 0 }, 'Količina mora biti veća od 0'],
+      [{ kolicina: -1 }, 'Količina mora biti veća od 0'],
+      [{ kolicina: null }, 'Količina mora biti veća od 0'],
+      [{ kolicina: '2' }, 'Količina mora biti veća od 0'],
+      [{ cijena: -0.01 }, 'Cijena ne može biti negativna'],
+      [{ cijena: null }, 'Cijena mora biti broj'],
+      [{ cijena: '5' }, 'Cijena mora biti broj'],
+      [{ rabat: 100 }, 'Rabat mora biti između 0 i 100 %'],
+      [{ rabat: -5 }, 'Rabat mora biti između 0 i 100 %'],
+      [{ rabat: '10' }, 'Rabat mora biti između 0 i 100 %'],
+      [{ pdvStopa: 'A' }, 'PDV stopa mora biti E ili K'],
+      [{ pdvStopa: null }, 'PDV stopa mora biti E ili K'],
+      [{ productId: 999_999 }, 'Proizvod #999999 ne postoji'],
+      [{ productId: String(p) }, `Proizvod #${p} ne postoji`],
+    ];
+  }
+
+  function nistaUpisano() {
+    expect(b.tring.zahtjevi).toEqual([]);
+    expect(red('SELECT COUNT(*) AS n FROM orders').n).toBe(0);
+    expect(red('SELECT COUNT(*) AS n FROM order_items').n).toBe(0);
+    expect(red('SELECT COUNT(*) AS n FROM pending_receipts').n).toBe(0);
+    expect(red("SELECT COUNT(*) AS n FROM stock_movements WHERE referenceType = 'order'").n).toBe(0);
+  }
+
+  test('finalize: neispravna stavka se odbija prije write-ahead zapisa i štampe', async () => {
+    const p = dodajArtikal('V1', 5, { stanje: 10 });
+    for (const [polje, poruka] of losaPolja(p)) {
+      const s = { ...kasaStavka(p, 1, 5), ...polje };
+      await expect(b.call('order:finalize', { ...racun([kasaStavka(p, 1, 5)]), stavke: [s] }), JSON.stringify(polje)).rejects.toThrow(poruka);
+    }
+    await expect(b.call('order:finalize', { ...racun([]), stavke: [null] })).rejects.toThrow('Neispravna stavka računa');
+    await expect(b.call('order:finalize', { ...racun([]), stavke: 'x' })).rejects.toThrow('Račun mora imati najmanje jednu stavku');
+    nistaUpisano();
+  });
+
+  test('createManual: ista pravila za stavke, ništa se ne upisuje', async () => {
+    const p = dodajArtikal('V2', 5, { stanje: 10 });
+    for (const [polje, poruka] of losaPolja(p)) {
+      const s = { ...stavka(p, 1, 5), ...polje };
+      await expect(b.call('order:createManual', { ...racun([stavka(p, 1, 5)], { brojFiskalnogRacuna: '7', createdAt: sada() }), stavke: [s] }), JSON.stringify(polje))
+        .rejects.toThrow(poruka);
+    }
+    nistaUpisano();
+  });
+
+  test('ukupno i PDV iz payload-a smiju odstupati najviše 0,005 — u bazu ide iznos izračunat iz stavki', async () => {
+    const p = dodajArtikal('V3', 2.5, { stanje: 10 });
+    const osnova = racun([kasaStavka(p, 2, 2.5)]); // 5 KM, PDV 0,73
+    expect(osnova.pdvIznos).toBe(0.73);
+
+    await expect(b.call('order:finalize', { ...osnova, ukupno: 4.99 })).rejects.toThrow('Ukupan iznos (4.99) ne odgovara stavkama (5.00)');
+    await expect(b.call('order:finalize', { ...osnova, ukupno: '5' })).rejects.toThrow('Ukupan iznos ("5") ne odgovara stavkama (5.00)');
+    await expect(b.call('order:finalize', { ...osnova, pdvIznos: 0 })).rejects.toThrow('Iznos PDV-a (0.00) ne odgovara stavkama (0.73)');
+    await expect(b.call('order:createManual', { ...osnova, ukupno: 50, brojFiskalnogRacuna: '8', createdAt: sada() }))
+      .rejects.toThrow('Ukupan iznos (50.00) ne odgovara stavkama (5.00)');
+    nistaUpisano();
+
+    const r = await b.call('order:finalize', { ...osnova, ukupno: 5.004, pdvIznos: 0.726 });
+    expect(red('SELECT ukupno, pdvIznos FROM orders WHERE id = ?', r.id)).toEqual({ ukupno: 5, pdvIznos: 0.73 });
+    const bezIznosa = await b.call('order:createManual', { ...osnova, ukupno: null, pdvIznos: undefined, brojFiskalnogRacuna: '9', createdAt: sada() });
+    expect(red('SELECT ukupno, pdvIznos FROM orders WHERE id = ?', bezIznosa.id)).toEqual({ ukupno: 5, pdvIznos: 0.73 });
+  });
+
+  test('način plaćanja: samo Gotovina, Kartica, Virman ili Ček', async () => {
+    const p = dodajArtikal('V4', 5, { stanje: 10 });
+    for (const [nacin, poruka] of [
+      ['', 'Način plaćanja je obavezan'], [null, 'Način plaćanja je obavezan'], ['Bitcoin', 'Nepoznat način plaćanja: "Bitcoin"'],
+      ['{"gotovina":5}', 'Nepoznat način plaćanja: "{"gotovina":5}"'], [{ gotovina: 5 }, 'Način plaćanja je obavezan'],
+    ] as const) {
+      await expect(b.call('order:finalize', racun([kasaStavka(p, 1, 5)], { nacinPlacanja: nacin })), String(nacin)).rejects.toThrow(poruka);
+      await expect(b.call('order:createManual', racun([stavka(p, 1, 5)], { nacinPlacanja: nacin, brojFiskalnogRacuna: '1', createdAt: sada() })))
+        .rejects.toThrow(poruka);
+    }
+    nistaUpisano();
+    const r = await b.call('order:finalize', racun([kasaStavka(p, 1, 5)], { nacinPlacanja: ' Ček ' }));
+    expect(red('SELECT nacinPlacanja FROM orders WHERE id = ?', r.id).nacinPlacanja).toBe('Ček');
+  });
+
+  test('razbijeno plaćanje: poznate vrste, iznosi > 0, zbir = ukupno; u bazu ide raspodjela', async () => {
+    const p = dodajArtikal('V5', 5, { stanje: 10 });
+    const osnova = racun([kasaStavka(p, 1, 5)]);
+    for (const [vrste, poruka] of [
+      [[{ oznaka: 'Gotovina', iznos: 3 }, { oznaka: 'Kartica', iznos: 1 }], 'Zbir plaćanja (4.00) ne odgovara iznosu računa (5.00)'],
+      [[{ oznaka: 'Gotovina', iznos: 3 }, { oznaka: 'Zlato', iznos: 2 }], 'Nepoznat način plaćanja: "Zlato"'],
+      [[{ oznaka: 'Gotovina', iznos: 6 }, { oznaka: 'Kartica', iznos: -1 }], 'Iznos plaćanja mora biti veći od 0'],
+      [[{ oznaka: 'Gotovina', iznos: 2 }, { oznaka: 'Gotovina', iznos: 3 }], 'Način plaćanja "Gotovina" je naveden više puta'],
+      [[null], 'Neispravne vrste plaćanja'],
+      ['Gotovina', 'Neispravne vrste plaćanja'],
+    ] as const) {
+      await expect(b.call('order:finalize', { ...osnova, vrstePlacanja: vrste }), JSON.stringify(vrste)).rejects.toThrow(poruka);
+    }
+    nistaUpisano();
+
+    const r = await b.call('order:finalize', { ...osnova, vrstePlacanja: [{ oznaka: 'Gotovina', iznos: 3 }, { oznaka: 'Ček', iznos: 2 }] });
+    expect(red('SELECT nacinPlacanja FROM orders WHERE id = ?', r.id).nacinPlacanja).toBe('{"gotovina":3,"cek":2}');
+    expect(await b.call('cash:drawerState')).toMatchObject({ gotovinskiPromet: 3 });
+    const jedna = await b.call('order:finalize', { ...osnova, nacinPlacanja: 'Gotovina', vrstePlacanja: [{ oznaka: 'Kartica', iznos: 5 }] });
+    expect(red('SELECT nacinPlacanja FROM orders WHERE id = ?', jedna.id).nacinPlacanja).toBe('Kartica');
+    expect(b.tring.zahtjevi.at(-1)!.tijelo).toContain('<Oznaka>Kartica</Oznaka><Iznos>5</Iznos>');
+  });
+
+  test('finalize: uređaj dobije šifru, naziv, JM i PLU artikla iz baze; stopa mora biti stopa artikla', async () => {
+    const p = dodajArtikal('V6', 5, { stanje: 10 });
+    await expect(b.call('order:finalize', racun([{ ...kasaStavka(p, 1, 5), pdvStopa: 'K' }])))
+      .rejects.toThrow('PDV stopa stavke "Artikal V6" ne odgovara artiklu (E)');
+    nistaUpisano();
+
+    await b.call('order:finalize', racun([{ ...kasaStavka(p, 1, 5), sifra: 'X', naziv: 'Laptop', jm: 'm', plu: 99 }]));
+    const tijelo = b.tring.zahtjevi.at(-1)!.tijelo;
+    expect(tijelo).toContain('<Sifra>V6</Sifra>');
+    expect(tijelo).toContain('<Naziv>Artikal V6</Naziv>');
+    expect(tijelo).toContain('<PLU>1</PLU>');
+    expect(tijelo).not.toContain('Laptop');
+  });
+
+  test('finalize: polja van ugovora (datum, prilog, ručni, valuta) se ne upisuju', async () => {
+    const p = dodajArtikal('V7', 5, { stanje: 10 });
+    const r = await b.call('order:finalize', racun([kasaStavka(p, 1, 5)], {
+      createdAt: '2020-01-01 00:00:00', prilogBroj: 5, prilogNaziv: 'X', isManual: 1, datumValute: '2020-02-02', brojFiskalnogRacuna: '1',
+    }));
+    const o = red('SELECT createdAt, prilogBroj, prilogNaziv, isManual, datumValute, brojFiskalnogRacuna FROM orders WHERE id = ?', r.id);
+    expect(o.createdAt.startsWith('2020')).toBe(false);
+    expect({ ...o, createdAt: null }).toEqual({ createdAt: null, prilogBroj: null, prilogNaziv: null, isManual: 0, datumValute: null, brojFiskalnogRacuna: '101' });
+  });
+
+  test('neispravan kupac ili napomena se odbijaju prije štampe', async () => {
+    const p = dodajArtikal('V8', 5, { stanje: 10 });
+    await expect(b.call('order:finalize', racun([kasaStavka(p, 1, 5)], { kupac: { naziv: { x: 1 } } }))).rejects.toThrow('Neispravni podaci kupca');
+    await expect(b.call('order:finalize', racun([kasaStavka(p, 1, 5)], { kupac: 'Firma' }))).rejects.toThrow('Neispravni podaci kupca');
+    await expect(b.call('order:finalize', racun([kasaStavka(p, 1, 5)], { napomena: 5 }))).rejects.toThrow('Napomena mora biti tekst');
+    await expect(b.call('order:createManual', racun([stavka(p, 1, 5)], { kupac: { idBroj: 42 }, brojFiskalnogRacuna: '1', createdAt: sada() })))
+      .rejects.toThrow('Neispravni podaci kupca');
+    nistaUpisano();
+  });
+
+  test('finalizePrilog: nepoznat način plaćanja se odbija prije štampe', async () => {
+    await b.call('fiscal:setZadnjiBroj', 100);
+    await expect(b.call('order:finalizePrilog', { iznos: 10, nacinPlacanja: 'Bitcoin' })).rejects.toThrow('Nepoznat način plaćanja: "Bitcoin"');
+    await expect(b.call('order:finalizePrilog', { iznos: '10', nacinPlacanja: 'Virman' })).rejects.toThrow('Iznos mora biti veći od 0');
+    expect(b.tring.zahtjevi).toEqual([]);
+    expect(red('SELECT COUNT(*) AS n FROM pending_receipts').n).toBe(0);
   });
 });
