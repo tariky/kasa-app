@@ -2,6 +2,7 @@
 // sam odlučuje — renderer ne šalje ni korisnikId ni ulogu. Isti skupovi važe
 // za Rust backend (src-tauri), pa su ovdje kao podaci, ne razbacani po handlerima.
 import type { JavniKorisnik } from '../lib/korisnici';
+import { KLJUCEVI_DOKUMENATA } from '../lib/dokumentPostavke';
 
 export const PORUKA_NISTE_PRIJAVLJENI = 'Niste prijavljeni';
 export const PORUKA_SAMO_ADMIN = 'Ovu radnju može izvršiti samo administrator';
@@ -56,9 +57,8 @@ export const POSTAVKE_ZA_ADMINA: ReadonlySet<string> = new Set([
   'ui.skala',
   // LicencaGrupa
   'ui.showGenerator',
-  // Dokumenti — nastavak numeracije iz starog programa
-  'dokumenti.ponuda.nastavakBroj', 'dokumenti.ponuda.nastavakGodina',
-  'dokumenti.nalog.nastavakBroj', 'dokumenti.nalog.nastavakGodina',
+  // Postavke › Dokumenti (i nastavak numeracije iz starog programa)
+  ...KLJUCEVI_DOKUMENATA,
 ]);
 
 /**
