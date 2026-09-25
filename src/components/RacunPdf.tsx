@@ -257,7 +257,7 @@ const s = StyleSheet.create({
   },
   // Širine u pt (A4 minus margine = 495pt); Opis uzima ostatak (~173pt).
   colRb: { width: 18 },
-  colSifra: { width: 44 },
+  colSifra: { width: 44, paddingRight: 6 },
   colArtikal: { flex: 1, paddingRight: 8 },
   colJm: { width: 26 },
   colKol: { width: 38, textAlign: 'right' },

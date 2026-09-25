@@ -5,6 +5,8 @@ import { PdfPodnozje } from './PdfPodnozje';
 import { PrilogPdf } from '../PrilogPdf';
 import { RacunPdf } from '../RacunPdf';
 import { OtpremnicaPdf } from '../OtpremnicaPdf';
+import { PonudaPdf } from '../PonudaPdf';
+import { RadniNalogPdf } from '../RadniNalogPdf';
 import { ZADANE_DOKUMENT_POSTAVKE, procitajDokumentPostavke } from '@/lib/dokumentPostavke';
 
 // 1×1 PNG
@@ -83,5 +85,23 @@ for (const [ime, postavke] of [['zadano', ZADANE_DOKUMENT_POSTAVKE], ['sve uklju
     await renderuj(<RacunPdf order={ORDER} firma={FIRMA} postavke={postavke} lang="en" />);
     await renderuj(<RacunPdf order={{ ...ORDER, stavke: ORDER.stavke.map((s: any) => ({ ...s, rabat: 0 })) }} firma={FIRMA} postavke={postavke} />);
     await renderuj(<OtpremnicaPdf order={ORDER} firma={FIRMA} postavke={postavke} />);
+  });
+}
+
+const PONUDA: any = {
+  id: 1, broj: 3, godina: 2026, datum: '2026-09-25', vaziDo: '2026-10-03', napomena: 'Isporuka 5 dana',
+  ukupno: 22.82, pdvIznos: 3.32, korisnikIme: 'Admin', kupacNaziv: 'Kupac',
+  stavke: [{ id: 1, productNaziv: 'Artikal', productJm: 'kom', productSifra: 'A1', kolicina: 2, cijena: 11.7, rabat: 2.5 }],
+};
+const NALOG: any = {
+  id: 1, broj: 2, godina: 2026, datum: '2026-09-25', vrsta: 'narudzba', status: 'otvoren', opis: 'Izrada',
+  stavke: [{ id: 1, materijalSifra: 'M1', materijalNaziv: 'Ploča', materijalJm: 'm2', kolicina: 1.5, napomena: '' }],
+};
+
+for (const [ime, postavke] of [['zadano', ZADANE_DOKUMENT_POSTAVKE], ['sve uključeno', SVE_UKLJUCENO]] as const) {
+  test(`ponuda i nalog (${ime})`, async () => {
+    await renderuj(<PonudaPdf ponuda={PONUDA} firma={FIRMA} postavke={postavke} />);
+    await renderuj(<PonudaPdf ponuda={{ ...PONUDA, stavke: [{ ...PONUDA.stavke[0], rabat: 0 }] }} firma={FIRMA} postavke={{ ...postavke, ponuda: { ...postavke.ponuda, uslovi: '' } }} />);
+    await renderuj(<RadniNalogPdf nalog={NALOG} firma={FIRMA} postavke={postavke} />);
   });
 }

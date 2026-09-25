@@ -27,7 +27,7 @@ import { localDateStr } from '@/lib/novac';
 import { cn, formatKM, formatDate } from '@/lib/utils';
 import { useModuli } from '@/hooks/useModuli';
 import { formatBrojNaloga } from '@/lib/proizvodnja';
-import { LOGO_VELICINA } from '@/lib/firma';
+import { ucitajZaStampu } from '@/lib/stampa';
 import { PretragaProizvoda } from '@/components/PretragaProizvoda';
 import type { Product } from '@/types';
 import FakturaDialog, { type FakturaPocetno } from '@/components/FakturaDialog';
@@ -403,18 +403,10 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
 
   // ── PDF ────────────────────────────────────────────────────
 
-  const loadFirma = async () => {
-    try {
-      return await window.api.getFirmaSettings();
-    } catch {
-      return { naziv: '', adresa: '', grad: '', idBroj: '', pdvBroj: '', skladiste: '', web: '', email: '', logo: '', logoVelicina: LOGO_VELICINA.zadano, ziroRacuniPozicija: 'zaglavlje' as const, bankAccounts: [] };
-    }
-  };
-
   const buildPdfBlob = async (p: PonudaRow) => {
     const full = p.stavke ? p : await window.api.getPonuda(p.id);
-    const firma = await loadFirma();
-    return pdf(<PonudaPdf ponuda={full as any} firma={firma} />).toBlob();
+    const { firma, postavke } = await ucitajZaStampu();
+    return pdf(<PonudaPdf ponuda={full as any} firma={firma} postavke={postavke} />).toBlob();
   };
 
   const handlePrintPdf = async (p: PonudaRow) => {

@@ -7,7 +7,7 @@ import { formatBrojNaloga } from '@/lib/proizvodnja';
 import { rokOznaka } from '@/lib/nalogPrikaz';
 import { localDateStr } from '@/lib/novac';
 import { cn, formatKM, formatDate } from '@/lib/utils';
-import { LOGO_VELICINA } from '@/lib/firma';
+import { ucitajZaStampu } from '@/lib/stampa';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Key, mod } from '@/components/ui/ledger';
@@ -112,11 +112,10 @@ export function NalogDetailDialog({ nalogId, redoslijed, uloga, onClose, onNavig
     catch (e) { greska(e); }
   };
 
-  const loadFirma = async () => {
-    try { return await window.api.getFirmaSettings(); }
-    catch { return { naziv: '', adresa: '', grad: '', idBroj: '', pdvBroj: '', skladiste: '', web: '', email: '', logo: '', logoVelicina: LOGO_VELICINA.zadano, ziroRacuniPozicija: 'zaglavlje' as const, bankAccounts: [] }; }
+  const buildPdfBlob = async (n: RadniNalog) => {
+    const { firma, postavke } = await ucitajZaStampu();
+    return pdf(<RadniNalogPdf nalog={n} firma={firma} postavke={postavke} />).toBlob();
   };
-  const buildPdfBlob = async (n: RadniNalog) => pdf(<RadniNalogPdf nalog={n} firma={await loadFirma()} />).toBlob();
   const printPdf = async () => {
     if (!nalog || stavkeDirty) return;
     const url = URL.createObjectURL(await buildPdfBlob(nalog));
