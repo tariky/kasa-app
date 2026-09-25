@@ -475,6 +475,49 @@ describe('dialog:saveFile / fs:writeFile', () => {
   });
 });
 
+describe('dialog:saveFile — ime, ekstenzija i filteri (kao Tauri ljuska)', () => {
+  const pdf = [{ name: 'PDF', extensions: ['pdf'] }];
+
+  test('predloženo ime ostaje samo ime: "/", "\\" i ":" postaju crtice', async () => {
+    for (const [predlog, ime] of [
+      ['Faktura 12/2026.pdf', 'Faktura 12-2026.pdf'],
+      ['/Users/x/Library/LaunchAgents/evil.pdf', '-Users-x-Library-LaunchAgents-evil.pdf'],
+      ['C:\\Windows\\izvoz.zip', 'C--Windows-izvoz.zip'],
+      ['Promet.XLSX', 'Promet.XLSX'],
+    ]) {
+      b.otvoreniDijalozi.length = 0;
+      await b.call('dialog:saveFile', { defaultName: predlog, filters: pdf });
+      expect(b.otvoreniDijalozi.map(d => d.opcije.defaultPath)).toEqual([ime]);
+    }
+  });
+
+  test('nedozvoljena ekstenzija ili skriveno ime: dijalog se ne otvara i vraća null', async () => {
+    b.dijalog.sacuvaj = path.join(b.radniFolder, 'x.pdf');
+    for (const predlog of ['evil.exe', 'x.pdf.sh', '.skriveno.pdf', 'bez-ekstenzije', '', null]) {
+      expect(await b.call('dialog:saveFile', { defaultName: predlog, filters: pdf })).toBeNull();
+    }
+    expect(b.otvoreniDijalozi).toEqual([]);
+    await expect(b.call('fs:writeFile', { path: path.join(b.radniFolder, 'x.pdf'), buffer: [1] }))
+      .rejects.toThrow('Write path not approved by save dialog');
+  });
+
+  test('filteri: ekstenzije van liste pdf, xlsx, csv, db, zip se izbacuju', async () => {
+    await b.call('dialog:saveFile', {
+      defaultName: 'a.zip',
+      filters: [{ name: 'PDF', extensions: ['pdf'] }, { name: 'Sve', extensions: ['exe', 'zip'] }, { name: 'Skripte', extensions: ['sh'] }],
+    });
+    expect(b.otvoreniDijalozi[0].opcije.filters).toEqual([{ name: 'PDF', extensions: ['pdf'] }, { name: 'Sve', extensions: ['zip'] }]);
+  });
+
+  test('odabrana putanja s nedozvoljenom ekstenzijom znači otkazano i ne odobrava upis', async () => {
+    const zlo = path.join(b.radniFolder, 'launch.plist');
+    b.dijalog.sacuvaj = zlo;
+    expect(await b.call('dialog:saveFile', { defaultName: 'a.pdf', filters: pdf })).toBeNull();
+    await expect(b.call('fs:writeFile', { path: zlo, buffer: [1] })).rejects.toThrow('Write path not approved by save dialog');
+    expect(existsSync(zlo)).toBe(false);
+  });
+});
+
 // ─── db:backup ──────────────────────────────────────────────
 
 describe('db:backup', () => {
@@ -525,6 +568,13 @@ describe('db:backup', () => {
     expect(b.otvoreniDijalozi[0].vrsta).toBe('sacuvaj');
     expect(b.otvoreniDijalozi[0].opcije.defaultPath).toMatch(/^kasa-backup-\d{4}-\d{2}-\d{2}\.db$/);
     expect(b.otvoreniDijalozi[0].opcije.filters).toEqual([{ name: 'SQLite Database', extensions: ['db'] }]);
+  });
+
+  test('odabrana putanja s nedozvoljenom ekstenzijom znači otkazano', async () => {
+    const zlo = path.join(b.radniFolder, 'kopija.command');
+    b.dijalog.sacuvaj = zlo;
+    expect(await b.call('db:backup')).toBeNull();
+    expect(readdirSync(b.radniFolder)).toEqual([]);
   });
 
   test('backup ne odobrava fs:writeFile na istu putanju', async () => {

@@ -44,6 +44,7 @@ import { logoVelicina, ziroRacuniPozicija } from '../lib/firma';
 import { dohvatiKnjigovodja } from '../lib/knjigovodja/podaci';
 import * as Tring from '../services/tring';
 import { provjeriKanal, stanjeLicence, aktivirajLicencu } from './licenca';
+import { imeZaCuvanje, dozvoljeniFilteri, dozvoljenaEkstenzija } from './cuvanje';
 import {
   provjeriPristup, OgranicenjePokusaja, OgranicenjePromjenaPina, PORUKA_NISTE_PRIJAVLJENI, TAJNE_POSTAVKE, KLJUC_BLOKADE,
 } from './sesija';
@@ -1822,19 +1823,20 @@ export function registerIpcHandlers(): void {
 
   let lastApprovedSavePath: string | null = null;
 
+  // Predloženo ime, filteri i odabrana putanja idu kroz pravila iz cuvanje.ts
+  // (ista kao u Tauri ljusci). Svaki poziv poništava ranije odobrenje — upisiva
+  // je samo putanja iz zadnjeg dijaloga; odbijeno ime ili ekstenzija = otkazano.
   handle('dialog:saveFile', async (data: { defaultName: string; filters: Array<{ name: string; extensions: string[] }> }) => {
-    const result = await dialog.showSaveDialog({
-      defaultPath: data.defaultName,
-      filters: data.filters,
-    });
-    // Otkazan dijalog poništava i ranije odobrenje — upisiva je samo putanja
-    // iz zadnjeg dijaloga.
     lastApprovedSavePath = null;
-    if (!result.canceled && result.filePath) {
-      lastApprovedSavePath = result.filePath;
-      return result.filePath;
-    }
-    return null;
+    const ime = imeZaCuvanje(data?.defaultName);
+    if (!ime) return null;
+    const result = await dialog.showSaveDialog({
+      defaultPath: ime,
+      filters: dozvoljeniFilteri(data?.filters),
+    });
+    if (result.canceled || !result.filePath || !dozvoljenaEkstenzija(result.filePath)) return null;
+    lastApprovedSavePath = result.filePath;
+    return result.filePath;
   });
 
   handle('fs:writeFile', (data: { path: string; buffer: number[] }) => {
@@ -1842,6 +1844,7 @@ export function registerIpcHandlers(): void {
       throw new Error('Write path not approved by save dialog');
     }
     lastApprovedSavePath = null;
+    if (!dozvoljenaEkstenzija(data.path)) throw new Error('Nedozvoljena vrsta fajla');
     writeFileSync(data.path, Buffer.from(data.buffer));
     return { success: true };
   });
@@ -1855,7 +1858,7 @@ export function registerIpcHandlers(): void {
       defaultPath: `kasa-backup-${timestamp}.db`,
       filters: [{ name: 'SQLite Database', extensions: ['db'] }],
     });
-    if (result.canceled || !result.filePath) return null;
+    if (result.canceled || !result.filePath || !dozvoljenaEkstenzija(result.filePath)) return null;
 
     // Samostalan fajl (DELETE journal mode): gola kopija WAL baze se ne
     // otvara read-only, pa je ni db:restore ne bi mogao provjeriti.
