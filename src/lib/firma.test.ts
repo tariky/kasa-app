@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test';
-import { LOGO_VELICINA, logoVelicina, kontaktFirme } from './firma';
+import { LOGO_VELICINA, logoVelicina, kontaktFirme, ziroRacuniPozicija } from './firma';
 
 test('logoVelicina vraća zadanu vrijednost kad nije postavljena', () => {
   expect(logoVelicina({})).toBe(LOGO_VELICINA.zadano);
@@ -18,4 +18,11 @@ test('kontaktFirme spaja web i email, preskače prazne', () => {
   expect(kontaktFirme({ web: '  ', email: 'info@firma.ba' })).toBe('info@firma.ba');
   expect(kontaktFirme({ web: 'www.firma.ba' })).toBe('www.firma.ba');
   expect(kontaktFirme({})).toBe('');
+});
+
+test('ziroRacuniPozicija je zaglavlje osim kad je izričito podnožje', () => {
+  expect(ziroRacuniPozicija({})).toBe('zaglavlje');
+  expect(ziroRacuniPozicija({ ziroRacuniPozicija: 'podnozje' })).toBe('podnozje');
+  expect(ziroRacuniPozicija({ ziroRacuniPozicija: 'zaglavlje' })).toBe('zaglavlje');
+  expect(ziroRacuniPozicija({ ziroRacuniPozicija: 'bilo šta' as any })).toBe('zaglavlje');
 });

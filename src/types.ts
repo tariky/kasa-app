@@ -226,8 +226,12 @@ export interface FirmaSettings {
   logo: string;
   /** Veličina loga na dokumentima u pt (vidi LOGO_VELICINA). */
   logoVelicina: number;
+  /** Gdje faktura ispisuje žiro račune (vidi lib/firma.ts). */
+  ziroRacuniPozicija: ZiroRacuniPozicija;
   bankAccounts: BankAccount[];
 }
+
+export type ZiroRacuniPozicija = 'zaglavlje' | 'podnozje';
 
 export type NalogVrsta = 'narudzba' | 'zaliha';
 export type NalogStatus = 'otvoren' | 'u_izradi' | 'zavrsen' | 'fakturisan';

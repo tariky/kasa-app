@@ -22,6 +22,11 @@ pub fn logo_velicina(v: &Value) -> f64 {
     }
 }
 
+/// `ziroRacuniPozicija` iz lib/firma.ts: sve osim "podnozje" je zaglavlje.
+pub fn ziro_racuni_pozicija(v: &Value) -> &'static str {
+    if v.as_str() == Some("podnozje") { "podnozje" } else { "zaglavlje" }
+}
+
 /// Postavke s prefiksom, bez prefiksa u ključu.
 fn sa_prefiksom(db: &Db, prefiks: &str) -> R<Map<String, Value>> {
     let mut m = Map::new();
@@ -84,6 +89,7 @@ fn get_firma(db: &Db) -> R<Value> {
         "email": g("email"),
         "logo": g("logo"),
         "logoVelicina": js::f(logo_velicina(&js::f(logo))),
+        "ziroRacuniPozicija": ziro_racuni_pozicija(s.get("ziroRacuniPozicija").unwrap_or(&Value::Null)),
         "bankAccounts": bank_accounts,
     }))
 }
@@ -96,6 +102,7 @@ fn save_firma(db: &Db, data: &Value) -> R<Value> {
         db.run(UPSERT, p!["firma.web", nn(&data["web"], &json!(""))])?;
         db.run(UPSERT, p!["firma.email", nn(&data["email"], &json!(""))])?;
         db.run(UPSERT, p!["firma.logoVelicina", js::num_str(logo_velicina(&data["logoVelicina"]))])?;
+        db.run(UPSERT, p!["firma.ziroRacuniPozicija", ziro_racuni_pozicija(&data["ziroRacuniPozicija"])])?;
 
         let accounts = data["bankAccounts"].as_array().cloned().unwrap_or_default();
         for i in 0..3 {

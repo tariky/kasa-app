@@ -1,6 +1,6 @@
 import { test, expect } from 'bun:test';
 import { generateKeyPairSync, sign } from 'node:crypto';
-import { izdajLicencu, provjeriLicencu, procitajLicencu } from './licenca';
+import { izdajLicencu, provjeriLicencu, procitajLicencu, backupPodaci } from './licenca';
 
 const { privateKey, publicKey } = generateKeyPairSync('ed25519');
 const tudji = generateKeyPairSync('ed25519');
@@ -87,4 +87,52 @@ test('nepoznat modul u tokenu se ignoriše, m koji nije niz je greška formata',
   expect(procitajLicencu(potpisi({ k: 'F', d: '2026-10-31', i: '2026-10-01', m: 'ponude' }))).toBeNull();
   expect(procitajLicencu(potpisi({ k: 'F', d: '2026-10-31', i: '2026-10-01', m: null }))).toBeNull();
   expect(procitajLicencu(potpisi({ k: 'F', d: '2026-10-31', i: '2026-10-01', m: [1] }))).toBeNull();
+});
+
+const r2 = {
+  accountId: '0123456789abcdef0123456789abcdef',
+  accessKeyId: 'AKIDabcdef0123456789abcdef012345',
+  secret: 'tajna0123456789abcdef0123456789abcdef0123456789abcdef0123456789',
+  bucket: 'pazar-pekara-seher',
+  primalac: 'age1xysxk850805p27sr69wc9a6f6dfu76m4ld9zae0cehcdwtl9rulsfuwfxp',
+};
+
+test('backup: licenca nosi ime bucketa, a R2 pristup samo šifrovan', () => {
+  const token = izdajLicencu({ ...osnovna, backup: { bucket: r2.bucket } }, privateKey, r2);
+  expect(provjeriLicencu(token, publicKey, { sada })).toEqual({ ok: true, licenca: { ...osnovna, backup: { bucket: 'pazar-pekara-seher' } } });
+  const payload = Buffer.from(token.split('.')[1], 'base64url').toString('utf8');
+  for (const tajno of [r2.secret, r2.accessKeyId, r2.accountId]) expect(payload).not.toContain(tajno);
+  expect(backupPodaci(token)).toEqual(r2);
+});
+
+test('backup: licenca bez backup-a nema ni polje ni podatke', () => {
+  const token = izdajLicencu(osnovna, privateKey, r2);
+  expect('backup' in procitajLicencu(token)!).toBe(false);
+  expect(backupPodaci(token)).toBeNull();
+  expect(backupPodaci('smeće')).toBeNull();
+});
+
+test('backup: izdavanje traži R2 podatke za isti bucket i ispravno ime', () => {
+  expect(() => izdajLicencu({ ...osnovna, backup: { bucket: r2.bucket } }, privateKey)).toThrow('R2 podaci');
+  expect(() => izdajLicencu({ ...osnovna, backup: { bucket: 'Pekara Šeher' } }, privateKey, { ...r2, bucket: 'Pekara Šeher' })).toThrow('Ime bucketa');
+  expect(() => izdajLicencu({ ...osnovna, backup: { bucket: r2.bucket } }, privateKey, { ...r2, bucket: 'drugi-bucket' })).toThrow('bucket');
+  expect(() => izdajLicencu({ ...osnovna, backup: { bucket: r2.bucket } }, privateKey, { ...r2, primalac: 'xyz' })).toThrow('age1');
+  expect(() => izdajLicencu({ ...osnovna, backup: { bucket: r2.bucket } }, privateKey, { ...r2, secret: ' ' })).toThrow('potpuni');
+});
+
+test('backup: pokvaren b se ignoriše, licenca i dalje važi', () => {
+  const b = (x: unknown) => potpisi({ k: 'F', d: '2026-10-31', i: '2026-10-01', b: x });
+  for (const los of [null, 'x', { c: 'Loš Bucket', x: 'abc' }, { c: 'dobar-bucket' }, { c: 'ab', x: 'abc' }]) {
+    expect(provjeriLicencu(b(los), publicKey, { sada })).toEqual({ ok: true, licenca: { klijent: 'F', vrijediDo: '2026-10-31', izdana: '2026-10-01' } });
+  }
+  expect(procitajLicencu(b({ c: 'dobar-bucket', x: 'neispravno' }))?.backup).toEqual({ bucket: 'dobar-bucket' });
+  expect(backupPodaci(b({ c: 'dobar-bucket', x: 'neispravno' }))).toBeNull();
+});
+
+test('backup: dopisan backup u payload ruši potpis', () => {
+  const tudjiToken = izdajLicencu({ ...osnovna, backup: { bucket: r2.bucket } }, privateKey, r2);
+  const tudjeB = JSON.parse(Buffer.from(tudjiToken.split('.')[1], 'base64url').toString('utf8')).b;
+  const [pre, , potpis] = izdajLicencu(osnovna, privateKey).split('.');
+  const lazni = Buffer.from(JSON.stringify({ k: osnovna.klijent, d: osnovna.vrijediDo, i: osnovna.izdana, b: tudjeB })).toString('base64url');
+  expect(provjeriLicencu(`${pre}.${lazni}.${potpis}`, publicKey, { sada })).toEqual({ ok: false, razlog: 'potpis' });
 });

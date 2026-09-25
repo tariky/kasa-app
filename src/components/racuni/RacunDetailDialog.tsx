@@ -132,7 +132,7 @@ export function RacunDetailDialog({ orderId, redoslijed, korisnikId, onClose, on
   // ── dokumenti ─────────────────────────────────────────
   const loadFirma = async () => {
     try { return await window.api.getFirmaSettings(); }
-    catch { return { naziv: '', adresa: '', grad: '', idBroj: '', pdvBroj: '', skladiste: '', web: '', email: '', logo: '', logoVelicina: LOGO_VELICINA.zadano, bankAccounts: [] }; }
+    catch { return { naziv: '', adresa: '', grad: '', idBroj: '', pdvBroj: '', skladiste: '', web: '', email: '', logo: '', logoVelicina: LOGO_VELICINA.zadano, ziroRacuniPozicija: 'zaglavlje' as const, bankAccounts: [] }; }
   };
   const otvoriZaStampu = (blob: Blob) => {
     const url = URL.createObjectURL(blob);
@@ -290,8 +290,8 @@ export function RacunDetailDialog({ orderId, redoslijed, korisnikId, onClose, on
         default:
       }
       switch (e.key.toLowerCase()) {
-        case 'p': e.preventDefault(); stampajRacun(); break;
-        case 's': e.preventDefault(); spremiRacun(); break;
+        case 'p': if (!imaFakturu) { e.preventDefault(); stampajRacun(); } break;
+        case 's': if (!imaFakturu) { e.preventDefault(); spremiRacun(); } break;
         case 'o': e.preventDefault(); stampajOtpremnicu(); break;
         case 'v': e.preventDefault(); otvoriValutu(); break;
         case 'f':
@@ -390,15 +390,6 @@ export function RacunDetailDialog({ orderId, redoslijed, korisnikId, onClose, on
                               : `Dodijeljeno ${formatKM(sumaPriloga(fakturaStavke))} od ${formatKM(order.ukupno)} — dopunite stavke prije štampe.`}
                         </p>
                       </div>
-                      {fakturaZavrsena ? (
-                        <Button onClick={stampajFakturu} className="h-12 gap-2.5 rounded-xl px-6 text-[14px]">
-                          <Printer className="h-4 w-4" /> Štampaj fakturu <Key tone="dark">F</Key>
-                        </Button>
-                      ) : mozeUreditiFakturu && (
-                        <Button variant="outline" onClick={() => setPrilogOpen(true)} className="h-12 gap-2.5 rounded-xl bg-white px-6 text-[14px]">
-                          <Paperclip className="h-4 w-4" /> Dodijeli stavke <Key>F</Key>
-                        </Button>
-                      )}
                     </section>
                   )}
 
@@ -472,7 +463,7 @@ export function RacunDetailDialog({ orderId, redoslijed, korisnikId, onClose, on
                     </div>
                   </section>
 
-                  <section className="rounded-xl border border-slate-200/70 px-4 py-3" aria-label="Jezik dokumenta">
+                  {!imaFakturu && <section className="rounded-xl border border-slate-200/70 px-4 py-3" aria-label="Jezik dokumenta">
                     <div className="flex items-center justify-between gap-3">
                       <span className="text-[12px] text-slate-500">Jezik računa za štampu</span>
                       <div className="inline-flex rounded-lg bg-slate-100 p-0.5">
@@ -486,7 +477,7 @@ export function RacunDetailDialog({ orderId, redoslijed, korisnikId, onClose, on
                         ))}
                       </div>
                     </div>
-                  </section>
+                  </section>}
                 </aside>
               </div>
             </div>
@@ -509,11 +500,19 @@ export function RacunDetailDialog({ orderId, redoslijed, korisnikId, onClose, on
                   <FooterBtn icon={Truck} label="Otpremnica" hint="O" onClick={stampajOtpremnicu} />
                   <FooterBtn icon={Download} title="Sačuvaj otpremnicu kao PDF" onClick={spremiOtpremnicu} />
                 </div>
-                <span className="w-px h-5 bg-slate-200" aria-hidden />
-                <div className="flex items-center gap-1.5">
-                  <FooterBtn icon={Download} title={`Sačuvaj račun kao PDF (${lang.toUpperCase()}) — S`} onClick={spremiRacun} />
-                  <FooterBtn icon={Printer} label="Štampaj račun" hint="P" tone="primary" onClick={stampajRacun} />
-                </div>
+                {/* Račun uz fakturu se ne štampa zasebno — njegovo mjesto preuzima faktura. */}
+                {imaFakturu ? (fakturaZavrsena || mozeUreditiFakturu) && <>
+                  <span className="w-px h-5 bg-slate-200" aria-hidden />
+                  {fakturaZavrsena
+                    ? <FooterBtn icon={Printer} label="Štampaj fakturu" hint="F" tone="primary" onClick={stampajFakturu} />
+                    : <FooterBtn icon={Paperclip} label="Dodijeli stavke" hint="F" tone="primary" onClick={() => setPrilogOpen(true)} />}
+                </> : <>
+                  <span className="w-px h-5 bg-slate-200" aria-hidden />
+                  <div className="flex items-center gap-1.5">
+                    <FooterBtn icon={Download} title={`Sačuvaj račun kao PDF (${lang.toUpperCase()}) — S`} onClick={spremiRacun} />
+                    <FooterBtn icon={Printer} label="Štampaj račun" hint="P" tone="primary" onClick={stampajRacun} />
+                  </div>
+                </>}
             </FullDialogFooter>
           </>
         )}

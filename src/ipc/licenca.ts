@@ -3,13 +3,11 @@
 // računa ID uređaja i blokira kanale koji prave nove dokumente kad je
 // licenca zaključana ili modul nije licenciran.
 import { app, BrowserWindow } from 'electron';
-import { createHash } from 'node:crypto';
-import { execSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { hostname } from 'node:os';
 import path from 'node:path';
 import { lokalniDatum } from '../lib/licenca';
 import { LICENCA_JAVNI_KLJUC } from '../lib/licencaJavniKljuc';
+import { uredjajId } from '../lib/uredjaj';
 import { izracunajStanje, efektivniDanas, kanalPodLicencom, razlogBlokade, type LicencaInfo } from '../lib/licencaStanje';
 
 interface Zapis {
@@ -31,38 +29,6 @@ function procitaj(): Zapis {
 
 function zapisi(z: Zapis): void {
   writeFileSync(putanja(), JSON.stringify(z, null, 2));
-}
-
-function sirovIdUredjaja(): string {
-  try {
-    if (process.platform === 'win32') {
-      const out = execSync('reg query HKLM\\SOFTWARE\\Microsoft\\Cryptography /v MachineGuid', { encoding: 'utf8', windowsHide: true });
-      const m = out.match(/MachineGuid\s+REG_SZ\s+(\S+)/);
-      if (m) return m[1];
-    } else if (process.platform === 'darwin') {
-      const out = execSync('ioreg -rd1 -c IOPlatformExpertDevice', { encoding: 'utf8' });
-      const m = out.match(/"IOPlatformUUID"\s*=\s*"([^"]+)"/);
-      if (m) return m[1];
-    } else {
-      for (const f of ['/etc/machine-id', '/var/lib/dbus/machine-id']) {
-        if (existsSync(f)) return readFileSync(f, 'utf8').trim();
-      }
-    }
-  } catch {
-    // pada na hostname ispod
-  }
-  return hostname();
-}
-
-let idUredjaja: string | null = null;
-
-/** Kratak, stabilan ID ovog računara, npr. `3F9A-01C2-7B44`. */
-export function uredjajId(): string {
-  if (!idUredjaja) {
-    const h = createHash('sha256').update(`pazar:${sirovIdUredjaja()}`).digest('hex').slice(0, 12).toUpperCase();
-    idUredjaja = h.match(/.{4}/g)!.join('-');
-  }
-  return idUredjaja;
 }
 
 export function stanjeLicence(): LicencaInfo {

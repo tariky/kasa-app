@@ -299,8 +299,17 @@ describe('settings:getFirma', () => {
   test('prazna baza daje prazna polja, logo 100 i bez računa', async () => {
     expect(await b.call('settings:getFirma')).toEqual({
       naziv: '', adresa: '', grad: '', idBroj: '', pdvBroj: '', skladiste: '',
-      web: '', email: '', logo: '', logoVelicina: 100, bankAccounts: [],
+      web: '', email: '', logo: '', logoVelicina: 100, ziroRacuniPozicija: 'zaglavlje', bankAccounts: [],
     });
+  });
+
+  test('položaj žiro računa: samo "podnozje" mijenja zadano zaglavlje', async () => {
+    const set = (v: string) => b.db.prepare(
+      "INSERT INTO settings (key, value) VALUES ('firma.ziroRacuniPozicija', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+    ).run(v);
+    set('podnozje'); expect((await b.call('settings:getFirma')).ziroRacuniPozicija).toBe('podnozje');
+    set('zaglavlje'); expect((await b.call('settings:getFirma')).ziroRacuniPozicija).toBe('zaglavlje');
+    set('lijevo'); expect((await b.call('settings:getFirma')).ziroRacuniPozicija).toBe('zaglavlje');
   });
 
   test('izostavlja potpuno prazne bankovne račune, zadržava djelimično popunjene', async () => {
@@ -331,7 +340,7 @@ describe('settings:getFirma', () => {
 describe('settings:saveFirma', () => {
   test('upisuje sva polja i uvijek sva tri bankovna računa', async () => {
     const r = await b.call('settings:saveFirma', firma({
-      web: 'stolarija.ba', email: 'info@stolarija.ba', logoVelicina: 150,
+      web: 'stolarija.ba', email: 'info@stolarija.ba', logoVelicina: 150, ziroRacuniPozicija: 'podnozje',
       bankAccounts: [{ bankName: 'UniCredit', accountNumber: '3380000000000000' }],
     }));
     expect(r).toEqual({ success: true });
@@ -342,13 +351,13 @@ describe('settings:saveFirma', () => {
       'firma.naziv': 'Stolarija d.o.o.', 'firma.adresa': 'Titova 1', 'firma.grad': 'Sarajevo',
       'firma.idBroj': '4200000000001', 'firma.pdvBroj': '200000000001', 'firma.skladiste': 'Glavno',
       'firma.logo': 'data:image/png;base64,AAA', 'firma.web': 'stolarija.ba', 'firma.email': 'info@stolarija.ba',
-      'firma.logoVelicina': '150',
+      'firma.logoVelicina': '150', 'firma.ziroRacuniPozicija': 'podnozje',
       'firma.bank1.name': 'UniCredit', 'firma.bank1.number': '3380000000000000',
       'firma.bank2.name': '', 'firma.bank2.number': '',
       'firma.bank3.name': '', 'firma.bank3.number': '',
     });
     expect(await b.call('settings:getFirma')).toEqual({
-      ...firma(), web: 'stolarija.ba', email: 'info@stolarija.ba', logoVelicina: 150,
+      ...firma(), web: 'stolarija.ba', email: 'info@stolarija.ba', logoVelicina: 150, ziroRacuniPozicija: 'podnozje',
       bankAccounts: [{ bankName: 'UniCredit', accountNumber: '3380000000000000' }],
     });
   });
@@ -358,6 +367,7 @@ describe('settings:saveFirma', () => {
     expect(postavka('firma.web')).toBe('');
     expect(postavka('firma.email')).toBe('');
     expect(postavka('firma.logoVelicina')).toBe('100');
+    expect(postavka('firma.ziroRacuniPozicija')).toBe('zaglavlje');
     expect(postavka('firma.bank1.name')).toBe('');
   });
 

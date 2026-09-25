@@ -79,6 +79,14 @@ fn datum_ok(s: &str) -> bool {
     D.with(|r| r.is_match(s))
 }
 
+/// `citajB`: bucket iz `b` kad su `c` ispravno ime i `x` string; pokvaren
+/// `b` znači "bez backup-a", ne neispravnu licencu.
+fn backup_bucket(b: &Value) -> Option<&str> {
+    thread_local!(static K: Regex = Regex::new(r"^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$").unwrap());
+    let c = b["c"].as_str().filter(|c| K.with(|r| r.is_match(c)))?;
+    b["x"].is_string().then_some(c)
+}
+
 /// Čita token bez provjere potpisa; `None` kad format nije ispravan.
 pub fn procitaj_licencu(token: &str) -> Option<Value> {
     let dijelovi: Vec<&str> = token.trim().split('.').collect();
@@ -99,6 +107,9 @@ pub fn procitaj_licencu(token: &str) -> Option<Value> {
     }
     if let Some(m) = p.get("m") {
         l.insert("moduli".into(), normalizuj_module(m)?);
+    }
+    if let Some(c) = backup_bucket(&p["b"]) {
+        l.insert("backup".into(), json!({ "bucket": c }));
     }
     Some(Value::Object(l))
 }
@@ -386,5 +397,17 @@ mod tests {
         let zakljucana = izracunaj_stanje(Some(&samo_proizvodnja), &v, "2026-12-01", "X");
         assert!(razlog_blokade(&zakljucana, "ponuda:create").unwrap().0);
         assert!(pod_licencom("normativ:save") && pod_licencom("order:create") && !pod_licencom("product:getAll"));
+    }
+
+    #[test]
+    fn backup_u_licenci() {
+        let k = SigningKey::from_bytes(&[7u8; 32]);
+        let sa = izdaj(&k, r#"{"k":"F","d":"2026-10-10","i":"2026-01-01","b":{"c":"pazar-pekara","x":"abc"}}"#);
+        assert_eq!(procitaj_licencu(&sa).unwrap()["backup"], json!({"bucket": "pazar-pekara"}));
+        for los in ["null", r#""x""#, r#"{"c":"Loš Bucket","x":"abc"}"#, r#"{"c":"dobar-bucket"}"#, r#"{"c":"ab","x":"abc"}"#] {
+            let t = izdaj(&k, &format!(r#"{{"k":"F","d":"2026-10-10","i":"2026-01-01","b":{los}}}"#));
+            let l = procitaj_licencu(&t).expect(los);
+            assert!(l.get("backup").is_none(), "{los}");
+        }
     }
 }

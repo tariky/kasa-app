@@ -4,10 +4,25 @@
 import index from './index.html';
 import { procitajLicencu, provjeriLicencu } from '../../src/lib/licenca';
 import { LICENCIRANI_MODULI, NAZIV_MODULA, opisModula, type Modul } from '../../src/lib/moduli';
-import { PODRAZUMIJEVANI_MODULI, PRIVATNI, doNakonDana, izdaj, izdaneLicence, javniIzPrivatnog } from '../licenca-zajednicko';
+import {
+  BACKUP_KLJUC, BUCKETI_FAJL, PODRAZUMIJEVANI_MODULI, PRIVATNI, R2_FAJL, doNakonDana, izdaj, izdaneLicence, javniBackupKljuc,
+  javniIzPrivatnog, napraviBackupKljuc, spremiAccountId, ucitajAccountId, ucitajBuckete, type BackupUnos,
+} from '../licenca-zajednicko';
 
 function greska(poruka: string, status = 400) {
   return Response.json({ greska: poruka }, { status });
+}
+
+/** R2 stanje za formu — secret-i se ne vraćaju u preglednik. */
+async function backupStanje() {
+  return {
+    accountId: ucitajAccountId(),
+    r2Fajl: R2_FAJL,
+    bucketi: Object.entries(ucitajBuckete()).map(([bucket, b]) => ({ bucket, klijent: b.klijent, accessKeyId: b.accessKeyId })),
+    bucketiFajl: BUCKETI_FAJL,
+    kljuc: await javniBackupKljuc(),
+    kljucFajl: BACKUP_KLJUC,
+  };
 }
 
 const saOpisom = <T extends { moduli?: Modul[] }>(l: T) => ({ ...l, opisModula: opisModula(l.moduli) });
@@ -18,10 +33,11 @@ const server = Bun.serve({
   routes: {
     '/': index,
     '/api/stanje': {
-      GET: () => {
+      GET: async () => {
         try {
           javniIzPrivatnog();
           return Response.json({
+            backup: await backupStanje(),
             kljuc: PRIVATNI,
             izdane: izdaneLicence().reverse().map(saOpisom),
             moduli: LICENCIRANI_MODULI.map((id) => ({ id, naziv: NAZIV_MODULA[id] })),
@@ -34,7 +50,7 @@ const server = Bun.serve({
     },
     '/api/izdaj': {
       POST: async (req) => {
-        const b = (await req.json()) as { klijent?: string; dana?: number; vrijediDo?: string; uredjaj?: string; moduli?: string[] };
+        const b = (await req.json()) as { klijent?: string; dana?: number; vrijediDo?: string; uredjaj?: string; moduli?: string[]; backup?: BackupUnos };
         if (!b.klijent?.trim()) return greska('Upiši ime klijenta');
         if (!Array.isArray(b.moduli)) return greska('Odaberi module');
         let vrijediDo = b.vrijediDo;
@@ -44,7 +60,28 @@ const server = Bun.serve({
         }
         if (!vrijediDo) return greska('Zadaj broj dana ili datum');
         try {
-          return Response.json(saOpisom(izdaj({ klijent: b.klijent, vrijediDo, uredjaj: b.uredjaj, moduli: b.moduli as Modul[] })));
+          return Response.json(saOpisom(await izdaj({ klijent: b.klijent, vrijediDo, uredjaj: b.uredjaj, moduli: b.moduli as Modul[], backup: b.backup?.bucket ? b.backup : undefined })));
+        } catch (e) {
+          return greska((e as Error).message);
+        }
+      },
+    },
+    '/api/r2': {
+      POST: async (req) => {
+        const b = (await req.json()) as { accountId?: string };
+        try {
+          spremiAccountId(b.accountId ?? '');
+          return Response.json(await backupStanje());
+        } catch (e) {
+          return greska((e as Error).message);
+        }
+      },
+    },
+    '/api/backup-kljuc': {
+      POST: async () => {
+        try {
+          await napraviBackupKljuc();
+          return Response.json(await backupStanje());
         } catch (e) {
           return greska((e as Error).message);
         }

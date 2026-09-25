@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Sekcija } from '@/components/postavke/dijelovi';
 import { PROGRAM } from '@/lib/brend';
 import { version } from '../../package.json';
 import appIcon from '@/assets/icon.png';
@@ -57,20 +58,18 @@ export function OProgramuDialog() {
 /** Kartica "O programu" u Postavke → Sistem. */
 export function OProgramuKartica() {
   return (
-    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm shadow-slate-200/50 overflow-hidden">
-      <div className="px-6 py-4 border-b border-slate-100">
-        <div className="flex items-center gap-3">
-          <img src={appIcon} alt={PROGRAM.naziv} className="w-10 h-10" />
-          <div>
-            <h3 className="text-[15px] font-semibold text-slate-800">O programu</h3>
-            <p className="text-[12px] text-slate-400 mt-0.5">{PROGRAM.naziv} — {PROGRAM.opis}</p>
-          </div>
+    <Sekcija naslov="O programu">
+      <div className="flex items-center gap-3 px-5 pt-4">
+        <img src={appIcon} alt="" className="w-10 h-10" />
+        <div className="min-w-0">
+          <p className="text-[13.5px] font-semibold text-slate-800">{PROGRAM.naziv}</p>
+          <p className="text-[12px] text-slate-500">{PROGRAM.opis}</p>
         </div>
       </div>
-      <div className="px-6 py-5 space-y-4">
-        <p className="text-[13px] text-slate-500">{PROGRAM.moduli}</p>
+      <div className="px-5 py-4 space-y-4">
+        <p className="text-[12px] text-slate-500">{PROGRAM.moduli}</p>
         <Podaci />
       </div>
-    </div>
+    </Sekcija>
   );
 }

@@ -6,7 +6,7 @@ import { iznosStavke, pdvStavke } from '@/lib/racun';
 import { round2 } from '@/lib/novac';
 import { prilogNaziv } from '@/lib/prilog';
 import { formatDatumValute } from '@/lib/valuta';
-import { logoVelicina, kontaktFirme } from '@/lib/firma';
+import { logoVelicina, kontaktFirme, ziroRacuniPozicija } from '@/lib/firma';
 
 /** Red iz `prilog:getStavke` (prilog_stavke + JOIN na products). */
 export interface PrilogPdfStavka {
@@ -35,6 +35,7 @@ export interface PrilogPdfProps {
     web?: string;
     email?: string;
     logoVelicina?: number;
+    ziroRacuniPozicija?: string;
   };
   stavke: PrilogPdfStavka[];
 }
@@ -163,6 +164,20 @@ const s = StyleSheet.create({
     flexDirection: 'row', justifyContent: 'space-between',
     borderTop: '0.5pt solid #ccc', paddingTop: 8, fontSize: 7, color: '#999',
   },
+
+  /* ── Žiro računi u podnožju: zrcali debelu liniju zaglavlja i nosi se na svakoj
+     stranici, pa kupac broj za uplatu nađe na istom mjestu kao na memorandumu. ── */
+  pagePodnozje: { paddingBottom: 118 },
+  podnozje: { position: 'absolute', bottom: 30, left: 50, right: 50 },
+  bankaTraka: {
+    flexDirection: 'row', alignItems: 'flex-start',
+    borderTop: '1pt solid #000', paddingTop: 7, marginBottom: 10,
+  },
+  bankaNaslov: { width: 78, fontSize: 7.5, fontFamily: FB, fontWeight: 700, paddingTop: 0.5 },
+  bankaKolona: { flex: 1, paddingLeft: 9, borderLeft: '0.5pt solid #ccc' },
+  bankaNaziv: { fontSize: 7, color: '#555', marginBottom: 2 },
+  bankaBroj: { fontSize: 9.5, fontFamily: FB, fontWeight: 700, letterSpacing: 0.4 },
+  podnozjeMeta: { flexDirection: 'row', justifyContent: 'space-between', fontSize: 7, color: '#999' },
 });
 
 /**
@@ -178,6 +193,7 @@ export function PrilogPdf({ order, firma, stavke }: PrilogPdfProps) {
   const today = fmtDate(new Date());
   const datumValute = formatDatumValute(order.datumValute);
   const hasKupac = order.kupacNaziv || order.kupacIdBroj;
+  const racuniDolje = ziroRacuniPozicija(firma) === 'podnozje' && firma.bankAccounts.length > 0;
 
   // Cijene u sistemu su sa uračunatim PDV-om; za fakturni prikaz se jedinična
   // cijena bez PDV-a izlučuje iz bruto cijene po stopi stavke.
@@ -197,7 +213,7 @@ export function PrilogPdf({ order, firma, stavke }: PrilogPdfProps) {
 
   return (
     <Document>
-      <Page size="A4" style={s.page}>
+      <Page size="A4" style={racuniDolje ? [s.page, s.pagePodnozje] : s.page}>
 
         {/* ── Top: Logo+Firma left, title right ── */}
         <View style={s.topBar}>
@@ -207,7 +223,7 @@ export function PrilogPdf({ order, firma, stavke }: PrilogPdfProps) {
               <Text style={s.firmaNaziv}>{firma.naziv}</Text>
               <Text style={s.firmaLine}>{firma.adresa}, {firma.grad}</Text>
               {kontaktFirme(firma) ? <Text style={s.firmaLine}>{kontaktFirme(firma)}</Text> : null}
-              {firma.bankAccounts.map((b, i) => (
+              {!racuniDolje && firma.bankAccounts.map((b, i) => (
                 <Text key={i} style={s.bankLine}>{b.bankName}: {b.accountNumber}</Text>
               ))}
             </View>
@@ -359,11 +375,30 @@ export function PrilogPdf({ order, firma, stavke }: PrilogPdfProps) {
         </View>
 
         {/* ── Footer ── */}
-        <View style={s.footer} fixed>
-          <Text>{POTPIS_AUTORA}</Text>
-          <Text>{firma.naziv} · Generisano: {today}</Text>
-          <Text render={({ pageNumber, totalPages }) => `${pageNumber} / ${totalPages}`} />
-        </View>
+        {racuniDolje ? (
+          <View style={s.podnozje} fixed>
+            <View style={s.bankaTraka}>
+              <Text style={s.bankaNaslov}>Žiro računi</Text>
+              {firma.bankAccounts.map((b, i) => (
+                <View key={i} style={s.bankaKolona}>
+                  <Text style={s.bankaNaziv}>{b.bankName || '—'}</Text>
+                  <Text style={s.bankaBroj}>{b.accountNumber || '—'}</Text>
+                </View>
+              ))}
+            </View>
+            <View style={s.podnozjeMeta}>
+              <Text>{POTPIS_AUTORA}</Text>
+              <Text>{firma.naziv} · Generisano: {today}</Text>
+              <Text render={({ pageNumber, totalPages }) => `${pageNumber} / ${totalPages}`} />
+            </View>
+          </View>
+        ) : (
+          <View style={s.footer} fixed>
+            <Text>{POTPIS_AUTORA}</Text>
+            <Text>{firma.naziv} · Generisano: {today}</Text>
+            <Text render={({ pageNumber, totalPages }) => `${pageNumber} / ${totalPages}`} />
+          </View>
+        )}
       </Page>
     </Document>
   );

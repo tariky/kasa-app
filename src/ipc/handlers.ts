@@ -36,7 +36,7 @@ import {
 } from '../lib/ponuda';
 import { buildTringRacun, buildTringReklamacija } from '../lib/tringRacun';
 import { addCashMovement, retryCashMovement, getTodayMovements, getDrawerState, getLastPologIznos } from '../lib/cash';
-import { logoVelicina } from '../lib/firma';
+import { logoVelicina, ziroRacuniPozicija } from '../lib/firma';
 import { dohvatiKnjigovodja } from '../lib/knjigovodja/podaci';
 import * as Tring from '../services/tring';
 import { provjeriKanal, stanjeLicence, aktivirajLicencu } from './licenca';
@@ -1547,6 +1547,7 @@ export function registerIpcHandlers(): void {
       email: settings.email ?? '',
       logo: settings.logo ?? '',
       logoVelicina: logoVelicina({ logoVelicina: Number(settings.logoVelicina) }),
+      ziroRacuniPozicija: ziroRacuniPozicija(settings),
       bankAccounts,
     };
   });
@@ -1591,7 +1592,7 @@ export function registerIpcHandlers(): void {
   handle('settings:saveFirma', (data: {
     naziv: string; adresa: string; grad: string;
     idBroj: string; pdvBroj: string; skladiste: string; logo: string;
-    web?: string; email?: string; logoVelicina?: number;
+    web?: string; email?: string; logoVelicina?: number; ziroRacuniPozicija?: string;
     bankAccounts?: Array<{ bankName: string; accountNumber: string }>;
   }) => {
     const save = db.transaction(() => {
@@ -1608,6 +1609,7 @@ export function registerIpcHandlers(): void {
       upsert.run('firma.web', data.web ?? '');
       upsert.run('firma.email', data.email ?? '');
       upsert.run('firma.logoVelicina', String(logoVelicina(data)));
+      upsert.run('firma.ziroRacuniPozicija', ziroRacuniPozicija(data));
 
       const accounts = data.bankAccounts ?? [];
       for (let i = 0; i < 3; i++) {

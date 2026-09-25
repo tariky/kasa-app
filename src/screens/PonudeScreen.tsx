@@ -407,7 +407,7 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
     try {
       return await window.api.getFirmaSettings();
     } catch {
-      return { naziv: '', adresa: '', grad: '', idBroj: '', pdvBroj: '', skladiste: '', web: '', email: '', logo: '', logoVelicina: LOGO_VELICINA.zadano, bankAccounts: [] };
+      return { naziv: '', adresa: '', grad: '', idBroj: '', pdvBroj: '', skladiste: '', web: '', email: '', logo: '', logoVelicina: LOGO_VELICINA.zadano, ziroRacuniPozicija: 'zaglavlje' as const, bankAccounts: [] };
     }
   };
 

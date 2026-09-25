@@ -6,7 +6,7 @@
 //   bun tools/licenca.ts kljucevi
 //   bun tools/licenca.ts izdaj --klijent "Pekara X" --dana 31
 //   bun tools/licenca.ts izdaj --klijent "Pekara X" --do 2026-12-31 --uredjaj <id>
-//   bun tools/licenca.ts izdaj --klijent X (--dana N | --do YYYY-MM-DD) [--uredjaj ID] [--moduli skladiste,ponude,proizvodnja,generator | --moduli ""]
+//   bun tools/licenca.ts izdaj --klijent X (--dana N | --do YYYY-MM-DD) [--uredjaj ID] [--moduli skladiste,ponude,proizvodnja,generator | --moduli ""] [--backup BUCKET [--r2-kljuc ID --r2-secret S]]
 //   bun tools/licenca.ts provjeri <token>
 import { generateKeyPairSync } from 'node:crypto';
 import { mkdirSync, existsSync, writeFileSync } from 'node:fs';
@@ -50,7 +50,7 @@ function zapisiJavni(pem: string) {
   );
 }
 
-function izdaj(args: string[]) {
+async function izdaj(args: string[]) {
   const { values } = parseArgs({
     args,
     options: {
@@ -59,6 +59,9 @@ function izdaj(args: string[]) {
       do: { type: 'string' },
       uredjaj: { type: 'string' },
       moduli: { type: 'string' },
+      backup: { type: 'string' },
+      'r2-kljuc': { type: 'string' },
+      'r2-secret': { type: 'string' },
     },
   });
   if (!values.klijent) greska('--klijent je obavezan');
@@ -73,9 +76,11 @@ function izdaj(args: string[]) {
 
   const moduli = (values.moduli === undefined ? PODRAZUMIJEVANI_MODULI : values.moduli.split(',').map(m => m.trim()).filter(Boolean)) as Modul[];
 
-  let izdana: ReturnType<typeof izdajLicencu>;
+  let izdana: Awaited<ReturnType<typeof izdajLicencu>>;
   try {
-    izdana = izdajLicencu({ klijent: values.klijent, vrijediDo: vrijediDo!, uredjaj: values.uredjaj, moduli });
+    izdana = await izdajLicencu({ klijent: values.klijent, vrijediDo: vrijediDo!, uredjaj: values.uredjaj, moduli,
+      backup: values.backup ? { bucket: values.backup, accessKeyId: values['r2-kljuc'], secret: values['r2-secret'] } : undefined,
+    });
   } catch (e) {
     greska((e as Error).message);
   }
@@ -84,6 +89,7 @@ function izdaj(args: string[]) {
   console.error(`Važi do:   ${vrijediDo} (uključivo)`);
   console.error(`Moduli:    ${opisModula(izdana.moduli)}`);
   if (values.uredjaj) console.error(`Uređaj:    ${values.uredjaj}`);
+  if (values.backup) console.error(`Backup:    ${values.backup}`);
   console.error('');
   console.log(izdana.token);
 }
@@ -98,6 +104,7 @@ function provjeri(token: string | undefined) {
   console.log(`Važi do:   ${licenca.vrijediDo}`);
   if (licenca.uredjaj) console.log(`Uređaj:    ${licenca.uredjaj}`);
   console.log(`Moduli:    ${opisModula(licenca.moduli)}`);
+  if (licenca.backup) console.log(`Backup:    ${licenca.backup.bucket}`);
   console.log(`Status:    ${r.ok ? 'ISPRAVNA' : r.razlog.toUpperCase()}`);
   process.exit(r.ok ? 0 : 1);
 }
@@ -108,12 +115,12 @@ switch (komanda) {
     kljucevi(ostalo.includes('--prepisi'));
     break;
   case 'izdaj':
-    izdaj(ostalo);
+    await izdaj(ostalo);
     break;
   case 'provjeri':
     provjeri(ostalo[0]);
     break;
   default:
-    console.log('Upotreba: bun tools/licenca.ts <kljucevi [--prepisi] | izdaj --klijent X (--dana N | --do YYYY-MM-DD) [--uredjaj ID] [--moduli skladiste,ponude,proizvodnja,generator | --moduli ""] | provjeri TOKEN>');
+    console.log('Upotreba: bun tools/licenca.ts <kljucevi [--prepisi] | izdaj --klijent X (--dana N | --do YYYY-MM-DD) [--uredjaj ID] [--moduli skladiste,ponude,proizvodnja,generator | --moduli ""] [--backup BUCKET [--r2-kljuc ID --r2-secret S]] | provjeri TOKEN>');
     process.exit(komanda ? 1 : 0);
 }

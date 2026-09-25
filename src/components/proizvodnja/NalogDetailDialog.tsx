@@ -114,7 +114,7 @@ export function NalogDetailDialog({ nalogId, redoslijed, korisnikId, uloga, onCl
 
   const loadFirma = async () => {
     try { return await window.api.getFirmaSettings(); }
-    catch { return { naziv: '', adresa: '', grad: '', idBroj: '', pdvBroj: '', skladiste: '', web: '', email: '', logo: '', logoVelicina: LOGO_VELICINA.zadano, bankAccounts: [] }; }
+    catch { return { naziv: '', adresa: '', grad: '', idBroj: '', pdvBroj: '', skladiste: '', web: '', email: '', logo: '', logoVelicina: LOGO_VELICINA.zadano, ziroRacuniPozicija: 'zaglavlje' as const, bankAccounts: [] }; }
   };
   const buildPdfBlob = async (n: RadniNalog) => pdf(<RadniNalogPdf nalog={n} firma={await loadFirma()} />).toBlob();
   const printPdf = async () => {
