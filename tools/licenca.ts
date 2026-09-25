@@ -4,9 +4,9 @@
 // može izdati licencu bilo kome, zato ga ne commitati i čuvati backup.
 //
 //   bun tools/licenca.ts kljucevi
-//   bun tools/licenca.ts izdaj --klijent "Pekara X" --dana 31
-//   bun tools/licenca.ts izdaj --klijent "Pekara X" --do 2026-12-31 --uredjaj <id>
-//   bun tools/licenca.ts izdaj --klijent X (--dana N | --do YYYY-MM-DD) [--uredjaj ID] [--moduli skladiste,ponude,proizvodnja,generator | --moduli ""] [--backup BUCKET [--r2-kljuc ID --r2-secret S]]
+//   bun tools/licenca.ts izdaj --klijent "Pekara X" --dana 31 --uredjaj <id>
+//   bun tools/licenca.ts izdaj --klijent "Pekara X" --do 2026-12-31 --bilo-koji-uredjaj
+//   bun tools/licenca.ts izdaj --klijent X (--dana N | --do YYYY-MM-DD) (--uredjaj ID | --bilo-koji-uredjaj) [--moduli skladiste,ponude,proizvodnja,generator | --moduli ""] [--backup BUCKET [--r2-kljuc ID --r2-secret S]]
 //   bun tools/licenca.ts provjeri <token>
 import { generateKeyPairSync } from 'node:crypto';
 import { mkdirSync, existsSync, writeFileSync } from 'node:fs';
@@ -14,7 +14,7 @@ import { dirname, join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { provjeriLicencu, procitajLicencu } from '../src/lib/licenca';
 import { opisModula, type Modul } from '../src/lib/moduli';
-import { PODRAZUMIJEVANI_MODULI, PRIVATNI, doNakonDana, izdaj as izdajLicencu, javniIzPrivatnog } from './licenca-zajednicko';
+import { PODRAZUMIJEVANI_MODULI, PRIVATNI, doNakonDana, izdaj as izdajLicencu, javniIzPrivatnog, uredjajZaIzdavanje } from './licenca-zajednicko';
 const JAVNI_TS = join(import.meta.dir, '..', 'src', 'lib', 'licencaJavniKljuc.ts');
 
 function greska(poruka: string): never {
@@ -58,6 +58,7 @@ async function izdaj(args: string[]) {
       dana: { type: 'string' },
       do: { type: 'string' },
       uredjaj: { type: 'string' },
+      'bilo-koji-uredjaj': { type: 'boolean' },
       moduli: { type: 'string' },
       backup: { type: 'string' },
       'r2-kljuc': { type: 'string' },
@@ -66,6 +67,7 @@ async function izdaj(args: string[]) {
   });
   if (!values.klijent) greska('--klijent je obavezan');
   if (!values.dana === !values.do) greska('zadaj tačno jedno: --dana N ili --do YYYY-MM-DD');
+  if (!values.uredjaj?.trim() === !values['bilo-koji-uredjaj']) greska('zadaj tačno jedno: --uredjaj ID ili --bilo-koji-uredjaj');
 
   let vrijediDo = values.do;
   if (values.dana) {
@@ -78,7 +80,9 @@ async function izdaj(args: string[]) {
 
   let izdana: Awaited<ReturnType<typeof izdajLicencu>>;
   try {
-    izdana = await izdajLicencu({ klijent: values.klijent, vrijediDo: vrijediDo!, uredjaj: values.uredjaj, moduli,
+    // Vezanje za uređaj je zadano: bez --uredjaj treba izričito --bilo-koji-uredjaj.
+    const uredjaj = uredjajZaIzdavanje(values.uredjaj, values['bilo-koji-uredjaj'] === true);
+    izdana = await izdajLicencu({ klijent: values.klijent, vrijediDo: vrijediDo!, uredjaj, moduli,
       backup: values.backup ? { bucket: values.backup, accessKeyId: values['r2-kljuc'], secret: values['r2-secret'] } : undefined,
     });
   } catch (e) {
@@ -88,7 +92,7 @@ async function izdaj(args: string[]) {
   console.error(`Klijent:   ${values.klijent}`);
   console.error(`Važi do:   ${vrijediDo} (uključivo)`);
   console.error(`Moduli:    ${opisModula(izdana.moduli)}`);
-  if (values.uredjaj) console.error(`Uređaj:    ${values.uredjaj}`);
+  console.error(`Uređaj:    ${izdana.uredjaj ?? 'bilo koji'}`);
   if (values.backup) console.error(`Backup:    ${values.backup}`);
   console.error('');
   console.log(izdana.token);
@@ -121,6 +125,6 @@ switch (komanda) {
     provjeri(ostalo[0]);
     break;
   default:
-    console.log('Upotreba: bun tools/licenca.ts <kljucevi [--prepisi] | izdaj --klijent X (--dana N | --do YYYY-MM-DD) [--uredjaj ID] [--moduli skladiste,ponude,proizvodnja,generator | --moduli ""] [--backup BUCKET [--r2-kljuc ID --r2-secret S]] | provjeri TOKEN>');
+    console.log('Upotreba: bun tools/licenca.ts <kljucevi [--prepisi] | izdaj --klijent X (--dana N | --do YYYY-MM-DD) (--uredjaj ID | --bilo-koji-uredjaj) [--moduli skladiste,ponude,proizvodnja,generator | --moduli ""] [--backup BUCKET [--r2-kljuc ID --r2-secret S]] | provjeri TOKEN>');
     process.exit(komanda ? 1 : 0);
 }

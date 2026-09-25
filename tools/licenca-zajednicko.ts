@@ -96,6 +96,19 @@ export async function napraviBackupKljuc(): Promise<string> {
   return javni;
 }
 
+/**
+ * Uređaj za novu licencu. Vezanje za uređaj je zadano: bez ID-a licenca se
+ * izdaje samo kad je "bilo koji uređaj" izričito izabran (GUI i CLI isto).
+ */
+export function uredjajZaIzdavanje(uredjaj: unknown, biloKoji: unknown): string | undefined {
+  if (uredjaj != null && typeof uredjaj !== 'string') throw new Error('ID uređaja mora biti tekst');
+  const id = typeof uredjaj === 'string' ? uredjaj.trim() : '';
+  if (id && biloKoji === true) throw new Error('Izaberi ili ID uređaja ili „bilo koji uređaj“, ne oboje');
+  if (id) return id;
+  if (biloKoji === true) return undefined;
+  throw new Error('Upiši ID uređaja ili izričito izaberi „bilo koji uređaj“');
+}
+
 /** Novi klijent dobija sve osim Generatora (interni alat). */
 export const PODRAZUMIJEVANI_MODULI: Modul[] = ['skladiste', 'ponude', 'proizvodnja'];
 

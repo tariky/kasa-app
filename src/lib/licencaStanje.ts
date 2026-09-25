@@ -18,12 +18,50 @@ export function razlikaDana(od: string, doDatuma: string): number {
   return danBroj(doDatuma) - danBroj(od);
 }
 
+const DATUM = /^\d{4}-\d{2}-\d{2}$/;
+
 /**
- * Datum s kojim se računa licenca: veći od stvarnog i zadnjeg viđenog, da
- * vraćanje sata unazad ne produži licencu.
+ * Datum s kojim se računa licenca: najveći od stvarnog, zadnjeg viđenog
+ * (licenca.json) i najnovijeg iz baze, da ni vraćanje sata unazad ni brisanje
+ * `zadnjiDatum` ne produže licencu. Vrijednost koja nije `YYYY-MM-DD` se ignoriše.
+ * Rust: `efektivni_danas` u licenca.rs.
  */
-export function efektivniDanas(stvarni: string, zadnjiVidjeni?: string | null): string {
-  return zadnjiVidjeni && zadnjiVidjeni > stvarni ? zadnjiVidjeni : stvarni;
+export function efektivniDanas(stvarni: string, zadnjiVidjeni?: string | null, izBaze?: string | null): string {
+  let danas = stvarni;
+  for (const d of [zadnjiVidjeni, izBaze]) {
+    if (typeof d === 'string' && DATUM.test(d) && d > danas) danas = d;
+  }
+  return danas;
+}
+
+/**
+ * Najnoviji dan iz računa i pologa/povrata — `createdAt` ih upisuje sat
+ * računara, pa baza pamti "danas" i kad se obriše licenca.json. Ručno uneseni
+ * računi (`isManual`) nose datum koji je korisnik ukucao, pa se ne broje:
+ * greška u kucanju ne smije zaključati licencu. Isti upit je u licenca.rs.
+ */
+export const UPIT_NAJNOVIJI_DATUM = `
+  SELECT MAX(d) AS d FROM (
+    SELECT MAX(substr(createdAt, 1, 10)) AS d FROM orders
+      WHERE isManual = 0 AND createdAt GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*'
+    UNION ALL
+    SELECT MAX(substr(createdAt, 1, 10)) FROM cash_movements
+      WHERE createdAt GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*'
+  )`;
+
+/** Dovoljno i za better-sqlite3 i za bun:sqlite (testovi). */
+interface CitljivaBaza {
+  prepare(sql: string): { get(...parametri: unknown[]): unknown };
+}
+
+/** `YYYY-MM-DD` ili null (prazna, zatvorena ili nedostupna baza nisu greška). */
+export function najnovijiDatumIzBaze(db: CitljivaBaza): string | null {
+  try {
+    const d = (db.prepare(UPIT_NAJNOVIJI_DATUM).get() as { d?: unknown } | null | undefined)?.d;
+    return typeof d === 'string' && DATUM.test(d) ? d : null;
+  } catch {
+    return null;
+  }
 }
 
 export function izracunajStanje(
@@ -65,14 +103,25 @@ const BLOKIRANI_KANALI = new Set([
   'nalog:setStatus', 'nalog:izdajRacun',
 ]);
 
-/** Da li kanal uopšte zavisi od licence — ostali ne čitaju licenca.json. */
-export function kanalPodLicencom(kanal: string): boolean {
-  return BLOKIRANI_KANALI.has(kanal) || Object.hasOwn(KANALI_MODULA, kanal);
+/** Kanal pripada modulu (svi takvi kanali nešto mijenjaju — čitanja nisu u katalogu). */
+function kanalModula(kanal: string): boolean {
+  // Object.hasOwn: ključevi s prototipa (`constructor`, `toString`) nisu kanali.
+  return Object.hasOwn(KANALI_MODULA, kanal);
 }
 
-/** Zašto licenca ne dozvoljava kanal; null = dozvoljen. Istekla licenca ima prednost. */
+/** Da li kanal uopšte zavisi od licence — ostali ne čitaju licenca.json. */
+export function kanalPodLicencom(kanal: string): boolean {
+  return BLOKIRANI_KANALI.has(kanal) || kanalModula(kanal);
+}
+
+/**
+ * Zašto licenca ne dozvoljava kanal; null = dozvoljen. Istekla licenca ima prednost.
+ * Bez važeće licence (nema, neispravna, zaključana) program je "samo pregled":
+ * čitanja rade, a kanali modula su blokirani kao i pisanje dokumenata —
+ * `licenciraniModuli` daje "sve" samo da bi se u pregledu vidjeli ekrani.
+ */
 export function razlogBlokade(s: StanjeLicence, kanal: string): { razlog: 'istekla' | 'modul'; poruka: string } | null {
-  if (BLOKIRANI_KANALI.has(kanal) && !smijeRaditi(s)) {
+  if ((BLOKIRANI_KANALI.has(kanal) || kanalModula(kanal)) && !smijeRaditi(s)) {
     return { razlog: 'istekla', poruka: 'Licenca je istekla — program radi samo za pregled. Unesite novi kod licence.' };
   }
   const modul = modulVanLicence(s, kanal);
