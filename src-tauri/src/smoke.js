@@ -19,14 +19,25 @@
   try {
     ok('window.api postoji', typeof window.api?.login === 'function');
 
+    // CSP iz tauri.conf.json: inline skripte se ne izvršavaju.
+    const povrede = [];
+    document.addEventListener('securitypolicyviolation', e => povrede.push(e.violatedDirective));
+    const inline = document.createElement('script');
+    inline.textContent = 'window.__smokeInline = 1';
+    document.head.appendChild(inline);
+    await new Promise(r => setTimeout(r, 200));
+    ok('CSP blokira inline skriptu', window.__smokeInline === undefined && povrede.some(d => d.startsWith('script-src')), povrede.join(','));
+
     // Bez licence: ekran aktivacije → samo pregled.
     ok('ekran aktivacije', await cekaj(() => dugme('Nastavi samo za pregled →')));
     dugme('Nastavi samo za pregled →')?.click();
 
-    // Prijava kroz tastaturu na ekranu (PIN 0000).
-    ok('ekran prijave', await cekaj(() => dugme('Prijava')));
+    // Prijava kroz tastaturu na ekranu (PIN 0000, pa strelica „Prijavi se“).
+    const prijavi = () => document.querySelector('button[aria-label="Prijavi se"]');
+    ok('ekran prijave', await cekaj(() => prijavi() && dugme('0')));
     for (let i = 0; i < 4; i++) { dugme('0').click(); await new Promise(r => setTimeout(r, 50)); }
-    dugme('Prijava').click();
+    await new Promise(r => setTimeout(r, 100));
+    prijavi().click();
     ok('glavni ekran nakon prijave', await cekaj(() => tekst().includes('Skladište') && tekst().includes('Postavke')));
 
     // Kanali kroz invoke('api').
@@ -82,6 +93,16 @@
     const win = window.open(URL.createObjectURL(pdf), '_blank');
     ok('window.open(blob:) vraća prozor', !!win);
     await new Promise(r => setTimeout(r, 1000));
+    // PDF prozor ne smije napustiti svoj blob: (on_navigation u lib.rs).
+    let pdfUrl;
+    try {
+      win.location.href = 'https://example.com/';
+      await new Promise(r => setTimeout(r, 1000));
+      pdfUrl = win.location.href;
+    } catch (e) {
+      pdfUrl = `nedostupan: ${e?.message ?? e}`;
+    }
+    ok('PDF prozor ne navigira van', pdfUrl.startsWith('blob:'), pdfUrl);
 
     // Veličina prikaza (Postavke → Prikaz): zoom mora imati dozvolu u capabilities
     // i stvarno smanjiti CSS viewport.
