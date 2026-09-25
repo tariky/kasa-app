@@ -174,57 +174,31 @@ impl Tring {
 
     // POST /inicijalizacija
     pub fn inicijalizacija(&self, operator_id: &Value, password: &Value) -> Odgovor {
-        let body = format!(
-            "{XML_DECL}<Operator {XMLNS}><BrojOperatora>{}</BrojOperatora><Lozinka>{}</Lozinka></Operator>",
-            to_string(operator_id),
-            to_string(password)
-        );
-        self.post_xml("/inicijalizacija", &body)
+        self.post_xml("/inicijalizacija", &operator_xml(operator_id, password))
     }
 
     // POST /ua - VrstaZahtjeva=105
     pub fn upisi_artikal(&self, artikal: &Value) -> Odgovor {
-        let n = self.next_request_number();
-        let body = format!(
-            "{XML_DECL}<RacunZahtjev {XMLNS}><BrojZahtjeva>{n}</BrojZahtjeva><VrstaZahtjeva>105</VrstaZahtjeva><NoviObjekat>{}</NoviObjekat></RacunZahtjev>",
-            artikal_to_xml(artikal)
-        );
-        self.post_xml("/ua", &body)
+        match artikal_to_xml(artikal) {
+            Ok(objekat) => self.post_xml("/ua", &racun_zahtjev(self.next_request_number(), 105, &objekat)),
+            Err(e) => odbijeno(&e),
+        }
     }
 
     // POST /sfr - VrstaZahtjeva=0
     pub fn stampati_fiskalni_racun(&self, racun: &Value) -> Odgovor {
-        let n = self.next_request_number();
-        let placanja = racun["vrstePlacanja"].as_array().cloned().unwrap_or_default();
-        let body = format!(
-            "{XML_DECL}<RacunZahtjev {XMLNS}><BrojZahtjeva>{n}</BrojZahtjeva><VrstaZahtjeva>0</VrstaZahtjeva><NoviObjekat>{}<StavkeRacuna>{}</StavkeRacuna><VrstePlacanja>{}</VrstePlacanja><Napomena>{}</Napomena><BrojRacuna>{}</BrojRacuna></NoviObjekat></RacunZahtjev>",
-            kupac_xml(&racun["kupac"]),
-            stavke_xml(&racun["stavke"]),
-            placanja_xml(&placanja),
-            napomena_xml(&racun["napomena"]),
-            to_string(js::nn(&racun["brojRacuna"], &json!(0))),
-        );
-        self.post_xml("/sfr", &body)
+        match fiskalni_racun_objekat(racun) {
+            Ok(objekat) => self.post_xml("/sfr", &racun_zahtjev(self.next_request_number(), 0, &objekat)),
+            Err(e) => odbijeno(&e),
+        }
     }
 
     // POST /srr - VrstaZahtjeva=2
     pub fn stampati_reklamirani_racun(&self, racun: &Value) -> Odgovor {
-        let n = self.next_request_number();
-        // Reklamacija mora nositi tačno jednu vrstu plaćanja — gotovinski povrat
-        // se šalje kao Gotovina/0 (vidi services/tring.ts).
-        let mut placanja = racun["vrstePlacanja"].as_array().cloned().unwrap_or_default();
-        if placanja.is_empty() {
-            placanja = vec![json!({"oznaka": "Gotovina", "iznos": 0})];
+        match reklamirani_racun_objekat(racun) {
+            Ok(objekat) => self.post_xml("/srr", &racun_zahtjev(self.next_request_number(), 2, &objekat)),
+            Err(e) => odbijeno(&e),
         }
-        let body = format!(
-            "{XML_DECL}<RacunZahtjev {XMLNS}><BrojZahtjeva>{n}</BrojZahtjeva><VrstaZahtjeva>2</VrstaZahtjeva><NoviObjekat>{}<StavkeRacuna>{}</StavkeRacuna><VrstePlacanja>{}</VrstePlacanja><Napomena>{}</Napomena><BrojRacuna>{}</BrojRacuna></NoviObjekat></RacunZahtjev>",
-            kupac_xml(&racun["kupac"]),
-            stavke_xml(&racun["stavke"]),
-            placanja_xml(&placanja),
-            napomena_xml(&racun["napomena"]),
-            to_string(&racun["brojRacuna"]),
-        );
-        self.post_xml("/srr", &body)
     }
 
     // POST /sps - VrstaZahtjeva=3 (X-report)
@@ -243,33 +217,31 @@ impl Tring {
 
     /// Službeni unos gotovine u kasu (polog), uvijek Gotovina.
     pub fn unos_novca(&self, iznos: f64) -> Odgovor {
-        let body = novac_xml(self.next_request_number(), 7, iznos, "Gotovina");
-        self.post_xml_fallback(&UNOS_NOVCA_PATHS, &body)
+        self.novac(&UNOS_NOVCA_PATHS, 7, iznos)
     }
 
     /// Službeni iznos gotovine iz kase.
     pub fn povrat_novca(&self, iznos: f64) -> Odgovor {
-        let body = novac_xml(self.next_request_number(), 8, iznos, "Gotovina");
-        self.post_xml_fallback(&POVRAT_NOVCA_PATHS, &body)
+        self.novac(&POVRAT_NOVCA_PATHS, 8, iznos)
+    }
+
+    fn novac(&self, paths: &[&str], vrsta_zahtjeva: i64, iznos: f64) -> Odgovor {
+        // Provjera prije brojača zahtjeva, kao `broj(iznos)` u services/tring.ts.
+        if let Err(e) = broj(&js::f(iznos), "Iznos") {
+            return odbijeno(&e);
+        }
+        match novac_xml(self.next_request_number(), vrsta_zahtjeva, iznos, "Gotovina") {
+            Ok(body) => self.post_xml_fallback(paths, &body),
+            Err(e) => odbijeno(&e),
+        }
     }
 
     // POST /spi - VrstaZahtjeva=5
     pub fn stampati_periodicni_izvjestaj(&self, od: &Value, do_: &Value) -> Odgovor {
-        let n = self.next_request_number();
-        let fmt = |d: &Value, vrijeme: &str| {
-            let s = to_string(d);
-            let dijelovi: Vec<&str> = s.split('-').collect();
-            let dio = |i: usize| dijelovi.get(i).copied().unwrap_or("");
-            let broj = |x: &str| js::parse_int(x).map(|n| n.to_string()).unwrap_or_else(|| "NaN".into());
-            let godina = dijelovi.get(0).map(|x| x.to_string()).unwrap_or_default();
-            format!("{}.{}.{} {}", broj(dio(2)), broj(dio(1)), godina, vrijeme)
-        };
-        let body = format!(
-            "{XML_DECL}<Zahtjev {XMLNS}><BrojZahtjeva>{n}</BrojZahtjeva><VrstaZahtjeva>5</VrstaZahtjeva><Parametri><Parametar><Naziv>odDatuma</Naziv><Vrijednost>{}</Vrijednost></Parametar><Parametar><Naziv>doDatuma</Naziv><Vrijednost>{}</Vrijednost></Parametar></Parametri></Zahtjev>",
-            fmt(od, "00:00:00"),
-            fmt(do_, "23:59:59"),
-        );
-        self.post_xml("/spi", &body)
+        match periodicni_parametri(od, do_) {
+            Ok(parametri) => self.post_xml("/spi", &periodicni_xml(self.next_request_number(), &parametri)),
+            Err(e) => odbijeno(&e),
+        }
     }
 }
 
@@ -370,17 +342,89 @@ fn esc(v: &Value) -> String {
     escape_xml(&to_string(v))
 }
 
-fn artikal_to_xml(a: &Value) -> String {
+// ─── Validacija polja prije slanja ──────────────────────────────
+// Kao u services/tring.ts: svako polje ide kroz escape ili validaciju, a
+// nevaljan zahtjev se odbija prije HTTP-a istom porukom kao u Electronu.
+
+/// Opis nevaljanog polja (bez prefiksa) ili gotov XML.
+type Xml = Result<String, String>;
+
+const MAX_PLU: i64 = 999_999;
+const MAX_GRUPA: i64 = 999_999;
+const MAX_BROJ_RACUNA: i64 = 999_999_999;
+
+fn odbijeno(greska: &str) -> Odgovor {
+    json!({
+        "success": false,
+        "vrstaOdgovora": "Greska",
+        "odgovori": {},
+        "error": format!("Zahtjev nije poslan fiskalnom uređaju: {greska}"),
+        "statusCode": null,
+    })
+}
+
+/// Broj ili decimalni string ("2.5", " 12 ", "1e3") → konačan broj i njegov JS
+/// zapis; "0x10", "1,5", "Infinity", null... su `None`.
+fn konacan_broj(v: &Value) -> Option<(f64, String)> {
+    thread_local! {
+        static DECIMALNI: Regex = Regex::new(r"^[ \t\r\n]*[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?[ \t\r\n]*$").unwrap();
+    }
+    let (n, zapis) = match v {
+        // Broj se ispisuje kao i dosad (`String(n)`), da ispravan XML ostane isti.
+        Value::Number(n) => (n.as_f64()?, js::number_str(n)),
+        Value::String(s) if DECIMALNI.with(|r| r.is_match(s)) => {
+            let n = js::to_number(v);
+            (n, js::num_str(n))
+        }
+        _ => return None,
+    };
+    n.is_finite().then_some((n, zapis))
+}
+
+/// Numeričko polje kako ga uređaj i dosad dobija: JS zapis broja, bez fiksnih
+/// decimala — tako za ispravne ulaze XML ostaje bajt po bajt isti.
+fn broj(v: &Value, polje: &str) -> Xml {
+    konacan_broj(v).map(|(_, zapis)| zapis).ok_or_else(|| format!("neispravna vrijednost polja {polje} (mora biti broj)"))
+}
+
+fn cijeli_broj(v: &Value, opis: &str, max: i64) -> Xml {
+    match konacan_broj(v) {
+        Some((n, zapis)) if n.fract() == 0.0 && n >= 0.0 && n <= max as f64 => Ok(zapis),
+        _ => Err(format!("{opis} (mora biti cijeli broj od 0 do {max})")),
+    }
+}
+
+/// Uređaj zna samo stope E (17 %) i K (oslobođeno) — isto kao CHECK u bazi.
+fn stopa(v: &Value) -> Xml {
+    match v.as_str() {
+        Some(s @ ("E" | "K")) => Ok(s.to_string()),
+        _ => Err("neispravna PDV stopa (dozvoljeno E ili K)".into()),
+    }
+}
+
+fn racun_zahtjev(n: i64, vrsta_zahtjeva: i64, novi_objekat: &str) -> String {
+    format!("{XML_DECL}<RacunZahtjev {XMLNS}><BrojZahtjeva>{n}</BrojZahtjeva><VrstaZahtjeva>{vrsta_zahtjeva}</VrstaZahtjeva><NoviObjekat>{novi_objekat}</NoviObjekat></RacunZahtjev>")
+}
+
+fn operator_xml(operator_id: &Value, password: &Value) -> String {
     format!(
+        "{XML_DECL}<Operator {XMLNS}><BrojOperatora>{}</BrojOperatora><Lozinka>{}</Lozinka></Operator>",
+        esc(operator_id),
+        esc(password)
+    )
+}
+
+fn artikal_to_xml(a: &Value) -> Xml {
+    Ok(format!(
         "<Sifra>{}</Sifra><Naziv>{}</Naziv><JM>{}</JM><Cijena>{}</Cijena><Stopa>{}</Stopa><Grupa>{}</Grupa><PLU>{}</PLU>",
         esc(&a["sifra"]),
         esc(&a["naziv"]),
         esc(&a["jm"]),
-        to_string(&a["cijena"]),
-        to_string(&a["stopa"]),
-        to_string(js::nn(&a["grupa"], &json!(0))),
-        to_string(js::nn(&a["plu"], &json!(0))),
-    )
+        broj(&a["cijena"], "Cijena")?,
+        stopa(&a["stopa"])?,
+        cijeli_broj(js::nn(&a["grupa"], &json!(0)), "neispravna Grupa", MAX_GRUPA)?,
+        cijeli_broj(js::nn(&a["plu"], &json!(0)), "neispravan PLU", MAX_PLU)?,
+    ))
 }
 
 fn kupac_xml(k: &Value) -> String {
@@ -397,47 +441,94 @@ fn kupac_xml(k: &Value) -> String {
     )
 }
 
-fn stavke_xml(stavke: &Value) -> String {
-    stavke
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .map(|s| {
-                    format!(
-                        "<RacunStavka><artikal>{}</artikal><Kolicina>{}</Kolicina><Rabat>{}</Rabat></RacunStavka>",
-                        artikal_to_xml(&s["artikal"]),
-                        to_string(&s["kolicina"]),
-                        to_string(&s["rabat"]),
-                    )
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+fn stavke_xml(stavke: &Value) -> Xml {
+    let mut out = String::new();
+    for s in stavke.as_array().map(Vec::as_slice).unwrap_or_default() {
+        out += &format!(
+            "<RacunStavka><artikal>{}</artikal><Kolicina>{}</Kolicina><Rabat>{}</Rabat></RacunStavka>",
+            artikal_to_xml(&s["artikal"])?,
+            broj(&s["kolicina"], "Kolicina")?,
+            broj(&s["rabat"], "Rabat")?,
+        );
+    }
+    Ok(out)
 }
 
-fn placanja_xml(placanja: &[Value]) -> String {
-    placanja
-        .iter()
-        .map(|v| {
-            format!(
-                "<VrstaPlacanja><Oznaka>{}</Oznaka><Iznos>{}</Iznos></VrstaPlacanja>",
-                normalize_oznaka(&to_string(&v["oznaka"])),
-                to_string(&v["iznos"]),
-            )
-        })
-        .collect()
+fn placanja_xml(placanja: &[Value]) -> Xml {
+    let mut out = String::new();
+    for v in placanja {
+        out += &format!(
+            "<VrstaPlacanja><Oznaka>{}</Oznaka><Iznos>{}</Iznos></VrstaPlacanja>",
+            normalize_oznaka(&to_string(&v["oznaka"])),
+            broj(&v["iznos"], "Iznos")?,
+        );
+    }
+    Ok(out)
 }
 
 fn napomena_xml(n: &Value) -> String {
     if js::truthy(n) { esc(n) } else { String::new() }
 }
 
-fn novac_xml(broj_zahtjeva: i64, vrsta_zahtjeva: i64, iznos: f64, oznaka: &str) -> String {
-    let iznos = js::round2(iznos);
-    format!(
-        "{XML_DECL}<RacunZahtjev {XMLNS}><BrojZahtjeva>{broj_zahtjeva}</BrojZahtjeva><VrstaZahtjeva>{vrsta_zahtjeva}</VrstaZahtjeva><NoviObjekat><Oznaka>{oznaka}</Oznaka><Iznos>{}</Iznos></NoviObjekat></RacunZahtjev>",
-        js::num_str(iznos)
-    )
+/// `<NoviObjekat>` računa i reklamacije (redoslijed provjera kao u TS-u).
+fn racun_objekat(racun: &Value, placanja: &[Value], broj_racuna: &Value) -> Xml {
+    Ok(format!(
+        "{}<StavkeRacuna>{}</StavkeRacuna><VrstePlacanja>{}</VrstePlacanja><Napomena>{}</Napomena><BrojRacuna>{}</BrojRacuna>",
+        kupac_xml(&racun["kupac"]),
+        stavke_xml(&racun["stavke"])?,
+        placanja_xml(placanja)?,
+        napomena_xml(&racun["napomena"]),
+        cijeli_broj(broj_racuna, "neispravan BrojRacuna", MAX_BROJ_RACUNA)?,
+    ))
+}
+
+fn fiskalni_racun_objekat(racun: &Value) -> Xml {
+    let placanja = racun["vrstePlacanja"].as_array().cloned().unwrap_or_default();
+    racun_objekat(racun, &placanja, js::nn(&racun["brojRacuna"], &json!(0)))
+}
+
+/// Reklamacija mora nositi tačno jednu vrstu plaćanja — gotovinski povrat se
+/// šalje kao Gotovina/0 (vidi services/tring.ts).
+fn reklamirani_racun_objekat(racun: &Value) -> Xml {
+    let mut placanja = racun["vrstePlacanja"].as_array().cloned().unwrap_or_default();
+    if placanja.is_empty() {
+        placanja = vec![json!({"oznaka": "Gotovina", "iznos": 0})];
+    }
+    racun_objekat(racun, &placanja, &racun["brojRacuna"])
+}
+
+fn novac_xml(broj_zahtjeva: i64, vrsta_zahtjeva: i64, iznos: f64, oznaka: &str) -> Xml {
+    let iznos = broj(&js::f(js::round2(iznos)), "Iznos")?;
+    Ok(format!(
+        "{XML_DECL}<RacunZahtjev {XMLNS}><BrojZahtjeva>{broj_zahtjeva}</BrojZahtjeva><VrstaZahtjeva>{vrsta_zahtjeva}</VrstaZahtjeva><NoviObjekat><Oznaka>{}</Oznaka><Iznos>{iznos}</Iznos></NoviObjekat></RacunZahtjev>",
+        escape_xml(oznaka)
+    ))
+}
+
+/// "GGGG-MM-DD" → "d.M.gggg vrijeme", format koji Tring očekuje.
+fn datum_izvjestaja(d: &Value, vrijeme: &str) -> Xml {
+    thread_local! {
+        static DATUM: Regex = Regex::new(r"^([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})$").unwrap();
+    }
+    let dijelovi = d.as_str().and_then(|s| DATUM.with(|r| {
+        r.captures(s).map(|c| (c[1].to_string(), c[2].parse::<u32>().unwrap(), c[3].parse::<u32>().unwrap()))
+    }));
+    match dijelovi {
+        Some((godina, mjesec, dan)) => Ok(format!("{dan}.{mjesec}.{godina} {vrijeme}")),
+        None => Err("neispravan datum (očekuje se GGGG-MM-DD)".into()),
+    }
+}
+
+fn periodicni_parametri(od: &Value, do_: &Value) -> Xml {
+    Ok(format!(
+        "<Parametar><Naziv>odDatuma</Naziv><Vrijednost>{}</Vrijednost></Parametar><Parametar><Naziv>doDatuma</Naziv><Vrijednost>{}</Vrijednost></Parametar>",
+        datum_izvjestaja(od, "00:00:00")?,
+        datum_izvjestaja(do_, "23:59:59")?,
+    ))
+}
+
+fn periodicni_xml(n: i64, parametri: &str) -> String {
+    format!("{XML_DECL}<Zahtjev {XMLNS}><BrojZahtjeva>{n}</BrojZahtjeva><VrstaZahtjeva>5</VrstaZahtjeva><Parametri>{parametri}</Parametri></Zahtjev>")
 }
 
 #[cfg(test)]
@@ -450,5 +541,125 @@ mod tests {
         assert_eq!(r["error"], "Nedovoljno novca u kasi (Nema para) [535]");
         let r = parse_response("<RacunOdgovor><VrstaOdgovora>OK</VrstaOdgovora><Odgovor><Naziv>BrojFiskalnogRacuna</Naziv><Vrijednost xsi:type=\"x\">101</Vrijednost></Odgovor><Odgovor><Naziv>Prazno</Naziv><Vrijednost /></Odgovor></RacunOdgovor>");
         assert_eq!(r, json!({"success": true, "vrstaOdgovora": "OK", "odgovori": {"BrojFiskalnogRacuna": "101", "Prazno": ""}}));
+    }
+
+    fn stavka(artikal: Value, kolicina: Value, rabat: Value) -> Value {
+        json!({ "artikal": artikal, "kolicina": kolicina, "rabat": rabat })
+    }
+
+    fn kafa() -> Value {
+        json!({ "sifra": "A1", "naziv": "Kafa", "jm": "kom", "cijena": 2.5, "stopa": "E", "plu": 7 })
+    }
+
+    fn sa(mut v: Value, kljuc: &str, vrijednost: Value) -> Value {
+        v[kljuc] = vrijednost;
+        v
+    }
+
+    fn racun_sa_stavkom(s: Value) -> Value {
+        json!({ "stavke": [s], "vrstePlacanja": [{ "oznaka": "Gotovina", "iznos": 2.5 }] })
+    }
+
+    /// Isti ulazi kao u `services/tring.validacija.test.ts` — oba backenda moraju
+    /// dati bajt po bajt `tring.zlatni.txt` (XML prije uvođenja validacije).
+    #[test]
+    fn ispravni_ulazi_daju_zlatni_xml() {
+        let pun = json!({
+            "stavke": [
+                stavka(json!({ "sifra": "A&1", "naziv": "Kafa <dupla>", "jm": "kom", "cijena": 2.5, "stopa": "E", "grupa": 3, "plu": 7 }), json!(2), json!(0)),
+                stavka(json!({ "sifra": "B2", "naziv": "Sok 'o\"", "jm": "l", "cijena": 10, "stopa": "K" }), json!(0.1 + 0.2), json!(12.5)),
+                stavka(json!({ "sifra": "C3", "naziv": "Mali", "jm": "g", "cijena": 0.000001, "stopa": "E", "plu": 999999 }), json!(1.5e-7), json!(-1)),
+            ],
+            "vrstePlacanja": [{ "oznaka": "Ček", "iznos": 20.3 }, { "oznaka": "Gotovina", "iznos": 0 }],
+            "kupac": { "idBroj": "4200000000001", "naziv": "Firma & sin", "adresa": "Ulica 1", "postanskiBroj": "71000", "grad": "Sarajevo" },
+            "napomena": "Hvala <3",
+            "brojRacuna": 12,
+        });
+        let reklamacija = sa(sa(pun.clone(), "vrstePlacanja", json!([])), "brojRacuna", json!(101));
+        let kratki = json!({ "stavke": [pun["stavke"][0]], "vrstePlacanja": [{ "oznaka": "Kartica", "iznos": 5 }] });
+        let artikal = json!({ "sifra": "S<1>", "naziv": "Sok", "jm": "l", "cijena": 1.2, "stopa": "K", "plu": 12 });
+
+        let zahtjevi = [
+            ("/sfr", racun_zahtjev(1, 0, &fiskalni_racun_objekat(&pun).unwrap())),
+            ("/srr", racun_zahtjev(1, 2, &reklamirani_racun_objekat(&reklamacija).unwrap())),
+            ("/sfr", racun_zahtjev(1, 0, &fiskalni_racun_objekat(&kratki).unwrap())),
+            ("/ua", racun_zahtjev(1, 105, &artikal_to_xml(&artikal).unwrap())),
+            ("/inicijalizacija", operator_xml(&json!(5), &json!("tajna"))),
+            ("/spi", periodicni_xml(1, &periodicni_parametri(&json!("2026-01-05"), &json!("2026-02-10")).unwrap())),
+            ("/unosnovca", novac_xml(1, 7, 120.33, "Gotovina").unwrap()),
+        ];
+        let dobiveno: String = zahtjevi.iter().map(|(p, xml)| format!("{p}\n{xml}\n")).collect();
+        assert_eq!(dobiveno, include_str!("../../../src/services/tring.zlatni.txt"));
+    }
+
+    #[test]
+    fn broj_kao_string_ide_kao_broj() {
+        let artikal = json!({ "sifra": "A1", "naziv": "Kafa", "jm": "kom", "cijena": " 2.50 ", "stopa": "E", "grupa": "3", "plu": "7" });
+        assert!(artikal_to_xml(&artikal).unwrap().ends_with("<Cijena>2.5</Cijena><Stopa>E</Stopa><Grupa>3</Grupa><PLU>7</PLU>"));
+    }
+
+    #[test]
+    fn lozinka_ide_kroz_escape() {
+        let xml = operator_xml(&json!(5), &json!("a<b>&\"'</Lozinka>"));
+        assert!(xml.contains("<Lozinka>a&lt;b&gt;&amp;&quot;&apos;&lt;/Lozinka&gt;</Lozinka></Operator>"));
+    }
+
+    fn greska(r: Xml) -> String {
+        r.expect_err("nevaljan ulaz mora biti odbijen")
+    }
+
+    #[test]
+    fn stopa_samo_e_ili_k() {
+        for stopa in [json!("E</Stopa><Stopa>K"), json!("e"), json!("A"), json!(""), json!(null), json!(1)] {
+            assert_eq!(greska(artikal_to_xml(&sa(kafa(), "stopa", stopa))), "neispravna PDV stopa (dozvoljeno E ili K)");
+        }
+    }
+
+    fn nevaljani_brojevi() -> Vec<Value> {
+        vec![json!("1</Cijena><Cijena>0"), json!(""), json!("  "), json!(null), json!("1,5"), json!("0x10"),
+             json!("Infinity"), json!("NaN"), json!(true), json!({}), json!([]), json!("١")]
+    }
+
+    #[test]
+    fn numericka_polja_moraju_biti_konacan_broj() {
+        for v in nevaljani_brojevi() {
+            assert_eq!(greska(artikal_to_xml(&sa(kafa(), "cijena", v.clone()))), "neispravna vrijednost polja Cijena (mora biti broj)");
+            let r = racun_sa_stavkom(stavka(kafa(), v.clone(), json!(0)));
+            assert_eq!(greska(fiskalni_racun_objekat(&r)), "neispravna vrijednost polja Kolicina (mora biti broj)");
+            let r = sa(racun_sa_stavkom(stavka(kafa(), json!(1), v.clone())), "brojRacuna", json!(3));
+            assert_eq!(greska(reklamirani_racun_objekat(&r)), "neispravna vrijednost polja Rabat (mora biti broj)");
+            let r = sa(racun_sa_stavkom(stavka(kafa(), json!(1), json!(0))), "vrstePlacanja", json!([{ "oznaka": "Gotovina", "iznos": v }]));
+            assert_eq!(greska(fiskalni_racun_objekat(&r)), "neispravna vrijednost polja Iznos (mora biti broj)");
+        }
+        for iznos in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(greska(novac_xml(1, 7, iznos, "Gotovina")), "neispravna vrijednost polja Iznos (mora biti broj)");
+        }
+    }
+
+    #[test]
+    fn cijeli_brojevi_u_rasponu() {
+        for plu in [json!(-1), json!(1.5), json!(1_000_000), json!("7</PLU><PLU>8"), json!("")] {
+            assert_eq!(greska(artikal_to_xml(&sa(kafa(), "plu", plu))), "neispravan PLU (mora biti cijeli broj od 0 do 999999)");
+        }
+        assert!(artikal_to_xml(&sa(kafa(), "plu", json!(null))).unwrap().ends_with("<PLU>0</PLU>"));
+        for grupa in [json!(-1), json!(2.5), json!("3</Grupa>")] {
+            assert_eq!(greska(artikal_to_xml(&sa(kafa(), "grupa", grupa))), "neispravna Grupa (mora biti cijeli broj od 0 do 999999)");
+        }
+        for broj in [json!(-1), json!(1.5), json!("12</BrojRacuna>"), json!(1_000_000_000)] {
+            let r = sa(racun_sa_stavkom(stavka(kafa(), json!(1), json!(0))), "brojRacuna", broj);
+            assert_eq!(greska(fiskalni_racun_objekat(&r)), "neispravan BrojRacuna (mora biti cijeli broj od 0 do 999999999)");
+            assert_eq!(greska(reklamirani_racun_objekat(&r)), "neispravan BrojRacuna (mora biti cijeli broj od 0 do 999999999)");
+        }
+        // Reklamacija nema zadani broj originalnog računa.
+        let r = racun_sa_stavkom(stavka(kafa(), json!(1), json!(0)));
+        assert_eq!(greska(reklamirani_racun_objekat(&r)), "neispravan BrojRacuna (mora biti cijeli broj od 0 do 999999999)");
+    }
+
+    #[test]
+    fn datum_periodicnog_izvjestaja() {
+        for d in [json!("2026</Vrijednost><X>-01-05"), json!("26-01-05"), json!("2026-01"), json!("2026-01-05T00:00"), json!(""), json!(20260105)] {
+            assert_eq!(greska(periodicni_parametri(&d, &json!("2026-02-10"))), "neispravan datum (očekuje se GGGG-MM-DD)");
+            assert_eq!(greska(periodicni_parametri(&json!("2026-01-05"), &d)), "neispravan datum (očekuje se GGGG-MM-DD)");
+        }
     }
 }

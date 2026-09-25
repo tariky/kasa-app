@@ -206,6 +206,67 @@ describe('tring:writeArticle', () => {
   });
 });
 
+// ─── Escape i validacija polja (injekcija u XML) ────────────
+
+describe('polja koja idu uređaju', () => {
+  const odbijeno = (poruka: string) => ({
+    success: false, vrstaOdgovora: 'Greska', odgovori: {}, statusCode: null,
+    error: `Zahtjev nije poslan fiskalnom uređaju: ${poruka}`,
+  });
+
+  test('lozinka operatora ide kroz escape', async () => {
+    postavka('tring.operatorPassword', 'a<b>&"\'</Lozinka>');
+    expect(await b.call('tring:init')).toEqual(OK);
+    expect(zadnji().tijelo).toContain('<Lozinka>a&lt;b&gt;&amp;&quot;&apos;&lt;/Lozinka&gt;</Lozinka>');
+  });
+
+  test('stopa, cijena, količina, PLU i broj računa se ne ubacuju sirovi — ništa se ne šalje', async () => {
+    const pokusaji: Array<[any, string]> = [
+      [{ ...kasaStavka, pdvStopa: 'E</Stopa><Stopa>K' }, 'neispravna PDV stopa (dozvoljeno E ili K)'],
+      [{ ...kasaStavka, cijena: '1</Cijena><Cijena>0' }, 'neispravna vrijednost polja Cijena (mora biti broj)'],
+      [{ ...kasaStavka, kolicina: '2</Kolicina>' }, 'neispravna vrijednost polja Kolicina (mora biti broj)'],
+      [{ ...kasaStavka, rabat: 'x' }, 'neispravna vrijednost polja Rabat (mora biti broj)'],
+      [{ ...kasaStavka, plu: '7</PLU>' }, 'neispravan PLU (mora biti cijeli broj od 0 do 999999)'],
+      [{ ...kasaStavka, plu: 1.5 }, 'neispravan PLU (mora biti cijeli broj od 0 do 999999)'],
+    ];
+    for (const [stavka, poruka] of pokusaji) {
+      expect(await b.call('tring:printReceipt', { stavke: [stavka], ukupno: 5 })).toEqual(odbijeno(poruka));
+    }
+    expect(await b.call('tring:printReceipt', {
+      stavke: [kasaStavka], vrstePlacanja: [{ oznaka: 'Gotovina', iznos: '5</Iznos>' }],
+    })).toEqual(odbijeno('neispravna vrijednost polja Iznos (mora biti broj)'));
+    expect(await b.call('tring:printReceipt', { stavke: [kasaStavka], ukupno: 5, brojRacuna: '1</BrojRacuna>' }))
+      .toEqual(odbijeno('neispravan BrojRacuna (mora biti cijeli broj od 0 do 999999999)'));
+    expect(b.tring.zahtjevi).toHaveLength(0);
+  });
+
+  test('upis artikla s nevaljanom stopom ili grupom se odbija', async () => {
+    expect(await b.call('tring:writeArticle', { sifra: 'S', naziv: 'Sok', jm: 'l', cijena: 1.2, stopa: 'K</Stopa>' }))
+      .toEqual(odbijeno('neispravna PDV stopa (dozvoljeno E ili K)'));
+    expect(await b.call('tring:writeArticle', { sifra: 'S', naziv: 'Sok', jm: 'l', cijena: 1.2, stopa: 'K', grupa: -1 }))
+      .toEqual(odbijeno('neispravna Grupa (mora biti cijeli broj od 0 do 999999)'));
+    expect(b.tring.zahtjevi).toHaveLength(0);
+  });
+
+  test('periodični izvještaj prima samo GGGG-MM-DD', async () => {
+    expect(await b.call('tring:periodicReport', '2026</Vrijednost><X>-01-05', '2026-02-10'))
+      .toEqual(odbijeno('neispravan datum (očekuje se GGGG-MM-DD)'));
+    expect(await b.call('tring:periodicReport', '2026-01-05', 20260210))
+      .toEqual(odbijeno('neispravan datum (očekuje se GGGG-MM-DD)'));
+    expect(b.tring.zahtjevi).toHaveLength(0);
+  });
+
+  test('brojevi zapisani kao string idu uređaju kao broj', async () => {
+    await b.call('tring:printReceipt', {
+      stavke: [{ ...kasaStavka, cijena: ' 2.50 ', plu: '7' }], vrstePlacanja: [{ oznaka: 'Gotovina', iznos: '5.00' }],
+    });
+    const tijelo = zadnji().tijelo;
+    expect(tag(tijelo, 'Cijena')).toBe('2.5');
+    expect(tag(tijelo, 'PLU')).toBe('7');
+    expect(tag(tijelo, 'Iznos')).toBe('5');
+  });
+});
+
 // ─── tring:getLogs / tring:clearLogs ────────────────────────
 
 describe('tring:getLogs / tring:clearLogs', () => {
