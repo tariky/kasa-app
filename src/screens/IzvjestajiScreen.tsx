@@ -7,11 +7,12 @@ import { LedgerHead } from '@/components/ui/ledger';
 import { Stat } from '@/components/ui/stat';
 import {
   Printer, FileText, AlertTriangle, TrendingUp, Package,
-  Calendar, Loader2, ChevronRight, Zap, Clock, BarChart3, Download, Banknote, Boxes, BookOpenCheck,
+  Calendar, Loader2, ChevronRight, Moon, Clock, BarChart3, Download, Banknote, Boxes, BookOpenCheck,
 } from 'lucide-react';
 import { VrijednostZalihe } from '@/components/skladiste/VrijednostZalihe';
 import CashMovementDialog from '@/components/CashMovementDialog';
 import KnjigovodjaTab from '@/components/izvjestaji/KnjigovodjaTab';
+import ZIzvjestajDialog from '@/components/izvjestaji/ZIzvjestajDialog';
 import { cn, formatKM, formatDateTime, formatDate } from '@/lib/utils';
 import { nabavnaVrijednost } from '@/lib/kalkulacija';
 import { Order, Primka } from '@/types';
@@ -29,6 +30,7 @@ function fmtDisplay(d: Date): string {
 }
 
 type Tab = 'promet' | 'primke' | 'nivelacije' | 'zaliha' | 'fiskalni' | 'knjigovodja';
+type FiskalniIzvjestaj = 'x' | 'z' | 'periodicni';
 
 /** Ćelija izvještajne tabele — ista mjera kao lista artikala. */
 const td = 'py-2.5 border-b border-slate-100';
@@ -89,6 +91,48 @@ function IzvjestajKartica({ naslov, broj, akcije, children }: {
   );
 }
 
+/** Red fiskalnog izvještaja: šta radi lijevo, dugme desno, ishod zadnje štampe ispod opisa. */
+function FiskalniRed({ ikona: Ikona, naslov, oznaka, opis, akcija, opasno, zauzet, zakljucano, ishod, onClick }: {
+  ikona: typeof Clock;
+  naslov: string;
+  oznaka: string;
+  opis: string;
+  akcija: string;
+  opasno?: boolean;
+  zauzet: boolean;
+  zakljucano: boolean;
+  ishod?: { ok: boolean; tekst: string };
+  onClick: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-4 px-5 py-4 border-b border-slate-100 last:border-b-0">
+      <Ikona size={18} strokeWidth={1.75} className={cn('flex-shrink-0', opasno ? 'text-rose-500' : 'text-slate-400')} />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline gap-2">
+          <span className="text-[13.5px] font-semibold text-slate-800">{naslov}</span>
+          <span className="font-mono text-[11px] tabular-nums text-slate-400">{oznaka}</span>
+        </div>
+        <p className="mt-0.5 text-[12px] text-slate-500">{opis}</p>
+        {ishod && (
+          <p role="status" className={cn('mt-1.5 flex items-center gap-1.5 text-[11.5px] font-medium', ishod.ok ? 'text-emerald-600' : 'text-rose-600')}>
+            <span aria-hidden className={cn('h-1.5 w-1.5 flex-shrink-0 rounded-full', ishod.ok ? 'bg-emerald-500' : 'bg-rose-500')} />
+            {ishod.tekst}
+          </p>
+        )}
+      </div>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={onClick}
+        disabled={zakljucano}
+        className={cn('h-8 min-w-[124px] gap-1.5 text-[12px]', opasno && 'border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700 hover:border-rose-300')}
+      >
+        {zauzet ? <><Loader2 size={13} className="animate-spin" />Štampam…</> : akcija}
+      </Button>
+    </div>
+  );
+}
+
 export default function IzvjestajiScreen({ korisnikId, uloga }: { korisnikId: number; uloga: string }) {
   const [dateFrom, setDateFrom] = useState(new Date());
   const [dateTo, setDateTo] = useState(new Date());
@@ -110,8 +154,9 @@ export default function IzvjestajiScreen({ korisnikId, uloga }: { korisnikId: nu
   const [firma, setFirma] = useState<any>(null);
   const [reportError, setReportError] = useState('');
 
-  const [fiskalniStatus, setFiskalniStatus] = useState('');
-  const [fiskalniError, setFiskalniError] = useState(false);
+  const [stampa, setStampa] = useState<FiskalniIzvjestaj | null>(null);
+  const [ishod, setIshod] = useState<Partial<Record<FiskalniIzvjestaj, { ok: boolean; tekst: string }>>>({});
+  const [zPotvrda, setZPotvrda] = useState(false);
 
   const [ladica, setLadica] = useState<Awaited<ReturnType<typeof window.api.getDrawerState>> | null>(null);
   const [kretanja, setKretanja] = useState<Awaited<ReturnType<typeof window.api.getTodayCashMovements>>>([]);
@@ -259,59 +304,32 @@ export default function IzvjestajiScreen({ korisnikId, uloga }: { korisnikId: nu
     (sum, p) => sum + (p.stavke || []).reduce((s, st) => s + st.cijena * st.kolicina, 0), 0
   );
 
-  const setFiskalniMsg = (msg: string, isError = false) => {
-    setFiskalniStatus(msg);
-    setFiskalniError(isError);
-  };
-
-  const formatTringResult = (label: string, result: any): string => {
-    if (!result) return `${label}: Nema odgovora`;
-    const parts = [`${label}: ${result.vrstaOdgovora}`];
-    if (result.error) parts.push(result.error);
-    if (result.odgovori && Object.keys(result.odgovori).length > 0) {
-      parts.push(Object.entries(result.odgovori).map(([k, v]) => `${k}=${v}`).join(', '));
+  /** Uređaj štampa jedan po jedan — dok radi, sva tri dugmeta su zaključana. */
+  const stampaj = async (vrsta: FiskalniIzvjestaj, poziv: () => Promise<any>) => {
+    setStampa(vrsta);
+    setIshod(p => ({ ...p, [vrsta]: undefined }));
+    try {
+      const result = await poziv();
+      console.log(`Tring ${vrsta} result:`, result);
+      const vrijeme = new Date().toTimeString().slice(0, 5);
+      setIshod(p => ({
+        ...p,
+        [vrsta]: result?.success
+          ? { ok: true, tekst: vrsta === 'z' ? `Dan zatvoren u ${vrijeme}` : `Odštampano u ${vrijeme}` }
+          : { ok: false, tekst: result?.error || (result ? `Uređaj je odgovorio: ${result.vrstaOdgovora}` : 'Fiskalni uređaj nije odgovorio') },
+      }));
+    } catch (err: any) {
+      setIshod(p => ({ ...p, [vrsta]: { ok: false, tekst: err?.message || 'Veza s fiskalnim uređajem nije uspjela' } }));
+    } finally {
+      setStampa(null);
+      if (vrsta === 'z') loadLadica();
     }
-    return parts.join(' — ');
   };
 
-  const handleXReport = async () => {
-    setFiskalniMsg('Štampam X izvještaj...');
-    try {
-      const result = await window.api.tringXReport();
-      console.log('Tring xReport result:', result);
-      if (result?.success) {
-        setFiskalniMsg(formatTringResult('X izvještaj uspješno odštampan', result));
-      } else {
-        setFiskalniMsg(formatTringResult('X izvještaj greška', result), true);
-      }
-    } catch (err: any) { setFiskalniMsg(`Greška pri štampanju X izvještaja: ${err?.message || ''}`, true); }
-  };
-
-  const handleZReport = async () => {
-    setFiskalniMsg('Štampam Z izvještaj...');
-    try {
-      const result = await window.api.tringZReport();
-      console.log('Tring zReport result:', result);
-      if (result?.success) {
-        setFiskalniMsg(formatTringResult('Z izvještaj uspješno odštampan', result));
-      } else {
-        setFiskalniMsg(formatTringResult('Z izvještaj greška', result), true);
-      }
-    } catch (err: any) { setFiskalniMsg(`Greška pri štampanju Z izvještaja: ${err?.message || ''}`, true); }
-  };
-
-  const handlePeriodicReport = async () => {
-    setFiskalniMsg('Štampam periodični izvještaj...');
-    try {
-      const result = await window.api.tringPeriodicReport(toDateStr(dateFrom), toDateStr(dateTo));
-      console.log('Tring periodicReport result:', result);
-      if (result?.success) {
-        setFiskalniMsg(formatTringResult('Periodični izvještaj uspješno odštampan', result));
-      } else {
-        setFiskalniMsg(formatTringResult('Periodični izvještaj greška', result), true);
-      }
-    } catch (err: any) { setFiskalniMsg(`Greška pri štampanju periodičnog izvještaja: ${err?.message || ''}`, true); }
-  };
+  const handleXReport = () => stampaj('x', () => window.api.tringXReport());
+  const handleZReport = () => { setZPotvrda(false); stampaj('z', () => window.api.tringZReport()); };
+  const handlePeriodicReport = () =>
+    stampaj('periodicni', () => window.api.tringPeriodicReport(toDateStr(dateFrom), toDateStr(dateTo)));
 
   const tabs: { id: Tab; label: string; icon: typeof TrendingUp }[] = [
     { id: 'promet', label: 'Promet', icon: TrendingUp },
@@ -719,146 +737,101 @@ export default function IzvjestajiScreen({ korisnikId, uloga }: { korisnikId: nu
 
         {/* ═══ FISKALNI TAB ═══ */}
         {activeTab === 'fiskalni' && (
-          <div className="flex flex-col h-full">
-            <div className="flex-shrink-0 px-6 pt-5 pb-4">
-              <div className="grid grid-cols-3 gap-4">
-                {/* X Report */}
-                <button
-                  onClick={handleXReport}
-                  className="group bg-white rounded-2xl p-6 border border-slate-100 shadow-sm shadow-slate-200/50 text-left transition-all hover:border-blue-200 hover:shadow-blue-100/50 active:scale-[0.98]"
-                >
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center group-hover:bg-blue-100 transition-colors">
-                      <Clock size={20} className="text-blue-500" />
-                    </div>
-                    <ChevronRight size={16} className="text-slate-300 group-hover:text-blue-400 transition-colors" />
-                  </div>
-                  <h3 className="text-[15px] font-semibold text-slate-800 mb-1">Presjek stanja</h3>
-                  <p className="text-[12px] text-slate-400 leading-relaxed">
-                    X izvještaj — trenutno stanje prometa bez nuliranja
-                  </p>
-                </button>
-
-                {/* Z Report */}
-                <button
-                  onClick={handleZReport}
-                  className="group bg-white rounded-2xl p-6 border border-red-100 shadow-sm shadow-slate-200/50 text-left transition-all hover:border-red-200 hover:shadow-red-100/50 active:scale-[0.98]"
-                >
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="w-10 h-10 rounded-xl bg-red-50 flex items-center justify-center group-hover:bg-red-100 transition-colors">
-                      <Zap size={20} className="text-red-500" />
-                    </div>
-                    <ChevronRight size={16} className="text-slate-300 group-hover:text-red-400 transition-colors" />
-                  </div>
-                  <h3 className="text-[15px] font-semibold text-slate-800 mb-1">Dnevni izvještaj</h3>
-                  <p className="text-[12px] text-slate-400 leading-relaxed">
-                    Z izvještaj — zatvara dan i nulira promet
-                  </p>
-                </button>
-
-                {/* Periodic */}
-                <button
-                  onClick={handlePeriodicReport}
-                  className="group bg-white rounded-2xl p-6 border border-slate-100 shadow-sm shadow-slate-200/50 text-left transition-all hover:border-amber-200 hover:shadow-amber-100/50 active:scale-[0.98]"
-                >
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center group-hover:bg-amber-100 transition-colors">
-                      <Calendar size={20} className="text-amber-500" />
-                    </div>
-                    <ChevronRight size={16} className="text-slate-300 group-hover:text-amber-400 transition-colors" />
-                  </div>
-                  <h3 className="text-[15px] font-semibold text-slate-800 mb-1">Periodični izvještaj</h3>
-                  <p className="text-[12px] text-slate-400 leading-relaxed">
-                    Za odabrani period ({fmtDisplay(dateFrom)} — {fmtDisplay(dateTo)})
-                  </p>
-                </button>
+          <div className="h-full overflow-y-auto px-6 pt-5 pb-5 space-y-4">
+            <div className="bg-white rounded-2xl border border-slate-200/70 shadow-sm shadow-slate-200/40 overflow-hidden">
+              <div className="flex items-center gap-3 px-5 py-3 border-b border-slate-100">
+                <span className="text-[13px] font-semibold text-slate-700">Fiskalni izvještaji</span>
               </div>
+              <FiskalniRed
+                ikona={Clock}
+                naslov="Presjek stanja"
+                oznaka="X"
+                opis="Trenutni promet dana. Ništa se ne nulira, može se štampati koliko god puta."
+                akcija="Štampaj"
+                zauzet={stampa === 'x'}
+                zakljucano={stampa !== null}
+                ishod={ishod.x}
+                onClick={handleXReport}
+              />
+              <FiskalniRed
+                ikona={Moon}
+                naslov="Dnevni izvještaj"
+                oznaka="Z"
+                opis="Zatvara dan i nulira promet na uređaju. Štampa se jednom, na kraju radnog dana."
+                akcija="Zatvori dan…"
+                opasno
+                zauzet={stampa === 'z'}
+                zakljucano={stampa !== null}
+                ishod={ishod.z}
+                onClick={() => setZPotvrda(true)}
+              />
+              <FiskalniRed
+                ikona={Calendar}
+                naslov="Periodični izvještaj"
+                oznaka={`${fmtDisplay(dateFrom)} — ${fmtDisplay(dateTo)}`}
+                opis="Zbir zatvorenih dana za period odabran u zaglavlju."
+                akcija="Štampaj"
+                zauzet={stampa === 'periodicni'}
+                zakljucano={stampa !== null}
+                ishod={ishod.periodicni}
+                onClick={handlePeriodicReport}
+              />
             </div>
 
-            {/* Warning + Status */}
-            <div className="px-6 space-y-3">
-              <div className="flex items-start gap-3 bg-amber-50/60 border border-amber-100 rounded-xl px-4 py-3">
-                <AlertTriangle size={16} className="text-amber-500 mt-0.5 flex-shrink-0" />
-                <div>
-                  <p className="text-[12px] font-semibold text-amber-700">Pažnja: Z izvještaj je nepovratna operacija</p>
-                  <p className="text-[11px] text-amber-600/70 mt-0.5">Nulira sve vrijednosti na fiskalnom uređaju. Koristiti isključivo na kraju radnog dana.</p>
+            {/* Stanje ladice — lokalna evidencija pologa/povrata za danas */}
+            <div className="bg-white rounded-2xl border border-slate-200/70 shadow-sm shadow-slate-200/40 overflow-hidden">
+              <div className="flex items-center gap-3 px-5 py-3 border-b border-slate-100">
+                <span className="text-[13px] font-semibold text-slate-700">Stanje ladice danas</span>
+                <span className="hidden md:inline text-[12px] text-slate-400">Uporedi s presjekom stanja prije zatvaranja dana</span>
+                <div className="ml-auto flex gap-2">
+                  <Button variant="outline" size="sm" className="h-8 text-[12px]" onClick={() => setCashDialogTip('polog')}>
+                    Polog
+                  </Button>
+                  <Button variant="outline" size="sm" className="h-8 text-[12px]" onClick={() => setCashDialogTip('povrat')}>
+                    Povrat novca
+                  </Button>
                 </div>
               </div>
 
-              {fiskalniStatus && (
-                <div className={cn(
-                  'flex items-center gap-2 rounded-xl px-4 py-3 text-[12px] font-medium',
-                  fiskalniError
-                    ? 'bg-red-50/60 border border-red-100 text-red-600'
-                    : 'bg-emerald-50/60 border border-emerald-100 text-emerald-600',
-                )}>
-                  {fiskalniError ? <AlertTriangle size={14} /> : <Printer size={14} />}
-                  {fiskalniStatus}
+              {ladica && (
+                <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 p-5">
+                  <Stat label="Polozi" value={formatKM(ladica.polozi)} />
+                  <Stat label="Gotovinski promet" value={formatKM(ladica.gotovinskiPromet)} />
+                  <Stat label="Povrati" value={formatKM(-ladica.povrati)} />
+                  <Stat label="Reklamacije" value={formatKM(-ladica.gotovinskeReklamacije)} />
+                  <Stat label="Očekivano u ladici" value={formatKM(ladica.ocekivanoStanje)} strong
+                    className="col-span-2 lg:col-span-1 border-emerald-200 bg-emerald-50/50" />
                 </div>
               )}
 
-              {/* Stanje ladice — lokalna evidencija pologa/povrata za danas */}
-              <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-sm shadow-slate-200/50">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center">
-                      <Banknote size={20} className="text-emerald-500" />
+              {kretanja.length > 0 && (
+                <div className="border-t border-slate-100 px-5">
+                  {kretanja.map(k => (
+                    <div key={k.id} className="flex items-center gap-3 py-2.5 border-b border-slate-100 last:border-b-0 text-[12px]">
+                      <span className="font-mono text-[12px] text-slate-400 tabular-nums">{k.createdAt.slice(11, 16)}</span>
+                      <span className="flex items-center gap-1.5 text-slate-600">
+                        <span aria-hidden className={cn('h-1.5 w-1.5 rounded-full', k.tip === 'polog' ? 'bg-emerald-500' : 'bg-rose-500')} />
+                        {k.tip === 'polog' ? 'Polog' : 'Povrat'}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-slate-500">
+                        {k.korisnikIme}{k.napomena ? <span className="text-slate-400"> · {k.napomena}</span> : null}
+                      </span>
+                      {k.tringStatus === 'error' && (
+                        <Button
+                          variant="outline" size="sm" className="h-7 px-2 text-[11px] text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700"
+                          disabled={retryingId === k.id}
+                          onClick={() => retryCash(k.id)}
+                        >
+                          {retryingId === k.id ? 'Slanje…' : 'Nije poslano — ponovi'}
+                        </Button>
+                      )}
+                      <span className={cn('font-mono text-[12.5px] font-semibold tabular-nums whitespace-nowrap', k.tip === 'polog' ? 'text-emerald-600' : 'text-rose-600')}>
+                        {k.tip === 'polog' ? '+' : '−'}{formatKM(k.iznos)}
+                      </span>
                     </div>
-                    <div>
-                      <h3 className="text-[15px] font-semibold text-slate-800">Stanje ladice (danas)</h3>
-                      <p className="text-[12px] text-slate-400">Očekivana gotovina — uporedi s presjekom stanja (X)</p>
-                    </div>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button variant="outline" size="sm" className="h-8 gap-1.5 text-[12px]" onClick={() => setCashDialogTip('polog')}>
-                      Polog
-                    </Button>
-                    <Button variant="outline" size="sm" className="h-8 gap-1.5 text-[12px]" onClick={() => setCashDialogTip('povrat')}>
-                      Povrat novca
-                    </Button>
-                  </div>
+                  ))}
                 </div>
-
-                {ladica && (
-                  <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
-                    <Stat label="Polozi" value={formatKM(ladica.polozi)} />
-                    <Stat label="Gotovinski promet" value={formatKM(ladica.gotovinskiPromet)} />
-                    <Stat label="Povrati" value={formatKM(-ladica.povrati)} />
-                    <Stat label="Reklamacije" value={formatKM(-ladica.gotovinskeReklamacije)} />
-                    <Stat label="Očekivano u ladici" value={formatKM(ladica.ocekivanoStanje)} strong
-                      className="col-span-2 lg:col-span-1 border-emerald-200 bg-emerald-50/50" />
-                  </div>
-                )}
-
-                {kretanja.length > 0 && (
-                  <div className="border-t border-slate-100">
-                    {kretanja.map(k => (
-                      <div key={k.id} className="flex items-center gap-3 py-2.5 border-b border-slate-100 text-[12px]">
-                        <span className="font-mono text-[12px] text-slate-400 tabular-nums">{k.createdAt.slice(11, 16)}</span>
-                        <span className="flex items-center gap-1.5 text-slate-600">
-                          <span aria-hidden className={cn('h-1.5 w-1.5 rounded-full', k.tip === 'polog' ? 'bg-emerald-500' : 'bg-rose-500')} />
-                          {k.tip === 'polog' ? 'Polog' : 'Povrat'}
-                        </span>
-                        <span className="min-w-0 flex-1 truncate text-slate-500">
-                          {k.korisnikIme}{k.napomena ? <span className="text-slate-400"> · {k.napomena}</span> : null}
-                        </span>
-                        {k.tringStatus === 'error' && (
-                          <Button
-                            variant="outline" size="sm" className="h-7 px-2 text-[11px] text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700"
-                            disabled={retryingId === k.id}
-                            onClick={() => retryCash(k.id)}
-                          >
-                            {retryingId === k.id ? 'Slanje…' : 'Nije poslano — ponovi'}
-                          </Button>
-                        )}
-                        <span className={cn('font-mono text-[12.5px] font-semibold tabular-nums whitespace-nowrap', k.tip === 'polog' ? 'text-emerald-600' : 'text-rose-600')}>
-                          {k.tip === 'polog' ? '+' : '−'}{formatKM(k.iznos)}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+              )}
             </div>
 
             <CashMovementDialog
@@ -867,6 +840,13 @@ export default function IzvjestajiScreen({ korisnikId, uloga }: { korisnikId: nu
               korisnikId={korisnikId}
               onClose={() => setCashDialogTip(null)}
               onSaved={loadLadica}
+            />
+            <ZIzvjestajDialog
+              open={zPotvrda}
+              ocekivano={ladica?.ocekivanoStanje ?? null}
+              onClose={() => setZPotvrda(false)}
+              onConfirm={handleZReport}
+              onPresjek={() => { setZPotvrda(false); handleXReport(); }}
             />
           </div>
         )}
