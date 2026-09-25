@@ -42,6 +42,15 @@ async function rucniRacun(broj: string, cijena = 3): Promise<number> {
   })).id;
 }
 
+/** Čeka da uslov postane tačan (provjera svakih 10 ms, najviše 5 s). */
+async function cekaj(uslov: () => boolean): Promise<void> {
+  const kraj = Date.now() + 5000;
+  while (!uslov()) {
+    if (Date.now() > kraj) throw new Error('Uslov nije ispunjen za 5 s');
+    await new Promise(r => setTimeout(r, 10));
+  }
+}
+
 describe('audit_log', () => {
   test('nova baza ima praznu tabelu audit_log(id, createdAt, korisnikId, akcija, detalji)', async () => {
     const kolone = (b.db.prepare('PRAGMA table_info(audit_log)').all() as { name: string }[]).map(k => k.name);
@@ -97,7 +106,32 @@ describe('audit_log', () => {
     await b.call('product:update', p, { naziv: 'Novi naziv' });
     await b.call('product:update', p, { cijena: 10 });
     await b.call('product:update', p, { cijena: 12.5 });
-    expect(audit()).toEqual([{ korisnikId: ADMIN, akcija: 'artikal:cijena', detalji: { productId: p, staraCijena: 10, novaCijena: 12.5 } }]);
+    expect(audit()).toEqual([{ korisnikId: ADMIN, akcija: 'artikal:cijena', detalji: { productId: p, staraCijena: 10, novaCijena: 12.5, izvor: 'rucno' } }]);
+  });
+
+  test('primka: nova cijena, izmjena i vraćanje cijene pri brisanju → artikal:cijena; pregled ne ostavlja trag', async () => {
+    const saZalihom = dodajArtikal('P1', 10);
+    b.db.prepare("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'ulaz', 5, 'test', 0)").run(saZalihom);
+    const bezZalihe = dodajArtikal('P2', 8);
+    const stavka = (productId: number, cijena: number) => ({ productId, kolicina: 1, cijena, nabavnaCijena: 5, rabat: 0, pdvStopa: 'E' });
+    const data = { brojPrimke: 'U-1', datum: '2026-03-10', stavke: [stavka(saZalihom, 12), stavka(bezZalihe, 9)] };
+
+    await b.call('primka:pregledUnosa', data);
+    expect(audit()).toEqual([]);
+
+    const { id } = await b.call('primka:create', data);
+    await b.call('primka:update', { ...data, id, stavke: [stavka(saZalihom, 14), stavka(bezZalihe, 9)] });
+    await b.call('primka:delete', id);
+
+    const cijena = (productId: number, staraCijena: number, novaCijena: number, izvor: string) =>
+      ({ korisnikId: ADMIN, akcija: 'artikal:cijena', detalji: { productId, staraCijena, novaCijena, izvor, primkaId: id } });
+    expect(audit()).toEqual([
+      cijena(saZalihom, 10, 12, 'primka'),
+      cijena(bezZalihe, 8, 9, 'primka'),
+      cijena(saZalihom, 12, 14, 'primka:izmjena'),
+      cijena(saZalihom, 14, 10, 'primka:brisanje'),
+      cijena(bezZalihe, 9, 8, 'primka:brisanje'),
+    ]);
   });
 
   test('settings:set i proizvodnja:setEnabled → postavke:set sa starom i novom vrijednošću', async () => {
@@ -192,6 +226,8 @@ describe('audit_log', () => {
     } finally {
       aktivna.close();
     }
-    await Bun.sleep(700);
+    // db:restore restartuje program s odgodom (500 ms) — test čeka taj događaj,
+    // da restart ne padne u sljedeći test.
+    await cekaj(() => b.restartovan());
   });
 });

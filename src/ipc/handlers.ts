@@ -38,7 +38,7 @@ import {
   type PonudaStatus,
 } from '../lib/ponuda';
 import { buildTringRacun } from '../lib/tringRacun';
-import { pripremiRacun } from '../lib/provjeraRacuna';
+import { pripremiRacun, PDV_STOPE } from '../lib/provjeraRacuna';
 import { zapisiAudit, promjenePostavki } from '../lib/audit';
 import { addCashMovement, retryCashMovement, getTodayMovements, getDrawerState, getLastPologIznos } from '../lib/cash';
 import { logoVelicina, ziroRacuniPozicija } from '../lib/firma';
@@ -345,7 +345,6 @@ export function registerIpcHandlers(): void {
     return db.prepare('SELECT * FROM products WHERE id = ?').get(id);
   });
 
-  const PDV_STOPE = ['E', 'K'];
   // Tring: naziv zajedno s JM ima 32–36 znakova, zavisno od uređaja.
   const SLOBODAN_NAZIV_MAX = 32;
 
@@ -366,7 +365,7 @@ export function registerIpcHandlers(): void {
       upis.naziv = data.naziv.trim();
     }
     if (poslano('cijena') && (data.cijena == null || !(data.cijena >= 0))) throw new Error('Cijena mora biti pozitivan broj');
-    if (poslano('pdvStopa') && !PDV_STOPE.includes(data.pdvStopa as string)) throw new Error('PDV stopa mora biti E ili K');
+    if (poslano('pdvStopa') && !(PDV_STOPE as readonly string[]).includes(data.pdvStopa as string)) throw new Error('PDV stopa mora biti E ili K');
     const osimId = id ?? -1;
     if (upis.sifra !== undefined && db.prepare('SELECT id FROM products WHERE sifra = ? AND id != ?').get(upis.sifra, osimId)) {
       throw new Error(`Artikal sa šifrom "${data.sifra}" već postoji`);
@@ -430,7 +429,7 @@ export function registerIpcHandlers(): void {
       // Ručna izmjena cijene ulazi u historiju: poništavanje ranije primke je ne smije pregaziti.
       if (prije && data.cijena !== undefined && data.cijena !== prije.cijena) {
         zapisiPromjeneCijena(db, 'rucno', null, [{ productId: id, staraCijena: prije.cijena, novaCijena: data.cijena }]);
-        audit('artikal:cijena', { productId: id, staraCijena: prije.cijena, novaCijena: data.cijena });
+        audit('artikal:cijena', { productId: id, staraCijena: prije.cijena, novaCijena: data.cijena, izvor: 'rucno' });
       }
       return { changes: result.changes };
     })();
@@ -583,7 +582,7 @@ export function registerIpcHandlers(): void {
     if (data.cijena == null || !(data.cijena >= 0.01 && data.cijena <= 9_999_999.99)) {
       throw new Error('Cijena mora biti između 0,01 i 9.999.999,99');
     }
-    if (!PDV_STOPE.includes(data.pdvStopa as string)) throw new Error('PDV stopa mora biti E ili K');
+    if (!(PDV_STOPE as readonly string[]).includes(data.pdvStopa as string)) throw new Error('PDV stopa mora biti E ili K');
     const jm = data.jm?.trim() || 'kom';
 
     return db.transaction(() => {
@@ -814,8 +813,24 @@ export function registerIpcHandlers(): void {
   // Tijela create/update/delete bez transakcije: prava operacija ih pokrene u
   // transakciji, a pregled (primka:pregled*) u transakciji koju poništi — ista
   // logika, pa najava na ekranu ne može odstupiti od onoga što spremanje uradi.
+  /**
+   * Trag svake promjene cijene u šifarniku od snimka `prije` (cijeneArtikala) —
+   * primka je mijenja nivelacijom, bez zalihe direktno, a brisanje je vraća.
+   * U pregledu (poništena transakcija) nestaje zajedno s ostalim.
+   */
+  function auditCijenaPrimke(prije: Map<number, number>, izvor: string, primkaId: number | bigint) {
+    const sada = cijeneArtikala(db, prije.keys());
+    for (const [productId, staraCijena] of prije) {
+      const novaCijena = sada.get(productId);
+      if (novaCijena !== undefined && novaCijena !== staraCijena) {
+        audit('artikal:cijena', { productId, staraCijena, novaCijena, izvor, primkaId: Number(primkaId) });
+      }
+    }
+  }
+
   function unesiPrimku(data: PrimkaUnos) {
     const brojPrimke = validirajPrimku(db, data);
+    const cijenePrije = cijeneArtikala(db, data.stavke.map(s => s.productId));
     const datum = data.datum || localDateStr();
     const result = db
       .prepare('INSERT INTO primke (brojPrimke, datum, dobavljacNaziv, dobavljacId, dobavljacAdresa, napomena, brojFakture) VALUES (?, ?, ?, ?, ?, ?, ?)')
@@ -846,6 +861,7 @@ export function registerIpcHandlers(): void {
     upisiCijene(db, [...nivelacija, ...bezZaliha]);
     createNivelacija(primkaId, nivelacija, null);
     zapisiPromjeneCijena(db, 'primka', primkaId, [...nivelacija, ...bezZaliha]);
+    auditCijenaPrimke(cijenePrije, 'primka', primkaId);
 
     return { id: primkaId, nivelacijaCreated: nivelacija.length > 0 };
   }
@@ -911,6 +927,8 @@ export function registerIpcHandlers(): void {
       insertStock.run(stavka.productId, stavka.kolicina, data.id, datumUlaza);
     });
 
+    auditCijenaPrimke(prije, 'primka:izmjena', data.id);
+
     return { id: data.id, nivelacijaCreated: promjene.length > 0 };
   }
 
@@ -947,6 +965,7 @@ export function registerIpcHandlers(): void {
     }
 
     db.prepare('DELETE FROM primke WHERE id = ?').run(id);
+    auditCijenaPrimke(prije, 'primka:brisanje', id);
   }
 
   /**
