@@ -6,12 +6,15 @@ import { MakerZIP } from '@electron-forge/maker-zip';
 import { MakerDeb } from '@electron-forge/maker-deb';
 import { MakerRpm } from '@electron-forge/maker-rpm';
 import { VitePlugin } from '@electron-forge/plugin-vite';
+import { AutoUnpackNativesPlugin } from '@electron-forge/plugin-auto-unpack-natives';
 import { FusesPlugin } from '@electron-forge/plugin-fuses';
 import { FuseV1Options, FuseVersion } from '@electron/fuses';
 
 const config: ForgeConfig = {
   packagerConfig: {
-    asar: false,
+    // asar + provjera integriteta (fuse ispod): izmijenjen app.asar se ne pokreće.
+    // Nativni moduli (better-sqlite3 .node) se raspakuju kroz AutoUnpackNativesPlugin.
+    asar: true,
     icon: path.resolve(__dirname, 'src/assets/icon'),
     extraResource: [path.resolve(__dirname, 'src/assets/icon.png')],
   },
@@ -51,6 +54,7 @@ const config: ForgeConfig = {
     },
   },
   plugins: [
+    new AutoUnpackNativesPlugin({}),
     new VitePlugin({
       build: [
         {
@@ -77,8 +81,10 @@ const config: ForgeConfig = {
       [FuseV1Options.EnableCookieEncryption]: true,
       [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
       [FuseV1Options.EnableNodeCliInspectArguments]: false,
-      [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: false,
-      [FuseV1Options.OnlyLoadAppFromAsar]: false,
+      [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: true,
+      [FuseV1Options.OnlyLoadAppFromAsar]: true,
+      // Renderer se servira kroz app:// (src/main.ts), file:// ne treba posebne privilegije.
+      [FuseV1Options.GrantFileProtocolExtraPrivileges]: false,
     }),
   ],
 };

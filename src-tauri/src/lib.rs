@@ -1,7 +1,7 @@
 //! Tauri ljuska oko `pazar-backend`: prozor, komanda `api` (zamjena za
 //! `ipcRenderer.invoke`), sistemski dijalozi, restart i PDF prozori.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
@@ -31,26 +31,52 @@ fn filteri(opcije: &Value) -> Vec<(String, Vec<String>)> {
         .collect()
 }
 
+/// Ekstenzije koje dijalog za čuvanje prihvata (PDF, izvoz, backup baze).
+const DOZVOLJENE_EKSTENZIJE: [&str; 5] = ["pdf", "xlsx", "csv", "db", "zip"];
+
+fn dozvoljena_ekstenzija(p: &Path) -> bool {
+    p.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| DOZVOLJENE_EKSTENZIJE.iter().any(|d| d.eq_ignore_ascii_case(e)))
+}
+
+/// Predloženo ime fajla za dijalog: samo ime (renderer ne bira folder u kojem
+/// se dijalog otvara — `/` i `\` postaju `-`, kao i `:` jer je `C:ime` na
+/// Windowsu putanja relativna na disk C) i samo dozvoljena ekstenzija, inače `None`.
+fn ime_za_cuvanje(predlog: &str) -> Option<String> {
+    let ime = predlog.trim().replace(['/', '\\', ':'], "-");
+    if ime.is_empty() || ime.starts_with('.') || ime.contains('\0') || !dozvoljena_ekstenzija(Path::new(&ime)) {
+        return None;
+    }
+    Some(ime)
+}
+
+/// Filteri dijaloga bez ekstenzija koje se ne smiju snimati.
+fn dozvoljeni_filteri(opcije: &Value) -> Vec<(String, Vec<String>)> {
+    filteri(opcije)
+        .into_iter()
+        .map(|(ime, ext)| (ime, ext.into_iter().filter(|e| DOZVOLJENE_EKSTENZIJE.iter().any(|d| d.eq_ignore_ascii_case(e))).collect::<Vec<_>>()))
+        .filter(|(_, ext)| !ext.is_empty())
+        .collect()
+}
+
 impl Platforma for TauriPlatforma {
     fn dijalog_sacuvaj(&self, opcije: Value) -> Option<String> {
-        let mut d = self.app.dialog().file();
-        if let Some(p) = opcije["defaultPath"].as_str() {
-            // Electron prihvata i samo ime fajla i punu putanju.
-            let p = PathBuf::from(p);
-            if let (Some(dir), Some(ime)) = (p.parent().filter(|d| !d.as_os_str().is_empty()), p.file_name()) {
-                d = d.set_directory(dir).set_file_name(ime.to_string_lossy());
-            } else {
-                d = d.set_file_name(p.to_string_lossy());
-            }
-        }
+        // Predlog ime fajla s nedozvoljenom ekstenzijom (ili bez nje) se odbija
+        // kao da je korisnik otkazao — dijalog se ni ne otvara.
+        let ime = ime_za_cuvanje(opcije["defaultPath"].as_str()?)?;
+        let mut d = self.app.dialog().file().set_file_name(ime);
         if let Some(t) = opcije["title"].as_str() {
             d = d.set_title(t);
         }
-        for (ime, ext) in filteri(&opcije) {
+        for (ime, ext) in dozvoljeni_filteri(&opcije) {
             let ext: Vec<&str> = ext.iter().map(String::as_str).collect();
             d = d.add_filter(ime, &ext);
         }
-        d.blocking_save_file().and_then(|f| f.into_path().ok()).map(|p| p.to_string_lossy().into_owned())
+        d.blocking_save_file()
+            .and_then(|f| f.into_path().ok())
+            .filter(|p| dozvoljena_ekstenzija(p))
+            .map(|p| p.to_string_lossy().into_owned())
     }
 
     fn dijalog_otvori(&self, opcije: Value) -> Option<String> {
@@ -137,8 +163,10 @@ fn user_data(app: &AppHandle) -> PathBuf {
     baza.join("Pazar")
 }
 
+/// Smoke test (`PAZAR_SMOKE`) postoji samo u debug buildu: u release buildu
+/// varijabla okruženja ne mijenja ništa (ni skripta, ni izlaz iz programa).
 fn smoke() -> bool {
-    std::env::var_os("PAZAR_SMOKE").is_some()
+    cfg!(debug_assertions) && std::env::var_os("PAZAR_SMOKE").is_some()
 }
 
 /// Kraj smoke testa (`smoke.js`): ispiše rezultat i prozore, pa ugasi program.
@@ -153,13 +181,22 @@ fn smoke_kraj(app: AppHandle, rezultat: Value) {
     let pao = rezultat["greska"].is_string()
         || rezultat["provjere"].as_array().into_iter().flatten().any(|p| p["ok"] != Value::Bool(true));
     println!("{}", serde_json::json!({ "rezultat": rezultat, "prozori": prozori }));
-    app.exit(if pao { 1 } else { 0 });
+    if pao {
+        // `app.exit(1)` na macOS-u završi s kodom 0 — pad mora biti vidljiv i skripti.
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+        std::process::exit(1);
+    }
+    app.exit(0);
 }
 
 static PDF_PROZORI: AtomicU32 = AtomicU32::new(0);
 
 /// `window.open(blobUrl)` za PDF pregled: novi prozor dijeli webview
 /// konfiguraciju s glavnim (inače blob: URL ne postoji u novom prozoru).
+/// Capability (`capabilities/default.json`) važi samo za `main`; na macOS-u
+/// WebKit ipak daje popupu konfiguraciju otvarača (i njegov IPC), pa PDF
+/// prozor ne smije učitati ništa osim svog blob: sadržaja.
 fn novi_prozor(app: &AppHandle, url: tauri::Url, features: tauri::webview::NewWindowFeatures) -> NewWindowResponse<tauri::Wry> {
     if url.scheme() != "blob" {
         return NewWindowResponse::Deny;
@@ -172,6 +209,9 @@ fn novi_prozor(app: &AppHandle, url: tauri::Url, features: tauri::webview::NewWi
         .on_document_title_changed(|w, naslov| {
             let _ = w.set_title(&naslov);
         })
+        // Samo svoj PDF (blob:); nikakva navigacija dalje ni novi prozori.
+        .on_navigation(|url| url.scheme() == "blob" || url.as_str() == "about:blank")
+        .on_new_window(|_, _| NewWindowResponse::Deny)
         .build();
     match prozor {
         Ok(window) => NewWindowResponse::Create { window },
@@ -301,4 +341,42 @@ pub fn run() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod testovi {
+    use super::*;
+
+    #[test]
+    fn ime_za_cuvanje_separatori_postaju_crtice() {
+        assert_eq!(ime_za_cuvanje("Racun-1.pdf").as_deref(), Some("Racun-1.pdf"));
+        assert_eq!(ime_za_cuvanje("Faktura 12/2026.pdf").as_deref(), Some("Faktura 12-2026.pdf"));
+        assert_eq!(ime_za_cuvanje("/Users/x/Library/LaunchAgents/evil.pdf").as_deref(), Some("-Users-x-Library-LaunchAgents-evil.pdf"));
+        assert_eq!(ime_za_cuvanje("..\\..\\Startup\\izvoz.zip").as_deref(), None);
+        assert_eq!(ime_za_cuvanje("a/../../izvoz.zip").as_deref(), Some("a-..-..-izvoz.zip"));
+        assert_eq!(ime_za_cuvanje("C:\\Windows\\kasa-backup-2026-09-25.db").as_deref(), Some("C--Windows-kasa-backup-2026-09-25.db"));
+        assert_eq!(ime_za_cuvanje("C:izvoz.zip").as_deref(), Some("C-izvoz.zip"));
+        assert_eq!(ime_za_cuvanje("Izvjestaj.XLSX").as_deref(), Some("Izvjestaj.XLSX"));
+        assert_eq!(ime_za_cuvanje("promet.csv").as_deref(), Some("promet.csv"));
+    }
+
+    #[test]
+    fn ime_za_cuvanje_odbija_ostale_ekstenzije() {
+        for los in ["evil.exe", "skripta.sh", "x.pdf.bat", ".bashrc", ".skriveno.pdf", "bez-ekstenzije", "", "folder/", "..", "a\0.pdf", "plist.plist"] {
+            assert_eq!(ime_za_cuvanje(los), None, "{los}");
+        }
+    }
+
+    #[test]
+    fn filteri_bez_nedozvoljenih_ekstenzija() {
+        let opcije = serde_json::json!({ "filters": [
+            { "name": "PDF", "extensions": ["pdf"] },
+            { "name": "Sve", "extensions": ["exe", "zip"] },
+            { "name": "Skripte", "extensions": ["sh"] },
+        ]});
+        assert_eq!(
+            dozvoljeni_filteri(&opcije),
+            vec![("PDF".to_string(), vec!["pdf".to_string()]), ("Sve".to_string(), vec!["zip".to_string()])]
+        );
+    }
 }
