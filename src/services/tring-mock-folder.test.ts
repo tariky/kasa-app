@@ -95,6 +95,16 @@ test('fiskalni račun iz disiz: odgovor KasaOdgovor u odgovori/ s istim imenom, 
   expect(mock.racuni).toEqual([{ komanda: 'sfr', datoteka: 'stampatifiskalniracun.txt.251', brojFiskalnog: 1, stavke: [{ sifra: '00001', naziv: '00001 Čaša', kolicina: '2.0000', cijena: '12.68' }] }]);
 });
 
+test('veleprodajna faktura dobija xsd:int koji prracunf prepoznaje i koristi za zakljucen=1', async () => {
+  fs.writeFileSync(path.join(dir, 'stampatifiskalniracun.txt.76'), cp1250(racunDisiz('76', 'Promet po fakturi')));
+  mock = startMockTringFolder(dir, { delayMs: 0, tiho: true });
+
+  const odgovor = await cekaj(() => procitaj(path.join(dir, 'odgovori', 'stampatifiskalniracun.txt.76')));
+  expect(odgovor).toMatch(/<Naziv>BrojFiskalnogRacuna<\/Naziv>\s*<Vrijednost xsi:type="xsd:int">1<\/Vrijednost>/);
+  expect(odgovor).not.toContain('xsd:long');
+  expect(mock.racuni[0]?.stavke[0]?.naziv).toBe('Promet po fakturi');
+});
+
 test('datoteka koja stigne dok mock radi; brojač fiskalnih računa raste', async () => {
   mock = startMockTringFolder(dir, { delayMs: 0, tiho: true });
   fs.writeFileSync(path.join(dir, 'stampatifiskalniracun.txt.1'), cp1250(racunDisiz('1', 'A')));
