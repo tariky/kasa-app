@@ -24,7 +24,7 @@ import FakturaDialog, { type SkicaFakture } from '@/components/FakturaDialog';
 import SlobodnaStavkaDialog from '@/components/kasa/SlobodnaStavkaDialog';
 import StavkeRacuna from '@/components/kasa/StavkeRacuna';
 import SpremljeneKosarice, { type SavedCartRow } from '@/components/kasa/SpremljeneKosarice';
-import type { User, Product, CartItem, Kupac } from '@/types';
+import type { Product, CartItem, Kupac } from '@/types';
 import { potvrdi } from '@/lib/dijalog';
 
 type PaymentType = 'Gotovina' | 'Kartica' | 'Virman' | 'Ček';
@@ -39,10 +39,6 @@ const paymentIcons: Record<PaymentType, React.ReactNode> = {
 };
 
 const ARTIKLI_I_USLUGE: Product['tip'][] = ['artikal', 'usluga'];
-
-interface KasaScreenProps {
-  user: User;
-}
 
 /** Broj → tekst za polje količine (zarez kao separator, bez suvišnih nula). */
 function formatQty(n: number): string {
@@ -67,7 +63,7 @@ function uPoljuZaUnos(t: EventTarget | null): boolean {
 
 const poljaKupca = (k: Kupac) => ({ naziv: k.naziv, sifra: k.idBroj, dodatno: [k.adresa, k.grad].filter(Boolean).join(' ') });
 
-export default function KasaScreen({ user }: KasaScreenProps) {
+export default function KasaScreen() {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [zadnje, setZadnje] = useState<{ id: number; n: number } | null>(null);
   const [paymentType, setPaymentType] = useState<PaymentType>('Gotovina');
@@ -431,7 +427,7 @@ export default function KasaScreen({ user }: KasaScreenProps) {
       }));
 
       const res = await window.api.finalizeOrder({
-        korisnikId: user.id, ukupno: total, pdvIznos: pdvAmount, nacinPlacanja: paymentType,
+        ukupno: total, pdvIznos: pdvAmount, nacinPlacanja: paymentType,
         kupac, napomena: racunNapomena || undefined, stavke,
       });
 
@@ -1093,7 +1089,6 @@ export default function KasaScreen({ user }: KasaScreenProps) {
       <FakturaDialog
         open={prilogOpen}
         onOpenChange={setPrilogOpen}
-        korisnikId={user.id}
         skica={otvorenaSkica}
         onSkicePromijenjene={(spremljena) => {
           loadSkiceFaktura();

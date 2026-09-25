@@ -39,7 +39,6 @@ const GRID = 'grid grid-cols-[minmax(0,1fr)_74px_96px_74px_100px_30px] gap-2 ite
 interface Props {
   open: boolean;
   onOpenChange: (v: boolean) => void;
-  korisnikId: number;
   onSaved: () => void;
   prefillBroj?: string;
 }
@@ -60,7 +59,7 @@ function Eyebrow({ children, className }: { children: React.ReactNode; className
 
 const poljaKupca = (k: Kupac) => ({ naziv: k.naziv, sifra: k.idBroj, dodatno: [k.adresa, k.grad].filter(Boolean).join(' ') });
 
-export default function DodajRacunDialog({ open, onOpenChange, korisnikId, onSaved, prefillBroj }: Props) {
+export default function DodajRacunDialog({ open, onOpenChange, onSaved, prefillBroj }: Props) {
   const [brojFiskalnog, setBrojFiskalnog] = useState('');
   const [datum, setDatum] = useState(nowLocalInput());
   const [nacinPlacanja, setNacinPlacanja] = useState<PaymentType>('Gotovina');
@@ -145,7 +144,7 @@ export default function DodajRacunDialog({ open, onOpenChange, korisnikId, onSav
     setLoading(true);
     try {
       await window.api.createManualOrder({
-        korisnikId, ukupno, pdvIznos, nacinPlacanja,
+        ukupno, pdvIznos, nacinPlacanja,
         brojFiskalnogRacuna: brojFiskalnog.trim(), createdAt, kupac,
         stavke: stavke.map(s => ({
           productId: s.product.id, kolicina: s.kolicina, cijena: s.cijena, rabat: s.rabat, pdvStopa: s.product.pdvStopa,

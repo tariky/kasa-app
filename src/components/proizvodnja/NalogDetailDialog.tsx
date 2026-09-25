@@ -30,8 +30,8 @@ const ROK_TONE = { ok: 'bg-emerald-50 text-emerald-700', warn: 'bg-amber-50 text
  * i kalkulaciju, podnožje sljedeći korak. Tastatura: ↑↓ susjedni nalog, ⌘S spremi,
  * ⌘↵ sljedeći korak, P štampa, S PDF, U uredi, D obriši, / pretraga, esc zatvori.
  */
-export function NalogDetailDialog({ nalogId, redoslijed, korisnikId, uloga, onClose, onNavigate, onChanged, onDeleted }: {
-  nalogId: number | null; redoslijed: number[]; korisnikId: number; uloga: 'admin' | 'kasir';
+export function NalogDetailDialog({ nalogId, redoslijed, uloga, onClose, onNavigate, onChanged, onDeleted }: {
+  nalogId: number | null; redoslijed: number[]; uloga: 'admin' | 'kasir';
   onClose: () => void; onNavigate: (id: number) => void; onChanged: () => void; onDeleted: (n: RadniNalog) => void;
 }) {
   const [nalog, setNalog] = useState<RadniNalog | null>(null);
@@ -90,20 +90,20 @@ export function NalogDetailDialog({ nalogId, redoslijed, korisnikId, uloga, onCl
   // ── akcije ────────────────────────────────────────────
   const uIzradu = async () => {
     if (!nalog) return;
-    try { await window.api.setNalogStatus({ id: nalog.id, status: 'u_izradi', korisnikId }); await reload(); }
+    try { await window.api.setNalogStatus({ id: nalog.id, status: 'u_izradi' }); await reload(); }
     catch (e) { greska(e); }
   };
   const zavrsi = async () => {
     if (!nalog) return;
     try {
-      await window.api.setNalogStatus({ id: nalog.id, status: 'zavrsen', korisnikId });
+      await window.api.setNalogStatus({ id: nalog.id, status: 'zavrsen' });
       setZavrsiOpen(false); await reload();
       setNotice({ type: 'success', text: 'Nalog završen, materijal razdužen' });
     } catch (e) { greska(e); setZavrsiOpen(false); }
   };
   const vrati = async () => {
     if (!nalog) return;
-    try { await window.api.setNalogStatus({ id: nalog.id, status: 'vrati', korisnikId }); setVratiOpen(false); await reload(); }
+    try { await window.api.setNalogStatus({ id: nalog.id, status: 'vrati' }); setVratiOpen(false); await reload(); }
     catch (e) { greska(e); setVratiOpen(false); }
   };
   const obrisi = async () => {
@@ -299,10 +299,10 @@ export function NalogDetailDialog({ nalogId, redoslijed, korisnikId, uloga, onCl
 
       {nalog && (
         <>
-          <NalogDialog open={editOpen} onOpenChange={setEditOpen} korisnikId={korisnikId} nalog={nalog}
+          <NalogDialog open={editOpen} onOpenChange={setEditOpen} nalog={nalog}
             onSaved={async () => { await reload(); setNotice({ type: 'success', text: 'Nalog izmijenjen' }); }} />
 
-          <IzdajRacunDialog open={racunOpen} onOpenChange={setRacunOpen} nalog={nalog} korisnikId={korisnikId}
+          <IzdajRacunDialog open={racunOpen} onOpenChange={setRacunOpen} nalog={nalog}
             onIzdat={async (bf) => { await reload(); setNotice({ type: 'success', text: `Račun #${bf ?? ''} izdat po nalogu ${formatBrojNaloga(nalog)}` }); }} />
 
           <Dialog open={pending != null} onOpenChange={v => { if (!v) setPending(null); }}>

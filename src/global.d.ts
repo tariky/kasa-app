@@ -11,8 +11,10 @@ interface Window {
     getLicenca: () => Promise<import('./lib/licencaTipovi').LicencaInfo>;
     aktivirajLicencu: (token: string) => Promise<import('./lib/licencaTipovi').LicencaInfo>;
     onLicencaBlokirano: (cb: () => void) => () => void;
-    login: (pin: string) => Promise<any>;
-    getUsers: () => Promise<any[]>;
+    login: (pin: string) => Promise<(import('./types').User & { zadaniPin: boolean }) | null>;
+    logout: () => Promise<{ success: boolean }>;
+    promijeniSvojPin: (stari: string, novi: string) => Promise<{ success: boolean }>;
+    getUsers: () => Promise<import('./types').User[]>;
     verifyAdminPin: (pin: string) => Promise<{ success: boolean; ime: string }>;
     createUser: (data: any) => Promise<any>;
     updateUser: (id: number, data: any) => Promise<any>;
@@ -53,20 +55,17 @@ interface Window {
     getNivelacija: (id: number) => Promise<any>;
     getOrders: () => Promise<any[]>;
     getOrder: (id: number) => Promise<any>;
-    createOrder: (data: any) => Promise<any>;
     createManualOrder: (data: any) => Promise<{ id: number }>;
-    updateOrderReklamacija: (id: number, broj: string) => Promise<any>;
     setOrderDatumValute: (id: number, datum: string | null) => Promise<{ datumValute: string | null }>;
-    refundOrder: (id: number, brojReklamacije?: string) => Promise<any>;
     refundAndPrintOrder: (data: {
-      id: number; brojReklamacije?: string; dozvoliPolog?: boolean; korisnikId?: number;
+      id: number; brojReklamacije?: string; dozvoliPolog?: boolean; adminPin?: string;
     }) => Promise<{
       success: boolean; brojReklamacije?: string | null; error?: string; odgovori?: Record<string, string>;
       nedovoljnoSredstava?: boolean; manjak?: number; pologIznos?: number;
     }>;
     finalizeOrder: (data: any) => Promise<{ success: boolean; id?: number; brojFiskalnogRacuna?: string | null; error?: string; odgovori?: Record<string, string> }>;
     finalizePrilogOrder: (data: {
-      korisnikId: number; iznos?: number; nacinPlacanja: string; kupac?: any;
+      iznos?: number; nacinPlacanja: string; kupac?: any;
       stavke?: Array<{ productId: number; kolicina: number; cijena: number; rabat?: number; pdvStopa: string }>;
       prilogOpis?: string; prilogVeza?: string;
       datumValute?: string | null; napomena?: string | null; ponudaId?: number | null;
@@ -92,35 +91,32 @@ interface Window {
     updatePonuda: (id: number, data: any) => Promise<{ success: boolean }>;
     setPonudaStatus: (id: number, status: string) => Promise<{ success: boolean }>;
     deletePonuda: (id: number) => Promise<{ changes: number }>;
-    konvertujPonudu: (data: { id: number; korisnikId: number; nacinPlacanja: string }) => Promise<{
+    konvertujPonudu: (data: { id: number; nacinPlacanja: string }) => Promise<{
       success: boolean; racunId?: number; brojFiskalnogRacuna?: string | null; error?: string; odgovori?: Record<string, string>;
     }>;
     getNalozi: (filter?: string) => Promise<import('@/types').RadniNalog[]>;
     getNalog: (id: number) => Promise<import('@/types').RadniNalog>;
     getNextBrojNaloga: () => Promise<{ broj: number; godina: number }>;
     createNalog: (data: any) => Promise<{ id: number; broj: number; godina: number }>;
-    createNalogIzPonude: (ponudaId: number, korisnikId: number) => Promise<{ id: number; broj: number; godina: number }>;
+    createNalogIzPonude: (ponudaId: number) => Promise<{ id: number; broj: number; godina: number }>;
     getNalogZaPonudu: (ponudaId: number) => Promise<{ id: number; broj: number; godina: number } | null>;
     updateNalog: (id: number, data: any) => Promise<{ success: boolean }>;
     saveNalogStavke: (id: number, stavke: Array<{ materijalId: number; kolicina: number; napomena?: string | null }>) => Promise<{ success: boolean }>;
-    setNalogStatus: (data: { id: number; status: 'u_izradi' | 'zavrsen' | 'vrati'; korisnikId: number }) => Promise<{ success: boolean }>;
+    setNalogStatus: (data: { id: number; status: 'u_izradi' | 'zavrsen' | 'vrati' }) => Promise<{ success: boolean }>;
     deleteNalog: (id: number) => Promise<{ success: boolean }>;
     getNalogKalkulacija: (id: number) => Promise<any>;
-    izdajRacunZaNalog: (data: { id: number; korisnikId: number; nacinPlacanja: string }) => Promise<any>;
+    izdajRacunZaNalog: (data: { id: number; nacinPlacanja: string }) => Promise<any>;
     getNormativ: (productId: number) => Promise<import('@/types').NormativStavka[]>;
     saveNormativ: (productId: number, stavke: Array<{ materijalId: number; kolicina: number; napomena?: string | null }>) => Promise<{ success: boolean }>;
     searchMaterijal: (query: string) => Promise<any[]>;
     setProizvodnjaEnabled: (enabled: boolean) => Promise<{ success: boolean }>;
     tringInit: () => Promise<any>;
-    tringPrintReceipt: (data: any) => Promise<any>;
-    tringPrintRefund: (data: any) => Promise<any>;
     tringXReport: () => Promise<any>;
     tringZReport: () => Promise<any>;
     tringPeriodicReport: (from: string, to: string) => Promise<any>;
-    tringWriteArticle: (data: any) => Promise<any>;
     tringGetLogs: () => Promise<any[]>;
     tringClearLogs: () => Promise<any>;
-    addCashMovement: (data: { tip: 'polog' | 'povrat'; iznos: number; korisnikId: number; napomena?: string }) =>
+    addCashMovement: (data: { tip: 'polog' | 'povrat'; iznos: number; napomena?: string }) =>
       Promise<{ id: number; tringStatus: 'ok' | 'error' | 'skipped'; error?: string }>;
     retryCashMovement: (id: number) => Promise<{ id: number; tringStatus: 'ok' | 'error' | 'skipped'; error?: string }>;
     getTodayCashMovements: () => Promise<Array<{
@@ -141,7 +137,7 @@ interface Window {
     obrisiSkicuFakture: (id: number) => Promise<any>;
     getSetting: (key: string) => Promise<string | null>;
     setSetting: (key: string, value: string) => Promise<any>;
-    getTringSettings: () => Promise<any>;
+    getTringSettings: () => Promise<import('./types').TringSettings>;
     saveTringSettings: (data: any) => Promise<any>;
     getFirmaSettings: () => Promise<import('./types').FirmaSettings>;
     saveFirmaSettings: (data: import('./types').FirmaSettings) => Promise<{ success: boolean }>;

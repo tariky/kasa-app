@@ -136,7 +136,7 @@ const poljaPonude = (p: PonudaRow): PoljaPretrage => ({
   dodatno: [formatBrojPonude(p), p.korisnikIme].join(' '),
 });
 
-export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
+export default function PonudeScreen() {
   const [ponude, setPonude] = useState<PonudaRow[]>([]);
   const [selected, setSelected] = useState<PonudaRow | null>(null);
   const [filter, setFilter] = useState<Filter>('sve');
@@ -296,7 +296,6 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
     try {
       const payload = {
         kupacId: Number(kupacId),
-        korisnikId,
         datum,
         vaziDo,
         napomena: napomena.trim() || undefined,
@@ -359,7 +358,7 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
       // Štampa i upis idu kroz jedan poziv — kao refundAndPrint — da ne
       // ostane odštampan račun bez zapisa u bazi.
       const result = await window.api.konvertujPonudu({
-        id: selected.id, korisnikId, nacinPlacanja: paymentType,
+        id: selected.id, nacinPlacanja: paymentType,
       });
       if (!result || !result.success) {
         const details = result?.odgovori ? Object.entries(result.odgovori).map(([k, v]) => `${k}: ${v}`).join(', ') : '';
@@ -445,7 +444,7 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
   const napraviNalog = async () => {
     if (!selected) return;
     try {
-      const r = await window.api.createNalogIzPonude(selected.id, korisnikId);
+      const r = await window.api.createNalogIzPonude(selected.id);
       setMsg({ type: 'success', text: `Radni nalog ${formatBrojNaloga(r)} otvoren po ponudi ${formatBrojPonude(selected)}` });
       otvoriNalog(r.id);
     } catch (err: any) { setMsg({ type: 'error', text: err?.message || 'Nepoznata greška' }); }
@@ -1109,7 +1108,6 @@ export default function PonudeScreen({ korisnikId }: { korisnikId: number }) {
       <FakturaDialog
         open={fakturaOpen}
         onOpenChange={setFakturaOpen}
-        korisnikId={korisnikId}
         pocetno={faktura}
         onSkicePromijenjene={(spremljena) => {
           if (spremljena) setMsg({ type: 'success', text: `Faktura po ponudi ${faktura?.ponudaOznaka ?? ''} spremljena kao skica — nastavite je na Kasi, u Spremljenim.` });

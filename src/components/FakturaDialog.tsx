@@ -128,7 +128,6 @@ const izIso = (iso: string) => { const [y, m, d] = iso.split('-').map(Number); r
 interface FakturaDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  korisnikId: number;
   /** Faktura po ponudi — preskače izbor firme. */
   pocetno?: FakturaPocetno | null;
   /** Nastavak spremljene skice; ima prednost pred `pocetno`. */
@@ -149,7 +148,7 @@ interface FakturaDialogProps {
  * stvarne stavke idu na fakturu koja nosi isti broj. Tok ima dva koraka — prvo
  * firma (uvijek obavezna), pa stavke ili ručni iznos i način plaćanja.
  */
-export default function FakturaDialog({ open, onOpenChange, korisnikId, pocetno, skica, onSkicePromijenjene, onSuccess }: FakturaDialogProps) {
+export default function FakturaDialog({ open, onOpenChange, pocetno, skica, onSkicePromijenjene, onSuccess }: FakturaDialogProps) {
   const [korak, setKorak] = useState<Korak>('firma');
   const [firma, setFirma] = useState<Firma | null>(null);
   /** Ručni unos / uređivanje firme; null = pretraga šifarnika. */
@@ -339,7 +338,6 @@ export default function FakturaDialog({ open, onOpenChange, korisnikId, pocetno,
     setBusy(true);
     try {
       const res = await window.api.finalizePrilogOrder({
-        korisnikId,
         nacinPlacanja,
         ...(mode === 'stavke'
           ? { stavke: stavke.map(s => ({ productId: s.productId, kolicina: s.kolicina, cijena: s.cijena, rabat: s.rabat, pdvStopa: s.pdvStopa })) }
@@ -377,7 +375,7 @@ export default function FakturaDialog({ open, onOpenChange, korisnikId, pocetno,
     } finally {
       setBusy(false);
     }
-  }, [firma, iznos, mode, stavke, zabranjene, rokNeispravan, datumValute, napomena, ponuda, skicaId, korisnikId, nacinPlacanja, opis, vezaZaSlanje, onSuccess, onOpenChange, onSkicePromijenjene]);
+  }, [firma, iznos, mode, stavke, zabranjene, rokNeispravan, datumValute, napomena, ponuda, skicaId, nacinPlacanja, opis, vezaZaSlanje, onSuccess, onOpenChange, onSkicePromijenjene]);
 
   const imaSadrzaja = !!firma || stavke.length > 0 || (rucniIznos ?? 0) > 0;
 

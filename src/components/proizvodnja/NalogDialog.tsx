@@ -62,8 +62,8 @@ const poljaKupca = (k: Kupac) => ({ naziv: k.naziv, dodatno: [k.idBroj, k.pdvBro
  * Zaglavlje nosi vrstu naloga, tijelo kupca/proizvod (fuzzy pretraga) i rokove, desno
  * pregled onoga što će nalog biti. ⌘↵ sprema, esc pita ako ima izmjena.
  */
-export function NalogDialog({ open, onOpenChange, korisnikId, nalog, onSaved }: {
-  open: boolean; onOpenChange: (v: boolean) => void; korisnikId: number;
+export function NalogDialog({ open, onOpenChange, nalog, onSaved }: {
+  open: boolean; onOpenChange: (v: boolean) => void;
   nalog: RadniNalog | null; onSaved: (id: number) => void;
 }) {
   const [forma, setForma] = useState<Forma>(prazna);
@@ -132,7 +132,7 @@ export function NalogDialog({ open, onOpenChange, korisnikId, nalog, onSaved }: 
       }
       let id: number;
       if (isEdit) { await window.api.updateNalog(nalog!.id, payload); id = nalog!.id; }
-      else { const r = await window.api.createNalog({ ...payload, vrsta: forma.vrsta, korisnikId }); id = r.id; }
+      else { const r = await window.api.createNalog({ ...payload, vrsta: forma.vrsta }); id = r.id; }
       zatvori();
       onSaved(id);
     } catch (e: any) { setError(e?.message || 'Nalog nije spremljen'); }

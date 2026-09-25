@@ -16,8 +16,8 @@ const PAYMENTS: { type: PaymentType; icon: React.ReactNode }[] = [
   { type: 'Ček', icon: <FileCheck size={14} /> },
 ];
 
-export function IzdajRacunDialog({ open, onOpenChange, nalog, korisnikId, onIzdat }: {
-  open: boolean; onOpenChange: (v: boolean) => void; nalog: RadniNalog; korisnikId: number;
+export function IzdajRacunDialog({ open, onOpenChange, nalog, onIzdat }: {
+  open: boolean; onOpenChange: (v: boolean) => void; nalog: RadniNalog;
   onIzdat: (brojFiskalnog: string | null) => void;
 }) {
   const [paymentType, setPaymentType] = useState<PaymentType>('Gotovina');
@@ -33,7 +33,7 @@ export function IzdajRacunDialog({ open, onOpenChange, nalog, korisnikId, onIzda
     if (busy) return;
     setBusy(true); setErr(null);
     try {
-      const r = await window.api.izdajRacunZaNalog({ id: nalog.id, korisnikId, nacinPlacanja: paymentType });
+      const r = await window.api.izdajRacunZaNalog({ id: nalog.id, nacinPlacanja: paymentType });
       if (!r || !r.success) {
         const det = r?.odgovori ? Object.entries(r.odgovori).map(([k, v]) => `${k}: ${v}`).join(', ') : '';
         setErr(`Greška: ${r?.error || 'Nepoznata greška'}${det ? ` (${det})` : ''}`);

@@ -10,7 +10,7 @@ let skippedForDate: string | null = null;
  * Jutarnji prompt za početni polog: otvara se nakon prijave ako danas još
  * nije unesen nijedan polog. Predlaže zadnji uneseni iznos.
  */
-export default function PologPrompt({ korisnikId }: { korisnikId: number }) {
+export default function PologPrompt() {
   const [open, setOpen] = useState(false);
   const [suggested, setSuggested] = useState<number | undefined>(undefined);
 
@@ -47,7 +47,6 @@ export default function PologPrompt({ korisnikId }: { korisnikId: number }) {
     <CashMovementDialog
       open={open}
       tip="polog"
-      korisnikId={korisnikId}
       suggested={suggested}
       intro="Danas još nije unesen početni polog. Unesi iznos gotovine koju si stavio u ladicu, da se stanje kase slaže s fiskalnim printerom."
       onClose={close}

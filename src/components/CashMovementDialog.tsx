@@ -8,7 +8,6 @@ import { DecimalInput } from '@/components/ui/decimal-input';
 interface Props {
   open: boolean;
   tip: 'polog' | 'povrat';
-  korisnikId: number;
   /** Predloženi iznos pri otvaranju (npr. zadnji polog). */
   suggested?: number;
   /** Tekst iznad forme — jutarnji prompt objašnjava zašto se ovo pita. */
@@ -20,7 +19,7 @@ interface Props {
 
 const NASLOVI = { polog: 'Polog gotovine', povrat: 'Povrat novca iz kase' };
 
-export default function CashMovementDialog({ open, tip, korisnikId, suggested, intro, onClose, onSaved }: Props) {
+export default function CashMovementDialog({ open, tip, suggested, intro, onClose, onSaved }: Props) {
   const [iznosText, setIznosText] = useState('');
   const [iznos, setIznos] = useState(NaN);
   const [napomena, setNapomena] = useState('');
@@ -41,7 +40,7 @@ export default function CashMovementDialog({ open, tip, korisnikId, suggested, i
     setLoading(true);
     setError('');
     try {
-      const r = await window.api.addCashMovement({ tip, iznos, korisnikId, napomena: napomena.trim() || undefined });
+      const r = await window.api.addCashMovement({ tip, iznos, napomena: napomena.trim() || undefined });
       if (r.tringStatus === 'error') {
         // Zapis je u bazi; korisnik mora znati da printer nije potvrdio.
         setError(`Zapisano, ali slanje na fiskalni printer nije uspjelo (${r.error || 'nepoznata greška'}). Ponovi slanje na Izvještajima.`);

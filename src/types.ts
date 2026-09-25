@@ -1,9 +1,8 @@
+/** Korisnik kako ga vraćaju user:login i user:getAll — bez PIN-a. */
 export interface User {
   id: number;
   ime: string;
-  pin: string;
   uloga: 'admin' | 'kasir';
-  createdAt: string;
 }
 
 export type ProductTip = 'artikal' | 'usluga' | 'materijal';
@@ -141,11 +140,12 @@ export interface CartItem {
   rabat: number;
 }
 
+/** settings:getTring — lozinka operatera se ne vraća, samo da li je upisana. */
 export interface TringSettings {
   host: string;
   port: number;
   operatorId: number;
-  operatorPassword: string;
+  imaLozinku: boolean;
 }
 
 export interface NivelacijaStavka {

@@ -36,7 +36,7 @@ const poljaRacuna = (o: Order): PoljaPretrage => ({
   dodatno: [String(o.id), o.brojFiskalnogRacuna, o.korisnikIme, o.prilogBroj].join(' '),
 });
 
-export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
+export default function NarudzbeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
   const [orders, setOrders] = useState<Order[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [openId, setOpenId] = useState<number | null>(null);
@@ -212,15 +212,20 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
                 >
                   Unesi <span className="font-mono">#{n}</span>
                 </button>
-                <div className="w-px h-4 bg-amber-200" />
-                <button
-                  className="h-7 w-6 text-[13px] text-amber-400 hover:bg-amber-50 hover:text-amber-600 transition-colors"
-                  title={`Zanemari #${n}`}
-                  aria-label={`Zanemari #${n}`}
-                  onClick={async () => { await window.api.dismissFiscalGap(n); loadGaps(); }}
-                >
-                  ×
-                </button>
+                {/* Zanemarivanje praznine je administratorska odluka (provjera je i u main procesu). */}
+                {uloga === 'admin' && (
+                  <>
+                    <div className="w-px h-4 bg-amber-200" />
+                    <button
+                      className="h-7 w-6 text-[13px] text-amber-400 hover:bg-amber-50 hover:text-amber-600 transition-colors"
+                      title={`Zanemari #${n}`}
+                      aria-label={`Zanemari #${n}`}
+                      onClick={async () => { await window.api.dismissFiscalGap(n); loadGaps(); }}
+                    >
+                      ×
+                    </button>
+                  </>
+                )}
               </div>
             ))}
           </div>
@@ -350,7 +355,6 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
       <DodajRacunDialog
         open={dodajOpen}
         onOpenChange={(v) => { setDodajOpen(v); if (!v) setPrefillBroj(undefined); }}
-        korisnikId={korisnikId}
         prefillBroj={prefillBroj}
         onSaved={() => { loadOrders(); loadGaps(); setPrefillBroj(undefined); }}
       />
@@ -358,7 +362,7 @@ export default function NarudzbeScreen({ korisnikId }: { korisnikId: number }) {
       <RacunDetailDialog
         orderId={openId}
         redoslijed={visibleIds}
-        korisnikId={korisnikId}
+        uloga={uloga}
         onClose={zatvori}
         onNavigate={otvori}
         onChanged={loadOrders}

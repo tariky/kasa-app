@@ -133,7 +133,7 @@ function FiskalniRed({ ikona: Ikona, naslov, oznaka, opis, akcija, opasno, zauze
   );
 }
 
-export default function IzvjestajiScreen({ korisnikId, uloga }: { korisnikId: number; uloga: string }) {
+export default function IzvjestajiScreen({ uloga }: { uloga: string }) {
   const [dateFrom, setDateFrom] = useState(new Date());
   const [dateTo, setDateTo] = useState(new Date());
   const [fromOpen, setFromOpen] = useState(false);
@@ -837,7 +837,6 @@ export default function IzvjestajiScreen({ korisnikId, uloga }: { korisnikId: nu
             <CashMovementDialog
               open={cashDialogTip !== null}
               tip={cashDialogTip ?? 'polog'}
-              korisnikId={korisnikId}
               onClose={() => setCashDialogTip(null)}
               onSaved={loadLadica}
             />

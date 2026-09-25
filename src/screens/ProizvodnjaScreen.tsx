@@ -58,8 +58,8 @@ const ROK_CLS = { ok: 'text-slate-400', warn: 'text-amber-600', late: 'text-rose
  * Proizvodnja: lista naloga preko cijelog ekrana, nalog se otvara u dijalogu preko svega.
  * Tastatura na listi: ↑↓ kreću selekciju, ↵ otvara, N novi, ←→ ili [ ] mijenjaju filter.
  */
-export default function ProizvodnjaScreen({ korisnikId, uloga, initialNalogId }: {
-  korisnikId: number; uloga: 'admin' | 'kasir'; initialNalogId?: number | null;
+export default function ProizvodnjaScreen({ uloga, initialNalogId }: {
+  uloga: 'admin' | 'kasir'; initialNalogId?: number | null;
 }) {
   const [tab, setTab] = useState<Tab>('nalozi');
   const [nalozi, setNalozi] = useState<RadniNalog[]>([]);
@@ -288,13 +288,12 @@ export default function ProizvodnjaScreen({ korisnikId, uloga, initialNalogId }:
         </>
       )}
 
-      <NalogDialog open={formOpen} onOpenChange={setFormOpen} korisnikId={korisnikId} nalog={null}
+      <NalogDialog open={formOpen} onOpenChange={setFormOpen} nalog={null}
         onSaved={async (id) => { await load(); setMsg({ type: 'success', text: 'Nalog otvoren' }); otvori(id); }} />
 
       <NalogDetailDialog
         nalogId={openId}
         redoslijed={visibleIds}
-        korisnikId={korisnikId}
         uloga={uloga}
         onClose={zatvori}
         onNavigate={otvori}
