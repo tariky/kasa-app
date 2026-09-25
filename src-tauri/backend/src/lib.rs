@@ -19,6 +19,8 @@ pub mod racun;
 pub mod licenca;
 pub mod kanali;
 pub mod petlja;
+pub mod sesija;
+pub mod audit;
 
 // Domene (po grupama kanala)
 pub mod korisnici;
@@ -84,6 +86,8 @@ pub struct Backend {
     pub provjera_licence: bool,
     /// Jedina putanja koju `fs:writeFile` smije upisati — iz zadnjeg dijaloga.
     pub odobrena_putanja: Mutex<Option<String>>,
+    /// Prijavljeni korisnik i budžet promjena PIN-a (vidi sesija.rs).
+    pub sesija: sesija::Sesija,
 }
 
 impl Backend {
@@ -99,6 +103,7 @@ impl Backend {
             petlja,
             provjera_licence,
             odobrena_putanja: Mutex::new(None),
+            sesija: sesija::Sesija::default(),
         })
     }
 
@@ -177,7 +182,11 @@ impl Backend {
         // Panika (bug) u jednom pozivu je greška tog poziva, kao izuzetak u
         // Electron handleru — program i ostali pozivi rade dalje.
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            licenca::provjeri_kanal(self, kanal).and_then(|_| kanali::obradi(self, kanal, &a))
+            // Redom: kanal postoji, licenca, sesija i uloga (handle() u handlers.ts).
+            kanali::postoji(kanal)?;
+            licenca::provjeri_kanal(self, kanal)?;
+            self.provjeri_sesiju(kanal, &a)?;
+            kanali::obradi(self, kanal, &a)
         }))
         .unwrap_or_else(|p| {
             let poruka = p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned());
@@ -187,6 +196,13 @@ impl Backend {
             eprintln!("[IPC {kanal}] {}", g.0);
             if g.0.is_empty() { "Nepoznata greška".to_string() } else { g.0 }
         })
+    }
+
+    /// Prijava i uloga za `kanal` (sesija.rs); korisnik se čita iz baze pri
+    /// svakom pozivu, pa degradiran ili obrisan korisnik gubi pravo odmah.
+    fn provjeri_sesiju(&self, kanal: &str, a: &Args) -> R<()> {
+        let korisnik = sesija::trenutni(self)?;
+        sesija::provjeri_pristup(kanal, &a.0, korisnik.as_ref(), self.sesija.zadani_pin())
     }
 
     /// Tring postavke iz baze → klijent (`loadTringConfig`). Vraća operatora i lozinku.

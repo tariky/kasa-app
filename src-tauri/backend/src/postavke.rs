@@ -6,6 +6,8 @@ use serde_json::{json, Map, Value};
 use crate::greska::R;
 use crate::js::{self, is_integer, nn, to_string};
 use crate::sql::Db;
+use crate::audit::{self, NovaPostavka};
+use crate::sesija::TAJNE_POSTAVKE;
 use crate::{baci, p, proizvodnja, Args, Backend};
 
 const UPSERT: &str = "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value";
@@ -44,11 +46,18 @@ fn get_tring(db: &Db) -> R<Value> {
         "host": g("host", "localhost"),
         "port": js::parse_int_value(&g("port", "8085")),
         "operatorId": js::parse_int_value(&g("operatorId", "0")),
-        "operatorPassword": g("operatorPassword", "0"),
+        // Lozinka operatera ne izlazi iz backenda — UI zna samo da li je upisana.
+        "imaLozinku": s.get("operatorPassword").is_some_and(|v| !v.is_null() && v != ""),
     }))
 }
 
-fn save_tring(db: &Db, data: &Value) -> R<Value> {
+/// `postavka(key)` — vrijednost ili null.
+fn postavka(db: &Db, kljuc: &str) -> R<Value> {
+    db.val("SELECT value FROM settings WHERE key = ?", p![kljuc])
+}
+
+fn save_tring(b: &Backend, data: &Value) -> R<Value> {
+    let db = b.db()?;
     if js::blank(&data["host"]) {
         baci!("Host je obavezan");
     }
@@ -59,11 +68,24 @@ fn save_tring(db: &Db, data: &Value) -> R<Value> {
     if !is_integer(&data["operatorId"]) || data["operatorId"].as_f64() < Some(0.0) {
         baci!("Operator ID mora biti nenegativan cijeli broj");
     }
+    let mut nove: Vec<NovaPostavka> = vec![
+        ("tring.host".into(), Some(data["host"].clone())),
+        ("tring.port".into(), Some(json!(to_string(&data["port"])))),
+        ("tring.operatorId".into(), Some(json!(to_string(&data["operatorId"])))),
+    ];
+    // Prazna lozinka = stara ostaje (UI je ne zna, pa je ni ne šalje nazad).
+    if data["operatorPassword"].as_str().is_some_and(|l| !l.is_empty()) {
+        nove.push(("tring.operatorPassword".into(), Some(data["operatorPassword"].clone())));
+    }
     db.tx(|| {
-        db.run(UPSERT, p!["tring.host", data["host"]])?;
-        db.run(UPSERT, p!["tring.port", to_string(&data["port"])])?;
-        db.run(UPSERT, p!["tring.operatorId", to_string(&data["operatorId"])])?;
-        db.run(UPSERT, p!["tring.operatorPassword", data["operatorPassword"]])?;
+        // Audit: lozinka samo kao "promijenjena", nikad vrijednost.
+        let promjene = audit::promjene_postavki(|k| postavka(db, k), &nove, &["tring.operatorPassword"])?;
+        for (k, v) in &nove {
+            db.run(UPSERT, p![k, v])?;
+        }
+        if !promjene.is_empty() {
+            audit::zabiljezi(b, "postavke:tring", json!({ "promjene": promjene }))?;
+        }
         Ok(())
     })?;
     Ok(json!({ "success": true }))
@@ -94,21 +116,74 @@ fn get_firma(db: &Db) -> R<Value> {
     }))
 }
 
-fn save_firma(db: &Db, data: &Value) -> R<Value> {
+fn save_firma(b: &Backend, data: &Value) -> R<Value> {
+    let db = b.db()?;
+    // `data.naziv` koji nije poslan je `undefined` (None): upisuje se kao null,
+    // a za audit je uvijek promjena.
+    let polje = |k: &str| js::has(data, k).then(|| data[k].clone());
+    let mut nove: Vec<NovaPostavka> = ["naziv", "adresa", "grad", "idBroj", "pdvBroj", "skladiste", "logo"]
+        .into_iter()
+        .map(|k| (format!("firma.{k}"), polje(k)))
+        .collect();
+    nove.push(("firma.web".into(), Some(nn(&data["web"], &json!("")).clone())));
+    nove.push(("firma.email".into(), Some(nn(&data["email"], &json!("")).clone())));
+    nove.push(("firma.logoVelicina".into(), Some(json!(js::num_str(logo_velicina(&data["logoVelicina"]))))));
+    nove.push(("firma.ziroRacuniPozicija".into(), Some(json!(ziro_racuni_pozicija(&data["ziroRacuniPozicija"])))));
+    let accounts = data["bankAccounts"].as_array().cloned().unwrap_or_default();
+    for i in 0..3 {
+        let a = accounts.get(i).filter(|a| !a.is_null()).cloned().unwrap_or_else(|| json!({ "bankName": "", "accountNumber": "" }));
+        nove.push((format!("firma.bank{}.name", i + 1), Some(nn(&a["bankName"], &json!("")).clone())));
+        nove.push((format!("firma.bank{}.number", i + 1), Some(nn(&a["accountNumber"], &json!("")).clone())));
+    }
     db.tx(|| {
-        for k in ["naziv", "adresa", "grad", "idBroj", "pdvBroj", "skladiste", "logo"] {
-            db.run(UPSERT, p![format!("firma.{k}"), data[k]])?;
+        // Audit: stara i nova vrijednost promijenjenih ključeva; logo (slika) samo kao "promijenjen".
+        let promjene = audit::promjene_postavki(|k| postavka(db, k), &nove, &["firma.logo"])?;
+        for (k, v) in &nove {
+            db.run(UPSERT, p![k, v.clone().unwrap_or(Value::Null)])?;
         }
-        db.run(UPSERT, p!["firma.web", nn(&data["web"], &json!(""))])?;
-        db.run(UPSERT, p!["firma.email", nn(&data["email"], &json!(""))])?;
-        db.run(UPSERT, p!["firma.logoVelicina", js::num_str(logo_velicina(&data["logoVelicina"]))])?;
-        db.run(UPSERT, p!["firma.ziroRacuniPozicija", ziro_racuni_pozicija(&data["ziroRacuniPozicija"])])?;
+        if !promjene.is_empty() {
+            audit::zabiljezi(b, "postavke:firma", json!({ "promjene": promjene }))?;
+        }
+        Ok(())
+    })?;
+    Ok(json!({ "success": true }))
+}
 
-        let accounts = data["bankAccounts"].as_array().cloned().unwrap_or_default();
-        for i in 0..3 {
-            let a = accounts.get(i).filter(|a| !a.is_null()).cloned().unwrap_or_else(|| json!({ "bankName": "", "accountNumber": "" }));
-            db.run(UPSERT, p![format!("firma.bank{}.name", i + 1), nn(&a["bankName"], &json!(""))])?;
-            db.run(UPSERT, p![format!("firma.bank{}.number", i + 1), nn(&a["accountNumber"], &json!(""))])?;
+/// `settings:set` — ključ je već prošao allowlistu i provjeru uloge (sesija.rs).
+/// Audit: svaka promjena vrijednosti osim kasa.scanMode (prekidač skenera na
+/// kasi, F2 — UI izbor kasira, ne postavka programa).
+fn set(b: &Backend, kljuc: &Value, vrijednost: &Value) -> R<Value> {
+    let db = b.db()?;
+    let Some(nova) = vrijednost.as_str() else {
+        baci!("Vrijednost postavke mora biti tekst");
+    };
+    let k = to_string(kljuc);
+    db.tx(|| {
+        let stara = postavka(db, &k)?;
+        db.run(UPSERT, p![kljuc, nova])?;
+        if k != "kasa.scanMode" && stara != nova {
+            audit::zabiljezi(b, "postavke:set", json!({ "kljuc": k, "staraVrijednost": stara, "novaVrijednost": nova }))?;
+        }
+        Ok(())
+    })?;
+    Ok(json!({ "success": true }))
+}
+
+fn set_enabled(b: &Backend, enabled: &Value) -> R<Value> {
+    let db = b.db()?;
+    let nova = to_string(enabled);
+    db.tx(|| {
+        let stara = postavka(db, "proizvodnja.enabled")?;
+        db.run(UPSERT, p!["proizvodnja.enabled", nova])?;
+        if stara != nova.as_str() {
+            audit::zabiljezi(
+                b,
+                "postavke:set",
+                json!({ "kljuc": "proizvodnja.enabled", "staraVrijednost": stara, "novaVrijednost": nova }),
+            )?;
+        }
+        if js::truthy(enabled) {
+            proizvodnja::osiguraj_prodajnu_uslugu(db)?;
         }
         Ok(())
     })?;
@@ -149,24 +224,21 @@ pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
     };
     Some(match kanal {
         "settings:getTring" => get_tring(db),
-        "settings:saveTring" => save_tring(db, &a[0]),
+        "settings:saveTring" => save_tring(b, &a[0]),
         "settings:getFirma" => get_firma(db),
-        "settings:saveFirma" => save_firma(db, &a[0]),
-        "settings:get" => db.val("SELECT value FROM settings WHERE key = ?", p![a[0]]),
-        "settings:set" => db.run(UPSERT, p![a[0], a[1]]).map(|_| json!({ "success": true })),
+        "settings:saveFirma" => save_firma(b, &a[0]),
+        "settings:get" => match a[0].as_str() {
+            Some(k) if TAJNE_POSTAVKE.contains(&k) => Ok(Value::Null),
+            _ => db.val("SELECT value FROM settings WHERE key = ?", p![a[0]]),
+        },
+        "settings:set" => set(b, &a[0], &a[1]),
         "savedCarts:list" => db.all("SELECT * FROM saved_carts ORDER BY id DESC", p![]).map(Value::from),
         "savedCarts:save" => save_cart(db, &a[0], &a[1], &a[2]),
         "savedCarts:delete" => db.run("DELETE FROM saved_carts WHERE id = ?", p![a[0]]).map(|_| json!({ "success": true })),
         "fakturaSkice:list" => db.all("SELECT * FROM faktura_skice ORDER BY spremljeno DESC, id DESC", p![]).map(Value::from),
         "fakturaSkice:save" => spremi_skicu_fakture(db, &a[0], &a[1], &a[2], &a[3]),
         "fakturaSkice:delete" => db.run("DELETE FROM faktura_skice WHERE id = ?", p![a[0]]).map(|_| json!({ "success": true })),
-        "proizvodnja:setEnabled" => (|| {
-            db.run(UPSERT, p!["proizvodnja.enabled", to_string(&a[0])])?;
-            if js::truthy(&a[0]) {
-                proizvodnja::osiguraj_prodajnu_uslugu(db)?;
-            }
-            Ok(json!({ "success": true }))
-        })(),
+        "proizvodnja:setEnabled" => set_enabled(b, &a[0]),
         _ => return None,
     })
 }

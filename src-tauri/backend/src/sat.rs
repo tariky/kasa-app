@@ -30,6 +30,11 @@ impl Sat {
         }
     }
 
+    /// `Date.now()` — ms od epohe.
+    pub fn ms(&self) -> i64 {
+        self.sada().timestamp_millis()
+    }
+
     /// `localDateStr()` — YYYY-MM-DD po lokalnoj zoni.
     pub fn danas(&self) -> String {
         self.sada().format("%Y-%m-%d").to_string()

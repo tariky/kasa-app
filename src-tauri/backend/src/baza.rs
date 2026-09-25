@@ -4,13 +4,13 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::greska::R;
-use crate::p;
+use crate::{korisnici, p};
 use crate::petlja::Petlja;
 use crate::sql::Db;
 
 /// Schema je ista ona iz `src/database/schema.ts` — jedan izvor istine za
 /// oba backenda. Uzima se tekst između prva dva backticka.
-fn schema() -> &'static str {
+pub fn schema() -> &'static str {
     const TS: &str = include_str!("../../../src/database/schema.ts");
     TS.split('`').nth(1).expect("schema.ts mora imati template string")
 }
@@ -21,12 +21,27 @@ pub fn otvori(putanja: &Path, petlja: Arc<Petlja>) -> R<Db> {
     Db::aktivna(putanja, petlja)
 }
 
+/// Tabele koje program pravi — sve iz schema.ts (migracije ne prave nijednu
+/// koje tamo nema; `TABELE_SHEME` u database/restore.ts). Uz njih backup
+/// smije imati samo interne `sqlite_*` tabele.
+pub fn tabele_sheme() -> Vec<String> {
+    let re = regex::Regex::new(r"CREATE TABLE IF NOT EXISTS (\w+)").unwrap();
+    re.captures_iter(schema()).map(|m| m[1].to_string()).collect()
+}
+
+/// Pragme aktivne konekcije, redom (`PRAGME_KONEKCIJE` iz database/konekcija.ts):
+/// WAL, strani ključevi, i shema ne smije pozivati nebezbjedne funkcije.
+pub const PRAGME_KONEKCIJE: [&str; 3] = ["journal_mode = WAL", "foreign_keys = ON", "trusted_schema = OFF"];
+
 /// Priprema tek otvorene konekcije aktivne baze (poziva je `Db`).
 pub(crate) fn inicijalizuj(db: &Db) -> R<()> {
-    db.pragma("journal_mode = WAL")?;
-    db.pragma("foreign_keys = ON")?;
+    for p in PRAGME_KONEKCIJE {
+        db.pragma(p)?;
+    }
     db.exec(schema())?;
     run_migrations(db)?;
+    // PIN-ovi iz starijih verzija (i uvezenih backup-a) su bili čist tekst.
+    korisnici::hesiraj_stare_pinove(db)?;
     seed_defaults(db)?;
     Ok(())
 }
@@ -177,9 +192,9 @@ pub fn run_migrations(db: &Db) -> R<()> {
 }
 
 fn seed_defaults(db: &Db) -> R<()> {
-    if !db.ima("SELECT id FROM users WHERE pin = '0000'", p![])? {
-        db.run("INSERT INTO users (ime, pin, uloga) VALUES ('Admin', '0000', 'admin')", p![])?;
-    }
+    // Zadani Admin/0000 samo u praznoj bazi — inače bi se vraćao pri svakom
+    // pokretanju i nakon što ga korisnik obriše ili mu promijeni PIN.
+    korisnici::osiguraj_zadanog_admina(db)?;
     for (k, v) in [
         ("tring.host", "localhost"),
         ("tring.port", "8085"),

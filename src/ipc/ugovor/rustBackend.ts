@@ -34,40 +34,55 @@ export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
   const radniFolder = path.join(userData, 'radni');
   mkdirSync(radniFolder, { recursive: true });
 
-  const proc = Bun.spawn([BINARIJ, userData], {
-    // bun test radi u UTC-u (ili u TZ iz okruženja); backend mora računati
-    // "danas" u istoj zoni kao test.
-    env: { ...process.env, TZ: Intl.DateTimeFormat().resolvedOptions().timeZone },
-    stdin: 'pipe',
-    stdout: 'pipe',
-    stderr: process.env.KASA_UGOVOR_LOG ? 'inherit' : 'ignore',
-  });
-
   let restart = false;
-  const cekaju = new Map<number, (o: Odgovor) => void>();
-  let spreman!: (o: Odgovor) => void;
-  const pokrenut = new Promise<Odgovor>(r => { spreman = r; });
+  let cekaju = new Map<number, (o: Odgovor) => void>();
 
-  (async () => {
-    const dekoder = new TextDecoder();
-    let buf = '';
-    for await (const dio of proc.stdout) {
-      buf += dekoder.decode(dio, { stream: true });
-      let nl: number;
-      while ((nl = buf.indexOf('\n')) >= 0) {
-        const linija = buf.slice(0, nl);
-        buf = buf.slice(nl + 1);
-        if (!linija.trim()) continue;
-        const o = JSON.parse(linija) as Odgovor;
-        if (o.spreman !== undefined) spreman(o);
-        else if (o.dogadjaj === 'restart') restart = true;
-        else if (o.id !== undefined) { cekaju.get(o.id)?.(o); cekaju.delete(o.id); }
+  /** Pokrene ugovor-server nad `userData` i sačeka da javi da je spreman. */
+  async function pokreni() {
+    const proc = Bun.spawn([BINARIJ, userData], {
+      // bun test radi u UTC-u (ili u TZ iz okruženja); backend mora računati
+      // "danas" u istoj zoni kao test.
+      env: { ...process.env, TZ: Intl.DateTimeFormat().resolvedOptions().timeZone },
+      stdin: 'pipe',
+      stdout: 'pipe',
+      stderr: process.env.KASA_UGOVOR_LOG ? 'inherit' : 'ignore',
+    });
+    // Svaki proces ima svoje zahtjeve na čekanju (stari se gasi prije novog).
+    const mojiZahtjevi = new Map<number, (o: Odgovor) => void>();
+    cekaju = mojiZahtjevi;
+    let spreman!: (o: Odgovor) => void;
+    const pokrenut = new Promise<Odgovor>(r => { spreman = r; });
+
+    (async () => {
+      const dekoder = new TextDecoder();
+      let buf = '';
+      for await (const dio of proc.stdout) {
+        buf += dekoder.decode(dio, { stream: true });
+        let nl: number;
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const linija = buf.slice(0, nl);
+          buf = buf.slice(nl + 1);
+          if (!linija.trim()) continue;
+          const o = JSON.parse(linija) as Odgovor;
+          if (o.spreman !== undefined) spreman(o);
+          else if (o.dogadjaj === 'restart') restart = true;
+          else if (o.id !== undefined) { mojiZahtjevi.get(o.id)?.(o); mojiZahtjevi.delete(o.id); }
+        }
       }
-    }
-  })();
+    })();
 
-  const start = await pokrenut;
-  if (!start.spreman) throw new Error(`ugovor-server nije pokrenut: ${start.greska}`);
+    const start = await pokrenut;
+    if (!start.spreman) throw new Error(`ugovor-server nije pokrenut: ${start.greska}`);
+    return proc;
+  }
+
+  /** Ugasi proces: zatvoren stdin = kraj petlje zahtjeva, pa proces izađe. */
+  async function ugasi(p: Awaited<ReturnType<typeof pokreni>>) {
+    p.stdin.end();
+    await p.exited;
+  }
+
+  let proc = await pokreni();
 
   const db = new Database(path.join(userData, 'kasa.db'), { strict: true });
   const tring = pokreniLaziTring();
@@ -77,6 +92,15 @@ export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
   const otvoreniDijalozi: OtvoreniDijalog[] = [];
   let sljedeci = 0;
 
+  /** Jedan zahtjev ugovor-serveru i njegov odgovor. */
+  async function zahtjev(tijelo: Record<string, unknown>): Promise<Odgovor> {
+    const id = ++sljedeci;
+    const odgovor = new Promise<Odgovor>(r => cekaju.set(id, r));
+    proc.stdin.write(JSON.stringify({ id, ...tijelo }) + '\n');
+    proc.stdin.flush();
+    return odgovor;
+  }
+
   return {
     db,
     tring,
@@ -85,27 +109,24 @@ export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
     radniFolder,
     restartovan: () => restart,
     async kanali() {
-      // TODO(Task 6): ugovor-server treba vratiti listu svojih kanala (npr. meta zahtjev).
-      throw new Error('kanali() još nije implementiran za Rust backend (Task 6)');
+      const o = await zahtjev({ meta: 'kanali' });
+      return [...(o.ok as string[])].sort();
     },
     async ponovoPokreni() {
-      // TODO(Task 6): ugasiti proces i pokrenuti ugovor-server ponovo nad istim userData.
-      throw new Error('ponovoPokreni još nije implementiran za Rust backend (Task 6)');
+      // Novi proces nad istom bazom: shema, migracije i seed se ponove, a
+      // sesija i budžet promjena PIN-a počinju iz početka (blokada je u bazi).
+      await ugasi(proc);
+      proc = await pokreni();
     },
     async call(kanal, ...args) {
-      const id = ++sljedeci;
-      const odgovor = new Promise<Odgovor>(r => cekaju.set(id, r));
       // Date.now() prati setSystemTime iz testa — backend računa "danas" po njemu.
-      proc.stdin.write(JSON.stringify({ id, kanal, args, dijalog, sada: Date.now() }) + '\n');
-      proc.stdin.flush();
-      const o = await odgovor;
+      const o = await zahtjev({ kanal, args, dijalog, sada: Date.now() });
       otvoreniDijalozi.push(...(o.dijalozi ?? []));
       if (o.greska !== undefined) throw new Error(o.greska);
       return o.ok ?? null;
     },
     async close() {
-      proc.stdin.end();
-      await proc.exited;
+      await ugasi(proc);
       tring.stop();
       db.close();
       rmSync(userData, { recursive: true, force: true });

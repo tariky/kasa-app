@@ -10,6 +10,9 @@
 //! `"dijalozi":[{"vrsta":"sacuvaj","opcije":{…}}]` koje je poziv otvorio.
 //! Restart (nakon uvoza backup-a) stiže kasnije kao `{"dogadjaj":"restart"}`.
 //!
+//! Meta zahtjev `{"id":2,"meta":"kanali"}` vraća `{"id":2,"ok":[…]}` — sve
+//! kanale backenda (`Backend.kanali()` u harnessu).
+//!
 //! Svaki zahtjev radi u svojoj niti, s mjestom u redu uzetim pri čitanju:
 //! kao u Electronu, drugi poziv može raditi dok prvi čeka uređaj.
 
@@ -96,6 +99,10 @@ fn main() {
                 continue;
             }
         };
+        if z["meta"] == "kanali" {
+            posalji(&json!({ "id": z["id"], "ok": pazar_backend::kanali::SVI_KANALI }));
+            continue;
+        }
         {
             let mut s = stanje.lock().unwrap();
             let d = &z["dijalog"];

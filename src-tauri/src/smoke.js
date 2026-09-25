@@ -38,12 +38,33 @@
     for (let i = 0; i < 4; i++) { dugme('0').click(); await new Promise(r => setTimeout(r, 50)); }
     await new Promise(r => setTimeout(r, 100));
     prijavi().click();
+
+    // Zadani PIN 0000: prije ulaska se traži novi PIN (PromjenaZadanogPina).
+    const NOVI_PIN = '2468';
+    const unesi = (id, vrijednost) => {
+      const polje = document.getElementById(id);
+      // React prati vrijednost kroz setter prototipa; običan `value =` ne okine onChange.
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(polje, vrijednost);
+      polje.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    ok('promjena zadanog PIN-a', await cekaj(() => document.getElementById('novi-pin') && dugme('Spremi i uđi')));
+    // Dok PIN nije promijenjen, sesija smije samo promjenu PIN-a i odjavu.
+    let zabrana = null;
+    try { await window.api.getProducts(); } catch (e) { zabrana = e; }
+    ok('zadani PIN ne otvara ostale kanale', zabrana?.message === 'Prije rada promijenite zadani PIN 0000', zabrana?.message);
+    unesi('novi-pin', NOVI_PIN);
+    unesi('ponovi-pin', NOVI_PIN);
+    await new Promise(r => setTimeout(r, 100));
+    dugme('Spremi i uđi').click();
     ok('glavni ekran nakon prijave', await cekaj(() => tekst().includes('Skladište') && tekst().includes('Postavke')));
 
     // Kanali kroz invoke('api').
-    const admin = await window.api.login('0000');
-    ok('user:login', admin?.ime === 'Admin' && admin?.uloga === 'admin', JSON.stringify(admin));
+    ok('user:login stari PIN 0000 → null', (await window.api.login('0000')) === null);
     ok('user:login pogrešan PIN → null', (await window.api.login('9999')) === null);
+    // Neuspjela prijava zatvara sesiju — ponovo kao admin, novim PIN-om.
+    const admin = await window.api.login(NOVI_PIN);
+    ok('user:login', admin?.ime === 'Admin' && admin?.uloga === 'admin' && admin?.zadaniPin === false, JSON.stringify(admin));
+    ok('user:getAll bez PIN-a', JSON.stringify(await window.api.getUsers()) === JSON.stringify([{ id: 1, ime: 'Admin', uloga: 'admin' }]));
 
     const { id } = await window.api.createProduct({ sifra: 'SMK1', naziv: 'Smoke artikal', cijena: 2.5, pdvStopa: 'E' });
     ok('product:create', Number.isInteger(id), id);
@@ -74,7 +95,7 @@
     ok('settings:saveFirma', (await window.api.getFirmaSettings()).naziv === 'Smoke d.o.o.');
 
     const tring = await window.api.getTringSettings();
-    ok('settings:getTring', tring?.port === 8085 && tring?.host === 'localhost', JSON.stringify(tring));
+    ok('settings:getTring', tring?.port === 8085 && tring?.host === 'localhost' && tring?.imaLozinku === true && !('operatorPassword' in tring), JSON.stringify(tring));
 
     // Tring: odgovor uređaja (ako neki sluša na 8085, npr. tring-mock-server) ima isti oblik.
     const x = await window.api.tringXReport();

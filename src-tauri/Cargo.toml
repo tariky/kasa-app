@@ -32,3 +32,12 @@ codegen-units = 1
 lto = true
 opt-level = "s"
 strip = true
+
+# PIN heš (PBKDF2-HMAC-SHA256, 100000 iteracija) je bez optimizacije ~0,5 s po
+# provjeri, a prijava provjerava svakog korisnika — ugovorni testovi i `tauri
+# dev` bi puzali. Generički PBKDF2/HMAC kod se instancira u backendu, pa se
+# optimizuje backend (i SHA-256 kompresija); ljuska ostaje debug.
+[profile.dev.package.pazar-backend]
+opt-level = 3
+[profile.dev.package.sha2]
+opt-level = 3
