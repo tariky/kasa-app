@@ -20,7 +20,7 @@ import {
   getNalog, listNalozi, deleteNalog, kalkulacijaNaloga, setStatusNaloga, zavrsiNalog, vratiUIzradu,
   izdajRacunZaNalog, getNormativ, saveNormativ, osigurajProdajnuUslugu,
 } from '../lib/proizvodnja';
-import { refundOrderInTransaction, refundAndPrint } from '../lib/refund';
+import { refundAndPrint } from '../lib/refund';
 import { postaviDatumValute } from '../lib/valuta';
 import {
   savePrilogStavkeInTransaction, finalizePrilogAndPrint, oznaciPonuduFakturisanom,
@@ -28,24 +28,33 @@ import {
 } from '../lib/prilog';
 import { saveCart, listSavedCarts, deleteSavedCart } from '../lib/savedCarts';
 import { spremiSkicuFakture, listSkiceFaktura, obrisiSkicuFakture } from '../lib/fakturaSkice';
-import { validirajPin, validirajUlogu, VEZE_KORISNIKA } from '../lib/korisnici';
+import {
+  validirajPin, validirajUlogu, VEZE_KORISNIKA, ZADANI_PIN, hesirajPin, nadjiPoPinu, pinZauzet, pinKorisnika,
+  type JavniKorisnik,
+} from '../lib/korisnici';
 import type { SavedCartItem } from '../lib/kosarica';
 import {
   nextBrojPonude, createPonuda, updatePonuda, setStatusPonude, deletePonuda, konvertujPonudu,
   type PonudaStatus,
 } from '../lib/ponuda';
-import { buildTringRacun, buildTringReklamacija } from '../lib/tringRacun';
+import { buildTringRacun } from '../lib/tringRacun';
 import { addCashMovement, retryCashMovement, getTodayMovements, getDrawerState, getLastPologIznos } from '../lib/cash';
 import { logoVelicina, ziroRacuniPozicija } from '../lib/firma';
 import { dohvatiKnjigovodja } from '../lib/knjigovodja/podaci';
 import * as Tring from '../services/tring';
 import { provjeriKanal, stanjeLicence, aktivirajLicencu } from './licenca';
+import { provjeriPristup, OgranicenjePokusaja, PORUKA_NISTE_PRIJAVLJENI, TAJNE_POSTAVKE } from './sesija';
 import Database from 'better-sqlite3';
+
+// Provjera sesije i uloge prije svakog handlera; postavlja je registerIpcHandlers
+// (treba joj baza da pročita trenutnog korisnika).
+let provjeriSesiju: (channel: string, args: unknown[]) => void = () => undefined;
 
 function handle<T>(channel: string, handler: (...args: any[]) => T): void {
   ipcMain.handle(channel, async (_event, ...args) => {
     try {
       provjeriKanal(channel);
+      provjeriSesiju(channel, args);
       // `await` je obavezan: bez njega odbijeni promise async handlera
       // promaši catch ispod i renderer dobije neobrađenu Electron grešku.
       return await handler(...args);
@@ -129,20 +138,85 @@ export function registerIpcHandlers(): void {
 
   const db = getDb();
 
-  // ─── Users ───────────────────────────────────────────────
+  const postavka = (key: string): string | null =>
+    (db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined)?.value ?? null;
+
+  // ─── Sesija i korisnici ──────────────────────────────────
+  // Prijavljeni korisnik živi samo u main procesu (jedan prozor = jedna sesija);
+  // uloga se svaki put čita iz baze, pa izmjena ili brisanje korisnika važi odmah.
+
+  let prijavljeniId: number | null = null;
+  const pokusaji = new OgranicenjePokusaja();
+
+  const trenutni = (): JavniKorisnik | null => {
+    if (prijavljeniId === null) return null;
+    return (db.prepare('SELECT id, ime, uloga FROM users WHERE id = ?').get(prijavljeniId) as JavniKorisnik | undefined) ?? null;
+  };
+  /** Prijavljeni korisnik; kanal je već prošao provjeriSesiju, ali korisnik je mogao biti obrisan. */
+  const korisnik = (): JavniKorisnik => {
+    const k = trenutni();
+    if (!k) throw new Error(PORUKA_NISTE_PRIJAVLJENI);
+    return k;
+  };
+  provjeriSesiju = (channel, args) => provjeriPristup(channel, args, trenutni());
+
+  /**
+   * Admin PIN za radnju kasira (storno). Neuspjeh ulazi u ograničenje pokušaja;
+   * baca 'Neispravan admin PIN'. Vraća admina čiji je PIN.
+   */
+  const provjeriAdminPin = (pin: unknown): JavniKorisnik => {
+    pokusaji.provjeri();
+    const admin = nadjiPoPinu(db, pin, { samoAdmin: true });
+    if (!admin) {
+      pokusaji.neuspjeh();
+      throw new Error('Neispravan admin PIN');
+    }
+    pokusaji.uspjeh();
+    return admin;
+  };
 
   handle('user:login', (pin: string) => {
-    return db.prepare('SELECT id, ime, pin, uloga FROM users WHERE pin = ?').get(pin) ?? null;
+    // Nova prijava uvijek poništi staru sesiju, i kad ne uspije.
+    prijavljeniId = null;
+    pokusaji.provjeri();
+    const u = nadjiPoPinu(db, pin);
+    if (!u) {
+      pokusaji.neuspjeh();
+      return null;
+    }
+    pokusaji.uspjeh();
+    prijavljeniId = u.id;
+    return { ...u, zadaniPin: pin === ZADANI_PIN };
+  });
+
+  handle('user:logout', () => {
+    prijavljeniId = null;
+    return { success: true };
+  });
+
+  // Prijavljeni korisnik mijenja svoj PIN (obavezno nakon prijave sa zadanim 0000).
+  handle('user:promijeniSvojPin', (stari: string, novi: string) => {
+    const k = korisnik();
+    validirajPin(novi);
+    if (novi === ZADANI_PIN) throw new Error(`Novi PIN ne smije biti ${ZADANI_PIN}`);
+    pokusaji.provjeri();
+    if (!pinKorisnika(db, k.id, stari)) {
+      pokusaji.neuspjeh();
+      throw new Error('Trenutni PIN nije tačan');
+    }
+    pokusaji.uspjeh();
+    if (pinZauzet(db, novi, k.id)) throw new Error('Taj PIN je zauzet, odaberite drugi');
+    db.prepare('UPDATE users SET pin = ? WHERE id = ?').run(hesirajPin(novi), k.id);
+    return { success: true };
   });
 
   handle('user:verifyAdminPin', (pin: string) => {
-    const user = db.prepare("SELECT id, ime FROM users WHERE pin = ? AND uloga = 'admin'").get(pin) as any;
-    if (!user) throw new Error('Neispravan admin PIN');
-    return { success: true, ime: user.ime };
+    const admin = provjeriAdminPin(pin);
+    return { success: true, ime: admin.ime };
   });
 
   handle('user:getAll', () => {
-    return db.prepare('SELECT * FROM users ORDER BY ime').all();
+    return db.prepare('SELECT id, ime, uloga FROM users ORDER BY ime').all();
   });
 
   // Admin koji je jedini admin u bazi — ne smije se obrisati ni degradirati.
@@ -156,15 +230,14 @@ export function registerIpcHandlers(): void {
     if (!data.ime?.trim()) throw new Error('Ime korisnika je obavezno');
     validirajPin(data.pin);
     validirajUlogu(data.uloga);
-    const existingPin = db.prepare('SELECT id FROM users WHERE pin = ?').get(data.pin);
-    if (existingPin) throw new Error(`Korisnik sa PIN-om "${data.pin}" već postoji`);
+    if (pinZauzet(db, data.pin)) throw new Error(`Korisnik sa PIN-om "${data.pin}" već postoji`);
     const result = db
       .prepare('INSERT INTO users (ime, pin, uloga) VALUES (?, ?, ?)')
-      .run(data.ime.trim(), data.pin, data.uloga);
+      .run(data.ime.trim(), hesirajPin(data.pin), data.uloga);
     return { id: result.lastInsertRowid };
   });
 
-  handle('user:update', (id: number, data: { ime?: string; pin?: string; uloga?: string }) => {
+  handle('user:update', (id: number, data: { ime?: string; pin?: string | null; uloga?: string }) => {
     const fields: string[] = [];
     const values: any[] = [];
 
@@ -172,11 +245,11 @@ export function registerIpcHandlers(): void {
       if (!data.ime.trim()) throw new Error('Ime korisnika je obavezno');
       fields.push('ime = ?'); values.push(data.ime.trim());
     }
-    if (data.pin !== undefined) {
+    // Prazan PIN = PIN ostaje kakav je (UI ga više ne zna, pa ga ne može ni poslati).
+    if (data.pin != null && data.pin !== '') {
       validirajPin(data.pin);
-      const existingPin = db.prepare('SELECT id FROM users WHERE pin = ? AND id != ?').get(data.pin, id);
-      if (existingPin) throw new Error(`Korisnik sa PIN-om "${data.pin}" već postoji`);
-      fields.push('pin = ?'); values.push(data.pin);
+      if (pinZauzet(db, data.pin, id)) throw new Error(`Korisnik sa PIN-om "${data.pin}" već postoji`);
+      fields.push('pin = ?'); values.push(hesirajPin(data.pin));
     }
     if (data.uloga !== undefined) {
       const uloga = validirajUlogu(data.uloga);
@@ -991,59 +1064,14 @@ export function registerIpcHandlers(): void {
     return order;
   });
 
-  handle('order:create', (data: {
-    korisnikId: number; ukupno: number; pdvIznos: number;
-    nacinPlacanja: string; brojFiskalnogRacuna?: string;
-    kupac?: { naziv?: string; idBroj?: string; adresa?: string; grad?: string; postanskiBroj?: string };
-    stavke: Array<{ productId: number; kolicina: number; cijena: number; rabat: number; pdvStopa: string }>;
-  }) => {
-    if (!data.stavke || data.stavke.length === 0) throw new Error('Račun mora imati najmanje jednu stavku');
-    if (!data.korisnikId) throw new Error('Korisnik nije prijavljen');
-    const createOrder = db.transaction(() => {
-      const result = db
-        .prepare(`
-          INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, status,
-            kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj)
-          VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?)
-        `)
-        .run(
-          data.korisnikId, data.ukupno, data.pdvIznos, data.nacinPlacanja, data.brojFiskalnogRacuna ?? null,
-          data.kupac?.naziv || null, data.kupac?.idBroj || null, data.kupac?.adresa || null,
-          data.kupac?.grad || null, data.kupac?.postanskiBroj || null
-        );
-
-      const orderId = result.lastInsertRowid;
-
-      const insertItem = db.prepare(
-        'INSERT INTO order_items (orderId, productId, kolicina, cijena, rabat, pdvStopa) VALUES (?, ?, ?, ?, ?, ?)'
-      );
-      const insertStock = db.prepare(
-        "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'izlaz', ?, 'order', ?)"
-      );
-
-      for (const item of data.stavke) {
-        insertItem.run(orderId, item.productId, item.kolicina, item.cijena, item.rabat, item.pdvStopa);
-        // Only create stock movements for artikli, not services
-        const product = db.prepare('SELECT tip FROM products WHERE id = ?').get(item.productId) as { tip: string } | undefined;
-        if (!product || product.tip !== 'usluga') {
-          insertStock.run(item.productId, item.kolicina, orderId);
-        }
-      }
-
-      return { id: orderId };
-    });
-
-    return createOrder();
-  });
-
-  handle('order:createManual', (data: {
-    korisnikId: number; ukupno: number; pdvIznos: number;
+  handle('order:createManual', (unos: {
+    ukupno: number; pdvIznos: number;
     nacinPlacanja: string; brojFiskalnogRacuna: string; createdAt: string;
     kupac?: { naziv?: string; idBroj?: string; adresa?: string; grad?: string; postanskiBroj?: string };
     stavke: Array<{ productId: number; kolicina: number; cijena: number; rabat: number; pdvStopa: string }>;
   }) => {
+    const data = { ...unos, korisnikId: korisnik().id };
     if (!data.stavke || data.stavke.length === 0) throw new Error('Račun mora imati najmanje jednu stavku');
-    if (!data.korisnikId) throw new Error('Korisnik nije prijavljen');
     if (!data.brojFiskalnogRacuna?.trim()) throw new Error('Fiskalni broj je obavezan');
     if (!data.createdAt?.trim()) throw new Error('Datum računa je obavezan');
 
@@ -1089,15 +1117,16 @@ export function registerIpcHandlers(): void {
     return createManual();
   });
 
-  handle('order:finalize', async (data: {
-    korisnikId: number; ukupno: number; pdvIznos: number; nacinPlacanja: string;
+  handle('order:finalize', async (unos: {
+    ukupno: number; pdvIznos: number; nacinPlacanja: string;
     kupac?: { naziv?: string; idBroj?: string; adresa?: string; grad?: string; postanskiBroj?: string };
     napomena?: string;
     stavke: Array<{ productId: number; sifra: string; naziv: string; jm: string; plu?: number;
       cijena: number; kolicina: number; rabat: number; pdvStopa: string }>;
   }) => {
+    // Račun izdaje prijavljeni korisnik — korisnikId iz payload-a se ne čita.
+    const data = { ...unos, korisnikId: korisnik().id };
     if (!data.stavke || data.stavke.length === 0) throw new Error('Račun mora imati najmanje jednu stavku');
-    if (!data.korisnikId) throw new Error('Korisnik nije prijavljen');
 
     // 1. Write-ahead: persist the snapshot BEFORE printing (committed immediately).
     const pending = db
@@ -1136,13 +1165,14 @@ export function registerIpcHandlers(): void {
 
   // Račun po prilogu: jedna zbirna stavka na fiskalnom računu, stvarne stavke
   // se dodjeljuju naknadno. Orkestracija živi u lib/prilog.ts (testabilna).
-  handle('order:finalizePrilog', async (data: {
-    korisnikId: number; iznos?: number; nacinPlacanja: string;
+  handle('order:finalizePrilog', async (unos: {
+    iznos?: number; nacinPlacanja: string;
     kupac?: { naziv?: string; idBroj?: string; adresa?: string; grad?: string; postanskiBroj?: string };
     stavke?: PrilogStavkaUnos[];
     prilogOpis?: string; prilogVeza?: string;
     datumValute?: string | null; napomena?: string | null; ponudaId?: number | null;
   }) => {
+    const data = { ...unos, korisnikId: korisnik().id };
     loadTringConfig();
     return finalizePrilogAndPrint({
       db,
@@ -1183,28 +1213,23 @@ export function registerIpcHandlers(): void {
     return { success: true };
   });
 
-  handle('order:updateReklamacija', (id: number, brojReklamacije: string) => {
-    const result = db
-      .prepare('UPDATE orders SET brojReklamacije = ? WHERE id = ?')
-      .run(brojReklamacije, id);
-    return { changes: result.changes };
-  });
-
   handle('order:setDatumValute', (id: number, datum: string | null) => {
     return { datumValute: postaviDatumValute(db, id, datum) };
-  });
-
-  handle('order:refund', (id: number, brojReklamacije?: string) => {
-    const tx = db.transaction(() => refundOrderInTransaction(db, id, brojReklamacije?.trim() || null));
-    tx();
-    return { success: true };
   });
 
   // Orkestracija (štampa → atomični upis) živi u lib/refund.ts da bi bila
   // testabilna nad mock fiskalnim serverom, bez Electron ovisnosti.
   handle('order:refundAndPrint', async (data: {
-    id: number; brojReklamacije?: string; dozvoliPolog?: boolean; korisnikId?: number;
+    id: number; brojReklamacije?: string; dozvoliPolog?: boolean; adminPin?: string;
   }) => {
+    const k = korisnik();
+    // Kasir uz uključen "PIN za reklamaciju" šalje admin PIN u istom pozivu;
+    // provjera je ovdje, prije štampe — odvojeni verifyAdminPin korak renderer
+    // može preskočiti.
+    if (postavka('kasa.requirePinRefund') === 'true' && k.uloga !== 'admin') {
+      if (!data?.adminPin) throw new Error('Reklamacija traži PIN administratora');
+      provjeriAdminPin(data.adminPin);
+    }
     loadTringConfig();
     return refundAndPrint({
       db,
@@ -1220,7 +1245,7 @@ export function registerIpcHandlers(): void {
       // UnosNovca + cash_movements) da uređaj dozvoli gotovinski storno.
       depositCash: async (iznos, napomena) => {
         const res = await addCashMovement(cashDeps(), {
-          tip: 'polog', iznos, korisnikId: data.korisnikId ?? 0, napomena,
+          tip: 'polog', iznos, korisnikId: k.id, napomena,
         });
         if (res.tringStatus === 'error') {
           throw new Error(`Polog od ${iznos} KM nije prihvaćen na printeru: ${res.error ?? 'nepoznata greška'}`);
@@ -1354,11 +1379,11 @@ export function registerIpcHandlers(): void {
     return { broj: nextBrojPonude(db, godina), godina };
   });
 
-  handle('ponuda:create', (data: {
-    kupacId: number; korisnikId: number; datum?: string; vaziDo?: string; napomena?: string;
+  handle('ponuda:create', (unos: {
+    kupacId: number; datum?: string; vaziDo?: string; napomena?: string;
     stavke: Array<{ productId: number; kolicina: number; cijena: number; rabat: number; pdvStopa: string }>;
   }) => {
-    if (!data.korisnikId) throw new Error('Korisnik nije prijavljen');
+    const data = { ...unos, korisnikId: korisnik().id };
     const tx = db.transaction(() => createPonuda(db, data));
     return tx();
   });
@@ -1383,7 +1408,8 @@ export function registerIpcHandlers(): void {
 
   // Orkestracija (štampa → atomični upis) živi u lib/ponuda.ts da bi bila
   // testabilna nad mock fiskalnim serverom, bez Electron ovisnosti.
-  handle('ponuda:konvertuj', async (data: { id: number; korisnikId: number; nacinPlacanja: string }) => {
+  handle('ponuda:konvertuj', async (unos: { id: number; nacinPlacanja: string }) => {
+    const data = { ...unos, korisnikId: korisnik().id };
     loadTringConfig();
     return konvertujPonudu({
       db,
@@ -1409,13 +1435,13 @@ export function registerIpcHandlers(): void {
     return { broj: nextBrojNaloga(db, godina), godina };
   });
 
-  handle('nalog:create', (data: any) => {
-    if (!data?.korisnikId) throw new Error('Korisnik nije prijavljen');
+  handle('nalog:create', (unos: any) => {
+    const data = { ...unos, korisnikId: korisnik().id };
     return db.transaction(() => createNalog(db, data))();
   });
 
-  handle('nalog:createIzPonude', (ponudaId: number, korisnikId: number) => {
-    if (!korisnikId) throw new Error('Korisnik nije prijavljen');
+  handle('nalog:createIzPonude', (ponudaId: number) => {
+    const korisnikId = korisnik().id;
     return db.transaction(() => createNalogIzPonude(db, ponudaId, korisnikId))();
   });
 
@@ -1431,12 +1457,11 @@ export function registerIpcHandlers(): void {
     return { success: true };
   });
 
-  handle('nalog:setStatus', (data: { id: number; status: 'u_izradi' | 'zavrsen' | 'vrati'; korisnikId: number }) => {
+  handle('nalog:setStatus', (data: { id: number; status: 'u_izradi' | 'zavrsen' | 'vrati' }) => {
     if (data.status === 'u_izradi') setStatusNaloga(db, data.id, 'u_izradi');
     else if (data.status === 'zavrsen') db.transaction(() => zavrsiNalog(db, data.id))();
     else if (data.status === 'vrati') {
-      const u = db.prepare('SELECT uloga FROM users WHERE id = ?').get(data.korisnikId) as { uloga: string } | undefined;
-      if (u?.uloga !== 'admin') throw new Error('Vraćanje naloga u izradu može samo administrator');
+      if (korisnik().uloga !== 'admin') throw new Error('Vraćanje naloga u izradu može samo administrator');
       db.transaction(() => vratiUIzradu(db, data.id))();
     } else throw new Error('Nepoznat status');
     return { success: true };
@@ -1449,7 +1474,8 @@ export function registerIpcHandlers(): void {
 
   handle('nalog:kalkulacija', (id: number) => kalkulacijaNaloga(db, id));
 
-  handle('nalog:izdajRacun', async (data: { id: number; korisnikId: number; nacinPlacanja: string }) => {
+  handle('nalog:izdajRacun', async (unos: { id: number; nacinPlacanja: string }) => {
+    const data = { ...unos, korisnikId: korisnik().id };
     loadTringConfig();
     return izdajRacunZaNalog({
       db,
@@ -1490,15 +1516,16 @@ export function registerIpcHandlers(): void {
       settings[shortKey] = row.value;
     }
 
+    // Lozinka operatera ne izlazi iz main procesa — UI zna samo da li je upisana.
     return {
       host: settings.host ?? 'localhost',
       port: parseInt(settings.port ?? '8085', 10),
       operatorId: parseInt(settings.operatorId ?? '0', 10),
-      operatorPassword: settings.operatorPassword ?? '0',
+      imaLozinku: (settings.operatorPassword ?? '') !== '',
     };
   });
 
-  handle('settings:saveTring', (data: { host: string; port: number; operatorId: number; operatorPassword: string }) => {
+  handle('settings:saveTring', (data: { host: string; port: number; operatorId: number; operatorPassword?: string | null }) => {
     if (!data.host?.trim()) throw new Error('Host je obavezan');
     if (!Number.isInteger(data.port) || data.port < 1 || data.port > 65535) {
       throw new Error('Port mora biti cijeli broj između 1 i 65535');
@@ -1513,7 +1540,10 @@ export function registerIpcHandlers(): void {
       upsert.run('tring.host', data.host);
       upsert.run('tring.port', String(data.port));
       upsert.run('tring.operatorId', String(data.operatorId));
-      upsert.run('tring.operatorPassword', data.operatorPassword);
+      // Prazna lozinka = stara ostaje (UI je ne zna, pa je ni ne šalje nazad).
+      if (typeof data.operatorPassword === 'string' && data.operatorPassword !== '') {
+        upsert.run('tring.operatorPassword', data.operatorPassword);
+      }
     });
     save();
     return { success: true };
@@ -1553,11 +1583,13 @@ export function registerIpcHandlers(): void {
   });
 
   handle('settings:get', (key: string) => {
-    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
-    return row?.value ?? null;
+    if (TAJNE_POSTAVKE.has(key)) return null;
+    return postavka(key);
   });
 
+  // Ključ je već prošao allowlistu i provjeru uloge (sesija.ts).
   handle('settings:set', (key: string, value: string) => {
+    if (typeof value !== 'string') throw new Error('Vrijednost postavke mora biti tekst');
     db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
       .run(key, value);
     return { success: true };
@@ -1739,28 +1771,6 @@ export function registerIpcHandlers(): void {
     return result;
   });
 
-  handle('tring:printReceipt', async (data: any) => {
-    loadTringConfig();
-    const racun = buildTringRacun(data);
-    if (Tring.isLoggingEnabled()) console.log('[Tring] printReceipt request:', JSON.stringify(racun));
-    const result = await Tring.stampatiFiskalniRacun(racun);
-    if (Tring.isLoggingEnabled()) console.log('[Tring] printReceipt response:', JSON.stringify(result));
-    return result;
-  });
-
-  handle('tring:printRefund', async (data: any) => {
-    loadTringConfig();
-    const brojRacuna = parseFiskalniBroj(data.brojRacuna);
-    if (brojRacuna === null) {
-      throw new Error(`Fiskalni broj "${data.brojRacuna ?? ''}" nije ispravan broj računa`);
-    }
-    const racun = buildTringReklamacija({ ...data, brojRacuna });
-    if (Tring.isLoggingEnabled()) console.log('[Tring] printRefund request:', JSON.stringify(racun));
-    const result = await Tring.stampatiReklamiraniRacun(racun);
-    if (Tring.isLoggingEnabled()) console.log('[Tring] printRefund response:', JSON.stringify(result));
-    return result;
-  });
-
   handle('tring:xReport', async () => {
     loadTringConfig();
     const result = await Tring.stampatiPresjekStanja();
@@ -1796,8 +1806,8 @@ export function registerIpcHandlers(): void {
     };
   };
 
-  handle('cash:add', (data: { tip: 'polog' | 'povrat'; iznos: number; korisnikId: number; napomena?: string }) =>
-    addCashMovement(cashDeps(), data));
+  handle('cash:add', (data: { tip: 'polog' | 'povrat'; iznos: number; napomena?: string }) =>
+    addCashMovement(cashDeps(), { ...data, korisnikId: korisnik().id }));
 
   handle('cash:retry', (id: number) => retryCashMovement(cashDeps(), id));
 
@@ -1806,13 +1816,6 @@ export function registerIpcHandlers(): void {
   handle('cash:lastPolog', () => getLastPologIznos(db));
 
   handle('cash:drawerState', () => getDrawerState(db));
-
-  handle('tring:writeArticle', async (data: any) => {
-    loadTringConfig();
-    const result = await Tring.upisiArtikal(data);
-    if (Tring.isLoggingEnabled()) console.log('[Tring] writeArticle:', JSON.stringify(result));
-    return result;
-  });
 
   handle('tring:getLogs', () => {
     return Tring.getLogs();

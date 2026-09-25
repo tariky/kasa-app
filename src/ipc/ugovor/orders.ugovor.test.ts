@@ -52,40 +52,18 @@ async function rucni(broj: string, createdAt: string, productId: number): Promis
   return r.id;
 }
 
-// ─── order:create ───────────────────────────────────────────
+/** Sada kao lokalni "YYYY-MM-DD HH:MM:SS" — račun "od danas" (ladica ga broji). */
+function sada(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
 
-describe('order:create', () => {
-  test('upisuje račun, stavke i izlaz sa zalihe', async () => {
-    const p = dodajArtikal('A1', 5, { stanje: 10 });
-    const r = await b.call('order:create', racun([stavka(p, 3, 5)], {
-      brojFiskalnogRacuna: '42',
-      kupac: { naziv: 'Firma d.o.o.', idBroj: '4200000000001', grad: 'Sarajevo' },
-    }));
-
-    expect(Object.keys(r)).toEqual(['id']);
-    expect(typeof r.id).toBe('number');
-    const o = red('SELECT * FROM orders WHERE id = ?', r.id);
-    expect(o).toMatchObject({
-      korisnikId: ADMIN, ukupno: 15, status: 'completed', brojFiskalnogRacuna: '42', isManual: 0,
-      kupacNaziv: 'Firma d.o.o.', kupacIdBroj: '4200000000001', kupacGrad: 'Sarajevo', kupacAdresa: null,
-    });
-    expect(red('SELECT COUNT(*) AS n FROM order_items WHERE orderId = ?', r.id).n).toBe(1);
-    expect(stanje(p)).toBe(7);
-  });
-
-  test('usluga ne skida zalihu', async () => {
-    const p = dodajArtikal('U1', 20, { tip: 'usluga' });
-    await b.call('order:create', racun([stavka(p, 2, 20)]));
-    expect(red('SELECT COUNT(*) AS n FROM stock_movements WHERE productId = ?', p).n).toBe(0);
-  });
-
-  test('odbija račun bez stavki i bez korisnika', async () => {
-    const p = dodajArtikal('A2', 5);
-    await expect(b.call('order:create', racun([]))).rejects.toThrow('Račun mora imati najmanje jednu stavku');
-    await expect(b.call('order:create', racun([stavka(p, 1, 5)], { korisnikId: 0 }))).rejects.toThrow('Korisnik nije prijavljen');
-    expect(red('SELECT COUNT(*) AS n FROM orders').n).toBe(0);
-  });
-});
+let sljedeciBroj = 1000;
+/** Račun upisan u bazu bez štampe (order:createManual), s datumom sada. */
+async function izdaj(stavke: ReturnType<typeof stavka>[], extra: Record<string, unknown> = {}): Promise<{ id: number }> {
+  return b.call('order:createManual', racun(stavke, { brojFiskalnogRacuna: String(++sljedeciBroj), createdAt: sada(), ...extra }));
+}
 
 // ─── order:createManual ─────────────────────────────────────
 
@@ -105,6 +83,31 @@ describe('order:createManual', () => {
     const p = dodajArtikal('M2', 10);
     await rucni('77', '2026-01-15 10:30:00', p);
     await expect(rucni('77', '2026-01-16 10:30:00', p)).rejects.toThrow('Fiskalni račun sa tim brojem već postoji');
+  });
+
+  test('upisuje kupca, stavke i izlaz sa zalihe; usluga ne skida zalihu', async () => {
+    const p = dodajArtikal('A1', 5, { stanje: 10 });
+    const u = dodajArtikal('U1', 20, { tip: 'usluga' });
+    const r = await izdaj([stavka(p, 3, 5), stavka(u, 2, 20)], {
+      brojFiskalnogRacuna: '42',
+      kupac: { naziv: 'Firma d.o.o.', idBroj: '4200000000001', grad: 'Sarajevo' },
+    });
+
+    expect(Object.keys(r)).toEqual(['id']);
+    expect(typeof r.id).toBe('number');
+    const o = red('SELECT * FROM orders WHERE id = ?', r.id);
+    expect(o).toMatchObject({
+      korisnikId: ADMIN, ukupno: 55, status: 'completed', brojFiskalnogRacuna: '42', isManual: 1,
+      kupacNaziv: 'Firma d.o.o.', kupacIdBroj: '4200000000001', kupacGrad: 'Sarajevo', kupacAdresa: null,
+    });
+    expect(red('SELECT COUNT(*) AS n FROM order_items WHERE orderId = ?', r.id).n).toBe(2);
+    expect(stanje(p)).toBe(7);
+    expect(red('SELECT COUNT(*) AS n FROM stock_movements WHERE productId = ?', u).n).toBe(0);
+  });
+
+  test('odbija račun bez stavki', async () => {
+    await expect(izdaj([])).rejects.toThrow('Račun mora imati najmanje jednu stavku');
+    expect(red('SELECT COUNT(*) AS n FROM orders').n).toBe(0);
   });
 
   test('traži fiskalni broj i datum', async () => {
@@ -135,7 +138,7 @@ describe('order:getAll i order:get', () => {
 
   test('račun dolazi sa stavkama i podacima artikla', async () => {
     const p = dodajArtikal('G2', 4.5);
-    const { id } = await b.call('order:create', racun([stavka(p, 2, 4.5)]));
+    const { id } = await izdaj([stavka(p, 2, 4.5)]);
 
     const o = await b.call('order:get', id);
     expect(o).toMatchObject({ id, ukupno: 9, korisnikIme: 'Admin' });
@@ -259,22 +262,12 @@ describe('order:finalizePrilog', () => {
   });
 });
 
-// ─── order:updateReklamacija / order:setDatumValute ─────────
-
-describe('order:updateReklamacija', () => {
-  test('upisuje broj i vraća broj promijenjenih redova', async () => {
-    const p = dodajArtikal('R1', 1);
-    const { id } = await b.call('order:create', racun([stavka(p, 1, 1)]));
-    expect(await b.call('order:updateReklamacija', id, 'R-9')).toEqual({ changes: 1 });
-    expect(red('SELECT brojReklamacije FROM orders WHERE id = ?', id).brojReklamacije).toBe('R-9');
-    expect(await b.call('order:updateReklamacija', 999, 'R-9')).toEqual({ changes: 0 });
-  });
-});
+// ─── order:setDatumValute ───────────────────────────────────
 
 describe('order:setDatumValute', () => {
   test('postavlja, briše i odbija neispravan datum', async () => {
     const p = dodajArtikal('V1', 1);
-    const { id } = await b.call('order:create', racun([stavka(p, 1, 1)]));
+    const { id } = await izdaj([stavka(p, 1, 1)]);
 
     expect(await b.call('order:setDatumValute', id, '2026-10-01')).toEqual({ datumValute: '2026-10-01' });
     expect(red('SELECT datumValute FROM orders WHERE id = ?', id).datumValute).toBe('2026-10-01');
@@ -284,46 +277,33 @@ describe('order:setDatumValute', () => {
   });
 });
 
-// ─── order:refund / order:refundAndPrint ────────────────────
-
-describe('order:refund', () => {
-  test('stornira bez štampe i vraća zalihu, samo jednom', async () => {
-    const p = dodajArtikal('S1', 3, { stanje: 10 });
-    const { id } = await b.call('order:create', racun([stavka(p, 4, 3)]));
-    expect(stanje(p)).toBe(6);
-
-    expect(await b.call('order:refund', id, ' R-5 ')).toEqual({ success: true });
-    expect(red('SELECT status, brojReklamacije FROM orders WHERE id = ?', id))
-      .toEqual({ status: 'refunded', brojReklamacije: 'R-5' });
-    expect(red('SELECT refundedAt FROM orders WHERE id = ?', id).refundedAt).toBeTruthy();
-    expect(stanje(p)).toBe(10);
-    expect(b.tring.zahtjevi).toEqual([]);
-
-    await expect(b.call('order:refund', id)).rejects.toThrow('Račun ne postoji ili je već storniran');
-    expect(stanje(p)).toBe(10);
-  });
-});
+// ─── order:refundAndPrint ───────────────────────────────────
 
 describe('order:refundAndPrint', () => {
-  test('štampa reklamaciju i upisuje broj sa uređaja', async () => {
+  test('štampa reklamaciju i upisuje broj sa uređaja, samo jednom', async () => {
     const p = dodajArtikal('S2', 3, { stanje: 10 });
-    const { id } = await b.call('order:create', racun([stavka(p, 2, 3)], { brojFiskalnogRacuna: '55' }));
+    const { id } = await izdaj([stavka(p, 2, 3)], { brojFiskalnogRacuna: '55' });
 
-    const r = await b.call('order:refundAndPrint', { id, korisnikId: ADMIN });
+    const r = await b.call('order:refundAndPrint', { id });
 
     expect(r).toMatchObject({ success: true, brojReklamacije: 'R-1', pologIznos: 0 });
     expect(b.tring.zahtjevi.map(z => z.putanja)).toEqual(['/srr']);
     expect(b.tring.zahtjevi[0].tijelo).toContain('55');
     expect(red('SELECT status, brojReklamacije FROM orders WHERE id = ?', id))
       .toEqual({ status: 'refunded', brojReklamacije: 'R-1' });
+    expect(red('SELECT refundedAt FROM orders WHERE id = ?', id).refundedAt).toBeTruthy();
+    expect(stanje(p)).toBe(10);
+
+    await expect(b.call('order:refundAndPrint', { id })).rejects.toThrow('Račun ne postoji ili je već storniran');
+    expect(b.tring.zahtjevi).toHaveLength(1);
     expect(stanje(p)).toBe(10);
   });
 
   test('bezgotovinski račun: pokriće se prvo unese u uređaj', async () => {
     const p = dodajArtikal('S3', 30);
-    const { id } = await b.call('order:create', racun([stavka(p, 1, 30)], { brojFiskalnogRacuna: '56', nacinPlacanja: 'Kartica' }));
+    const { id } = await izdaj([stavka(p, 1, 30)], { brojFiskalnogRacuna: '56', nacinPlacanja: 'Kartica' });
 
-    const r = await b.call('order:refundAndPrint', { id, korisnikId: ADMIN });
+    const r = await b.call('order:refundAndPrint', { id });
 
     expect(r.success).toBe(true);
     const putanje = b.tring.zahtjevi.map(z => z.putanja);
@@ -334,7 +314,7 @@ describe('order:refundAndPrint', () => {
 
   test('greška printera: račun ostaje nestorniran', async () => {
     const p = dodajArtikal('S4', 3, { stanje: 10 });
-    const { id } = await b.call('order:create', racun([stavka(p, 1, 3)], { brojFiskalnogRacuna: '57' }));
+    const { id } = await izdaj([stavka(p, 1, 3)], { brojFiskalnogRacuna: '57' });
     b.tring.greskaNa('/srr', 'Uređaj zauzet');
 
     const r = await b.call('order:refundAndPrint', { id });
@@ -346,7 +326,7 @@ describe('order:refundAndPrint', () => {
 
   test('nenumerički fiskalni broj se odbija prije štampe', async () => {
     const p = dodajArtikal('S5', 3);
-    const { id } = await b.call('order:create', racun([stavka(p, 1, 3)], { brojFiskalnogRacuna: '12/A' }));
+    const { id } = await izdaj([stavka(p, 1, 3)], { brojFiskalnogRacuna: '12/A' });
     await expect(b.call('order:refundAndPrint', { id })).rejects.toThrow('nije ispravan broj računa');
     expect(b.tring.zahtjevi).toEqual([]);
   });

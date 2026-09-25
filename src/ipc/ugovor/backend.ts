@@ -40,12 +40,38 @@ export interface Backend {
   radniFolder: string;
   /** Da li je backend zatražio restart aplikacije (npr. nakon uvoza backup-a). */
   restartovan(): boolean;
+  /**
+   * Novo pokretanje backenda nad istom bazom (kao ponovno otvaranje programa):
+   * shema, migracije i seed se ponove, sesija i ograničenje pokušaja počinju
+   * iz početka — niko nije prijavljen.
+   */
+  ponovoPokreni(): Promise<void>;
   close(): Promise<void>;
 }
 
-export async function otvoriBackend(): Promise<Backend> {
+export interface OpcijeBackenda {
+  /**
+   * PIN kojim se harness prijavi odmah nakon otvaranja (kanali traže
+   * prijavljenog korisnika — vidi src/ipc/sesija.ts). Podrazumijevano zadani
+   * admin (id 1, PIN 0000); `null` = backend ostaje bez prijave.
+   */
+  prijava?: string | null;
+}
+
+export async function otvoriBackend(opcije: OpcijeBackenda = {}): Promise<Backend> {
   const vrsta = process.env.KASA_BACKEND ?? 'ts';
-  if (vrsta === 'ts') return (await import('./tsBackend')).otvoriTsBackend();
-  if (vrsta === 'rust') return (await import('./rustBackend')).otvoriRustBackend();
-  throw new Error(`Nepoznat KASA_BACKEND: ${vrsta}`);
+  let b: Backend;
+  if (vrsta === 'ts') b = await (await import('./tsBackend')).otvoriTsBackend();
+  else if (vrsta === 'rust') b = await (await import('./rustBackend')).otvoriRustBackend();
+  else throw new Error(`Nepoznat KASA_BACKEND: ${vrsta}`);
+  const pin = opcije.prijava === undefined ? '0000' : opcije.prijava;
+  if (pin !== null) await prijavi(b, pin);
+  return b;
+}
+
+/** Prijava kao iz LoginScreena; baca ako PIN ne pripada nikome. Vraća user:login rezultat. */
+export async function prijavi(b: Backend, pin: string): Promise<{ id: number; ime: string; uloga: string; zadaniPin: boolean }> {
+  const u = await b.call('user:login', pin);
+  if (!u) throw new Error(`Prijava PIN-om ${pin} nije uspjela`);
+  return u;
 }

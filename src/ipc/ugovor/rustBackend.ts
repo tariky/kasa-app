@@ -84,6 +84,10 @@ export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
     otvoreniDijalozi,
     radniFolder,
     restartovan: () => restart,
+    async ponovoPokreni() {
+      // TODO(Task 6): ugasiti proces i pokrenuti ugovor-server ponovo nad istim userData.
+      throw new Error('ponovoPokreni još nije implementiran za Rust backend (Task 6)');
+    },
     async call(kanal, ...args) {
       const id = ++sljedeci;
       const odgovor = new Promise<Odgovor>(r => cekaju.set(id, r));

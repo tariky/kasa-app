@@ -141,12 +141,20 @@ describe('ponuda:create', () => {
     expect(red('SELECT vaziDo FROM ponude WHERE id = ?', c.id).vaziDo).toBe('2025-06-01');
   });
 
-  test('validacije: korisnik, stavke, kupac', async () => {
+  test('autor je prijavljeni korisnik; korisnikId iz payload-a se ignoriše', async () => {
+    const kupacId = dodajKupca();
+    const p = dodajArtikal('C5', 1);
+    const { id } = await b.call('ponuda:create', { kupacId, korisnikId: 999, stavke: [stavka(p, 1, 1)] });
+    expect(red('SELECT korisnikId FROM ponude WHERE id = ?', id).korisnikId).toBe(ADMIN);
+    await b.call('user:logout');
+    await expect(b.call('ponuda:create', { kupacId, stavke: [stavka(p, 1, 1)] })).rejects.toThrow('Niste prijavljeni');
+    expect(broj('SELECT COUNT(*) AS n FROM ponude')).toBe(1);
+  });
+
+  test('validacije: stavke, kupac', async () => {
     const kupacId = dodajKupca();
     const p = dodajArtikal('C4', 1);
 
-    await expect(b.call('ponuda:create', { kupacId, korisnikId: 0, stavke: [stavka(p, 1, 1)] }))
-      .rejects.toThrow('Korisnik nije prijavljen');
     await expect(b.call('ponuda:create', { kupacId, korisnikId: ADMIN, stavke: [] }))
       .rejects.toThrow('Ponuda mora imati najmanje jednu stavku');
     await expect(b.call('ponuda:create', { kupacId: 0, korisnikId: ADMIN, stavke: [stavka(p, 1, 1)] }))
@@ -453,20 +461,23 @@ describe('ponuda:konvertuj', () => {
     expect(await b.call('fiscal:getNumeracija')).toEqual({ zadnjiUBazi: 101, zadnjiUpisani: null, predvidjeni: 102 });
   });
 
-  test('bez prijavljenog korisnika (0, izostavljen ili nepostojeći) odbija se PRIJE štampe', async () => {
+  test('bez prijavljenog korisnika odbija se PRIJE štampe; korisnikId iz payload-a se ignoriše', async () => {
     const { id, p } = await napraviPonudu();
-    for (const korisnikId of [0, undefined, null, 999]) {
+    await b.call('user:logout');
+    for (const korisnikId of [0, undefined, null, 999, ADMIN]) {
       await expect(b.call('ponuda:konvertuj', { id, korisnikId, nacinPlacanja: 'Gotovina' }))
-        .rejects.toThrow('Korisnik nije prijavljen');
+        .rejects.toThrow('Niste prijavljeni');
     }
     expect(b.tring.zahtjevi).toEqual([]);
     expect(broj('SELECT COUNT(*) AS n FROM orders')).toBe(0);
     expect(stanje(p)).toBe(10);
     expect(red('SELECT status, racunId FROM ponude WHERE id = ?', id)).toEqual({ status: 'draft', racunId: null });
 
-    // Nakon odbijanja konverzija s prijavljenim korisnikom prolazi normalno.
-    expect(await b.call('ponuda:konvertuj', { id, korisnikId: ADMIN, nacinPlacanja: 'Gotovina' }))
-      .toMatchObject({ success: true, brojFiskalnogRacuna: '101' });
+    // Nakon prijave konverzija prolazi, a račun nosi prijavljenog korisnika.
+    await b.call('user:login', '0000');
+    const r = await b.call('ponuda:konvertuj', { id, korisnikId: 999, nacinPlacanja: 'Gotovina' });
+    expect(r).toMatchObject({ success: true, brojFiskalnogRacuna: '101' });
+    expect(red('SELECT korisnikId FROM orders WHERE id = ?', r.racunId).korisnikId).toBe(ADMIN);
   });
 
   test('način plaćanja: izostavljen ili nepoznat se odbija PRIJE štampe', async () => {
@@ -651,7 +662,7 @@ describe('prilog:saveStavke', () => {
     await b.call('prilog:saveStavke', id, [prilogStavka(a, 3, 5)]);
     expect(stanje(a)).toBe(7);
 
-    await b.call('order:refund', id);
+    expect(await b.call('order:refundAndPrint', { id })).toMatchObject({ success: true });
     expect(stanje(a)).toBe(10);
 
     await expect(b.call('prilog:saveStavke', id, [prilogStavka(a, 1, 5)]))
