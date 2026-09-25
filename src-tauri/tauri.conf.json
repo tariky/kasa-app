@@ -25,6 +25,18 @@
         "base-uri": "'none'",
         "form-action": "'none'"
       },
+      "devCsp": {
+        "default-src": "'self'",
+        "script-src": "'self' 'wasm-unsafe-eval' 'unsafe-inline'",
+        "style-src": "'self' 'unsafe-inline'",
+        "img-src": "'self' data: blob:",
+        "font-src": "'self' data:",
+        "connect-src": "'self' data: ipc: http://ipc.localhost ws://localhost:1420 http://localhost:1420",
+        "object-src": "'none'",
+        "frame-src": "blob:",
+        "base-uri": "'none'",
+        "form-action": "'none'"
+      },
       "dangerousDisableAssetCspModification": [
         "style-src"
       ],

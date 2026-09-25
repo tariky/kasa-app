@@ -40,15 +40,15 @@ fn dozvoljena_ekstenzija(p: &Path) -> bool {
         .is_some_and(|e| DOZVOLJENE_EKSTENZIJE.iter().any(|d| d.eq_ignore_ascii_case(e)))
 }
 
-/// Predloženo ime fajla za dijalog: samo ime (bez foldera — renderer ne bira
-/// gdje se dijalog otvara) i samo dozvoljena ekstenzija, inače `None`.
+/// Predloženo ime fajla za dijalog: samo ime (renderer ne bira folder u kojem
+/// se dijalog otvara — `/` i `\` postaju `-`, kao i `:` jer je `C:ime` na
+/// Windowsu putanja relativna na disk C) i samo dozvoljena ekstenzija, inače `None`.
 fn ime_za_cuvanje(predlog: &str) -> Option<String> {
-    // I `\` je separator: ime stiže iz renderera, bez obzira na OS.
-    let ime = predlog.rsplit(['/', '\\']).next().unwrap_or("").trim();
-    if ime.is_empty() || ime == "." || ime == ".." || ime.contains('\0') || !dozvoljena_ekstenzija(Path::new(ime)) {
+    let ime = predlog.trim().replace(['/', '\\', ':'], "-");
+    if ime.is_empty() || ime.starts_with('.') || ime.contains('\0') || !dozvoljena_ekstenzija(Path::new(&ime)) {
         return None;
     }
-    Some(ime.to_string())
+    Some(ime)
 }
 
 /// Filteri dijaloga bez ekstenzija koje se ne smiju snimati.
@@ -348,18 +348,21 @@ mod testovi {
     use super::*;
 
     #[test]
-    fn ime_za_cuvanje_samo_ime_bez_foldera() {
+    fn ime_za_cuvanje_separatori_postaju_crtice() {
         assert_eq!(ime_za_cuvanje("Racun-1.pdf").as_deref(), Some("Racun-1.pdf"));
-        assert_eq!(ime_za_cuvanje("/Users/x/Library/LaunchAgents/evil.pdf").as_deref(), Some("evil.pdf"));
-        assert_eq!(ime_za_cuvanje("..\\..\\Startup\\izvoz.zip").as_deref(), Some("izvoz.zip"));
-        assert_eq!(ime_za_cuvanje("C:\\Windows\\kasa-backup-2026-09-25.db").as_deref(), Some("kasa-backup-2026-09-25.db"));
+        assert_eq!(ime_za_cuvanje("Faktura 12/2026.pdf").as_deref(), Some("Faktura 12-2026.pdf"));
+        assert_eq!(ime_za_cuvanje("/Users/x/Library/LaunchAgents/evil.pdf").as_deref(), Some("-Users-x-Library-LaunchAgents-evil.pdf"));
+        assert_eq!(ime_za_cuvanje("..\\..\\Startup\\izvoz.zip").as_deref(), None);
+        assert_eq!(ime_za_cuvanje("a/../../izvoz.zip").as_deref(), Some("a-..-..-izvoz.zip"));
+        assert_eq!(ime_za_cuvanje("C:\\Windows\\kasa-backup-2026-09-25.db").as_deref(), Some("C--Windows-kasa-backup-2026-09-25.db"));
+        assert_eq!(ime_za_cuvanje("C:izvoz.zip").as_deref(), Some("C-izvoz.zip"));
         assert_eq!(ime_za_cuvanje("Izvjestaj.XLSX").as_deref(), Some("Izvjestaj.XLSX"));
         assert_eq!(ime_za_cuvanje("promet.csv").as_deref(), Some("promet.csv"));
     }
 
     #[test]
     fn ime_za_cuvanje_odbija_ostale_ekstenzije() {
-        for los in ["evil.exe", "skripta.sh", "x.pdf.bat", ".bashrc", "bez-ekstenzije", "", "folder/", "..", "a\0.pdf", "plist.plist"] {
+        for los in ["evil.exe", "skripta.sh", "x.pdf.bat", ".bashrc", ".skriveno.pdf", "bez-ekstenzije", "", "folder/", "..", "a\0.pdf", "plist.plist"] {
             assert_eq!(ime_za_cuvanje(los), None, "{los}");
         }
     }
