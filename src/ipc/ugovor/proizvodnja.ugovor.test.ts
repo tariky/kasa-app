@@ -1,6 +1,6 @@
 // Ugovor za kanale nalog:* i normativ:* (proizvodnja) — vidi backend.ts.
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
-import { otvoriBackend, type Backend } from './backend';
+import { otvoriBackend, ADMIN_PIN, type Backend } from './backend';
 import { hesirajPin } from '../../lib/korisnici';
 
 let b: Backend;
@@ -8,7 +8,7 @@ let b: Backend;
 beforeEach(async () => { b = await otvoriBackend(); });
 afterEach(async () => { await b.close(); });
 
-const ADMIN = 1; // getDb seeduje admina s PIN-om 0000
+const ADMIN = 1; // seedovani admin; harness mu postavi ADMIN_PIN i prijavi se
 const GODINA = new Date().getFullYear();
 
 // ─── pomoćne funkcije (samo SQL) ────────────────────────────
@@ -302,7 +302,7 @@ describe('nalog:createIzPonude', () => {
 
     await b.call('user:logout');
     await expect(b.call('nalog:createIzPonude', ok)).rejects.toThrow('Niste prijavljeni');
-    await b.call('user:login', '0000');
+    await b.call('user:login', ADMIN_PIN);
     await expect(b.call('nalog:createIzPonude', 999, ADMIN)).rejects.toThrow('Ponuda ne postoji');
     await expect(b.call('nalog:createIzPonude', draft, ADMIN))
       .rejects.toThrow('Ponuda mora biti prihvaćena da bi se otvorio radni nalog');
@@ -556,7 +556,7 @@ describe('nalog:setStatus', () => {
     await expect(b.call('nalog:setStatus', { id: z.id, status: 'vrati' }))
       .rejects.toThrow('Vraćanje naloga u izradu može samo administrator');
     expect(status(z.id)).toBe('zavrsen');
-    await b.call('user:login', '0000');
+    await b.call('user:login', ADMIN_PIN);
 
     await expect(b.call('nalog:setStatus', { id: otvoren, status: 'vrati', korisnikId: ADMIN }))
       .rejects.toThrow('Samo završen nalog se vraća u izradu');

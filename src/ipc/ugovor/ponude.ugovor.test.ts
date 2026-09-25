@@ -1,13 +1,13 @@
 // Ugovor za kanale ponuda:*, prilog:* i fiscal:* — vidi backend.ts.
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
-import { otvoriBackend, type Backend } from './backend';
+import { otvoriBackend, ADMIN_PIN, type Backend } from './backend';
 
 let b: Backend;
 
 beforeEach(async () => { b = await otvoriBackend(); });
 afterEach(async () => { await b.close(); });
 
-const ADMIN = 1; // getDb seeduje admina s PIN-om 0000
+const ADMIN = 1; // seedovani admin; harness mu postavi ADMIN_PIN i prijavi se
 const GODINA = new Date().getFullYear();
 
 function dodajArtikal(sifra: string, cijena: number, opts: { tip?: string; stanje?: number } = {}): number {
@@ -474,7 +474,7 @@ describe('ponuda:konvertuj', () => {
     expect(red('SELECT status, racunId FROM ponude WHERE id = ?', id)).toEqual({ status: 'draft', racunId: null });
 
     // Nakon prijave konverzija prolazi, a račun nosi prijavljenog korisnika.
-    await b.call('user:login', '0000');
+    await b.call('user:login', ADMIN_PIN);
     const r = await b.call('ponuda:konvertuj', { id, korisnikId: 999, nacinPlacanja: 'Gotovina' });
     expect(r).toMatchObject({ success: true, brojFiskalnogRacuna: '101' });
     expect(red('SELECT korisnikId FROM orders WHERE id = ?', r.racunId).korisnikId).toBe(ADMIN);

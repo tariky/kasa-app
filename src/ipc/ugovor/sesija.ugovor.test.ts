@@ -3,7 +3,7 @@
 // PIN za storno. Pravila su u src/ipc/sesija.ts — vidi backend.ts.
 import { test, expect, describe, beforeEach, afterEach, setSystemTime } from 'bun:test';
 import { pbkdf2Sync } from 'node:crypto';
-import { otvoriBackend, prijavi, type Backend } from './backend';
+import { otvoriBackend, prijavi, ADMIN_PIN, type Backend } from './backend';
 import { hesirajPin, provjeriPin } from '../../lib/korisnici';
 
 let b: Backend;
@@ -13,9 +13,11 @@ afterEach(async () => {
   await b.close();
 });
 
-const ADMIN = 1; // getDb seeduje admina s PIN-om 0000
+const ADMIN = 1; // seedovani admin (Admin/0000); adminPin() mu postavi ADMIN_PIN
 const NISTE_PRIJAVLJENI = 'Niste prijavljeni';
 const SAMO_ADMIN = 'Ovu radnju može izvršiti samo administrator';
+const ZADANI_PIN = 'Prije rada promijenite zadani PIN 0000';
+const BLOKADA = 'Previše pogrešnih pokušaja. Pokušajte ponovo za';
 
 function red(sql: string, ...params: any[]): any {
   return b.db.prepare(sql).get(...params);
@@ -29,6 +31,11 @@ function dodajKorisnika(ime: string, pin: string, uloga: 'admin' | 'kasir' = 'ka
   return Number(b.db.prepare('INSERT INTO users (ime, pin, uloga) VALUES (?, ?, ?)').run(ime, hesirajPin(pin), uloga).lastInsertRowid);
 }
 
+/** Seedovani admin dobije ADMIN_PIN (inače bi njegova sesija smjela samo promijeniti PIN). */
+function adminPin() {
+  b.db.prepare('UPDATE users SET pin = ? WHERE id = ?').run(hesirajPin(ADMIN_PIN), ADMIN);
+}
+
 function postavka(kljuc: string, vrijednost: string) {
   b.db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(kljuc, vrijednost);
 }
@@ -39,15 +46,24 @@ function dodajArtikal(sifra: string, cijena = 5): number {
   ).run(sifra, `Artikal ${sifra}`, cijena).lastInsertRowid);
 }
 
-function sada(): string {
-  const d = new Date();
+function dodajKupca(): number {
+  return Number(b.db.prepare("INSERT INTO kupci (naziv, idBroj) VALUES ('K', ?)").run(`42${Math.floor(Math.random() * 1e11)}`).lastInsertRowid);
+}
+
+function datum(d: Date): string {
   const p = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
+const sada = () => datum(new Date());
 
-/** Svi kanali backenda (osim licenca:*, koje harness zamjenjuje). */
+async function greska(p: Promise<unknown>): Promise<string> {
+  try { await p; return '(prošao)'; } catch (e: any) { return e.message; }
+}
+
+/** Svi kanali backenda. Provjera ispod drži listu tačnom. */
 const SVI_KANALI = [
-  'user:login', 'user:logout', 'user:promijeniSvojPin', 'user:verifyAdminPin', 'user:getAll', 'user:create', 'user:update', 'user:delete',
+  'licenca:stanje', 'licenca:aktiviraj',
+  'user:login', 'user:logout', 'user:promijeniSvojPin', 'user:getAll', 'user:create', 'user:update', 'user:delete',
   'product:getAll', 'product:get', 'product:create', 'product:update', 'product:delete', 'product:adjustStock', 'product:search',
   'product:getDobavljacSifre', 'product:setDobavljacSifre', 'product:findByDobavljacSifra', 'dobavljac:getSifre', 'product:slobodan',
   'materijal:search', 'dobavljac:getAll', 'dobavljac:create', 'dobavljac:update', 'dobavljac:delete',
@@ -69,8 +85,8 @@ const SVI_KANALI = [
   'dialog:saveFile', 'fs:writeFile', 'db:backup', 'db:restore',
 ];
 
-/** Kanali bez prijave (licenca:* se ne gleda — harness je zamjenjuje). */
-const BEZ_PRIJAVE = ['user:login', 'user:logout', 'settings:getFirma', 'settings:get'];
+/** Kanali bez prijave (licenca:* se ovdje ne zove — harness je zamjenjuje). */
+const BEZ_PRIJAVE = ['licenca:stanje', 'licenca:aktiviraj', 'user:login', 'user:logout', 'settings:getFirma', 'settings:get'];
 
 const ADMIN_KANALI = [
   'user:create', 'user:update', 'user:delete', 'settings:saveFirma', 'settings:saveTring', 'proizvodnja:setEnabled',
@@ -78,23 +94,34 @@ const ADMIN_KANALI = [
   'tring:init', 'tring:getLogs', 'tring:clearLogs',
 ];
 
+/** Zove svaki kanal iz `kanali` bez argumenata; vraća one koji nisu odbijeni porukom `poruka`. */
+async function neodbijeni(kanali: string[], poruka: string): Promise<string[]> {
+  const prosli: string[] = [];
+  for (const kanal of kanali) {
+    const g = await greska(b.call(kanal));
+    if (g !== poruka) prosli.push(`${kanal}: ${g}`);
+  }
+  return prosli;
+}
+
+// ─── Lista kanala ───────────────────────────────────────────
+
+describe('lista kanala', () => {
+  beforeEach(async () => { b = await otvoriBackend({ prijava: null }); });
+
+  // TODO(Task 6): Rust adapter još nema kanali() — pod KASA_BACKEND=rust ovaj test pada dok se ne doda.
+  test('SVI_KANALI su tačno kanali koje backend registruje', async () => {
+    expect([...SVI_KANALI].sort()).toEqual(await b.kanali());
+  });
+});
+
 // ─── Bez prijave ────────────────────────────────────────────
 
 describe('bez prijave', () => {
   beforeEach(async () => { b = await otvoriBackend({ prijava: null }); });
 
   test('svaki kanal osim prijave, odjave i onoga što LoginScreen čita traži prijavu', async () => {
-    const slobodni: string[] = [];
-    for (const kanal of SVI_KANALI) {
-      if (BEZ_PRIJAVE.includes(kanal)) continue;
-      try {
-        await b.call(kanal);
-        slobodni.push(`${kanal}: prošao`);
-      } catch (e: any) {
-        if (e.message !== NISTE_PRIJAVLJENI) slobodni.push(`${kanal}: ${e.message}`);
-      }
-    }
-    expect(slobodni).toEqual([]);
+    expect(await neodbijeni(SVI_KANALI.filter(k => !BEZ_PRIJAVE.includes(k)), NISTE_PRIJAVLJENI)).toEqual([]);
     expect(b.tring.zahtjevi).toEqual([]);
     expect(b.otvoreniDijalozi).toEqual([]);
   });
@@ -116,27 +143,68 @@ describe('bez prijave', () => {
   });
 });
 
+// ─── Zadani PIN ─────────────────────────────────────────────
+
+describe('sesija sa zadanim PIN-om 0000', () => {
+  beforeEach(async () => { b = await otvoriBackend({ prijava: null }); });
+
+  test('smije samo promijeniti PIN, odjaviti se i ono što smije neprijavljen', async () => {
+    expect(await prijavi(b, '0000')).toEqual({ id: ADMIN, ime: 'Admin', uloga: 'admin', zadaniPin: true });
+    const zabranjeni = SVI_KANALI.filter(k => !BEZ_PRIJAVE.includes(k) && k !== 'user:promijeniSvojPin');
+    expect(await neodbijeni(zabranjeni, ZADANI_PIN)).toEqual([]);
+    expect(b.tring.zahtjevi).toEqual([]);
+    expect(b.otvoreniDijalozi).toEqual([]);
+    // Pred-prijavna čitanja rade kao i bez prijave; ostale postavke ne.
+    expect((await b.call('settings:getFirma')).naziv).toBe('');
+    expect(await b.call('settings:get', 'ui.skala')).toBeNull();
+    await expect(b.call('settings:get', 'tring.host')).rejects.toThrow(ZADANI_PIN);
+  });
+
+  test('nakon promjene PIN-a sesija radi normalno; odjava gasi ograničenu sesiju', async () => {
+    await prijavi(b, '0000');
+    expect(await b.call('user:promijeniSvojPin', '0000', '2468')).toEqual({ success: true });
+    expect(await b.call('product:getAll')).toEqual([]);
+
+    b.db.prepare('UPDATE users SET pin = ? WHERE id = ?').run(hesirajPin('0000'), ADMIN);
+    await prijavi(b, '0000');
+    expect(await b.call('user:logout')).toEqual({ success: true });
+    await expect(b.call('product:getAll')).rejects.toThrow(NISTE_PRIJAVLJENI);
+  });
+
+  test('i kasir kome je admin postavio 0000 mora ga promijeniti', async () => {
+    adminPin();
+    const kasir = dodajKorisnika('Kasir', '1234');
+    await prijavi(b, ADMIN_PIN);
+    await b.call('user:update', kasir, { pin: '0000' });
+    expect(await prijavi(b, '0000')).toMatchObject({ id: kasir, zadaniPin: true });
+    await expect(b.call('cash:getToday')).rejects.toThrow(ZADANI_PIN);
+  });
+});
+
 // ─── Prijava i odjava ───────────────────────────────────────
 
 describe('sesija', () => {
-  beforeEach(async () => { b = await otvoriBackend({ prijava: null }); });
+  beforeEach(async () => {
+    b = await otvoriBackend({ prijava: null });
+    adminPin();
+  });
 
   test('prijava otvara sesiju, odjava je zatvara', async () => {
-    expect(await prijavi(b, '0000')).toEqual({ id: ADMIN, ime: 'Admin', uloga: 'admin', zadaniPin: true });
+    expect(await prijavi(b, ADMIN_PIN)).toEqual({ id: ADMIN, ime: 'Admin', uloga: 'admin', zadaniPin: false });
     expect(await b.call('product:getAll')).toEqual([]);
     expect(await b.call('user:logout')).toEqual({ success: true });
     await expect(b.call('product:getAll')).rejects.toThrow(NISTE_PRIJAVLJENI);
   });
 
   test('neuspjela prijava zatvara i dotadašnju sesiju', async () => {
-    await prijavi(b, '0000');
+    await prijavi(b, ADMIN_PIN);
     expect(await b.call('user:login', '9999')).toBeNull();
     await expect(b.call('product:getAll')).rejects.toThrow(NISTE_PRIJAVLJENI);
   });
 
   test('nova prijava zamjenjuje korisnika sesije', async () => {
     const kasir = dodajKorisnika('Kasir', '1234');
-    await prijavi(b, '0000');
+    await prijavi(b, ADMIN_PIN);
     await prijavi(b, '1234');
     const p = dodajArtikal('A1');
     const { id } = await b.call('order:createManual', {
@@ -147,7 +215,7 @@ describe('sesija', () => {
   });
 
   test('restart backenda gasi sesiju', async () => {
-    await prijavi(b, '0000');
+    await prijavi(b, ADMIN_PIN);
     await b.ponovoPokreni();
     await expect(b.call('product:getAll')).rejects.toThrow(NISTE_PRIJAVLJENI);
   });
@@ -215,22 +283,21 @@ describe('PIN heš, seed i migracija', () => {
   });
 
   test('jedinstvenost PIN-a se provjerava nad hešovima', async () => {
-    await prijavi(b, '0000');
+    adminPin();
+    await prijavi(b, ADMIN_PIN);
     dodajKorisnika('Ana', '1234');
     await expect(b.call('user:create', { ime: 'Druga', pin: '1234', uloga: 'kasir' }))
       .rejects.toThrow('Korisnik sa PIN-om "1234" već postoji');
-    await expect(b.call('user:create', { ime: 'Treća', pin: '0000', uloga: 'kasir' }))
-      .rejects.toThrow('Korisnik sa PIN-om "0000" već postoji');
+    await expect(b.call('user:create', { ime: 'Treća', pin: ADMIN_PIN, uloga: 'kasir' }))
+      .rejects.toThrow(`Korisnik sa PIN-om "${ADMIN_PIN}" već postoji`);
   });
 
   test('nijedan kanal ne vraća PIN', async () => {
+    adminPin();
     const k = dodajKorisnika('Ana', '1234');
-    const odgovori = [
-      await b.call('user:login', '1234'),
-      await b.call('user:getAll'),
-    ];
-    await prijavi(b, '0000');
-    odgovori.push(await b.call('user:getAll'), await b.call('user:verifyAdminPin', '0000'));
+    const odgovori = [await b.call('user:login', '1234'), await b.call('user:getAll')];
+    await prijavi(b, ADMIN_PIN);
+    odgovori.push(await b.call('user:getAll'));
     const json = JSON.stringify(odgovori);
     expect(json).not.toContain('pbkdf2');
     expect(json).not.toContain('"pin"');
@@ -244,21 +311,13 @@ describe('uloge', () => {
   let kasir: number;
   beforeEach(async () => {
     b = await otvoriBackend({ prijava: null });
+    adminPin();
     kasir = dodajKorisnika('Kasir', '1234');
     await prijavi(b, '1234');
   });
 
   test('kasir ne može zvati nijedan administratorski kanal', async () => {
-    const prosli: string[] = [];
-    for (const kanal of ADMIN_KANALI) {
-      try {
-        await b.call(kanal);
-        prosli.push(`${kanal}: prošao`);
-      } catch (e: any) {
-        if (e.message !== SAMO_ADMIN) prosli.push(`${kanal}: ${e.message}`);
-      }
-    }
-    expect(prosli).toEqual([]);
+    expect(await neodbijeni(ADMIN_KANALI, SAMO_ADMIN)).toEqual([]);
     expect(b.tring.zahtjevi).toEqual([]);
     expect(b.otvoreniDijalozi).toEqual([]);
   });
@@ -291,16 +350,14 @@ describe('uloge', () => {
   });
 
   test('admin zove administratorske kanale', async () => {
-    await prijavi(b, '0000');
+    await prijavi(b, ADMIN_PIN);
     expect(await b.call('fiscal:setZadnjiBroj', 100)).toMatchObject({ success: true, predvidjeni: 101 });
     expect(await b.call('order:dismissFiscalGap', 7)).toEqual({ success: true });
     expect(Array.isArray(await b.call('tring:getLogs'))).toBe(true);
   });
 
   test('nalog: kasir radi sve osim vraćanja u izradu', async () => {
-    const kupac = Number(b.db.prepare("INSERT INTO kupci (naziv, idBroj) VALUES ('K', '4200000000001')").run().lastInsertRowid);
-    const { id } = await b.call('nalog:create', { vrsta: 'narudzba', kupacId: kupac, opis: 'Ormar', korisnikId: ADMIN });
-    expect(red('SELECT korisnikId FROM radni_nalozi WHERE id = ?', id).korisnikId).toBe(kasir);
+    const { id } = await b.call('nalog:create', { vrsta: 'narudzba', kupacId: dodajKupca(), opis: 'Ormar', korisnikId: ADMIN });
     const mat = Number(b.db.prepare(
       "INSERT INTO products (sifra, naziv, jm, cijena, pdvStopa, tip) VALUES ('M1', 'Iverica', 'm2', 10, 'E', 'materijal')"
     ).run().lastInsertRowid);
@@ -308,7 +365,7 @@ describe('uloge', () => {
     await b.call('nalog:setStatus', { id, status: 'zavrsen' });
     await expect(b.call('nalog:setStatus', { id, status: 'vrati', korisnikId: ADMIN }))
       .rejects.toThrow('Vraćanje naloga u izradu može samo administrator');
-    await prijavi(b, '0000');
+    await prijavi(b, ADMIN_PIN);
     expect(await b.call('nalog:setStatus', { id, status: 'vrati' })).toEqual({ success: true });
   });
 });
@@ -316,7 +373,10 @@ describe('uloge', () => {
 // ─── settings:set allowlista ────────────────────────────────
 
 describe('settings:set', () => {
-  beforeEach(async () => { b = await otvoriBackend({ prijava: null }); });
+  beforeEach(async () => {
+    b = await otvoriBackend({ prijava: null });
+    adminPin();
+  });
 
   test('kasir smije samo kasa.scanMode', async () => {
     dodajKorisnika('Kasir', '1234');
@@ -329,7 +389,7 @@ describe('settings:set', () => {
   });
 
   test('admin postavlja ključeve iz Postavki', async () => {
-    await prijavi(b, '0000');
+    await prijavi(b, ADMIN_PIN);
     const kljucevi = [
       'kasa.pologPrompt', 'kasa.allowZeroStock', 'kasa.kusurKalkulacija', 'kasa.requirePinRefund', 'kasa.showDailyTotal',
       'kasa.scanMode', 'cijene.unosBezPdv', 'racun.napomena', 'dev.logging', 'ui.skala', 'ui.showGenerator',
@@ -339,7 +399,7 @@ describe('settings:set', () => {
   });
 
   test('sve ostalo se odbija i adminu (tajne, interni ključevi, firma, tring)', async () => {
-    await prijavi(b, '0000');
+    await prijavi(b, ADMIN_PIN);
     for (const k of ['tring.operatorPassword', 'tring.host', 'fiscal.dismissedGaps', 'firma.naziv', 'proizvodnja.enabled', 'kasa.nesto', '']) {
       await expect(b.call('settings:set', k, 'x')).rejects.toThrow(`Postavka "${k}" se ne može mijenjati`);
     }
@@ -348,7 +408,7 @@ describe('settings:set', () => {
   });
 
   test('vrijednost mora biti tekst', async () => {
-    await prijavi(b, '0000');
+    await prijavi(b, ADMIN_PIN);
     for (const v of [true, 1, null, { a: 1 }]) {
       await expect(b.call('settings:set', 'kasa.scanMode', v)).rejects.toThrow('Vrijednost postavke mora biti tekst');
     }
@@ -356,72 +416,102 @@ describe('settings:set', () => {
 });
 
 // ─── Ograničenje pokušaja ───────────────────────────────────
+// Neuspjesi se broje u kliznom prozoru od 15 min; uspjeh ih ne briše.
 
 describe('ograničenje pokušaja', () => {
-  beforeEach(async () => { b = await otvoriBackend({ prijava: null }); });
+  beforeEach(async () => {
+    b = await otvoriBackend({ prijava: null });
+    adminPin();
+  });
 
   async function pogresno(n: number) {
     for (let i = 0; i < n; i++) expect(await b.call('user:login', '9999')).toBeNull();
   }
 
-  test('nakon 5 uzastopnih grešaka blokada 30 s — i za tačan PIN', async () => {
+  test('nakon 5 grešaka blokada 30 s — i za tačan PIN', async () => {
     const t0 = Date.now();
     setSystemTime(t0);
     await pogresno(5);
-    await expect(b.call('user:login', '0000')).rejects.toThrow('Previše pogrešnih pokušaja. Pokušajte ponovo za 30 s.');
+    await expect(b.call('user:login', ADMIN_PIN)).rejects.toThrow(`${BLOKADA} 30 s.`);
     setSystemTime(t0 + 12_500);
-    await expect(b.call('user:login', '0000')).rejects.toThrow('Previše pogrešnih pokušaja. Pokušajte ponovo za 18 s.');
+    await expect(b.call('user:login', ADMIN_PIN)).rejects.toThrow(`${BLOKADA} 18 s.`);
     // Blokirana prijava ne otvara sesiju.
     await expect(b.call('product:getAll')).rejects.toThrow(NISTE_PRIJAVLJENI);
     setSystemTime(t0 + 30_000);
-    expect(await b.call('user:login', '0000')).toMatchObject({ id: ADMIN });
+    expect(await b.call('user:login', ADMIN_PIN)).toMatchObject({ id: ADMIN });
   });
 
-  test('svaka sljedeća greška udvostručuje blokadu, najviše 15 min', async () => {
+  test('svaki sljedeći neuspjeh na pragu udvostručuje blokadu; stari neuspjesi ističu iz prozora', async () => {
     let t = Date.now();
     setSystemTime(t);
     await pogresno(5);
-    const ocekivano = [60, 120, 240, 480, 900, 900];
-    for (const sekundi of [30, ...ocekivano.slice(0, -1)]) {
-      t += sekundi * 1000;
+    let blokada = 30;
+    for (const sljedeca of [60, 120, 240, 480]) {
+      t += blokada * 1000;
       setSystemTime(t);
       await pogresno(1);
-      const sljedeca = ocekivano.shift()!;
-      await expect(b.call('user:login', '0000')).rejects.toThrow(`Pokušajte ponovo za ${sljedeca} s.`);
+      await expect(b.call('user:login', ADMIN_PIN)).rejects.toThrow(`${BLOKADA} ${sljedeca} s.`);
+      blokada = sljedeca;
     }
+    // t = 450 s: nakon 480 s čekanja prvih šest neuspjeha (0 s i 30 s) je
+    // izvan 15-minutnog prozora — u njemu ostaju 4, pa novi neuspjeh ne blokira.
+    t += blokada * 1000;
+    setSystemTime(t);
+    await pogresno(1);
+    expect(await b.call('user:login', ADMIN_PIN)).toMatchObject({ id: ADMIN });
   });
 
-  test('uspjeh poništava brojač', async () => {
+  test('uspjeh ne poništava brojač', async () => {
     setSystemTime(Date.now());
     await pogresno(4);
-    await prijavi(b, '0000');
-    await pogresno(4);
-    expect(await b.call('user:login', '0000')).toMatchObject({ id: ADMIN });
+    await prijavi(b, ADMIN_PIN);
+    await pogresno(1);
+    await expect(b.call('user:login', ADMIN_PIN)).rejects.toThrow(`${BLOKADA} 30 s.`);
   });
 
-  test('brojač je zajednički za prijavu, admin PIN i PIN pri promjeni svog PIN-a', async () => {
+  test('ciklus "4 pogrešna + prijava svojim PIN-om" završava blokadom', async () => {
+    const t0 = Date.now();
+    setSystemTime(t0);
+    dodajKorisnika('Kasir', '1234');
+    let blokiran = false;
+    for (let krug = 0; krug < 3 && !blokiran; krug++) {
+      for (let i = 0; i < 4; i++) {
+        const r = await greska(b.call('user:login', `${5000 + krug * 10 + i}`));
+        if (r.startsWith(BLOKADA)) blokiran = true;
+      }
+      const r = await greska(b.call('user:login', '1234'));
+      if (r.startsWith(BLOKADA)) blokiran = true;
+      else expect(r).toBe('(prošao)');
+    }
+    expect(blokiran).toBe(true);
+  });
+
+  test('neuspjesi stariji od 15 min ne ulaze u prag', async () => {
+    const t0 = Date.now();
+    setSystemTime(t0);
+    await pogresno(4);
+    setSystemTime(t0 + 15 * 60_000);
+    await pogresno(4);
+    expect(await b.call('user:login', ADMIN_PIN)).toMatchObject({ id: ADMIN });
+  });
+
+  test('brojač je zajednički za prijavu, admin PIN u stornu i PIN pri promjeni svog PIN-a', async () => {
     setSystemTime(Date.now());
     dodajKorisnika('Kasir', '1234');
     await prijavi(b, '1234');
-    await expect(b.call('user:verifyAdminPin', '1234')).rejects.toThrow('Neispravan admin PIN');
-    await expect(b.call('user:verifyAdminPin', '5555')).rejects.toThrow('Neispravan admin PIN');
+    postavka('kasa.requirePinRefund', 'true');
+    await expect(b.call('order:refundAndPrint', { id: 1, adminPin: '1234' })).rejects.toThrow('Neispravan admin PIN');
+    await expect(b.call('order:refundAndPrint', { id: 1, adminPin: '5555' })).rejects.toThrow('Neispravan admin PIN');
     await expect(b.call('user:promijeniSvojPin', '9999', '4321')).rejects.toThrow('Trenutni PIN nije tačan');
     await pogresno(2);
-    await expect(b.call('user:login', '0000')).rejects.toThrow('Previše pogrešnih pokušaja');
-  });
-
-  test('blokada važi i za admin PIN, bez provjere PIN-a', async () => {
-    setSystemTime(Date.now());
-    await prijavi(b, '0000');
-    for (let i = 0; i < 5; i++) await expect(b.call('user:verifyAdminPin', '5555')).rejects.toThrow('Neispravan admin PIN');
-    await expect(b.call('user:verifyAdminPin', '0000')).rejects.toThrow('Previše pogrešnih pokušaja. Pokušajte ponovo za 30 s.');
+    await expect(b.call('user:login', ADMIN_PIN)).rejects.toThrow(BLOKADA);
   });
 
   test('restart backenda poništava brojač (drži se u memoriji)', async () => {
     setSystemTime(Date.now());
     await pogresno(5);
     await b.ponovoPokreni();
-    expect(await b.call('user:login', '0000')).toMatchObject({ id: ADMIN });
+    expect(await b.call('user:login', ADMIN_PIN)).toMatchObject({ id: ADMIN });
   });
 });
 
@@ -461,6 +551,55 @@ describe('user:promijeniSvojPin', () => {
     await expect(b.call('user:promijeniSvojPin', '0000', '1234')).rejects.toThrow('Taj PIN je zauzet, odaberite drugi');
     expect(provjeriPin('0000', red('SELECT pin FROM users WHERE id = ?', ADMIN).pin)).toBe(true);
   });
+
+  test('pogađanje tuđih PIN-ova kroz promjenu svog PIN-a udara u blokadu', async () => {
+    setSystemTime(Date.now());
+    adminPin();
+    const tudji = ['1111', '2222', '3333', '4444', '5555'];
+    tudji.forEach((pin, i) => dodajKorisnika(`K${i}`, pin));
+    const kasir = dodajKorisnika('Kasir', '1234');
+    await prijavi(b, '1234');
+    for (const pin of tudji) {
+      await expect(b.call('user:promijeniSvojPin', '1234', pin)).rejects.toThrow('Taj PIN je zauzet, odaberite drugi');
+    }
+    // Sljedeći pokušaj, i sa slobodnim PIN-om, ne otkriva ništa.
+    await expect(b.call('user:promijeniSvojPin', '1234', ADMIN_PIN)).rejects.toThrow(`${BLOKADA} 30 s.`);
+    await expect(b.call('user:promijeniSvojPin', '1234', '7777')).rejects.toThrow(BLOKADA);
+    expect(provjeriPin('1234', red('SELECT pin FROM users WHERE id = ?', kasir).pin)).toBe(true);
+    // Blokada važi i za prijavu admina.
+    await expect(b.call('user:login', ADMIN_PIN)).rejects.toThrow(BLOKADA);
+  });
+
+  test('uspješna promjena ne briše neuspjehe', async () => {
+    setSystemTime(Date.now());
+    adminPin();
+    ['1111', '2222', '3333', '4444'].forEach((pin, i) => dodajKorisnika(`K${i}`, pin));
+    dodajKorisnika('Kasir', '1234');
+    await prijavi(b, '1234');
+    for (const pin of ['1111', '2222', '3333', '4444']) {
+      await expect(b.call('user:promijeniSvojPin', '1234', pin)).rejects.toThrow('Taj PIN je zauzet');
+    }
+    expect(await b.call('user:promijeniSvojPin', '1234', '7777')).toEqual({ success: true });
+    await expect(b.call('user:promijeniSvojPin', '7777', ADMIN_PIN)).rejects.toThrow('Taj PIN je zauzet');
+    await expect(b.call('user:promijeniSvojPin', '7777', '8888')).rejects.toThrow(`${BLOKADA} 30 s.`);
+  });
+
+  test('najviše 3 uspješne promjene u 10 min po korisniku, i preko nove prijave', async () => {
+    const t0 = Date.now();
+    setSystemTime(t0);
+    const kasir = dodajKorisnika('Kasir', '1234');
+    await prijavi(b, '1234');
+    expect(await b.call('user:promijeniSvojPin', '1234', '1235')).toEqual({ success: true });
+    expect(await b.call('user:promijeniSvojPin', '1235', '1236')).toEqual({ success: true });
+    await prijavi(b, '1236');
+    expect(await b.call('user:promijeniSvojPin', '1236', '1237')).toEqual({ success: true });
+    await expect(b.call('user:promijeniSvojPin', '1237', '1238')).rejects.toThrow('Previše promjena PIN-a. Pokušajte ponovo za 600 s.');
+    // Budžet ne troši pokušaje i ne otkriva da li je PIN zauzet.
+    await expect(b.call('user:promijeniSvojPin', '1237', ADMIN_PIN)).rejects.toThrow('Previše promjena PIN-a');
+    expect(provjeriPin('1237', red('SELECT pin FROM users WHERE id = ?', kasir).pin)).toBe(true);
+    setSystemTime(t0 + 10 * 60_000);
+    expect(await b.call('user:promijeniSvojPin', '1237', '1238')).toEqual({ success: true });
+  });
 });
 
 // ─── Storno uz admin PIN ────────────────────────────────────
@@ -469,6 +608,7 @@ describe('order:refundAndPrint uz kasa.requirePinRefund', () => {
   let racun: number;
   beforeEach(async () => {
     b = await otvoriBackend({ prijava: null });
+    adminPin();
     dodajKorisnika('Kasir', '1234');
     dodajKorisnika('Berina', '1111', 'admin');
     await prijavi(b, '1234');
@@ -499,7 +639,7 @@ describe('order:refundAndPrint uz kasa.requirePinRefund', () => {
 
   test('admin ne treba PIN; bez postavke ni kasir', async () => {
     postavka('kasa.requirePinRefund', 'true');
-    await prijavi(b, '0000');
+    await prijavi(b, ADMIN_PIN);
     expect(await b.call('order:refundAndPrint', { id: racun })).toMatchObject({ success: true });
 
     await prijavi(b, '1234');
@@ -512,14 +652,15 @@ describe('order:refundAndPrint uz kasa.requirePinRefund', () => {
     expect(await b.call('order:refundAndPrint', { id: drugi })).toMatchObject({ success: true });
   });
 
-  test('pogrešan admin PIN ulazi u ograničenje pokušaja', async () => {
+  test('pogrešan admin PIN ulazi u ograničenje pokušaja, a tačan ne briše ranije neuspjehe', async () => {
     setSystemTime(Date.now());
     postavka('kasa.requirePinRefund', 'true');
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 4; i++) {
       await expect(b.call('order:refundAndPrint', { id: racun, adminPin: '9999' })).rejects.toThrow('Neispravan admin PIN');
     }
-    await expect(b.call('order:refundAndPrint', { id: racun, adminPin: '1111' })).rejects.toThrow('Previše pogrešnih pokušaja');
-    expect(b.tring.zahtjevi).toEqual([]);
+    expect(await b.call('order:refundAndPrint', { id: racun, adminPin: '1111' })).toMatchObject({ success: true });
+    expect(await b.call('user:login', '9999')).toBeNull();
+    await expect(b.call('user:login', '1234')).rejects.toThrow(`${BLOKADA} 30 s.`);
   });
 });
 
@@ -529,6 +670,7 @@ describe('korisnikId se uzima iz sesije, ne iz payload-a', () => {
   let kasir: number;
   beforeEach(async () => {
     b = await otvoriBackend({ prijava: null });
+    adminPin();
     kasir = dodajKorisnika('Kasir', '1234');
     await prijavi(b, '1234');
   });
@@ -546,20 +688,58 @@ describe('korisnikId se uzima iz sesije, ne iz payload-a', () => {
     expect(red('SELECT korisnikId FROM cash_movements WHERE id = ?', c.id).korisnikId).toBe(kasir);
   });
 
+  test('ponuda:create i ponuda:konvertuj', async () => {
+    const p = dodajArtikal('P1', 10);
+    const { id } = await b.call('ponuda:create', {
+      kupacId: dodajKupca(), korisnikId: ADMIN, stavke: [{ productId: p, kolicina: 1, cijena: 10, rabat: 0, pdvStopa: 'E' }],
+    });
+    expect(red('SELECT korisnikId FROM ponude WHERE id = ?', id).korisnikId).toBe(kasir);
+    const r = await b.call('ponuda:konvertuj', { id, korisnikId: ADMIN, nacinPlacanja: 'Gotovina' });
+    expect(r.success).toBe(true);
+    expect(red('SELECT korisnikId FROM orders WHERE id = ?', r.racunId).korisnikId).toBe(kasir);
+  });
+
+  test('nalog:create i nalog:izdajRacun', async () => {
+    const { id } = await b.call('nalog:create', {
+      vrsta: 'narudzba', kupacId: dodajKupca(), opis: 'Ormar', dogovorenaCijena: 50, korisnikId: ADMIN,
+    });
+    expect(red('SELECT korisnikId FROM radni_nalozi WHERE id = ?', id).korisnikId).toBe(kasir);
+    const mat = Number(b.db.prepare(
+      "INSERT INTO products (sifra, naziv, jm, cijena, pdvStopa, tip) VALUES ('M1', 'Iverica', 'm2', 10, 'E', 'materijal')"
+    ).run().lastInsertRowid);
+    await b.call('nalog:replaceStavke', id, [{ materijalId: mat, kolicina: 1 }]);
+    await b.call('nalog:setStatus', { id, status: 'zavrsen' });
+    const r = await b.call('nalog:izdajRacun', { id, korisnikId: ADMIN, nacinPlacanja: 'Gotovina' });
+    expect(r.success).toBe(true);
+    expect(red('SELECT korisnikId FROM orders WHERE id = ?', r.racunId).korisnikId).toBe(kasir);
+  });
+
   test('order:finalizePrilog i nalog:createIzPonude', async () => {
-    await prijavi(b, '0000');
+    await prijavi(b, ADMIN_PIN);
     await b.call('fiscal:setZadnjiBroj', 100);
     await prijavi(b, '1234');
     const r = await b.call('order:finalizePrilog', { korisnikId: ADMIN, iznos: 10, nacinPlacanja: 'Virman' });
     expect(red('SELECT korisnikId FROM orders WHERE id = ?', r.id).korisnikId).toBe(kasir);
 
-    const kupac = Number(b.db.prepare("INSERT INTO kupci (naziv, idBroj) VALUES ('K', '4200000000001')").run().lastInsertRowid);
     const ponuda = Number(b.db.prepare(`
       INSERT INTO ponude (broj, godina, kupacId, korisnikId, datum, vaziDo, ukupno, pdvIznos, status)
       VALUES (1, 2026, ?, ?, '2026-09-01', '2026-09-30', 10, 0, 'prihvacena')
-    `).run(kupac, ADMIN).lastInsertRowid);
+    `).run(dodajKupca(), ADMIN).lastInsertRowid);
     const n = await b.call('nalog:createIzPonude', ponuda, ADMIN);
     expect(red('SELECT korisnikId FROM radni_nalozi WHERE id = ?', n.id).korisnikId).toBe(kasir);
+  });
+
+  test('order:refundAndPrint: automatski polog za manjak u ladici nosi korisnika sesije', async () => {
+    const p = dodajArtikal('S1', 3);
+    const juce = new Date(Date.now() - 24 * 3600_000);
+    // Jučerašnji gotovinski račun: današnja ladica ga ne pokriva, pa storno uz override traži polog.
+    const { id } = await b.call('order:createManual', {
+      ukupno: 3, pdvIznos: 0, nacinPlacanja: 'Gotovina', brojFiskalnogRacuna: '77', createdAt: datum(juce),
+      stavke: [{ productId: p, kolicina: 1, cijena: 3, rabat: 0, pdvStopa: 'E' }],
+    });
+    const r = await b.call('order:refundAndPrint', { id, dozvoliPolog: true, korisnikId: ADMIN });
+    expect(r).toMatchObject({ success: true, pologIznos: 3 });
+    expect(b.db.prepare("SELECT korisnikId, iznos FROM cash_movements WHERE tip = 'polog'").all()).toEqual([{ korisnikId: kasir, iznos: 3 }]);
   });
 });
 
@@ -568,8 +748,11 @@ describe('korisnikId se uzima iz sesije, ne iz payload-a', () => {
 describe('uklonjeni kanali', () => {
   beforeEach(async () => { b = await otvoriBackend(); });
 
-  test('nema sirovih kanala za račun, storno, reklamaciju i upis artikla na uređaj', async () => {
-    for (const kanal of ['order:create', 'order:refund', 'order:updateReklamacija', 'tring:printReceipt', 'tring:printRefund', 'tring:writeArticle']) {
+  test('nema sirovih kanala za račun, storno, reklamaciju, upis artikla ni zasebne provjere admin PIN-a', async () => {
+    for (const kanal of [
+      'order:create', 'order:refund', 'order:updateReklamacija', 'tring:printReceipt', 'tring:printRefund', 'tring:writeArticle',
+      'user:verifyAdminPin',
+    ]) {
       await expect(b.call(kanal, {})).rejects.toThrow();
     }
     expect(b.tring.zahtjevi).toEqual([]);

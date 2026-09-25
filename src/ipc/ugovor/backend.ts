@@ -7,6 +7,13 @@
 // (src-tauri/backend, `bun run test:rust`).
 import type { Database } from 'bun:sqlite';
 import type { LaziTring } from './laziTring';
+import { hesirajPin } from '../../lib/korisnici';
+
+/**
+ * PIN seedovanog admina (id 1) u testovima koji se prijave automatski. Zadani
+ * PIN 0000 bi otvorio sesiju koja smije samo promijeniti PIN (vidi sesija.ts).
+ */
+export const ADMIN_PIN = '2580';
 
 export interface OdgovoriDijaloga {
   /** Putanja koju vrati dijalog za spremanje. */
@@ -46,14 +53,17 @@ export interface Backend {
    * iz početka — niko nije prijavljen.
    */
   ponovoPokreni(): Promise<void>;
+  /** Svi registrovani kanali backenda (za provjeru da ugovorni testovi pokrivaju svaki). */
+  kanali(): Promise<string[]>;
   close(): Promise<void>;
 }
 
 export interface OpcijeBackenda {
   /**
    * PIN kojim se harness prijavi odmah nakon otvaranja (kanali traže
-   * prijavljenog korisnika — vidi src/ipc/sesija.ts). Podrazumijevano zadani
-   * admin (id 1, PIN 0000); `null` = backend ostaje bez prijave.
+   * prijavljenog korisnika — vidi src/ipc/sesija.ts). Podrazumijevano: seedovani
+   * admin (id 1) dobije ADMIN_PIN direktno u bazi i prijavi se njime.
+   * `null` = baza ostaje netaknuta (Admin/0000) i niko nije prijavljen.
    */
   prijava?: string | null;
 }
@@ -64,8 +74,12 @@ export async function otvoriBackend(opcije: OpcijeBackenda = {}): Promise<Backen
   if (vrsta === 'ts') b = await (await import('./tsBackend')).otvoriTsBackend();
   else if (vrsta === 'rust') b = await (await import('./rustBackend')).otvoriRustBackend();
   else throw new Error(`Nepoznat KASA_BACKEND: ${vrsta}`);
-  const pin = opcije.prijava === undefined ? '0000' : opcije.prijava;
-  if (pin !== null) await prijavi(b, pin);
+  if (opcije.prijava === undefined) {
+    b.db.prepare('UPDATE users SET pin = ? WHERE id = 1').run(hesirajPin(ADMIN_PIN));
+    await prijavi(b, ADMIN_PIN);
+  } else if (opcije.prijava !== null) {
+    await prijavi(b, opcije.prijava);
+  }
   return b;
 }
 

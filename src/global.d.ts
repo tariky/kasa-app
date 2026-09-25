@@ -15,7 +15,6 @@ interface Window {
     logout: () => Promise<{ success: boolean }>;
     promijeniSvojPin: (stari: string, novi: string) => Promise<{ success: boolean }>;
     getUsers: () => Promise<import('./types').User[]>;
-    verifyAdminPin: (pin: string) => Promise<{ success: boolean; ime: string }>;
     createUser: (data: any) => Promise<any>;
     updateUser: (id: number, data: any) => Promise<any>;
     deleteUser: (id: number) => Promise<any>;

@@ -43,7 +43,9 @@ import { logoVelicina, ziroRacuniPozicija } from '../lib/firma';
 import { dohvatiKnjigovodja } from '../lib/knjigovodja/podaci';
 import * as Tring from '../services/tring';
 import { provjeriKanal, stanjeLicence, aktivirajLicencu } from './licenca';
-import { provjeriPristup, OgranicenjePokusaja, PORUKA_NISTE_PRIJAVLJENI, TAJNE_POSTAVKE } from './sesija';
+import {
+  provjeriPristup, OgranicenjePokusaja, OgranicenjePromjenaPina, PORUKA_NISTE_PRIJAVLJENI, TAJNE_POSTAVKE,
+} from './sesija';
 import Database from 'better-sqlite3';
 
 // Provjera sesije i uloge prije svakog handlera; postavlja je registerIpcHandlers
@@ -146,7 +148,10 @@ export function registerIpcHandlers(): void {
   // uloga se svaki put čita iz baze, pa izmjena ili brisanje korisnika važi odmah.
 
   let prijavljeniId: number | null = null;
+  // Prijava PIN-om 0000: dok ga ne promijeni, korisnik smije samo promijeniSvojPin i odjavu.
+  let sesijaSaZadanimPinom = false;
   const pokusaji = new OgranicenjePokusaja();
+  const promjenePina = new OgranicenjePromjenaPina();
 
   const trenutni = (): JavniKorisnik | null => {
     if (prijavljeniId === null) return null;
@@ -158,11 +163,11 @@ export function registerIpcHandlers(): void {
     if (!k) throw new Error(PORUKA_NISTE_PRIJAVLJENI);
     return k;
   };
-  provjeriSesiju = (channel, args) => provjeriPristup(channel, args, trenutni());
+  provjeriSesiju = (channel, args) => provjeriPristup(channel, args, trenutni(), sesijaSaZadanimPinom);
 
   /**
    * Admin PIN za radnju kasira (storno). Neuspjeh ulazi u ograničenje pokušaja;
-   * baca 'Neispravan admin PIN'. Vraća admina čiji je PIN.
+   * baca 'Neispravan admin PIN'. Uspjeh ne briše ranije neuspjehe.
    */
   const provjeriAdminPin = (pin: unknown): JavniKorisnik => {
     pokusaji.provjeri();
@@ -171,48 +176,51 @@ export function registerIpcHandlers(): void {
       pokusaji.neuspjeh();
       throw new Error('Neispravan admin PIN');
     }
-    pokusaji.uspjeh();
     return admin;
   };
 
   handle('user:login', (pin: string) => {
     // Nova prijava uvijek poništi staru sesiju, i kad ne uspije.
     prijavljeniId = null;
+    sesijaSaZadanimPinom = false;
     pokusaji.provjeri();
     const u = nadjiPoPinu(db, pin);
     if (!u) {
       pokusaji.neuspjeh();
       return null;
     }
-    pokusaji.uspjeh();
     prijavljeniId = u.id;
-    return { ...u, zadaniPin: pin === ZADANI_PIN };
+    sesijaSaZadanimPinom = pin === ZADANI_PIN;
+    return { ...u, zadaniPin: sesijaSaZadanimPinom };
   });
 
   handle('user:logout', () => {
     prijavljeniId = null;
+    sesijaSaZadanimPinom = false;
     return { success: true };
   });
 
   // Prijavljeni korisnik mijenja svoj PIN (obavezno nakon prijave sa zadanim 0000).
+  // Kanal ne smije postati proročište za tuđe PIN-ove: uspjeh ne briše neuspjehe,
+  // zauzet PIN se broji kao neuspjeh, a i uspješne promjene su ograničene.
   handle('user:promijeniSvojPin', (stari: string, novi: string) => {
     const k = korisnik();
     validirajPin(novi);
     if (novi === ZADANI_PIN) throw new Error(`Novi PIN ne smije biti ${ZADANI_PIN}`);
     pokusaji.provjeri();
+    promjenePina.provjeri(k.id);
     if (!pinKorisnika(db, k.id, stari)) {
       pokusaji.neuspjeh();
       throw new Error('Trenutni PIN nije tačan');
     }
-    pokusaji.uspjeh();
-    if (pinZauzet(db, novi, k.id)) throw new Error('Taj PIN je zauzet, odaberite drugi');
+    if (pinZauzet(db, novi, k.id)) {
+      pokusaji.neuspjeh();
+      throw new Error('Taj PIN je zauzet, odaberite drugi');
+    }
     db.prepare('UPDATE users SET pin = ? WHERE id = ?').run(hesirajPin(novi), k.id);
+    promjenePina.zabiljezi(k.id);
+    sesijaSaZadanimPinom = false;
     return { success: true };
-  });
-
-  handle('user:verifyAdminPin', (pin: string) => {
-    const admin = provjeriAdminPin(pin);
-    return { success: true, ime: admin.ime };
   });
 
   handle('user:getAll', () => {
@@ -1224,8 +1232,8 @@ export function registerIpcHandlers(): void {
   }) => {
     const k = korisnik();
     // Kasir uz uključen "PIN za reklamaciju" šalje admin PIN u istom pozivu;
-    // provjera je ovdje, prije štampe — odvojeni verifyAdminPin korak renderer
-    // može preskočiti.
+    // provjera je ovdje, prije štampe — odvojen korak provjere renderer bi
+    // mogao preskočiti.
     if (postavka('kasa.requirePinRefund') === 'true' && k.uloga !== 'admin') {
       if (!data?.adminPin) throw new Error('Reklamacija traži PIN administratora');
       provjeriAdminPin(data.adminPin);

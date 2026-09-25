@@ -75,6 +75,9 @@ export async function otvoriTsBackend(): Promise<Backend> {
     otvoreniDijalozi,
     radniFolder,
     restartovan: () => restart,
+    async kanali() {
+      return [...handleri.keys()].sort();
+    },
     async ponovoPokreni() {
       closeDb();
       handleri.clear();

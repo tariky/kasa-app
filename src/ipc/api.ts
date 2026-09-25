@@ -17,7 +17,6 @@ export function napraviApi(pozovi: Pozovi, naLicencaBlokirano: (cb: () => void) 
     logout: () => pozovi('user:logout'),
     promijeniSvojPin: (stari: string, novi: string) => pozovi('user:promijeniSvojPin', stari, novi),
     getUsers: () => pozovi('user:getAll'),
-    verifyAdminPin: (pin: string) => pozovi('user:verifyAdminPin', pin),
     createUser: (data: any) => pozovi('user:create', data),
     updateUser: (id: number, data: any) => pozovi('user:update', id, data),
     deleteUser: (id: number) => pozovi('user:delete', id),

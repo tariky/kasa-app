@@ -1,6 +1,6 @@
 // Ugovor za kanale user:*, settings:*, savedCarts:*, fakturaSkice:* i proizvodnja:setEnabled — vidi backend.ts.
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
-import { otvoriBackend, prijavi, type Backend } from './backend';
+import { otvoriBackend, prijavi, ADMIN_PIN, type Backend } from './backend';
 import { hesirajPin, provjeriPin } from '../../lib/korisnici';
 
 let b: Backend;
@@ -8,7 +8,7 @@ let b: Backend;
 beforeEach(async () => { b = await otvoriBackend(); });
 afterEach(async () => { await b.close(); });
 
-const ADMIN = 1; // getDb seeduje admina s PIN-om 0000
+const ADMIN = 1; // seedovani admin; harness mu postavi ADMIN_PIN i prijavi se
 
 function red(sql: string, ...params: any[]): any {
   return b.db.prepare(sql).get(...params);
@@ -59,7 +59,7 @@ function firma(extra: Record<string, unknown> = {}) {
 
 describe('user:login', () => {
   test('vraća korisnika za tačan PIN — bez PIN-a, uz oznaku zadanog PIN-a', async () => {
-    expect(await b.call('user:login', '0000')).toEqual({ id: ADMIN, ime: 'Admin', uloga: 'admin', zadaniPin: true });
+    expect(await b.call('user:login', ADMIN_PIN)).toEqual({ id: ADMIN, ime: 'Admin', uloga: 'admin', zadaniPin: false });
     const k = dodajKorisnika('Kasir Ana', '1234');
     expect(await b.call('user:login', '1234')).toEqual({ id: k, ime: 'Kasir Ana', uloga: 'kasir', zadaniPin: false });
   });
@@ -67,20 +67,6 @@ describe('user:login', () => {
   test('pogrešan PIN vraća null, bez greške', async () => {
     expect(await b.call('user:login', '9999')).toBeNull();
     expect(await b.call('user:login', '')).toBeNull();
-  });
-});
-
-// ─── user:verifyAdminPin ────────────────────────────────────
-
-describe('user:verifyAdminPin', () => {
-  test('admin PIN vraća ime admina', async () => {
-    expect(await b.call('user:verifyAdminPin', '0000')).toEqual({ success: true, ime: 'Admin' });
-  });
-
-  test('PIN kasira i nepostojeći PIN se odbijaju', async () => {
-    dodajKorisnika('Kasir', '1234');
-    await expect(b.call('user:verifyAdminPin', '1234')).rejects.toThrow('Neispravan admin PIN');
-    await expect(b.call('user:verifyAdminPin', '5555')).rejects.toThrow('Neispravan admin PIN');
   });
 });
 
@@ -119,8 +105,8 @@ describe('user:create', () => {
   });
 
   test('odbija PIN koji već postoji', async () => {
-    await expect(b.call('user:create', { ime: 'Ana', pin: '0000', uloga: 'kasir' }))
-      .rejects.toThrow('Korisnik sa PIN-om "0000" već postoji');
+    await expect(b.call('user:create', { ime: 'Ana', pin: ADMIN_PIN, uloga: 'kasir' }))
+      .rejects.toThrow(`Korisnik sa PIN-om "${ADMIN_PIN}" već postoji`);
     expect(red('SELECT COUNT(*) AS n FROM users').n).toBe(1);
   });
 
@@ -171,14 +157,14 @@ describe('user:update', () => {
   });
 
   test('korisnik može zadržati svoj PIN', async () => {
-    expect(await b.call('user:update', ADMIN, { pin: '0000' })).toEqual({ changes: 1 });
+    expect(await b.call('user:update', ADMIN, { pin: ADMIN_PIN })).toEqual({ changes: 1 });
   });
 
   test('validira ime, dužinu PIN-a i jedinstvenost PIN-a', async () => {
     const k = dodajKorisnika('Ana', '1234');
     await expect(b.call('user:update', k, { ime: ' ' })).rejects.toThrow('Ime korisnika je obavezno');
     await expect(b.call('user:update', k, { pin: '12' })).rejects.toThrow('PIN mora imati najmanje 4 cifre');
-    await expect(b.call('user:update', k, { pin: '0000' })).rejects.toThrow('Korisnik sa PIN-om "0000" već postoji');
+    await expect(b.call('user:update', k, { pin: ADMIN_PIN })).rejects.toThrow(`Korisnik sa PIN-om "${ADMIN_PIN}" već postoji`);
     // Greška u jednom polju poništava i ostala.
     await expect(b.call('user:update', k, { ime: 'Novo', pin: '1' })).rejects.toThrow('PIN mora imati najmanje 4 cifre');
     expect(korisnikSaPinom(k, '1234')).toEqual({ ime: 'Ana', uloga: 'kasir', pinOdgovara: true });
@@ -199,7 +185,7 @@ describe('user:update', () => {
     expect(red('SELECT uloga FROM users WHERE id = ?', ADMIN).uloga).toBe('admin');
     // Admin koji zadržava ulogu (UI uvijek šalje ulogu) prolazi.
     expect(await b.call('user:update', ADMIN, { ime: 'Admin', uloga: 'admin' })).toEqual({ changes: 1 });
-    expect(await b.call('user:verifyAdminPin', '0000')).toEqual({ success: true, ime: 'Admin' });
+    expect(await b.call('user:login', ADMIN_PIN)).toMatchObject({ id: ADMIN, uloga: 'admin' });
   });
 
   test('admin može postati kasir kad postoji drugi admin', async () => {

@@ -5,6 +5,10 @@ import type { JavniKorisnik } from '../lib/korisnici';
 
 export const PORUKA_NISTE_PRIJAVLJENI = 'Niste prijavljeni';
 export const PORUKA_SAMO_ADMIN = 'Ovu radnju može izvršiti samo administrator';
+export const PORUKA_ZADANI_PIN = 'Prije rada promijenite zadani PIN 0000';
+
+/** Jedini kanali (uz KANALI_BEZ_PRIJAVE) dok prijavljeni korisnik još ima zadani PIN. */
+export const KANALI_SA_ZADANIM_PINOM: ReadonlySet<string> = new Set(['user:promijeniSvojPin', 'user:logout']);
 
 /** Kanali koji rade i bez prijave (ekran za prijavu i aktivaciju licence). */
 export const KANALI_BEZ_PRIJAVE: ReadonlySet<string> = new Set([
@@ -59,12 +63,16 @@ export const TAJNE_POSTAVKE: ReadonlySet<string> = new Set(['tring.operatorPassw
 
 /**
  * Baca grešku ako `korisnik` (null = niko nije prijavljen) ne smije zvati
- * `kanal` s ovim argumentima. Poziva se prije handlera.
+ * `kanal` s ovim argumentima. Poziva se prije handlera. `zadaniPin` = korisnik
+ * se prijavio PIN-om 0000 i još ga nije promijenio: smije samo ono što smije
+ * neprijavljen, plus promjenu svog PIN-a i odjavu.
  */
-export function provjeriPristup(kanal: string, args: unknown[], korisnik: JavniKorisnik | null): void {
-  if (!korisnik) {
-    if (!KANALI_BEZ_PRIJAVE.has(kanal)) throw new Error(PORUKA_NISTE_PRIJAVLJENI);
-    if (kanal === 'settings:get' && !POSTAVKE_BEZ_PRIJAVE.has(args[0] as string)) throw new Error(PORUKA_NISTE_PRIJAVLJENI);
+export function provjeriPristup(kanal: string, args: unknown[], korisnik: JavniKorisnik | null, zadaniPin = false): void {
+  if (!korisnik || zadaniPin) {
+    if (korisnik && KANALI_SA_ZADANIM_PINOM.has(kanal)) return;
+    const poruka = korisnik ? PORUKA_ZADANI_PIN : PORUKA_NISTE_PRIJAVLJENI;
+    if (!KANALI_BEZ_PRIJAVE.has(kanal)) throw new Error(poruka);
+    if (kanal === 'settings:get' && !POSTAVKE_BEZ_PRIJAVE.has(args[0] as string)) throw new Error(poruka);
     return;
   }
   if (ADMIN_KANALI.has(kanal) && korisnik.uloga !== 'admin') throw new Error(PORUKA_SAMO_ADMIN);
@@ -79,10 +87,13 @@ function provjeriUpisPostavke(kljuc: unknown, korisnik: JavniKorisnik): void {
 }
 
 // ─── Ograničenje pokušaja ───────────────────────────────────
-// Zajednički brojač za svaku provjeru PIN-a (prijava, admin PIN, promjena
-// svog PIN-a). Živi u memoriji main procesa — restart aplikacije ga poništi.
+// Zajednički brojač za svaku provjeru PIN-a (prijava, admin PIN pri stornu,
+// promjena svog PIN-a). Neuspjesi se broje u kliznom prozoru od 15 min i uspjeh
+// ih NE briše — inače bi "4 pogrešna + prijava svojim PIN-om" išlo u beskraj.
+// Živi u memoriji main procesa — restart aplikacije ga poništi.
 
 export const DOZVOLJENI_NEUSPJESI = 5;
+export const PROZOR_NEUSPJEHA_MS = 15 * 60_000;
 export const PRVA_BLOKADA_MS = 30_000;
 export const NAJDUZA_BLOKADA_MS = 15 * 60_000;
 
@@ -91,8 +102,9 @@ export function porukaBlokade(preostaloMs: number): string {
 }
 
 export class OgranicenjePokusaja {
-  private neuspjesi = 0;
+  private neuspjesi: number[] = [];
   private blokiranDo = 0;
+  private trajanje = 0;
 
   constructor(private readonly sada: () => number = () => Date.now()) {}
 
@@ -102,16 +114,53 @@ export class OgranicenjePokusaja {
     if (preostalo > 0) throw new Error(porukaBlokade(preostalo));
   }
 
-  /** Peti uzastopni neuspjeh blokira 30 s, svaki sljedeći udvostručuje (najviše 15 min). */
+  /**
+   * Neuspjeh ulazi u prozor. Kad prozor ima ≥ 5 neuspjeha: prva blokada 30 s,
+   * svaki sljedeći neuspjeh dok je prozor na pragu ili iznad udvostručuje je
+   * (najviše 15 min). Kad stari neuspjesi isteknu ispod praga, kreće se od 30 s.
+   */
   neuspjeh(): void {
-    this.neuspjesi++;
-    if (this.neuspjesi < DOZVOLJENI_NEUSPJESI) return;
-    const trajanje = Math.min(PRVA_BLOKADA_MS * 2 ** (this.neuspjesi - DOZVOLJENI_NEUSPJESI), NAJDUZA_BLOKADA_MS);
-    this.blokiranDo = this.sada() + trajanje;
+    const t = this.sada();
+    this.neuspjesi = this.neuspjesi.filter(x => t - x < PROZOR_NEUSPJEHA_MS);
+    this.neuspjesi.push(t);
+    if (this.neuspjesi.length < DOZVOLJENI_NEUSPJESI) {
+      this.trajanje = 0;
+      return;
+    }
+    this.trajanje = this.trajanje === 0 ? PRVA_BLOKADA_MS : Math.min(this.trajanje * 2, NAJDUZA_BLOKADA_MS);
+    this.blokiranDo = t + this.trajanje;
+  }
+}
+
+// ─── Promjena svog PIN-a ────────────────────────────────────
+// Uspješna promjena otkriva da novi PIN nije ničiji, pa je i ona ograničena:
+// najviše 3 po korisniku u 10 min (u memoriji, kao i brojač pokušaja).
+
+export const PROMJENA_PINA_MAKS = 3;
+export const PROMJENA_PINA_PROZOR_MS = 10 * 60_000;
+
+export function porukaPrevisePromjena(preostaloMs: number): string {
+  return `Previše promjena PIN-a. Pokušajte ponovo za ${Math.ceil(preostaloMs / 1000)} s.`;
+}
+
+export class OgranicenjePromjenaPina {
+  private promjene = new Map<number, number[]>();
+
+  constructor(private readonly sada: () => number = () => Date.now()) {}
+
+  private svjeze(korisnikId: number): number[] {
+    const t = this.sada();
+    const lista = (this.promjene.get(korisnikId) ?? []).filter(x => t - x < PROMJENA_PINA_PROZOR_MS);
+    this.promjene.set(korisnikId, lista);
+    return lista;
   }
 
-  uspjeh(): void {
-    this.neuspjesi = 0;
-    this.blokiranDo = 0;
+  provjeri(korisnikId: number): void {
+    const lista = this.svjeze(korisnikId);
+    if (lista.length >= PROMJENA_PINA_MAKS) throw new Error(porukaPrevisePromjena(lista[0] + PROMJENA_PINA_PROZOR_MS - this.sada()));
+  }
+
+  zabiljezi(korisnikId: number): void {
+    this.svjeze(korisnikId).push(this.sada());
   }
 }
