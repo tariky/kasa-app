@@ -59,3 +59,43 @@ export const LEGACY_SCHEMA = `
     value TEXT NOT NULL
   );
 `;
+
+/**
+ * Kasnija stara verzija: kupci, stavke priloga i historija cijena već
+ * postoje, ali bez kolona koje su im migracije dodale poslije (kupci: rok,
+ * način plaćanja i rabat; prilog_stavke: rabat; cijena_historija: ponistena i
+ * cijenaUProdaji — koraci sa samoAkoTabelaPostoji). Pokriva granu „tabela
+ * postoji, kolona ne". I ovaj fixture ostaje star.
+ */
+export const LEGACY_SCHEMA_S_TABELAMA = LEGACY_SCHEMA + `
+  CREATE TABLE kupci (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    naziv TEXT NOT NULL,
+    idBroj TEXT NOT NULL,
+    pdvBroj TEXT,
+    adresa TEXT,
+    postanskiBroj TEXT,
+    grad TEXT,
+    kontakt TEXT,
+    createdAt TEXT DEFAULT (datetime('now','localtime'))
+  );
+
+  CREATE TABLE prilog_stavke (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    orderId INTEGER NOT NULL,
+    productId INTEGER NOT NULL,
+    kolicina REAL NOT NULL,
+    cijena REAL NOT NULL,
+    pdvStopa TEXT NOT NULL
+  );
+
+  CREATE TABLE cijena_historija (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    productId INTEGER NOT NULL,
+    izvor TEXT NOT NULL CHECK(izvor IN ('primka', 'rucno')),
+    izvorId INTEGER,
+    staraCijena REAL NOT NULL,
+    novaCijena REAL NOT NULL,
+    createdAt TEXT DEFAULT (datetime('now','localtime'))
+  );
+`;

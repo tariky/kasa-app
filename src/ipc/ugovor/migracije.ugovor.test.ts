@@ -2,13 +2,13 @@
 // shema, migracije (src/database/migracije.json i koraci u kodu) i seed — vidi
 // backend.ts. Oba backenda moraju dati istu bazu, a ponovno otvaranje iste
 // baze ne smije promijeniti ništa.
-import { test, expect, beforeEach, afterEach } from 'bun:test';
+import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { otvoriBackend, prijavi, type Backend } from './backend';
-import { LEGACY_SCHEMA } from './staraBaza';
+import { LEGACY_SCHEMA, LEGACY_SCHEMA_S_TABELAMA } from './staraBaza';
 import { schema } from '../../database/schema';
 import { provjeriPin } from '../../lib/korisnici';
 
@@ -122,4 +122,74 @@ test('ponovno otvaranje iste baze (drugi i treći prolaz migracija) ne mijenja n
   expect(snimak(b.db)).toEqual(prije);
   await b.ponovoPokreni();
   expect(snimak(b.db)).toEqual(prije);
+});
+
+// ─── Tabela postoji, kolona ne ──────────────────────────────
+
+/** Kasnija stara baza (LEGACY_SCHEMA_S_TABELAMA) s kupcem, fakturom po prilogu i promjenom cijene. */
+function staraBazaSTabelama(): string {
+  const putanja = path.join(folder, 'stara-s-tabelama.db');
+  const db = new Database(putanja);
+  db.exec(LEGACY_SCHEMA_S_TABELAMA);
+  db.exec(`
+    INSERT INTO users (ime, pin, uloga) VALUES ('Vlasnik', '9876', 'admin');
+    INSERT INTO products (sifra, naziv, cijena, pdvStopa) VALUES ('001', 'Kafa', 2.5, 'E');
+    INSERT INTO kupci (naziv, idBroj, grad) VALUES ('Stari kupac', '4200000000001', 'Sarajevo');
+    INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, status) VALUES (1, 10, 1.45, 'Virman', '7', 'completed');
+    INSERT INTO prilog_stavke (orderId, productId, kolicina, cijena, pdvStopa) VALUES (1, 1, 4, 2.5, 'E');
+    INSERT INTO cijena_historija (productId, izvor, staraCijena, novaCijena, createdAt) VALUES (1, 'rucno', 2, 2.5, '2025-06-01 10:00:00');
+  `);
+  db.close();
+  return putanja;
+}
+
+describe('stara baza s kupcima, prilogom i historijom cijena bez novih kolona', () => {
+  beforeEach(async () => {
+    await b.close();
+    b = await otvoriBackend({ prijava: null, baza: staraBazaSTabelama() });
+  });
+
+  test('tabela koja postoji dobija kolone koje joj fale, redom migracija (i samoAkoTabelaPostoji)', () => {
+    const nova = new Database(':memory:');
+    nova.exec(schema);
+    const stara = new Database(':memory:');
+    stara.exec(LEGACY_SCHEMA_S_TABELAMA);
+    const dodano: Record<string, string[]> = {
+      ...DODANO_REDOM,
+      kupci: ['rokPlacanjaDana', 'nacinPlacanja', 'rabat'],
+      prilog_stavke: ['rabat'],
+      cijena_historija: ['ponistena', 'cijenaUProdaji'],
+    };
+
+    expect(objekti(b.db)).toEqual(objekti(nova));
+    for (const tabela of objekti(nova).filter(o => o.startsWith('table ')).map(o => o.slice(6))) {
+      const polazne = kolone(stara, tabela).length > 0 ? kolone(stara, tabela) : kolone(nova, tabela);
+      expect([tabela, ...kolone(b.db, tabela)]).toEqual([tabela, ...polazne, ...(dodano[tabela] ?? [])]);
+      expect([tabela, ...[...kolone(b.db, tabela)].sort()]).toEqual([tabela, ...[...kolone(nova, tabela)].sort()]);
+    }
+    nova.close();
+    stara.close();
+  });
+
+  test('stari redovi dobiju zadane vrijednosti novih kolona, a kanali ih čitaju', async () => {
+    expect(b.db.prepare('SELECT naziv, rokPlacanjaDana, nacinPlacanja, rabat FROM kupci').all())
+      .toEqual([{ naziv: 'Stari kupac', rokPlacanjaDana: null, nacinPlacanja: null, rabat: null }]);
+    expect(b.db.prepare('SELECT kolicina, rabat FROM prilog_stavke').all()).toEqual([{ kolicina: 4, rabat: 0 }]);
+    expect(b.db.prepare('SELECT staraCijena, novaCijena, ponistena, cijenaUProdaji FROM cijena_historija').all())
+      .toEqual([{ staraCijena: 2, novaCijena: 2.5, ponistena: 0, cijenaUProdaji: null }]);
+
+    await prijavi(b, '9876');
+    expect(await b.pozovi('kupac:getAll')).toMatchObject([{ naziv: 'Stari kupac', rokPlacanjaDana: null, nacinPlacanja: null, rabat: null }]);
+    expect((await b.pozovi('prilog:getStavke', 1)).map(s => [s.productId, s.kolicina, s.rabat])).toEqual([[1, 4, 0]]);
+    // Zalihe na dan čitaju staru historiju: prije promjene 2, poslije 2,5.
+    const cijenaNaDan = async (dan: string) => (await b.pozovi('izvoz:knjigovodja', dan, dan)).zalihe.map(z => [z.sifra, z.cijena]);
+    expect(await cijenaNaDan('2025-05-31')).toEqual([['001', 2]]);
+    expect(await cijenaNaDan('2025-06-01')).toEqual([['001', 2.5]]);
+  });
+
+  test('ponovno otvaranje ne mijenja ništa', async () => {
+    const prije = snimak(b.db);
+    await b.ponovoPokreni();
+    expect(snimak(b.db)).toEqual(prije);
+  });
 });

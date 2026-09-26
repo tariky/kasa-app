@@ -1,7 +1,8 @@
 // Ugovor za kanal izvoz:knjigovodja — vidi backend.ts.
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
 import { otvoriBackend, pozoviBezTipova, type Backend } from './backend';
-import { scenarij, ADMIN, spremljena, postoji } from './scenarij';
+import { scenarij, ADMIN, spremljena, postoji, danas, primka as unosPrimke, stavkaPrimke } from './scenarij';
+import { izracunajTotale } from '../../lib/racun';
 
 let b: Backend;
 const baza = scenarij(() => b);
@@ -209,5 +210,39 @@ describe('izvoz:knjigovodja', () => {
     await expect(izvoz('2026-9-1', '2026-09-30')).rejects.toThrow('Neispravan period');
     await expect(b.call('izvoz:knjigovodja', null, '2026-09-30')).rejects.toThrow('Neispravan period');
     await expect(pozoviBezTipova(b, 'izvoz:knjigovodja')).rejects.toThrow('Neispravan period');
+  });
+});
+
+// „Zalihe na dan" (lib/knjigovodja/upiti.ts) računa količinu svojom kopijom
+// formule knjige zalihe, s datumom; za danas mora dati stanje artikla
+// (STANJE_SQL, product:getAll) — za svaki tok koji knjiži zalihu.
+describe('zalihe na dan i stanje artikla', () => {
+  test('za danas je količina svakog artikla i materijala jednaka stanju', async () => {
+    const dan = danas();
+    const a = baza.artikal({ sifra: 'A', cijena: 10 });
+    const m = baza.artikal({ sifra: 'M', cijena: 4, tip: 'materijal' });
+    const p = baza.artikal({ sifra: 'P', cijena: 50 });
+    const u = baza.artikal({ sifra: 'U', cijena: 20, tip: 'usluga' });
+    baza.artikal({ sifra: 'S', cijena: 1, slobodan: 1, stanje: 3 });
+    const prodaj = (stavke: ReturnType<typeof baza.kasaStavka>[]) =>
+      b.pozovi('order:finalize', { ...izracunajTotale(stavke), nacinPlacanja: 'Gotovina', stavke });
+
+    // Primka (ulaz na datum primke), prodaja, storno, korekcija, prilog i završen nalog.
+    spremljena(await b.pozovi('primka:create', unosPrimke('U-1', [stavkaPrimke(a, 10, 10), stavkaPrimke(m, 7.5, 4)], { datum: dan })));
+    await prodaj([baza.kasaStavka(a, 3, 10), baza.kasaStavka(u, 1, 20)]);
+    const vracen = await prodaj([baza.kasaStavka(a, 1, 10)]);
+    await b.call('order:refundAndPrint', { id: (vracen as { id: number }).id });
+    await b.call('product:adjustStock', m, 7.2);
+    await b.call('fiscal:setZadnjiBroj', 200);
+    await b.call('order:finalizePrilog', { nacinPlacanja: 'Virman', stavke: [{ productId: a, kolicina: 2, cijena: 10, rabat: 0, pdvStopa: 'E' }] });
+    await b.call('normativ:save', p, [{ materijalId: m, kolicina: 1.5 }]);
+    const { id: nalog } = await b.pozovi('nalog:create', { vrsta: 'zaliha', productId: p, kolicina: 2 });
+    await b.call('nalog:setStatus', { id: nalog, status: 'zavrsen' });
+
+    const stanje = new Map((await b.pozovi('product:getAll')).map(x => [x.sifra, x.stanje]));
+    const zalihe = (await izvoz(dan, dan)).zalihe;
+    expect(zalihe.map(z => z.sifra)).toEqual(['A', 'M', 'P']);
+    expect(zalihe.map(z => [z.sifra, stanje.get(z.sifra)])).toEqual(zalihe.map(z => [z.sifra, z.kolicina]));
+    expect(zalihe.map(z => z.kolicina)).toEqual([5, 4.2, 2]);
   });
 });

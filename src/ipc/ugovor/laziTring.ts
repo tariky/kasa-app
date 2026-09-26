@@ -14,7 +14,8 @@ export interface LaziTring {
   zahtjevi: TringZahtjev[];
   /**
    * Sljedeći zahtjev na `putanja` dobije `Greska` u formatu uređaja
-   * (`<Greska><Broj/><Opis/></Greska>`); `broj` je TFS kod greške.
+   * (`<Greska><Broj/><Opis/></Greska>`); `broj` je TFS kod greške. Više
+   * poziva za istu putanju redaju greške za uzastopne zahtjeve.
    */
   greskaNa(putanja: string, opis: string, broj?: number): void;
   /** Putanja od sada vraća HTTP 404, kao na uređaju koji ne zna tu komandu. */
@@ -123,7 +124,7 @@ export async function slobodanPort(): Promise<number> {
 
 export function pokreniLaziTring(): LaziTring {
   const zahtjevi: TringZahtjev[] = [];
-  const greske = new Map<string, { opis: string; broj?: number }>();
+  const greske = new Map<string, Array<{ opis: string; broj?: number }>>();
   const nepoznate = new Set<string>();
   const zadrzani = new Map<string, { stigao: () => void; pusten: Promise<void> }>();
   const zadaniBrojevi = new Map<string, string>();
@@ -147,9 +148,8 @@ export function pokreniLaziTring(): LaziTring {
         return new Response(greska('Nepoznat endpoint'), { status: 404, headers: { 'Content-Type': 'application/xml' } });
       }
 
-      const g = greske.get(putanja);
+      const g = greske.get(putanja)?.shift();
       if (g !== undefined) {
-        greske.delete(putanja);
         return new Response(greska(g.opis, g.broj), { headers: { 'Content-Type': 'application/xml' } });
       }
 
@@ -166,7 +166,7 @@ export function pokreniLaziTring(): LaziTring {
   return {
     port: server.port!,
     zahtjevi,
-    greskaNa: (putanja, opis, broj) => { greske.set(putanja, { opis, broj }); },
+    greskaNa: (putanja, opis, broj) => { greske.set(putanja, [...(greske.get(putanja) ?? []), { opis, broj }]); },
     bez: (putanja) => { nepoznate.add(putanja); },
     sljedeciBroj: (putanja, broj) => { zadaniBrojevi.set(putanja, broj); },
     zadrzi: (putanja) => {

@@ -510,6 +510,76 @@ describe('order:refundAndPrint', () => {
   });
 });
 
+// ─── Storno: pokriće u uređaju i manjak ─────────────────────
+// Uređaj isplaćuje storno gotovinom i traži pokriće u punom iznosu računa
+// (lib/refund.ts). Unos novca koji uređaj odbije znači da storno nije
+// odštampan; ishod nakon štampe se čita iz zadnjeg odgovora uređaja.
+
+describe('order:refundAndPrint — pokriće i manjak', () => {
+  const NEMA_NOVCA = 535; // TFS: Nedovoljno novca u kasi
+
+  test('uređaj odbije unos pokrića: greška ide dalje, red nezavršenih obrisan, reklamacija nije poslana', async () => {
+    const p = baza.artikal({ sifra: 'M1', cijena: 30, stanje: 5 });
+    const { id } = await izdaj([stavka(p, 1, 30)], { brojFiskalnogRacuna: '60', nacinPlacanja: 'Kartica' });
+    b.tring.greskaNa('/unosnovca', 'Nema papira', 901);
+
+    await expect(b.call('order:refundAndPrint', { id }))
+      .rejects.toThrow('Unos novca od 30 KM nije prihvaćen na printeru: Nema papira [901]');
+
+    expect(b.tring.zahtjevi.map(z => z.putanja)).toEqual(['/unosnovca']);
+    expect(baza.broj('SELECT COUNT(*) FROM pending_receipts')).toBe(0);
+    expect(baza.red('SELECT status, brojReklamacije FROM orders WHERE id = ?', id)).toEqual({ status: 'completed', brojReklamacije: null });
+    expect(baza.stanje(p)).toBe(4);
+    expect(baza.broj('SELECT COUNT(*) FROM cash_movements')).toBe(0);
+  });
+
+  test('ladica pokriva, a uređaj javi manjak: unese pokriće i ponovi štampu', async () => {
+    const p = baza.artikal({ sifra: 'M2', cijena: 6 });
+    const { id } = await izdaj([stavka(p, 1, 6)], { brojFiskalnogRacuna: '61' });
+    b.tring.greskaNa('/srr', 'Nema novca', NEMA_NOVCA);
+
+    const r = await b.pozovi('order:refundAndPrint', { id });
+
+    expect(r).toMatchObject({ success: true, brojReklamacije: 'R-1', pologIznos: 0 });
+    expect(b.tring.zahtjevi.map(z => z.putanja)).toEqual(['/srr', '/unosnovca', '/srr']);
+    expect(tag(b.tring.zahtjevi[1].tijelo, 'Iznos')).toBe('6');
+    // Pokriće koje storno odmah potroši nije polog ladice.
+    expect(baza.broj('SELECT COUNT(*) FROM cash_movements')).toBe(0);
+    expect(baza.red('SELECT status FROM orders WHERE id = ?', id).status).toBe('refunded');
+  });
+
+  test('i ponovljena štampa javi manjak: ishod po zadnjem odgovoru uređaja, bez ponude pologa', async () => {
+    const p = baza.artikal({ sifra: 'M3', cijena: 6 });
+    const { id } = await izdaj([stavka(p, 1, 6)], { brojFiskalnogRacuna: '62' });
+    b.tring.greskaNa('/srr', 'Nema novca', NEMA_NOVCA);
+    b.tring.greskaNa('/srr', 'Nema novca ni poslije unosa', NEMA_NOVCA);
+
+    const r = await b.pozovi('order:refundAndPrint', { id });
+
+    // Uređaj je dobio puno pokriće — manjka nema, pa ni ponude pologa.
+    expect(r).toMatchObject({ success: false, nedovoljnoSredstava: false, manjak: 0 });
+    expect(r.error).toBe('Nedovoljno novca u kasi (Nema novca ni poslije unosa) [535]');
+    expect(b.tring.zahtjevi.map(z => z.putanja)).toEqual(['/srr', '/unosnovca', '/srr']);
+    expect(baza.broj('SELECT COUNT(*) FROM pending_receipts')).toBe(0);
+    expect(baza.red('SELECT status FROM orders WHERE id = ?', id).status).toBe('completed');
+  });
+
+  test('gotovina koje nema u ladici: bez unosa i ponavljanja, odgovor nudi polog za manjak', async () => {
+    const p = baza.artikal({ sifra: 'M4', cijena: 6 });
+    // Jučerašnji račun: današnja ladica ga ne pokriva.
+    const { id } = await izdaj([stavka(p, 1, 6)], { brojFiskalnogRacuna: '63', createdAt: sada(new Date(Date.now() - 24 * 3600_000)) });
+    b.tring.greskaNa('/srr', 'Nema novca', NEMA_NOVCA);
+
+    const r = await b.pozovi('order:refundAndPrint', { id });
+
+    expect(r).toMatchObject({ success: false, nedovoljnoSredstava: true, manjak: 6 });
+    expect(b.tring.zahtjevi.map(z => z.putanja)).toEqual(['/srr']);
+    expect(baza.broj('SELECT COUNT(*) FROM pending_receipts')).toBe(0);
+    expect(baza.broj('SELECT COUNT(*) FROM cash_movements')).toBe(0);
+    expect(baza.red('SELECT status FROM orders WHERE id = ?', id).status).toBe('completed');
+  });
+});
+
 // ─── order:getFiscalGaps / order:dismissFiscalGap ───────────
 
 describe('fiskalne praznine', () => {
