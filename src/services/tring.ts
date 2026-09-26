@@ -503,14 +503,6 @@ export function inicijalizacija(
   return postXml("/inicijalizacija", body);
 }
 
-// POST /ua - VrstaZahtjeva=105
-export function upisiArtikal(artikal: Artikal): Promise<TringResponse> {
-  return posalji(() => {
-    const noviObjekat = artikalToXml(artikal);
-    return racunZahtjev(105, noviObjekat);
-  }, (body) => postXml("/ua", body));
-}
-
 // POST /sfr - VrstaZahtjeva=0
 export function stampatiFiskalniRacun(racun: Racun): Promise<TringResponse> {
   return posalji(() => {

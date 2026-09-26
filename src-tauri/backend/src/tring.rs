@@ -258,14 +258,6 @@ impl Tring {
         self.post_xml("/inicijalizacija", &operator_xml(operator_id, password))
     }
 
-    // POST /ua - VrstaZahtjeva=105
-    pub fn upisi_artikal(&self, artikal: &Value) -> Odgovor {
-        match artikal_to_xml(artikal) {
-            Ok(objekat) => self.post_xml("/ua", &racun_zahtjev(self.next_request_number(), 105, &objekat)),
-            Err(e) => odbijeno(&e),
-        }
-    }
-
     // POST /sfr - VrstaZahtjeva=0
     pub fn stampati_fiskalni_racun(&self, racun: &Value) -> Odgovor {
         match fiskalni_racun_objekat(racun) {
@@ -691,13 +683,11 @@ mod tests {
         });
         let reklamacija = sa(sa(pun.clone(), "vrstePlacanja", json!([])), "brojRacuna", json!(101));
         let kratki = json!({ "stavke": [pun["stavke"][0]], "vrstePlacanja": [{ "oznaka": "Kartica", "iznos": 5 }] });
-        let artikal = json!({ "sifra": "S<1>", "naziv": "Sok", "jm": "l", "cijena": 1.2, "stopa": "K", "plu": 12 });
 
         let zahtjevi = [
             ("/sfr", racun_zahtjev(1, 0, &fiskalni_racun_objekat(&pun).unwrap())),
             ("/srr", racun_zahtjev(1, 2, &reklamirani_racun_objekat(&reklamacija).unwrap())),
             ("/sfr", racun_zahtjev(1, 0, &fiskalni_racun_objekat(&kratki).unwrap())),
-            ("/ua", racun_zahtjev(1, 105, &artikal_to_xml(&artikal).unwrap())),
             ("/inicijalizacija", operator_xml(&json!(5), &json!("tajna"))),
             ("/spi", periodicni_xml(1, &periodicni_parametri(&json!("2026-01-05"), &json!("2026-02-10")).unwrap())),
             ("/unosnovca", novac_xml(1, 7, 120.33, "Gotovina").unwrap()),
