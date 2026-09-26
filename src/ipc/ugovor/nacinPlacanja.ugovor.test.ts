@@ -113,7 +113,7 @@ test('pending:resolve odbija nepoznat način plaćanja iz snapshota, ništa ne u
   const artikal = dodajProduktZaSnapshot();
   const ponudaId = prihvacenaPonuda(dodajKupca(), artikal);
   const nalogId = await zavrsenNalog(dodajKupca(), null);
-  const snapshoti: Array<[string, (nacin: string) => object]> = [
+  const snapshoti: Array<[string, (nacin: string | null | undefined) => object]> = [
     ['kasa', nacin => ({
       korisnikId: ADMIN, ukupno: 5, pdvIznos: 0.73, nacinPlacanja: nacin,
       stavke: [{ productId: artikal, kolicina: 1, cijena: 5, rabat: 0, pdvStopa: 'E' }],
@@ -134,11 +134,14 @@ test('pending:resolve odbija nepoznat način plaćanja iz snapshota, ništa ne u
     })],
   ];
 
+  // null i nedostajući ključ (undefined JSON izostavi) daju praznu vrijednost u poruci (Ruling 15).
   for (const [vrsta, snapshot] of snapshoti) {
-    for (const nacin of ['gotovina', ' Gotovina ', 'Bitcoin', '{"zlato":5}', '{"gotovina":"5"}', '']) {
+    for (const nacin of ['gotovina', ' Gotovina ', 'Bitcoin', '{"zlato":5}', '{"gotovina":"5"}', '', null, undefined]) {
       const id = dodajPending(snapshot(nacin));
+      const { snapshot: upisan } = b.db.prepare('SELECT snapshot FROM pending_receipts WHERE id = ?').get(id) as { snapshot: string };
+      expect('nacinPlacanja' in JSON.parse(upisan)).toBe(nacin !== undefined);
       await expect(b.call('pending:resolve', { id, brojFiskalnogRacuna: '700', createdAt: DATUM }), `${vrsta}: ${nacin}`)
-        .rejects.toThrow(`Nepoznat način plaćanja: "${nacin}"`);
+        .rejects.toThrow(`Nepoznat način plaćanja: "${nacin ?? ''}"`);
       expect(broj(`SELECT COUNT(*) AS n FROM pending_receipts WHERE id = ${id}`), `${vrsta}: ${nacin}`).toBe(1);
     }
   }

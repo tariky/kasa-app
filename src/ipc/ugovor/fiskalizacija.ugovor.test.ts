@@ -7,14 +7,18 @@
 //    zabilježen u bazi".
 // 2. Sve što može pasti prije štampe (postavke uređaja, račun za uređaj) ide
 //    prije write-ahead reda: greška tada ne ostavlja nezavršeni red.
+// 3. Upis iz nezavršenih razdužuje skladište po tipu artikla u bazi u trenutku
+//    upisa (usluga ne razdužuje), ne po tipu zapisanom u snapshotu.
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
 import { otvoriBackend, type Backend } from './backend';
+import { pokreniPokvareniTring } from './laziTring';
 import { izracunajTotale } from '../../lib/racun';
 
 let b: Backend;
+let zaustavi: (() => void) | null = null;
 
 beforeEach(async () => { b = await otvoriBackend(); });
-afterEach(async () => { await b.close(); });
+afterEach(async () => { zaustavi?.(); zaustavi = null; await b.close(); });
 
 const DATUM = '2026-09-20 11:30:00';
 
@@ -237,5 +241,68 @@ describe('greška prije štampe ne ostavlja nezavršeni red', () => {
     expect(red('SELECT status FROM orders WHERE id = ?', orderId)).toEqual({ status: 'completed' });
     expect(red('SELECT status FROM ponude WHERE id = ?', pon.id)).toEqual({ status: 'prihvacena' });
     expect(red('SELECT status FROM radni_nalozi WHERE id = ?', nalogId)).toEqual({ status: 'zavrsen' });
+  });
+});
+
+describe('pending:resolve razdužuje po današnjem tipu artikla', () => {
+  /** Uređaj koji primi zahtjev pa prekine vezu — red ostaje u nezavršenim. */
+  async function uredjajBezPotvrde(): Promise<void> {
+    const u = await pokreniPokvareniTring('prekid');
+    zaustavi = u.stop;
+    b.db.prepare("UPDATE settings SET value = '127.0.0.1' WHERE key = 'tring.host'").run();
+    b.db.prepare("UPDATE settings SET value = ? WHERE key = 'tring.port'").run(String(u.port));
+  }
+
+  function postaniTip(productId: number, tip: 'artikal' | 'usluga'): void {
+    b.db.prepare('UPDATE products SET tip = ? WHERE id = ?').run(tip, productId);
+  }
+
+  /** Izlazi sa skladišta računa, po artiklu. */
+  function izlazi(orderId: number): Array<Record<string, unknown>> {
+    return b.db.prepare("SELECT productId, kolicina FROM stock_movements WHERE tip = 'izlaz' AND referenceType = 'order' AND referenceId = ? ORDER BY productId")
+      .all(orderId) as Array<Record<string, unknown>>;
+  }
+
+  test('ponuda: roba koja je poslije štampe postala usluga se ne razdužuje, usluga koja je postala roba se razdužuje', async () => {
+    const roba = dodajProizvod('artikal');
+    const usluga = dodajProizvod('artikal', 0);
+    postaniTip(usluga, 'usluga');
+    const ponudaId = Number(b.db.prepare(`
+      INSERT INTO ponude (broj, godina, kupacId, korisnikId, datum, vaziDo, status, ukupno, pdvIznos)
+      VALUES (1, 2026, ?, 1, '2026-03-01', '2026-03-31', 'prihvacena', 20, 2.91)
+    `).run(dodajKupca()).lastInsertRowid);
+    const stavka = b.db.prepare("INSERT INTO ponuda_stavke (ponudaId, productId, kolicina, cijena, rabat, pdvStopa) VALUES (?, ?, 2, 5, 0, 'E')");
+    stavka.run(ponudaId, roba);
+    stavka.run(ponudaId, usluga);
+    await uredjajBezPotvrde();
+
+    expect((await b.call('ponuda:konvertuj', { id: ponudaId, nacinPlacanja: 'Gotovina' })).ishodNepoznat).toBe(true);
+    expect(pending()[0].snapshot).toMatchObject({
+      vrsta: 'ponuda', stavke: [{ productId: roba, productTip: 'artikal' }, { productId: usluga, productTip: 'usluga' }],
+    });
+    postaniTip(roba, 'usluga');
+    postaniTip(usluga, 'artikal');
+
+    const id = await rijesi('700');
+    expect(izlazi(id)).toEqual([{ productId: usluga, kolicina: 2 }]);
+    expect(stanje(roba)).toBe(10);
+    expect(stanje(usluga)).toBe(-2);
+  });
+
+  test('račun sa kase: isto pravilo', async () => {
+    const roba = dodajProizvod('artikal');
+    const usluga = dodajProizvod('artikal', 0);
+    postaniTip(usluga, 'usluga');
+    const stavke = [roba, usluga].map(p => ({ ...kasaRacun(p, 1).stavke[0] }));
+    await uredjajBezPotvrde();
+
+    const r = await b.call('order:finalize', { ...izracunajTotale(stavke), nacinPlacanja: 'Gotovina', stavke });
+    expect(r.ishodNepoznat).toBe(true);
+    postaniTip(roba, 'usluga');
+    postaniTip(usluga, 'artikal');
+
+    const id = await rijesi('701');
+    expect(izlazi(id)).toEqual([{ productId: usluga, kolicina: 1 }]);
+    expect(stanje(roba)).toBe(10);
   });
 });
