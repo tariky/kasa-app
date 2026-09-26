@@ -3,6 +3,8 @@
 // službenim AWS primjerima (r2.test.ts). Koriste ga main proces (automatski
 // backup) i tools/backup (povrat).
 import { createHash, createHmac } from 'node:crypto';
+import { request as httpZahtjev } from 'node:http';
+import { request as httpsZahtjev } from 'node:https';
 
 export interface R2Pristup {
   accountId: string;
@@ -74,34 +76,92 @@ function amzDatum(d = new Date()): string {
   return d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
 }
 
-async function zahtjev(r2: R2Pristup, metoda: string, kljuc: string, upit: Record<string, string> = {}, tijelo?: Uint8Array): Promise<Response> {
+/** Svaka greška R2 poziva. `status` je HTTP status; nema ga kad server nije ni odgovorio. */
+export class R2Greska extends Error {
+  constructor(poruka: string, readonly status?: number) {
+    super(poruka);
+    this.name = 'R2Greska';
+  }
+}
+
+function greskaOdgovora(status: number, statusTekst: string, xml: string): R2Greska {
+  const kod = xml.match(/<Code>([^<]*)<\/Code>/)?.[1] ?? '';
+  const poruka = xml.match(/<Message>([^<]*)<\/Message>/)?.[1] ?? statusTekst;
+  const opis = `${status}${kod ? ` ${kod}` : ''}`;
+  return new R2Greska(status === 403 ? `R2 je odbio pristup (${opis}): ${poruka}` : `R2 greška (${opis}): ${poruka}`, status);
+}
+
+/** URL i potpisana zaglavlja (bez `host` — postavlja ga klijent). */
+function pripremi(r2: R2Pristup, metoda: string, kljuc: string, upit: Record<string, string>, tijelo?: Uint8Array) {
   const baza = new URL(r2.endpoint ?? `https://${r2.accountId}.r2.cloudflarestorage.com`);
   const putanja = `/${r2.bucket}${kljuc ? `/${kljuc}` : ''}`;
   const zaglavlja = potpisiS3({
     metoda, host: baza.host, putanja, upit, zaglavlja: {},
     hashTijela: sha256(tijelo ?? ''), accessKeyId: r2.accessKeyId, secret: r2.secret, region: 'auto', amzDatum: amzDatum(),
   });
-  delete zaglavlja.host; // fetch ga postavlja sam
+  delete zaglavlja.host;
   const q = Object.keys(upit).sort().map(k => `${kodiraj(k)}=${kodiraj(upit[k])}`).join('&');
-  const url = `${baza.origin}${kodiraj(putanja, true)}${q ? `?${q}` : ''}`;
+  return { url: new URL(`${baza.origin}${kodiraj(putanja, true)}${q ? `?${q}` : ''}`), zaglavlja };
+}
+
+async function zahtjev(r2: R2Pristup, metoda: string, kljuc: string, upit: Record<string, string> = {}): Promise<Response> {
+  const { url, zaglavlja } = pripremi(r2, metoda, kljuc, upit);
   let odg: Response;
   try {
-    odg = await fetch(url, { method: metoda, headers: zaglavlja, body: tijelo });
+    odg = await fetch(url, { method: metoda, headers: zaglavlja });
   } catch (e) {
-    throw new Error(`Nema veze s R2 (${(e as Error).message})`);
+    throw new R2Greska(`Nema veze s R2 (${(e as Error).message})`);
   }
-  if (!odg.ok) {
-    const xml = await odg.text();
-    const kod = xml.match(/<Code>([^<]*)<\/Code>/)?.[1] ?? '';
-    const poruka = xml.match(/<Message>([^<]*)<\/Message>/)?.[1] ?? odg.statusText;
-    const opis = `${odg.status}${kod ? ` ${kod}` : ''}`;
-    throw new Error(odg.status === 403 ? `R2 je odbio pristup (${opis}): ${poruka}` : `R2 greška (${opis}): ${poruka}`);
-  }
+  if (!odg.ok) throw greskaOdgovora(odg.status, odg.statusText, await odg.text());
   return odg;
 }
 
-export async function r2Posalji(r2: R2Pristup, kljuc: string, tijelo: Uint8Array): Promise<void> {
-  await zahtjev(r2, 'PUT', kljuc, {}, tijelo);
+const KOMAD = 64 * 1024;
+
+/**
+ * PUT preko node:http(s), a ne fetch: fetch sa streamom šalje chunked bez
+ * dužine, što R2 odbija, a bez streama nema napretka. `napredak` se javlja
+ * kad komad ode na mrežu.
+ */
+export function r2Posalji(
+  r2: R2Pristup, kljuc: string, tijelo: Uint8Array,
+  napredak?: (poslano: number, ukupno: number) => void, cekanjeMs = 120_000,
+): Promise<void> {
+  const { url, zaglavlja } = pripremi(r2, 'PUT', kljuc, {}, tijelo);
+  return new Promise((resolve, reject) => {
+    const posalji = url.protocol === 'https:' ? httpsZahtjev : httpZahtjev;
+    const z = posalji(url, { method: 'PUT', headers: { ...zaglavlja, 'content-length': String(tijelo.length) } }, odg => {
+      const dijelovi: Buffer[] = [];
+      odg.on('data', (d: Buffer) => dijelovi.push(d));
+      odg.on('end', () => {
+        const status = odg.statusCode ?? 0;
+        if (status >= 200 && status < 300) resolve();
+        else reject(greskaOdgovora(status, odg.statusMessage ?? '', Buffer.concat(dijelovi).toString('utf8')));
+      });
+      odg.on('error', e => reject(new R2Greska(`Nema veze s R2 (${e.message})`)));
+    });
+    z.on('error', e => reject(new R2Greska(`Nema veze s R2 (${e.message})`)));
+    // Bun na destroy(greška) ne emituje 'error' (samo 'close'), pa odbijamo ovdje.
+    z.setTimeout(cekanjeMs, () => {
+      reject(new R2Greska('Nema veze s R2 (isteklo vrijeme)'));
+      z.destroy();
+    });
+
+    let poslano = 0;
+    const salji = () => {
+      while (poslano < tijelo.length) {
+        const kraj = Math.min(poslano + KOMAD, tijelo.length);
+        const komad = tijelo.subarray(poslano, kraj);
+        poslano = kraj;
+        if (!z.write(komad, () => napredak?.(kraj, tijelo.length))) {
+          z.once('drain', salji);
+          return;
+        }
+      }
+      z.end();
+    };
+    salji();
+  });
 }
 
 export async function r2Preuzmi(r2: R2Pristup, kljuc: string): Promise<Uint8Array> {
