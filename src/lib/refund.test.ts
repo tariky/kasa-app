@@ -1,18 +1,14 @@
 import { test, expect, beforeEach } from 'bun:test';
-import { Database } from 'bun:sqlite';
-import { schema } from '@/database/schema';
+import { testnaBaza, type TestnaBaza } from './testnaBaza';
 import { refundOrderInTransaction, refundAndPrint, type RefundDeps } from './refund';
 import type { TringResponse } from '@/services/tring';
 import { uredjajIzFunkcija, type TringFunkcije } from './fiskalniUredjaj';
 import { stanje } from './zaliha';
-import type { SqlDb } from './sqldb';
 
-let db: SqlDb & Database;
+let db: TestnaBaza;
 
 beforeEach(() => {
-  db = new Database(':memory:') as SqlDb & Database;
-  db.exec(schema);
-  db.prepare("INSERT INTO users (id, ime, pin, uloga) VALUES (1, 'Kasir', '1234', 'kasir')").run();
+  db = testnaBaza({ kasir: true });
 });
 
 function dodajArtikal(id: number, tip = 'artikal'): void {

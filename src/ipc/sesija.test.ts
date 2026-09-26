@@ -1,8 +1,6 @@
 import { test, expect, describe, beforeEach } from 'bun:test';
-import { Database } from 'bun:sqlite';
-import { schema } from '../database/schema';
+import { testnaBaza, type TestnaBaza } from '../lib/testnaBaza';
 import { hesirajPin, provjeriPin } from '../lib/korisnici';
-import type { SqlDb } from '../lib/sqldb';
 import {
   OgranicenjePokusaja, OgranicenjePromjenaPina, provjeriPristup, porukaBlokade, napraviSesiju, KLJUC_BLOKADE,
   PORUKA_NISTE_PRIJAVLJENI, PORUKA_SAMO_ADMIN, PORUKA_ZADANI_PIN,
@@ -206,7 +204,7 @@ describe('napraviSesiju', () => {
   // PBKDF2 je namjerno spor — heševi se računaju jednom.
   const HES: Record<string, string> = Object.fromEntries(['0000', '1111', '1234', '2222'].map(p => [p, hesirajPin(p)]));
   const BLOKADA_30 = porukaBlokade(30_000);
-  let db: SqlDb & Database;
+  let db: TestnaBaza;
   let sada: number;
   let admin: number;
   let kasir: number;
@@ -220,8 +218,7 @@ describe('napraviSesiju', () => {
   const nova = () => napraviSesiju(db, () => sada);
 
   beforeEach(() => {
-    db = new Database(':memory:') as SqlDb & Database;
-    db.exec(schema);
+    db = testnaBaza();
     sada = 1_000_000_000;
     admin = dodaj('Admin', '1111', 'admin');
     kasir = dodaj('Kasir', '1234', 'kasir');

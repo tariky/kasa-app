@@ -1,9 +1,6 @@
-// Integracija nad pravom SQLite bazom sa produkcijskom šemom.
-// (better-sqlite3 je buildan za Electron ABI i ne učitava se pod Bun-om, pa
-// testovi koriste bun:sqlite — isti SQLite engine, isti SQL.)
+// Integracija nad pravom SQLite bazom sa produkcijskom šemom (testnaBaza).
 import { test, expect, beforeEach } from 'bun:test';
-import { Database } from 'bun:sqlite';
-import { schema } from '@/database/schema';
+import { testnaBaza, type TestnaBaza } from './testnaBaza';
 import {
   collectPriceChanges, upisiCijene,
   cijeneArtikala, promjeneUProdaji, artikliPrimke, brojeviNivelacijaPrimke, napomenaProtunivelacije,
@@ -12,14 +9,12 @@ import {
   isDobavljacUsed, istiPregled, validirajPrimku, TOLERANCIJA_ZALIHE,
 } from './skladiste';
 import { stanje } from './zaliha';
-import type { SqlDb } from './sqldb';
 import type { PregledCijenaUlaza } from '../types';
 
-let db: SqlDb & Database;
+let db: TestnaBaza;
 
 beforeEach(() => {
-  db = new Database(':memory:') as SqlDb & Database;
-  db.exec(schema);
+  db = testnaBaza();
 });
 
 function dodajArtikal(sifra: string, cijena: number, tip = 'artikal'): number {

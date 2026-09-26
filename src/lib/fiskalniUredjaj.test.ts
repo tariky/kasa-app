@@ -1,19 +1,16 @@
 import { test, expect, beforeEach, afterEach, describe } from 'bun:test';
-import { Database } from 'bun:sqlite';
-import { schema } from '../database/schema';
+import { testnaBaza, type TestnaBaza } from './testnaBaza';
 import * as Tring from '../services/tring';
 import { pokreniLaziTring, type LaziTring } from '../ipc/ugovor/laziTring';
 import {
   ishodIzOdgovora, procitajTringPostavke, uredjajIzFunkcija, uredjajIzPostavki,
 } from './fiskalniUredjaj';
-import type { SqlDb } from './sqldb';
 
-let db: SqlDb & Database;
+let db: TestnaBaza;
 const uredjaji: LaziTring[] = [];
 
 beforeEach(() => {
-  db = new Database(':memory:') as SqlDb & Database;
-  db.exec(schema);
+  db = testnaBaza();
 });
 
 afterEach(() => {

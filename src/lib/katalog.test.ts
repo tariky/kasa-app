@@ -2,19 +2,16 @@
 // šifarnika (product:*, dobavljac:*, kupac:*) su u ugovoru oba backenda
 // (src/ipc/ugovor/katalog.ugovor.test.ts); ovdje je modul sam.
 import { test, expect, beforeEach, describe } from 'bun:test';
-import { Database } from 'bun:sqlite';
-import { schema } from '../database/schema';
+import { testnaBaza, type TestnaBaza } from './testnaBaza';
 import {
   azuriraj, normalizujTip, validirajArtikal, provjeriBrisanjeArtikla, slobodnaStavka, validirajDobavljaca, validirajKupca,
   KOLONE_ARTIKLA, KOLONE_KUPCA, SLOBODAN_NAZIV_MAX,
 } from './katalog';
-import type { SqlDb } from './sqldb';
 
-let db: SqlDb & Database;
+let db: TestnaBaza;
 
 beforeEach(() => {
-  db = new Database(':memory:') as SqlDb & Database;
-  db.exec(schema);
+  db = testnaBaza();
 });
 
 function artikal(sifra: string, opts: { barkod?: string; cijena?: number } = {}): number {

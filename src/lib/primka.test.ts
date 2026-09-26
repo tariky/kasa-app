@@ -3,21 +3,18 @@
 // Ugovor oba backenda (src/ipc/ugovor/skladiste.ugovor.test.ts) pokriva kanale;
 // ovdje je modul sam, s audit-om u istoj bazi.
 import { test, expect, beforeEach } from 'bun:test';
-import { Database } from 'bun:sqlite';
-import { schema } from '@/database/schema';
+import { testnaBaza, type TestnaBaza } from './testnaBaza';
 import { napraviPrimke, upisiNivelaciju, type PrimkaUnos } from './primka';
 import { zapisiPromjeneCijena } from './skladiste';
 import { zapisiAudit } from './audit';
 import { localDateStr } from './novac';
-import type { SqlDb } from './sqldb';
 import type { PregledCijenaUlaza, PromijenjenoOdPregleda } from '../types';
 
-let db: SqlDb & Database;
+let db: TestnaBaza;
 let primke: ReturnType<typeof napraviPrimke>;
 
 beforeEach(() => {
-  db = new Database(':memory:') as SqlDb & Database;
-  db.exec(schema);
+  db = testnaBaza();
   primke = napraviPrimke({
     db,
     audit: (akcija, detalji) => zapisiAudit(db, 1, akcija, detalji),

@@ -1,17 +1,13 @@
 import { test, expect, beforeEach, describe } from 'bun:test';
-import { Database } from 'bun:sqlite';
-import { schema } from '../database/schema';
+import { testnaBaza, type TestnaBaza } from './testnaBaza';
 import { fiskalizuj, porukaNakonStampe, uToku, type FiskalizacijaDeps } from './fiskalizacija';
 import { vecEvidentiranStorno } from './pendingRacun';
 import type { IshodUredjaja } from './fiskalniUredjaj';
-import type { SqlDb } from './sqldb';
 
-let db: SqlDb & Database;
+let db: TestnaBaza;
 
 beforeEach(() => {
-  db = new Database(':memory:') as SqlDb & Database;
-  db.exec(schema);
-  db.prepare("INSERT INTO users (id, ime, pin, uloga) VALUES (1, 'Kasir', '1234', 'kasir')").run();
+  db = testnaBaza({ kasir: true });
 });
 
 const deps = (): FiskalizacijaDeps => ({ db, transaction: fn => db.transaction(fn) });

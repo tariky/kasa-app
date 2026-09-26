@@ -1,6 +1,5 @@
 import { test, expect, beforeEach } from 'bun:test';
-import { Database } from 'bun:sqlite';
-import { schema } from '@/database/schema';
+import { testnaBaza, type TestnaBaza } from './testnaBaza';
 import type { SqlDb } from './sqldb';
 import { konvertujPonudu, type KonverzijaDeps } from './ponuda';
 import { uredjajIzFunkcija, type TringFunkcije } from './fiskalniUredjaj';
@@ -13,11 +12,10 @@ import {
 } from './proizvodnja';
 import { stanje } from './zaliha';
 
-let db: SqlDb & Database;
+let db: TestnaBaza;
 
 beforeEach(() => {
-  db = new Database(':memory:') as SqlDb & Database;
-  db.exec(schema);
+  db = testnaBaza();
   db.prepare("INSERT INTO users (id, ime, pin, uloga) VALUES (1, 'Admin', '0000', 'admin')").run();
 });
 

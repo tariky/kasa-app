@@ -1,15 +1,11 @@
 import { test, expect, beforeEach } from 'bun:test';
-import { Database } from 'bun:sqlite';
-import { schema } from '@/database/schema';
-import type { SqlDb } from './sqldb';
+import { testnaBaza, type TestnaBaza } from './testnaBaza';
 import { postaviDatumValute, formatDatumValute } from './valuta';
 
-let db: SqlDb & Database;
+let db: TestnaBaza;
 
 beforeEach(() => {
-  db = new Database(':memory:') as SqlDb & Database;
-  db.exec(schema);
-  db.prepare("INSERT INTO users (id, ime, pin, uloga) VALUES (1, 'Kasir', '1234', 'kasir')").run();
+  db = testnaBaza({ kasir: true });
 });
 
 function dodajOrder(status: 'completed' | 'refunded' = 'completed'): number {

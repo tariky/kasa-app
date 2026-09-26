@@ -1,16 +1,13 @@
 import { test, expect, describe, beforeEach } from 'bun:test';
-import { Database } from 'bun:sqlite';
-import { schema } from '@/database/schema';
+import { testnaBaza, type TestnaBaza } from './testnaBaza';
 import {
   hesirajPin, provjeriPin, jeHesPina, hesirajStarePinove, osigurajZadanogAdmina, nadjiPoPinu, pinZauzet, pinKorisnika,
 } from './korisnici';
-import type { SqlDb } from './sqldb';
 
-let db: SqlDb & Database;
+let db: TestnaBaza;
 
 beforeEach(() => {
-  db = new Database(':memory:') as SqlDb & Database;
-  db.exec(schema);
+  db = testnaBaza();
 });
 
 function dodaj(ime: string, pin: string, uloga = 'kasir'): number {

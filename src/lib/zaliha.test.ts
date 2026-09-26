@@ -1,18 +1,15 @@
 // Knjiga zalihe nad pravom SQLite bazom sa produkcijskom šemom (bun:sqlite).
 import { test, expect, beforeEach } from 'bun:test';
-import { Database } from 'bun:sqlite';
+import { testnaBaza, type TestnaBaza } from './testnaBaza';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { schema } from '@/database/schema';
 import { knjizi, ponisti, stanje, STANJE_SQL, TOLERANCIJA_ZALIHE } from './zaliha';
 import { TOLERANCIJA_ZALIHE as IZ_TOLERANCIJA } from './tolerancije';
-import type { SqlDb } from './sqldb';
 
-let db: SqlDb & Database;
+let db: TestnaBaza;
 
 beforeEach(() => {
-  db = new Database(':memory:') as SqlDb & Database;
-  db.exec(schema);
+  db = testnaBaza();
 });
 
 function artikal(sifra: string, tip = 'artikal'): number {
