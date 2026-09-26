@@ -54,10 +54,14 @@ export function sljedeciBackup(s: BackupStanje, sada: Date, start: Date): Date {
   return new Date(Math.max(kandidat, start.getTime() + ODGODA_STARTA_MS, t));
 }
 
-/** Backup pada i uspjeha nema duže od 24 h. */
+/**
+ * Backup pada i uspjeha nema duže od 24 h. Uspjeh kojeg nema, koji se ne da
+ * pročitati ili je "u budućnosti" (vraćen sat) ne važi — računa se od `greskaOd`.
+ */
 export function trajnaGreska(s: BackupStanje, sada: Date): boolean {
   if (!s.greska) return false;
-  const od = s.zadnjiUspjeh ? ms(s.zadnjiUspjeh) : ms(s.greskaOd);
+  const uspjeh = ms(s.zadnjiUspjeh);
+  const od = Number.isNaN(uspjeh) || uspjeh > sada.getTime() ? ms(s.greskaOd) : uspjeh;
   return !Number.isNaN(od) && sada.getTime() - od > TRAJNA_GRESKA_MS;
 }
 

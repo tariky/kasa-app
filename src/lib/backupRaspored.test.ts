@@ -50,6 +50,13 @@ test('trajna greška: bez uspjeha duže od 24 h', () => {
   expect(trajnaGreska({ zadnjiUspjeh: iso(min(-30 * 60)) }, start)).toBe(false);
 });
 
+test('trajna greška: uspjeh "u budućnosti" (vraćen sat) ili nečitljiv → računa se od greskaOd', () => {
+  const dan = 24 * 60;
+  expect(trajnaGreska({ greska: 'x', greskaOd: iso(min(-dan - 1)), zadnjiUspjeh: iso(min(60)) }, start)).toBe(true);
+  expect(trajnaGreska({ greska: 'x', greskaOd: iso(min(-dan - 1)), zadnjiUspjeh: 'nije datum' }, start)).toBe(true);
+  expect(trajnaGreska({ greska: 'x', greskaOd: iso(min(-60)), zadnjiUspjeh: iso(min(60)) }, start)).toBe(false);
+});
+
 test('ukupni procenat po fazama: kopija 0–10, šifrovanje 10–20, slanje 20–100', () => {
   expect(ukupniProcenat('kopija', 0)).toBe(0);
   expect(ukupniProcenat('kopija', 100)).toBe(10);
