@@ -2,21 +2,17 @@
 // dolaze iz stvarnih lib tokova (ponuda, storno, pendingRacun) nad pravom
 // SQLite bazom — ako backend promijeni oblik ili poruku, test pada ovdje.
 import { test, expect, beforeEach } from 'bun:test';
-import { Database } from 'bun:sqlite';
-import { schema } from '@/database/schema';
+import { testnaBaza, type TestnaBaza } from './testnaBaza';
 import { createPonuda, konvertujPonudu } from './ponuda';
 import { refundAndPrint } from './refund';
 import { neuspjelaStampa, vecEvidentiran, vecEvidentiranStorno, zapisiPending } from './pendingRacun';
 import { procitajIshod, izvrsiFiskalno } from './fiskalniIshod';
 import type { FiskalniUredjaj, IshodUredjaja } from './fiskalniUredjaj';
-import type { SqlDb } from './sqldb';
 
-let db: SqlDb & Database;
+let db: TestnaBaza;
 
 beforeEach(() => {
-  db = new Database(':memory:') as SqlDb & Database;
-  db.exec(schema);
-  db.prepare("INSERT INTO users (id, ime, pin, uloga) VALUES (1, 'Kasir', '1234', 'kasir')").run();
+  db = testnaBaza({ kasir: true });
 });
 
 const brojPending = () => (db.prepare('SELECT COUNT(*) AS c FROM pending_receipts').get() as { c: number }).c;

@@ -1,8 +1,6 @@
 import { test, expect, describe, beforeEach } from 'bun:test';
-import { Database } from 'bun:sqlite';
-import { schema } from '../database/schema';
+import { testnaBaza, type TestnaBaza } from '../lib/testnaBaza';
 import { hesirajPin, provjeriPin } from '../lib/korisnici';
-import type { SqlDb } from '../lib/sqldb';
 import {
   OgranicenjePokusaja, OgranicenjePromjenaPina, provjeriPristup, porukaBlokade, napraviSesiju, KLJUC_BLOKADE,
   PORUKA_NISTE_PRIJAVLJENI, PORUKA_SAMO_ADMIN, PORUKA_ZADANI_PIN,
@@ -11,53 +9,24 @@ import {
 const ADMIN = { id: 1, ime: 'Admin', uloga: 'admin' as const };
 const KASIR = { id: 2, ime: 'Kasir', uloga: 'kasir' as const };
 
-describe('provjeriPristup', () => {
-  test('bez prijave: samo prijava, odjava, licenca, firma i dozvoljene postavke', () => {
-    for (const k of ['user:login', 'user:logout', 'licenca:stanje', 'licenca:aktiviraj', 'settings:getFirma']) {
+// Pravila pristupa (bez prijave, uloge, zadani PIN, allowlista postavki, 'vrati'
+// naloga) su u ugovoru oba backenda (ugovor/sesija.ugovor.test.ts) i u
+// napraviSesiju ispod; ovdje ostaju slučajevi do kojih ugovor ne dopire.
+describe('provjeriPristup — slučajevi van ugovora', () => {
+  test('licenca:* bez prijave (harness ugovora zamjenjuje licencu)', () => {
+    for (const k of ['licenca:stanje', 'licenca:aktiviraj']) {
       expect(() => provjeriPristup(k, [], null)).not.toThrow();
     }
-    expect(() => provjeriPristup('settings:get', ['ui.skala'], null)).not.toThrow();
-    expect(() => provjeriPristup('settings:get', ['tring.host'], null)).toThrow('Niste prijavljeni');
-    expect(() => provjeriPristup('product:getAll', [], null)).toThrow('Niste prijavljeni');
   });
 
-  test('admin kanali i postavke po ulozi', () => {
-    expect(() => provjeriPristup('db:restore', [], KASIR)).toThrow('Ovu radnju može izvršiti samo administrator');
-    expect(() => provjeriPristup('db:restore', [], ADMIN)).not.toThrow();
-    expect(() => provjeriPristup('settings:set', ['kasa.scanMode'], KASIR)).not.toThrow();
-    expect(() => provjeriPristup('settings:set', ['racun.napomena'], KASIR)).toThrow('samo administrator');
-    expect(() => provjeriPristup('settings:set', ['racun.napomena'], ADMIN)).not.toThrow();
-    expect(() => provjeriPristup('settings:set', ['tring.operatorPassword'], ADMIN)).toThrow('se ne može mijenjati');
+  test('ključ postavke koji nije tekst se odbija kao prazan ključ', () => {
     expect(() => provjeriPristup('settings:set', [42], ADMIN)).toThrow('Postavka "" se ne može mijenjati');
   });
-});
 
-describe('provjeriPristup — vraćanje naloga u izradu', () => {
-  test('nalog:setStatus "vrati" smije samo admin; ostale statuse svako', () => {
-    const vrati = [{ id: 1, status: 'vrati' }];
-    expect(() => provjeriPristup('nalog:setStatus', vrati, KASIR)).toThrow('Vraćanje naloga u izradu može samo administrator');
-    expect(() => provjeriPristup('nalog:setStatus', vrati, ADMIN)).not.toThrow();
-    expect(() => provjeriPristup('nalog:setStatus', [{ id: 1, status: 'zavrsen' }], KASIR)).not.toThrow();
-    expect(() => provjeriPristup('nalog:setStatus', [{ id: 1, status: 'u_izradi' }], KASIR)).not.toThrow();
-    // Neispravan payload ostaje handleru (njegova poruka), kao i dosad.
+  test('neispravan payload nalog:setStatus ostaje handleru (njegova poruka)', () => {
     for (const args of [[], [null], [5], [{ id: 1 }]]) {
       expect(() => provjeriPristup('nalog:setStatus', args, KASIR)).not.toThrow();
     }
-    // Bez prijave i sa zadanim PIN-om važe opšte poruke.
-    expect(() => provjeriPristup('nalog:setStatus', vrati, null)).toThrow('Niste prijavljeni');
-    expect(() => provjeriPristup('nalog:setStatus', vrati, KASIR, true)).toThrow('Prije rada promijenite zadani PIN 0000');
-  });
-});
-
-describe('zadani PIN', () => {
-  test('sesija sa zadanim PIN-om smije samo promjenu PIN-a, odjavu i pred-prijavne kanale', () => {
-    expect(() => provjeriPristup('user:promijeniSvojPin', [], ADMIN, true)).not.toThrow();
-    expect(() => provjeriPristup('user:logout', [], ADMIN, true)).not.toThrow();
-    expect(() => provjeriPristup('settings:getFirma', [], ADMIN, true)).not.toThrow();
-    expect(() => provjeriPristup('settings:get', ['ui.skala'], ADMIN, true)).not.toThrow();
-    expect(() => provjeriPristup('settings:get', ['tring.host'], ADMIN, true)).toThrow('Prije rada promijenite zadani PIN 0000');
-    expect(() => provjeriPristup('product:getAll', [], KASIR, true)).toThrow('Prije rada promijenite zadani PIN 0000');
-    expect(() => provjeriPristup('user:promijeniSvojPin', [], null)).toThrow('Niste prijavljeni');
   });
 });
 
@@ -206,7 +175,7 @@ describe('napraviSesiju', () => {
   // PBKDF2 je namjerno spor — heševi se računaju jednom.
   const HES: Record<string, string> = Object.fromEntries(['0000', '1111', '1234', '2222'].map(p => [p, hesirajPin(p)]));
   const BLOKADA_30 = porukaBlokade(30_000);
-  let db: SqlDb & Database;
+  let db: TestnaBaza;
   let sada: number;
   let admin: number;
   let kasir: number;
@@ -220,8 +189,7 @@ describe('napraviSesiju', () => {
   const nova = () => napraviSesiju(db, () => sada);
 
   beforeEach(() => {
-    db = new Database(':memory:') as SqlDb & Database;
-    db.exec(schema);
+    db = testnaBaza();
     sada = 1_000_000_000;
     admin = dodaj('Admin', '1111', 'admin');
     kasir = dodaj('Kasir', '1234', 'kasir');

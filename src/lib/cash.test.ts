@@ -1,17 +1,13 @@
 import { test, expect, beforeEach } from 'bun:test';
-import { Database } from 'bun:sqlite';
-import { schema } from '@/database/schema';
+import { testnaBaza, type TestnaBaza } from './testnaBaza';
 import { addCashMovement, retryCashMovement, getTodayMovements, getDrawerState } from './cash';
-import type { SqlDb } from './sqldb';
 import type { TringResponse } from '@/services/tring';
 import { uredjajIzFunkcija } from './fiskalniUredjaj';
 
-let db: SqlDb & Database;
+let db: TestnaBaza;
 
 beforeEach(() => {
-  db = new Database(':memory:') as SqlDb & Database;
-  db.exec(schema);
-  db.prepare("INSERT INTO users (id, ime, pin, uloga) VALUES (1, 'Kasir', '1234', 'kasir')").run();
+  db = testnaBaza({ kasir: true });
 });
 
 const ok: TringResponse = { success: true, vrstaOdgovora: 'OK', odgovori: {} };

@@ -2,6 +2,7 @@ import { test, expect, describe } from 'bun:test';
 import { sumePrimke, rucPrimke, sumePrometa, sumeNivelacija, razlikePoZnaku, formatRucPct } from './izvjestaji';
 import { kalkulacijaPrimke, type StavkaZaKalkulaciju } from './kalkulacija';
 import { formatKM } from './utils';
+import { round2 } from './novac';
 import { izluciPdv } from './pdv';
 
 const st = (p: Partial<StavkaZaKalkulaciju>): StavkaZaKalkulaciju => ({
@@ -95,7 +96,8 @@ describe('RUC primki', () => {
     const s = sumePrimke([{ stavke }]);
     expect(formatKM(s.nabavna)).toBe(formatKM(k.nabavna));
     expect(formatKM(s.ruc)).toBe(formatKM(k.ruc));
-    expect(formatKM(s.nabavna)).toBe('11,49 KM');
+    // Primjer vrijedi samo ako nabavna ima više od dvije decimale (inače round2 ne bi ništa promijenio).
+    expect(round2(k.nabavna)).not.toBe(k.nabavna);
   });
 
   test('više primki: zbir iznosa, a stopa RUC iz zbira (ne prosjek stopa)', () => {

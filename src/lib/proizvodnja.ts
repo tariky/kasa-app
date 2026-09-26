@@ -368,7 +368,7 @@ const NALOG_SELECT = `
   LEFT JOIN ponude po ON po.id = rn.ponudaId
 `;
 
-export function getNalogStavke(db: SqlDb, id: number): RadniNalogStavka[] {
+function getNalogStavke(db: SqlDb, id: number): RadniNalogStavka[] {
   const stavke = db.prepare(`
     SELECT s.*, m.naziv AS materijalNaziv, m.sifra AS materijalSifra, m.jm AS materijalJm,
       m.plocaSirina, m.plocaVisina
@@ -381,7 +381,7 @@ export function getNalogStavke(db: SqlDb, id: number): RadniNalogStavka[] {
   return stavke;
 }
 
-export function getNalogProizvodi(db: SqlDb, id: number): RadniNalogProizvod[] {
+function getNalogProizvodi(db: SqlDb, id: number): RadniNalogProizvod[] {
   return db.prepare(`
     SELECT rp.*, p.naziv AS productNaziv, p.sifra AS productSifra, p.jm AS productJm
     FROM radni_nalog_proizvodi rp LEFT JOIN products p ON p.id = rp.productId
@@ -439,7 +439,7 @@ export function saveNormativ(db: SqlDb, productId: number, stavke: NalogStavkaIn
  * Prosječna ponderisana nabavna cijena iz svih primki materijala, po kalkulaciji
  * ulaza: fakturna − rabat + zavisni troškovi (prevoz i sl.). 0 bez primki.
  */
-export function getProsjecnaNabavna(db: SqlDb, materijalId: number): number {
+function getProsjecnaNabavna(db: SqlDb, materijalId: number): number {
   const row = db.prepare(`
     SELECT SUM(kolicina * nabavnaCijena * (1 - COALESCE(rabat, 0) / 100.0) + COALESCE(zavisniTroskovi, 0)) AS vrijednost, SUM(kolicina) AS kolicina
     FROM primka_stavke WHERE productId = ?
@@ -615,7 +615,7 @@ export function vratiUIzradu(db: SqlDb, id: number): void {
   db.prepare("UPDATE radni_nalozi SET status = 'u_izradi', zavrsenAt = NULL WHERE id = ?").run(id);
 }
 
-export function fakturisiNalog(db: SqlDb, id: number, racunId: number): void {
+function fakturisiNalog(db: SqlDb, id: number, racunId: number): void {
   const n = ucitajNalogIliBaci(db, id);
   if (n.vrsta !== 'narudzba') throw new Error('Račun se izdaje samo za nalog po narudžbi');
   if (n.status !== 'zavrsen') throw new Error('Nalog mora biti završen prije izdavanja računa');

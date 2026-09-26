@@ -2,16 +2,13 @@
 // (settings:*, proizvodnja:setEnabled) su u ugovoru oba backenda
 // (src/ipc/ugovor/korisnici-postavke.ugovor.test.ts, audit.ugovor.test.ts).
 import { test, expect, beforeEach, describe } from 'bun:test';
-import { Database } from 'bun:sqlite';
-import { schema } from '../database/schema';
+import { testnaBaza, type TestnaBaza } from './testnaBaza';
 import { procitajPostavku, procitajGrupu, upisiPostavke } from './postavke';
-import type { SqlDb } from './sqldb';
 
-let db: SqlDb & Database;
+let db: TestnaBaza;
 
 beforeEach(() => {
-  db = new Database(':memory:') as SqlDb & Database;
-  db.exec(schema);
+  db = testnaBaza();
 });
 
 function postavi(kljuc: string, vrijednost: string | null) {

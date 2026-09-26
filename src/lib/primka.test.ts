@@ -3,21 +3,18 @@
 // Ugovor oba backenda (src/ipc/ugovor/skladiste.ugovor.test.ts) pokriva kanale;
 // ovdje je modul sam, s audit-om u istoj bazi.
 import { test, expect, beforeEach } from 'bun:test';
-import { Database } from 'bun:sqlite';
-import { schema } from '@/database/schema';
+import { testnaBaza, type TestnaBaza } from './testnaBaza';
 import { napraviPrimke, upisiNivelaciju, type PrimkaUnos } from './primka';
 import { zapisiPromjeneCijena } from './skladiste';
 import { zapisiAudit } from './audit';
 import { localDateStr } from './novac';
-import type { SqlDb } from './sqldb';
 import type { PregledCijenaUlaza, PromijenjenoOdPregleda } from '../types';
 
-let db: SqlDb & Database;
+let db: TestnaBaza;
 let primke: ReturnType<typeof napraviPrimke>;
 
 beforeEach(() => {
-  db = new Database(':memory:') as SqlDb & Database;
-  db.exec(schema);
+  db = testnaBaza();
   primke = napraviPrimke({
     db,
     audit: (akcija, detalji) => zapisiAudit(db, 1, akcija, detalji),
@@ -402,6 +399,8 @@ test('ručna izmjena poslije primke preuzima njenu staru cijenu i ostaje; cijena
   db.prepare('UPDATE products SET cijena = 13 WHERE id = ?').run(q);
   primke.obrisi(c);
   expect(cijena(q)).toBe(13);
+  // Cijena se ne vraća, pa nema ni traga vraćanja; promjena primke je ipak poništena (izlazi iz lanca).
+  expect(historija(q)).toEqual([{ izvor: 'primka', izvorId: c, staraCijena: 10, novaCijena: 12, ponistena: 1 }]);
 });
 
 // ── Stare primke (prije historije cijena) — stari put ─────────────────

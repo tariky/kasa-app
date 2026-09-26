@@ -1,18 +1,15 @@
 // Knjiga zalihe nad pravom SQLite bazom sa produkcijskom šemom (bun:sqlite).
 import { test, expect, beforeEach } from 'bun:test';
-import { Database } from 'bun:sqlite';
+import { testnaBaza, type TestnaBaza } from './testnaBaza';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { schema } from '@/database/schema';
 import { knjizi, ponisti, stanje, STANJE_SQL, TOLERANCIJA_ZALIHE } from './zaliha';
 import { TOLERANCIJA_ZALIHE as IZ_TOLERANCIJA } from './tolerancije';
-import type { SqlDb } from './sqldb';
 
-let db: SqlDb & Database;
+let db: TestnaBaza;
 
 beforeEach(() => {
-  db = new Database(':memory:') as SqlDb & Database;
-  db.exec(schema);
+  db = testnaBaza();
 });
 
 function artikal(sifra: string, tip = 'artikal'): number {
@@ -68,9 +65,9 @@ test('usluga ne razdužuje: izlaz računa i priloga preskače uslugu, ostalo knj
   expect(stanje(db, u)).toBe(0);
 });
 
-test('usluga ne razdužuje: artikal kojeg nema u bazi se knjiži (preskače se samo poznata usluga)', () => {
-  knjizi(db, { vrsta: 'order', id: 1 }, 'izlaz', [{ productId: 404, kolicina: 2 }]);
-  expect(stanje(db, 404)).toBe(-2);
+test('usluga ne razdužuje: preskače se samo poznata usluga — artikal kojeg nema u bazi se ne preskače, upis pada na stranom ključu', () => {
+  expect(() => knjizi(db, { vrsta: 'order', id: 1 }, 'izlaz', [{ productId: 404, kolicina: 2 }])).toThrow('FOREIGN KEY constraint failed');
+  expect(kretanja()).toEqual([]);
 });
 
 test('pravilo usluge važi samo za prodaju: storno, korekcija i nalog knjiže i uslugu', () => {
@@ -108,6 +105,7 @@ test('STANJE_SQL je stanje artikla p u upitu nad artiklima', () => {
 
 test('jedna tolerancija zalihe (lib/tolerancije.ts)', () => {
   expect(TOLERANCIJA_ZALIHE).toBe(IZ_TOLERANCIJA);
+  expect(TOLERANCIJA_ZALIHE).toBe(1e-9);
 });
 
 test('Rust (zaliha.rs) čita STANJE_SQL kao jedini tekst između backtickova u zaliha.ts', () => {
