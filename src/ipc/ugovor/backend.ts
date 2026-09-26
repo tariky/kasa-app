@@ -7,6 +7,7 @@
 // (src-tauri/backend, `bun run test:rust`).
 import type { Database } from 'bun:sqlite';
 import type { LaziTring } from './laziTring';
+import type { Argumenti, Kanal } from '../kanali';
 import { hesirajPin } from '../../lib/korisnici';
 
 /**
@@ -30,12 +31,20 @@ export interface OtvoreniDijalog {
   opcije: Record<string, unknown>;
 }
 
+/** Argumenti kanala s istim brojem i redom, ali bez tipova. */
+type BezTipova<A> = A extends unknown[] ? { [I in keyof A]: unknown } : never;
+
 export interface Backend {
   /**
    * Poziv kanala kao iz renderera. Argumenti i rezultat idu kroz JSON, a
    * "nema vrijednosti" je uvijek `null` (JSON nema `undefined`).
+   *
+   * Kanal i broj argumenata su iz ugovora (src/ipc/kanali.ts); tipovi
+   * argumenata i rezultata namjerno nisu: testovi šalju i neispravne podatke
+   * (provjera validacije) i čitaju svaku varijantu odgovora bez sužavanja.
+   * Kanal mimo ugovora (uklonjen, iz liste teksta): `pozoviBezTipova`.
    */
-  call(kanal: string, ...args: unknown[]): Promise<any>;
+  call<K extends Kanal>(kanal: K, ...args: BezTipova<Argumenti<K>>): Promise<any>;
   /** Druga konekcija na istu bazu — za pripremu podataka i provjeru stanja. */
   db: Database;
   tring: LaziTring;
@@ -95,4 +104,14 @@ export async function prijavi(b: Backend, pin: string): Promise<{ id: number; im
   const u = await b.call('user:login', pin);
   if (!u) throw new Error(`Prijava PIN-om ${pin} nije uspjela`);
   return u;
+}
+
+/**
+ * Poziv kanala zadanog tekstom, s bilo kojim argumentima — za kanale koji ne
+ * postoje (uklonjeni), liste kanala i pogrešan broj argumenata.
+ */
+export function pozoviBezTipova(b: Backend, kanal: string, ...args: unknown[]): Promise<unknown> {
+  // Oba harnessa primaju bilo koji kanal i argumente; tip `call` ih samo sužava na ugovor.
+  const sirovo = b.call.bind(b) as unknown as (kanal: string, ...args: unknown[]) => Promise<unknown>;
+  return sirovo(kanal, ...args);
 }

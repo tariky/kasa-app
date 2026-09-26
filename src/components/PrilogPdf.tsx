@@ -1,5 +1,5 @@
 import { View, Text, StyleSheet } from '@react-pdf/renderer';
-import type { FirmaSettings, Order } from '@/types';
+import type { FirmaSettings, Order, PrilogStavka } from '@/types';
 import { PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
 import { formatRabat, type DokumentPostavke } from '@/lib/dokumentPostavke';
 import { izracunajTotale } from '@/lib/racun';
@@ -12,18 +12,10 @@ import { formatKM, formatDateTime } from '@/lib/utils';
 import { A4Dokument, DvaBloka, Izdavac, Kupac, MetaRed } from './pdf/A4Dokument';
 import { TabelaStavki, type KolonaStavke } from './pdf/TabelaStavki';
 
-/** Red iz `prilog:getStavke` (prilog_stavke + JOIN na products). */
-export interface PrilogPdfStavka {
-  productId: number;
-  kolicina: number;
-  cijena: number;
-  /** Postotak; stari zapisi ga nemaju. */
-  rabat?: number | null;
-  pdvStopa: string;
-  productNaziv?: string;
-  productJm?: string;
-  productSifra?: string;
-}
+/** Dio reda iz `prilog:getStavke` koji PDF čita. */
+export type PrilogPdfStavka = Pick<
+  PrilogStavka, 'productId' | 'kolicina' | 'cijena' | 'rabat' | 'pdvStopa' | 'productNaziv' | 'productJm' | 'productSifra'
+>;
 
 export interface PrilogPdfProps {
   order: Order;

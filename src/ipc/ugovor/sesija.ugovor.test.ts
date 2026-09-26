@@ -3,7 +3,8 @@
 // PIN za storno. Pravila su u src/ipc/sesija.ts — vidi backend.ts.
 import { test, expect, describe, beforeEach, afterEach, setSystemTime } from 'bun:test';
 import { pbkdf2Sync } from 'node:crypto';
-import { otvoriBackend, prijavi, ADMIN_PIN, type Backend } from './backend';
+import { otvoriBackend, pozoviBezTipova, prijavi, ADMIN_PIN, type Backend } from './backend';
+import type { Kanal } from '../kanali';
 import { hesirajPin, provjeriPin } from '../../lib/korisnici';
 import { KLJUCEVI_DOKUMENATA } from '../../lib/dokumentPostavke';
 
@@ -62,7 +63,7 @@ async function greska(p: Promise<unknown>): Promise<string> {
 }
 
 /** Svi kanali backenda. Provjera ispod drži listu tačnom. */
-const SVI_KANALI = [
+const SVI_KANALI: Kanal[] = [
   'licenca:stanje', 'licenca:aktiviraj',
   'user:login', 'user:logout', 'user:promijeniSvojPin', 'user:getAll', 'user:create', 'user:update', 'user:delete',
   'product:getAll', 'product:get', 'product:create', 'product:update', 'product:delete', 'product:adjustStock',
@@ -85,22 +86,22 @@ const SVI_KANALI = [
   'cash:add', 'cash:retry', 'cash:getToday', 'cash:lastPolog', 'cash:drawerState',
   'dialog:saveFile', 'fs:writeFile', 'db:backup', 'db:restore',
   // Rust: faza 4 (automatski backup)
-  ...(process.env.KASA_BACKEND === 'rust' ? [] : ['backup:info', 'backup:sada']),
+  ...(process.env.KASA_BACKEND === 'rust' ? [] : ['backup:info', 'backup:sada'] as const),
 ];
 
 /** Kanali bez prijave (licenca:* se ovdje ne zove — harness je zamjenjuje). */
 const BEZ_PRIJAVE = ['licenca:stanje', 'licenca:aktiviraj', 'user:login', 'user:logout', 'settings:getFirma', 'settings:get'];
 
-const ADMIN_KANALI = [
+const ADMIN_KANALI: Kanal[] = [
   'user:create', 'user:update', 'user:delete', 'settings:saveFirma', 'settings:saveTring', 'proizvodnja:setEnabled',
   'fiscal:setZadnjiBroj', 'order:dismissFiscalGap', 'pending:discard', 'db:backup', 'db:restore', 'izvoz:knjigovodja',
   'tring:init', 'tring:getLogs', 'tring:clearLogs',
   // Rust: faza 4 (automatski backup)
-  ...(process.env.KASA_BACKEND === 'rust' ? [] : ['backup:sada']),
+  ...(process.env.KASA_BACKEND === 'rust' ? [] : ['backup:sada'] as const),
 ];
 
 /** Zove svaki kanal iz `kanali` bez argumenata; vraća one koji nisu odbijeni porukom `poruka`. */
-async function neodbijeni(kanali: string[], poruka: string): Promise<string[]> {
+async function neodbijeni(kanali: Kanal[], poruka: string): Promise<string[]> {
   const prosli: string[] = [];
   for (const kanal of kanali) {
     const g = await greska(b.call(kanal));
@@ -115,7 +116,7 @@ describe('lista kanala', () => {
   beforeEach(async () => { b = await otvoriBackend({ prijava: null }); });
 
   test('SVI_KANALI su tačno kanali koje backend registruje', async () => {
-    expect([...SVI_KANALI].sort()).toEqual(await b.kanali());
+    expect<string[]>([...SVI_KANALI].sort()).toEqual(await b.kanali());
   });
 });
 
@@ -880,7 +881,7 @@ describe('uklonjeni kanali', () => {
       'order:create', 'order:refund', 'order:updateReklamacija', 'tring:printReceipt', 'tring:printRefund', 'tring:writeArticle',
       'user:verifyAdminPin',
     ]) {
-      await expect(b.call(kanal, {})).rejects.toThrow();
+      await expect(pozoviBezTipova(b, kanal, {})).rejects.toThrow();
     }
     expect(b.tring.zahtjevi).toEqual([]);
   });

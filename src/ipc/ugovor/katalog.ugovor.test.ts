@@ -1,6 +1,6 @@
 // Ugovor za kanale product:*, dobavljac:* i kupac:* — vidi backend.ts.
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
-import { otvoriBackend, prijavi, ADMIN_PIN, type Backend } from './backend';
+import { otvoriBackend, pozoviBezTipova, prijavi, ADMIN_PIN, type Backend } from './backend';
 
 let b: Backend;
 
@@ -1002,6 +1002,6 @@ describe('uklonjeni kanali pretrage', () => {
   test('product:search, kupac:search i materijal:search ne postoje', async () => {
     const uklonjeni = ['product:search', 'kupac:search', 'materijal:search'];
     expect((await b.kanali()).filter(k => uklonjeni.includes(k))).toEqual([]);
-    for (const kanal of uklonjeni) await expect(b.call(kanal, '')).rejects.toThrow();
+    for (const kanal of uklonjeni) await expect(pozoviBezTipova(b, kanal, '')).rejects.toThrow();
   });
 });
