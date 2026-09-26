@@ -6,7 +6,7 @@ const OPCIJE: Array<{ vrijednost: ZiroRacuniPozicija; naziv: string; opis: strin
   { vrijednost: 'podnozje', naziv: 'U podnožju', opis: 'Posebna traka na dnu svake stranice' },
 ];
 
-/** Minijatura A4 fakture — žiro računi (amber) tamo gdje će stvarno biti. */
+/** Minijatura A4 dokumenta — žiro računi (amber) tamo gdje će stvarno biti. */
 function Minijatura({ pozicija, aktivna }: { pozicija: ZiroRacuniPozicija; aktivna: boolean }) {
   const racun = aktivna ? 'bg-amber-500' : 'bg-amber-300';
   return (
@@ -37,7 +37,7 @@ export function ZiroRacuniPozicijaBirac({ value, onChange }: {
   onChange: (v: ZiroRacuniPozicija) => void;
 }) {
   return (
-    <div role="radiogroup" aria-label="Položaj žiro računa na fakturi" className="grid grid-cols-2 gap-3">
+    <div role="radiogroup" aria-label="Položaj žiro računa na dokumentima" className="grid grid-cols-2 gap-3">
       {OPCIJE.map(o => {
         const aktivna = o.vrijednost === value;
         return (
