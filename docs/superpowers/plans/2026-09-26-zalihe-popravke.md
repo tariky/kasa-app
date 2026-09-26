@@ -38,12 +38,24 @@ Fajlovi: `src/lib/proizvodnja.ts`, `src-tauri/backend/src/proizvodnja.rs`, event
    skida materijal, a pri izdavanju računa (`izdajRacunZaNalog` → `konvertujPonudu` →
    `upisiRacun`, `racun.ts:88-91`) se skida i svaka ne-usluga stavka ponude — a gotov proizvod
    nikad nije ušao na zalihu → stanje proizvoda −kolicina.
-   **Odluka:** `zavrsiNalog` za nalog `vrsta='narudzba'` s `ponudaId` upisuje
-   `ulaz 'radni_nalog'` za svaku stavku ponude čiji artikal nije `usluga` ni `materijal`
-   (količina = količina stavke ponude). Nalog iz ponude predstavlja cijelu ponudu (spec:
-   opis = nazivi svih stavki), pa su sve takve stavke proizvod naloga. Prodaja i dalje uvijek
-   skida robu — tako je ishod isti bez obzira da li se ponuda fakturiše prije ili poslije
-   završetka naloga. Samostalni nalog po narudžbi (bez ponude) ide kroz uslugu i ne mijenja se.
+   **Odluka (vlasnik, 2026-09-26): sve što se prodaje mora biti skinuto** — i izrađeni
+   proizvod i kupljena roba sa zalihe (npr. sudopera) na istoj ponudi. Zato nalog eksplicitno
+   zna koje stavke ponude IZRAĐUJE:
+   - Nova tabela `radni_nalog_proizvodi (id, radniNalogId FK, productId FK, kolicina REAL
+     NOT NULL)` — schema.ts + idempotentna migracija u oba backenda.
+   - Pri kreiranju naloga iz ponude korisnik u dijalogu bira (checkbox po stavci) koje
+     stavke ponude (samo artikli koji nisu `usluga` ni `materijal`) nalog izrađuje; zadano
+     označeno je stavka čiji artikal trenutno nema dovoljno zalihe (stanje < količina
+     stavke), neoznačeno ako je roba na zalihi. Izbor se može mijenjati dok je nalog
+     `otvoren`/`u_izradi` (detalj/izmjena naloga), zaključan nakon završetka.
+     Backend validira: artikal je na ponudi naloga, nije usluga/materijal, količina > 0 i
+     ne veća od količine na ponudi.
+   - `zavrsiNalog` upisuje `ulaz 'radni_nalog'` samo za izabrane proizvode (količina iz
+     `radni_nalog_proizvodi`). Prodaja (račun iz ponude) i dalje skida SVE ne-usluga stavke
+     → izrađeni proizvod: ulaz pa izlaz = 0; kupljena roba: samo izlaz (skinuta sa zalihe).
+     Ishod je isti bez obzira da li se ponuda fakturiše prije ili poslije završetka naloga.
+   - Samostalni nalog po narudžbi (bez ponude) ide kroz uslugu i ne mijenja se. Stari
+     nalozi iz ponude bez redova u novoj tabeli ponašaju se kao do sada (bez ulaza).
    `vratiUIzradu` briše i te ulaze (već briše sve `radni_nalog` kretanja naloga).
    Postojeći ugovorni test koji maskira problem početnim stanjem (`proizvodnja.ugovor.test.ts`
    ~755) prepraviti da provjerava stvarni ishod (stanje proizvoda 0 nakon završetka+računa).
