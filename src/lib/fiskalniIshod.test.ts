@@ -8,6 +8,7 @@ import { createPonuda, konvertujPonudu } from './ponuda';
 import { refundAndPrint } from './refund';
 import { neuspjelaStampa, vecEvidentiran, vecEvidentiranStorno, zapisiPending } from './pendingRacun';
 import { procitajIshod, izvrsiFiskalno } from './fiskalniIshod';
+import type { FiskalniUredjaj, IshodUredjaja } from './fiskalniUredjaj';
 import type { SqlDb } from './sqldb';
 
 let db: SqlDb & Database;
@@ -29,8 +30,11 @@ function napraviPonudu(): number {
   }).id;
 }
 
-const stampaOk = async () => ({ success: true, vrstaOdgovora: 'OK', odgovori: { BrojFiskalnogRacuna: '41' } }) as any;
-const deps = (print: any) => ({ db, print, transaction: <T>(fn: () => T) => db.transaction(fn) });
+/** Lažni fiskalni uređaj (lib/fiskalniUredjaj.ts): štampa vrati ishod u obliku adaptera. */
+const stampaOk = async (): Promise<IshodUredjaja> => ({ ok: true, bf: '41', odgovori: { BrojFiskalnogRacuna: '41' } });
+/** Tok dobije samo komandu uređaja koju koristi — ponuda `stampajRacun`, storno `stampajReklamaciju`. */
+const deps = <U extends Partial<FiskalniUredjaj>>(uredjaj: U) =>
+  ({ db, uredjaj, transaction: <T>(fn: () => T) => db.transaction(fn) });
 /** Upis poslije štampe pada — kao disk pun ili zaključana baza. */
 const oboriUpis = (tabela: string, dogadjaj: 'INSERT' | 'UPDATE') =>
   db.exec(`CREATE TRIGGER obori BEFORE ${dogadjaj} ON ${tabela} BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`);
@@ -50,7 +54,7 @@ test('uspjeh: success iz bilo kojeg fiskalnog kanala', () => {
 test('siguran neuspjeh uređaja je greska — poruka nosi odgovore uređaja, formatirane na jednom mjestu', () => {
   const pendingId = zapisiPending(db, 1, {});
   const res = neuspjelaStampa(db, pendingId, {
-    success: false, vrstaOdgovora: 'Greska', error: 'Nedovoljno novca u kasi [535]',
+    ok: false, greska: 'Nedovoljno novca u kasi [535]', nepoznat: false,
     odgovori: { Kod: '535', Opis: 'Nema novca' },
   });
   expect(procitajIshod(res)).toEqual({ vrsta: 'greska', poruka: 'Nedovoljno novca u kasi [535] (Kod: 535, Opis: Nema novca)' });
@@ -66,7 +70,7 @@ test('siguran neuspjeh uređaja je greska — poruka nosi odgovore uređaja, for
 test('nepoznat ishod koji backend vrati (ishodNepoznat) ostavlja red za dijalog nezavršenih', () => {
   const pendingId = zapisiPending(db, 1, {});
   const res = neuspjelaStampa(db, pendingId, {
-    success: false, vrstaOdgovora: 'Greska', error: 'Request timed out', odgovori: {}, ishodNepoznat: true,
+    ok: false, greska: 'Request timed out', nepoznat: true, odgovori: {},
   });
   const ishod = procitajIshod(res);
   expect(ishod.vrsta).toBe('nepoznat');
@@ -91,8 +95,8 @@ test('odgovor koji fali (null/undefined bez greške) je greska', () => {
 test('bačena greška validacije PRIJE štampe je greska: ništa nije poslano, nema write-ahead reda', async () => {
   const id = napraviPonudu();
   let pozvano = 0;
-  const print = async () => { pozvano++; return stampaOk(); };
-  const e = await bacenaGreska(konvertujPonudu(deps(print), { id, korisnikId: 0, nacinPlacanja: 'Gotovina' }));
+  const stampajRacun = async () => { pozvano++; return stampaOk(); };
+  const e = await bacenaGreska(konvertujPonudu(deps({ stampajRacun }), { id, korisnikId: 0, nacinPlacanja: 'Gotovina' }));
 
   expect(procitajIshod(undefined, e)).toEqual({ vrsta: 'greska', poruka: 'Korisnik nije prijavljen' });
   expect(pozvano).toBe(0);
@@ -102,10 +106,11 @@ test('bačena greška validacije PRIJE štampe je greska: ništa nije poslano, n
 test('bačena greška POSLIJE štampe (račun po ponudi odštampan, upis pao) je nepoznat', async () => {
   const id = napraviPonudu();
   oboriUpis('orders', 'INSERT');
-  const e = await bacenaGreska(konvertujPonudu(deps(stampaOk), { id, korisnikId: 1, nacinPlacanja: 'Gotovina' }));
+  const e = await bacenaGreska(konvertujPonudu(deps({ stampajRacun: stampaOk }), { id, korisnikId: 1, nacinPlacanja: 'Gotovina' }));
 
   const ishod = procitajIshod(undefined, e);
   expect(ishod.vrsta).toBe('nepoznat');
+  // Ista poruka i za order:finalize i nalog:izdajRacun (lib/fiskalizacija.ts porukaNakonStampe, stampa.rs nije_zabiljezen).
   expect(ishod.poruka).toStartWith('Račun 41 JE odštampan, ali nije zabilježen u bazi: disk I/O error.');
   // Red ostaje (rollback) — dijalog nezavršenih ga rješava, ponuda se ne šalje ponovo.
   expect(brojPending()).toBe(1);
@@ -119,9 +124,9 @@ test('bačena greška POSLIJE štampe storna (reklamacija odštampana, upis pao)
   `).run().lastInsertRowid);
   db.prepare("INSERT INTO order_items (orderId, productId, kolicina, cijena, rabat, pdvStopa) VALUES (?, 1, 1, 10, 0, 'E')").run(orderId);
   oboriUpis('orders', 'UPDATE');
-  const stampaStorna = async () => ({ success: true, vrstaOdgovora: 'OK', odgovori: { BrojFiskalnogRacuna: '9' } }) as any;
+  const stampaStorna = async (): Promise<IshodUredjaja> => ({ ok: true, bf: '9', odgovori: { BrojFiskalnogRacuna: '9' } });
 
-  const e = await bacenaGreska(refundAndPrint(deps(stampaStorna), { id: orderId }));
+  const e = await bacenaGreska(refundAndPrint(deps({ stampajReklamaciju: stampaStorna }), { id: orderId }));
 
   const ishod = procitajIshod(undefined, e);
   expect(ishod.vrsta).toBe('nepoznat');
@@ -131,7 +136,7 @@ test('bačena greška POSLIJE štampe storna (reklamacija odštampana, upis pao)
 
 test('poruke "JE odštampan" iz ostalih tokova (oba backenda) i s Electron omotom su nepoznat', () => {
   const poruke = [
-    // lib/prilog.ts, racuni.rs finalize_prilog_and_print
+    // lib/prilog.ts, prilog.rs finalize_prilog_and_print
     'Fiskalni račun po prilogu br. 12 (BF 12) JE odštampan, ali nije zabilježen u bazi: x. Riješite ga kroz nezavršene račune.',
     // lib/proizvodnja.ts knjiziFakturisanjeNaloga, proizvodnja.rs knjizi_fakturisanje_naloga
     'Račun 41 JE odštampan, ali nalog nije zabilježen kao fakturisan u bazi: x. Evidentirajte nalog ručno.',
@@ -171,15 +176,16 @@ test('izvrsiFiskalno: vraćen odgovor se čita direktno', async () => {
 test('izvrsiFiskalno: greška validacije uz NEVEZAN postojeći red je greska (korpa ostaje)', async () => {
   stariRed();
   const id = napraviPonudu();
-  const r = await izvrsiFiskalno(() => konvertujPonudu(deps(stampaOk), { id, korisnikId: 0, nacinPlacanja: 'Gotovina' }), nezavrseni);
+  const r = await izvrsiFiskalno(() => konvertujPonudu(deps({ stampajRacun: stampaOk }), { id, korisnikId: 0, nacinPlacanja: 'Gotovina' }), nezavrseni);
   expect(r).toEqual({ ishod: { vrsta: 'greska', poruka: 'Korisnik nije prijavljen' }, res: null });
   expect(brojPending()).toBe(1);
 });
 
-test('izvrsiFiskalno: novi red poslije sirove greške upisa (order:finalize, upis pao poslije štampe) je nepoznat', async () => {
+test('izvrsiFiskalno: novi red uz sirovu grešku (bez "JE odštampan") je nepoznat', async () => {
   stariRed();
-  // handlers.ts order:finalize: red se upiše prije štampe, greška transakcije
-  // upisa poslije uspješne štampe izlazi sirova (bez "JE odštampan"), rollback ostavlja red.
+  // Poziv je upisao write-ahead red pa bacio grešku bez oznake — npr. IPC pao
+  // bez odgovora. (Upis koji padne poslije štampe oba backenda javljaju s
+  // oznakom — lib/fiskalizacija.ts, stampa.rs; ovo je rezerva za sve ostalo.)
   const finalize = async () => { zapisiPending(db, 1, { ukupno: 10, stavke: [] }); throw new Error('database is locked'); };
   const r = await izvrsiFiskalno(finalize, nezavrseni);
   expect(r.res).toBeNull();
@@ -192,7 +198,7 @@ test('izvrsiFiskalno: novi red poslije sirove greške upisa (order:finalize, upi
 test('izvrsiFiskalno: red koji za isti dokument već čeka blokira štampu — greska, bez novog reda', async () => {
   const id = napraviPonudu();
   zapisiPending(db, 1, { vrsta: 'ponuda', ponudaId: id });
-  const r = await izvrsiFiskalno(() => konvertujPonudu(deps(stampaOk), { id, korisnikId: 1, nacinPlacanja: 'Gotovina' }), nezavrseni);
+  const r = await izvrsiFiskalno(() => konvertujPonudu(deps({ stampajRacun: stampaOk }), { id, korisnikId: 1, nacinPlacanja: 'Gotovina' }), nezavrseni);
   expect(r.ishod.vrsta).toBe('greska');
   expect(r.ishod.poruka).toStartWith('Račun po ovoj ponudi čeka u nezavršenim računima');
 });
