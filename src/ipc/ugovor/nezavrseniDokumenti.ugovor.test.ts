@@ -677,6 +677,20 @@ describe('snapshot bez vrste', () => {
     expect(JSON.parse(trag.detalji)).toEqual({ pendingId: pid, brojFiskalnogRacuna: '300', orderId: r.id });
   });
 
+  // `vrsta: null` (npr. ručno popravljen ili tuđi snapshot) = bez vrste, u oba backenda.
+  test('vrsta null se rješava isto kao snapshot bez vrste', async () => {
+    const p = dodajArtikal('L1', 6, { stanje: 10 });
+    const pid = dodajPending({ vrsta: null, korisnikId: ADMIN, ukupno: 12, pdvIznos: 1.74, nacinPlacanja: 'Gotovina', stavke: [{ productId: p, kolicina: 2, cijena: 6, rabat: 0, pdvStopa: 'E' }] });
+
+    const r = await b.call('pending:resolve', { id: pid, brojFiskalnogRacuna: '301', createdAt: DATUM });
+    expect(red('SELECT brojFiskalnogRacuna, isManual, ukupno, status FROM orders WHERE id = ?', r.id))
+      .toEqual({ brojFiskalnogRacuna: '301', isManual: 1, ukupno: 12, status: 'completed' });
+    expect(stanje(p)).toBe(8);
+    expect(pending()).toEqual([]);
+    const trag = red("SELECT detalji FROM audit_log WHERE akcija = 'pending:rijesi'");
+    expect(JSON.parse(trag.detalji)).toEqual({ pendingId: pid, brojFiskalnogRacuna: '301', orderId: r.id });
+  });
+
   test('nepoznata vrsta se ne razrješava kao račun', async () => {
     const pid = dodajPending({ vrsta: 'nesto', korisnikId: ADMIN, ukupno: 1, stavke: [] });
     await expect(b.call('pending:resolve', { id: pid, brojFiskalnogRacuna: '1', createdAt: DATUM }))

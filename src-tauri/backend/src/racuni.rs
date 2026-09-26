@@ -1024,6 +1024,7 @@ fn pending_resolve(b: &Backend, data: &Value) -> R<Value> {
     };
     let snap = js::parse(&js::to_string(&row["snapshot"]))?;
     let broj = js::trim(&data["brojFiskalnogRacuna"]).map(Value::from).unwrap_or_else(|| data["brojFiskalnogRacuna"].clone());
+    // Snapshot bez `vrsta` ili s `vrsta: null` je običan račun (TS: `?? undefined`).
     let vrsta = &snap["vrsta"];
     if !vrsta.is_null() && !["ponuda", "nalog", "storno"].iter().any(|v| vrsta == *v) {
         baci!("Nepoznata vrsta nezavršenog zapisa: \"{}\"", js::to_string(vrsta));

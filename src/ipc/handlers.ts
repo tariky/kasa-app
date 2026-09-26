@@ -1407,7 +1407,8 @@ export function registerIpcHandlers(): void {
     if (!row) throw new Error('Zapis više ne postoji');
     const snap = JSON.parse(row.snapshot);
     const broj = data.brojFiskalnogRacuna.trim();
-    const vrsta: VrstaNezavrsenog | undefined = snap.vrsta;
+    // `vrsta: null` = bez vrste (običan račun), kao u Rust-u.
+    const vrsta: VrstaNezavrsenog | undefined = snap.vrsta ?? undefined;
     if (vrsta !== undefined && !['ponuda', 'nalog', 'storno'].includes(vrsta)) {
       throw new Error(`Nepoznata vrsta nezavršenog zapisa: "${vrsta}"`);
     }
