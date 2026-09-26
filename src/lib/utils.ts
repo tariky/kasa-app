@@ -37,14 +37,16 @@ function pad(n: number): string {
   return String(n).padStart(2, '0');
 }
 
-export function formatDate(date: string): string {
+/** 25.09.2026 — iz teksta iz baze ili iz `Date` (npr. današnji datum u podnožju PDF-a). */
+export function formatDate(date: string | Date): string {
   const d = new Date(date);
   return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`;
 }
 
-export function formatDateTime(date: string): string {
+/** 25.09.2026 u 10:30 u lokalnoj zoni; `veznik` po jeziku („at“), prazan daje „25.09.2026 10:30“. */
+export function formatDateTime(date: string | Date, veznik = 'u'): string {
   const d = new Date(date);
-  return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()} u ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return `${formatDate(d)} ${veznik ? `${veznik} ` : ''}${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 /** Poruka greške za prikaz; Electron IPC omot skida isto kao preload (`ocistiPorukuIpc`). */

@@ -2,7 +2,7 @@ import type { FirmaSettings, Order, OrderItem } from '@/types';
 import type { DokumentPostavke } from '@/lib/dokumentPostavke';
 import { A4Dokument, DvaBloka, Izdavac, Kupac, MetaRed } from './pdf/A4Dokument';
 import { TabelaStavki, type KolonaStavke } from './pdf/TabelaStavki';
-import { datumVrijemePdf } from './pdf/stil';
+import { formatDateTime } from '@/lib/utils';
 
 export interface OtpremnicaPdfProps {
   order: Order;
@@ -33,7 +33,7 @@ export function OtpremnicaPdf({ order, firma, postavke }: OtpremnicaPdfProps) {
       </DvaBloka>
 
       <MetaRed polja={[
-        ['Datum', datumVrijemePdf(new Date(order.createdAt))],
+        ['Datum', formatDateTime(order.createdAt)],
         ['Kasir', order.korisnikIme || '—'],
       ]} />
 

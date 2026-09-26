@@ -4,11 +4,10 @@ import { linijaDokumenta, type LinijaDokumenta } from '@/lib/dokumentStavke';
 import { opisPlacanja } from '@/lib/placanje';
 import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { formatDatumValute } from '@/lib/valuta';
-import { formatKM } from '@/lib/utils';
+import { formatKM, formatDateTime } from '@/lib/utils';
 import { formatRabat, type DokumentPostavke } from '@/lib/dokumentPostavke';
 import { A4Dokument, DvaBloka, Izdavac, Kupac, MetaRed, Okvir, Ukupno } from './pdf/A4Dokument';
 import { TabelaStavki, type KolonaStavke } from './pdf/TabelaStavki';
-import { datumVrijemePdf } from './pdf/stil';
 
 export type InvoiceLang = 'bs' | 'en';
 
@@ -115,7 +114,7 @@ export function RacunPdf({ order, firma, lang = 'bs', postavke }: RacunPdfProps)
       </DvaBloka>
 
       <MetaRed polja={[
-        [t.date, datumVrijemePdf(new Date(order.createdAt), t.dateTimeSep)],
+        [t.date, formatDateTime(order.createdAt, t.dateTimeSep)],
         [t.cashier, order.korisnikIme || '—'],
         [t.payment, placanje],
         datumValute ? [t.dueDate, datumValute] : null,

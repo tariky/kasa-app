@@ -8,7 +8,8 @@ import { pecatZa, type DokumentPostavke, type DokumentSaPotpisom } from '@/lib/d
 import { PotpisBlok } from './PotpisBlok';
 import { PdfPodnozje, DODATAK_PODNOZJA } from './PdfPodnozje';
 import { ZiroRacuniRedovi, ZiroRacuniTraka, PODNOZJE_S_RACUNIMA } from './ZiroRacuni';
-import { MJERE_ZAGLAVLJA as M, datumPdf } from './stil';
+import { MJERE_ZAGLAVLJA as M } from './stil';
+import { formatDate } from '@/lib/utils';
 
 type Stil = Styles[string];
 
@@ -152,7 +153,7 @@ export function A4Dokument({ vrsta, firma, postavke, naslov, broj, podnaslov, la
 
         <PdfPodnozje
           firmaNaziv={firma.naziv}
-          danas={datumPdf()}
+          danas={formatDate(new Date())}
           tekst={postavke.podnozje}
           potpisAutora={en ? POTPIS_AUTORA_EN : POTPIS_AUTORA}
           generisano={en ? EN.generisano : undefined}

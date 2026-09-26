@@ -8,10 +8,9 @@ import { round2 } from '@/lib/novac';
 import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { prilogNaziv } from '@/lib/prilog';
 import { formatDatumValute } from '@/lib/valuta';
-import { formatKM } from '@/lib/utils';
+import { formatKM, formatDateTime } from '@/lib/utils';
 import { A4Dokument, DvaBloka, Izdavac, Kupac, MetaRed } from './pdf/A4Dokument';
 import { TabelaStavki, type KolonaStavke } from './pdf/TabelaStavki';
-import { datumVrijemePdf } from './pdf/stil';
 
 /** Red iz `prilog:getStavke` (prilog_stavke + JOIN na products). */
 export interface PrilogPdfStavka {
@@ -79,7 +78,7 @@ type Linija = PrilogPdfStavka & LinijaDokumenta & { rabat: number };
  * računom (BF broj) je zakonski obavezna — bez nje je ovo samo papir.
  */
 export function PrilogPdf({ order, firma, stavke, postavke }: PrilogPdfProps) {
-  const orderDate = datumVrijemePdf(new Date(order.createdAt));
+  const orderDate = formatDateTime(order.createdAt);
   const datumValute = formatDatumValute(order.datumValute);
   const kol = postavke.kolone;
 

@@ -1,4 +1,5 @@
 import { formatRucPct, sumePrimke } from '@/lib/izvjestaji';
+import { formatDate } from '@/lib/utils';
 import { IzvjestajStrana, MrezaTabela, Sazetak, poljaFirme, brojeviFirme, fmt, type KolonaMreze } from './pdf/izvjestaj';
 
 export interface PrimkePdfProps {
@@ -17,17 +18,11 @@ export interface PrimkePdfProps {
   };
 }
 
-const pad = (n: number) => String(n).padStart(2, '0');
-const fmtDate = (str: string) => {
-  if (!str) return '—';
-  const dt = new Date(str);
-  return `${pad(dt.getDate())}.${pad(dt.getMonth() + 1)}.${dt.getFullYear()}`;
-};
 
 const KOLONE: KolonaMreze<PrimkePdfProps['primke'][number]>[] = [
   { kljuc: 'rb', naslov: 'Rb', sirina: '5%', poravnanje: 'sredina', vrijednost: (_, i) => i + 1 },
   { kljuc: 'broj', naslov: 'Br. primke', sirina: '12%', poravnanje: 'lijevo', vrijednost: p => p.brojPrimke },
-  { kljuc: 'datum', naslov: 'Datum', sirina: '12%', poravnanje: 'lijevo', vrijednost: p => fmtDate(p.datum || p.createdAt) },
+  { kljuc: 'datum', naslov: 'Datum', sirina: '12%', poravnanje: 'lijevo', vrijednost: p => { const d = p.datum || p.createdAt; return d ? formatDate(d) : '—'; } },
   { kljuc: 'dobavljac', naslov: 'Dobavljač', sirina: '18%', poravnanje: 'lijevo', vrijednost: p => p.dobavljacNaziv || '—' },
   { kljuc: 'faktura', naslov: 'Br. fakture', sirina: '13%', poravnanje: 'lijevo', vrijednost: p => p.brojFakture || '—' },
   { kljuc: 'stavki', naslov: 'Stavki', sirina: '8%', poravnanje: 'sredina', vrijednost: p => p.stavke?.length ?? 0 },

@@ -2,8 +2,8 @@ import type { ReactNode } from 'react';
 import { Document, Page, View, Text, StyleSheet, type Styles } from '@react-pdf/renderer';
 import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from '../pdf-fonts';
 import { kontaktFirme } from '@/lib/firma';
+import { formatDate } from '@/lib/utils';
 import { PdfPodnozje } from './PdfPodnozje';
-import { datumPdf } from './stil';
 
 type Stil = Styles[string];
 
@@ -133,7 +133,7 @@ export function IzvjestajStrana({ naslov, podnaslov, firma, polja, orijentacija,
           </View>
         ) : null}
 
-        <PdfPodnozje firmaNaziv={firma.naziv} danas={datumPdf()} margina={p.margina} dno={p.dno} velicina={p.velicina} linija={false} />
+        <PdfPodnozje firmaNaziv={firma.naziv} danas={formatDate(new Date())} margina={p.margina} dno={p.dno} velicina={p.velicina} linija={false} />
       </Page>
     </Document>
   );

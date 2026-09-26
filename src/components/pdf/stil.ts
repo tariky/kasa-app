@@ -19,18 +19,7 @@ export const MJERE_ZAGLAVLJA = {
 } as const;
 
 // ── Datumi na dokumentima ────────────────────────────────
-
-const dvije = (n: number) => String(n).padStart(2, '0');
-
-/** 26.09.2026 — zadano danas (za „Generisano:“ u podnožju). */
-export function datumPdf(d: Date = new Date()): string {
-  return `${dvije(d.getDate())}.${dvije(d.getMonth() + 1)}.${d.getFullYear()}`;
-}
-
-/** 25.09.2026 u 10:30 — vrijeme računa u lokalnoj zoni; `u` je veznik po jeziku („at“). */
-export function datumVrijemePdf(d: Date, u = 'u'): string {
-  return `${datumPdf(d)} ${u} ${dvije(d.getHours())}:${dvije(d.getMinutes())}`;
-}
+// Danas i vrijeme računa: `formatDate` / `formatDateTime` iz `@/lib/utils`.
 
 /**
  * `YYYY-MM-DD` iz baze → 25.09.2026, iz dijelova teksta (bez `new Date`, koji bi ga
