@@ -6,7 +6,8 @@
 import { app, BrowserWindow } from 'electron';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { lokalniDatum, backupPodaci, type R2Podaci } from '../lib/licenca';
+import { backupPodaci, type R2Podaci } from '../lib/licenca';
+import { localDateStr } from '../lib/novac';
 import { LICENCA_JAVNI_KLJUC } from '../lib/licencaJavniKljuc';
 import { uredjajId } from '../lib/uredjaj';
 import { getDb } from '../database/db';
@@ -52,7 +53,7 @@ function datumIzBaze(): string | null {
 }
 
 function danasZaLicencu(z: Zapis): string {
-  return efektivniDanas(lokalniDatum(new Date()), z.zadnjiDatum, datumIzBaze());
+  return efektivniDanas(localDateStr(new Date()), z.zadnjiDatum, datumIzBaze());
 }
 
 export function stanjeLicence(): LicencaInfo {
