@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { View, Text, StyleSheet } from '@react-pdf/renderer';
 import { POTPIS_AUTORA } from '@/lib/brend';
 import { MJERE_ZAGLAVLJA } from './stil';
+import { PRIJEVODI } from './prijevodi';
 
 /** Koliko `paddingBottom` stranice raste kad firma ima svoj tekst podnožja (`maxLines` ga reže na 4 reda, i kad su redovi iz `\n`). */
 export const DODATAK_PODNOZJA = 24;
@@ -24,7 +25,7 @@ function PodnozjeTekst({ tekst }: { tekst?: string }) {
  * imaju svoju marginu, niže i sitnije podnožje bez linije.
  */
 export function PdfPodnozje({
-  firmaNaziv, danas, tekst, potpisAutora = POTPIS_AUTORA, generisano = 'Generisano', iznad,
+  firmaNaziv, danas, tekst, potpisAutora = POTPIS_AUTORA, generisano = PRIJEVODI.bs.generisano, iznad,
   margina = MJERE_ZAGLAVLJA.margina, dno = 30, velicina = 7, linija = true,
 }: {
   firmaNaziv: string; danas: string; tekst?: string; potpisAutora?: string; generisano?: string;

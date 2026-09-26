@@ -2,14 +2,14 @@ import { Text } from '@react-pdf/renderer';
 import type { FirmaSettings, Order, OrderItem } from '@/types';
 import { linijaDokumenta, type LinijaDokumenta } from '@/lib/dokumentStavke';
 import { opisPlacanja } from '@/lib/placanje';
-import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { formatDatumValute } from '@/lib/valuta';
 import { formatKM, formatDateTime } from '@/lib/utils';
 import { formatRabat, type DokumentPostavke } from '@/lib/dokumentPostavke';
 import { A4Dokument, DvaBloka, Izdavac, Kupac, MetaRed, Okvir, Ukupno } from './pdf/A4Dokument';
 import { TabelaStavki, type KolonaStavke } from './pdf/TabelaStavki';
+import { PRIJEVODI, type JezikPdf } from './pdf/prijevodi';
 
-export type InvoiceLang = 'bs' | 'en';
+export type InvoiceLang = JezikPdf;
 
 export interface RacunPdfProps {
   order: Order;
@@ -18,65 +18,10 @@ export interface RacunPdfProps {
   postavke: DokumentPostavke;
 }
 
-const translations = {
-  bs: {
-    invoiceTitle: 'RAČUN',
-    refundTitle: 'STORNO',
-    seller: 'Izdavač',
-    buyer: 'Kupac',
-    date: 'Datum',
-    dueDate: 'Datum valute',
-    cashier: 'Kasir',
-    payment: 'Plaćanje',
-    colCode: 'Šifra',
-    colDescription: 'Opis',
-    colUnit: 'JM',
-    colQty: 'Kol.',
-    colPrice: 'Cijena bez PDV-a',
-    colDiscount: 'Rabat',
-    colVat: 'PDV',
-    colAmount: 'Iznos sa PDV-om',
-    subtotal: 'Osnovica',
-    vat: `PDV (${PDV_STOPA_E_PCT}%)`,
-    total: 'UKUPNO',
-    refund: 'Reklamacija',
-    refundNumber: 'Broj',
-    dateTimeSep: 'u',
-    paymentCash: 'Gotovina',
-    paymentCard: 'Kartica',
-  },
-  en: {
-    invoiceTitle: 'INVOICE',
-    refundTitle: 'CREDIT NOTE',
-    seller: 'From',
-    buyer: 'Bill to',
-    date: 'Date',
-    dueDate: 'Due date',
-    cashier: 'Cashier',
-    payment: 'Payment',
-    colCode: 'Code',
-    colDescription: 'Description',
-    colUnit: 'Unit',
-    colQty: 'Qty',
-    colPrice: 'Price excl. VAT',
-    colDiscount: 'Disc.',
-    colVat: 'VAT',
-    colAmount: 'Amount incl. VAT',
-    subtotal: 'Subtotal',
-    vat: `VAT (${PDV_STOPA_E_PCT}%)`,
-    total: 'TOTAL',
-    refund: 'Refund',
-    refundNumber: 'Number',
-    dateTimeSep: 'at',
-    paymentCash: 'Cash',
-    paymentCard: 'Card',
-  },
-} as const;
-
 type Red = OrderItem & LinijaDokumenta;
 
 export function RacunPdf({ order, firma, lang = 'bs', postavke }: RacunPdfProps) {
-  const t = translations[lang];
+  const t = PRIJEVODI[lang];
   const kol = postavke.kolone;
   // Jedinična cijena se prikazuje bez PDV-a (u bazi je bruto), a iznos stavke sa PDV-om —
   // tako se kolona Iznos zbraja u UKUPNO.

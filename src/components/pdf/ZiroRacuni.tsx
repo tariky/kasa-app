@@ -1,6 +1,7 @@
 import { View, Text, StyleSheet } from '@react-pdf/renderer';
 import type { BankAccount } from '@/types';
 import { PDF_FONT_FAMILY_BOLD } from '../pdf-fonts';
+import { PRIJEVODI } from './prijevodi';
 
 /** `paddingBottom` stranice kad žiro računi idu u traku iznad podnožja (bez teksta firme). */
 export const PODNOZJE_S_RACUNIMA = 118;
@@ -35,7 +36,7 @@ export function ZiroRacuniRedovi({ racuni }: { racuni: BankAccount[] }) {
 }
 
 /** Traka sa žiro računima iznad podnožja (ide u `PdfPodnozje` kao `iznad`). */
-export function ZiroRacuniTraka({ racuni, naslov = 'Žiro računi' }: { racuni: BankAccount[]; naslov?: string }) {
+export function ZiroRacuniTraka({ racuni, naslov = PRIJEVODI.bs.ziroRacuni }: { racuni: BankAccount[]; naslov?: string }) {
   return (
     <View style={s.traka}>
       <Text style={s.naslov}>{naslov}</Text>
