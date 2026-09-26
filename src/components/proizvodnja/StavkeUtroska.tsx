@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import type { PretragaStavkiHandle } from '@/components/ui/pretraga-stavki';
 import { PretragaProizvoda } from '@/components/PretragaProizvoda';
 import { uvecajKolicinu } from '@/lib/pretraga';
+import { TOLERANCIJA_ZALIHE } from '@/lib/tolerancije';
 import { DecimalInput } from '@/components/ui/decimal-input';
 import { Eyebrow, Key, mod } from '@/components/ui/ledger';
 import { ElementiDialog } from './ElementiDialog';
@@ -186,7 +187,7 @@ export const StavkeUtroska = forwardRef<StavkeHandle, {
             </thead>
             <tbody>
               {draft.map((s, i) => {
-                const prekoracenje = uredivo && (utrosak.get(s.materijalId) ?? 0) > s.stanje + 1e-9;
+                const prekoracenje = uredivo && (utrosak.get(s.materijalId) ?? 0) > s.stanje + TOLERANCIJA_ZALIHE;
                 const redMaterijala = draft.slice(0, i).filter(x => x.materijalId === s.materijalId).length;
                 const c = cijene.get(s.materijalId)?.[redMaterijala];
                 return (

@@ -13,6 +13,7 @@ use crate::pending_racun::{
 use crate::js::{self, has, round2, to_number, truthy};
 use crate::ponude::{self, UToku};
 use crate::racun::{izracunaj_totale, upisi_racun};
+use crate::skladiste::TOLERANCIJA_ZALIHE;
 use crate::sql::Db;
 use crate::tring::uspjeh;
 use crate::tring_racun::build_tring_racun;
@@ -25,9 +26,6 @@ pub const PRODAJNA_USLUGA_NAZIV: &str = "Namještaj po mjeri";
 fn round4(n: f64) -> f64 {
     js::js_round(n * 10000.0) / 10000.0
 }
-
-/// Tolerancija pri poređenju količina (SUM kretanja nosi grešku zaokruživanja).
-const TOLERANCIJA_KOLICINE: f64 = 1e-9;
 
 /// `Number(datum.slice(0, 4))` kao JSON broj (NaN → null, kako ga SQLite veže).
 fn godina_iz_datuma(datum: &str) -> Value {
@@ -287,7 +285,7 @@ pub fn proizvodi_ponude(db: &Db, ponuda_id: &Value) -> R<Vec<Value>> {
     )?;
     for r in &mut redovi {
         let stanje = stanje_artikla(db, &r["productId"])?;
-        let zadano = to_number(&stanje) < to_number(&r["kolicina"]) - TOLERANCIJA_KOLICINE;
+        let zadano = to_number(&stanje) < to_number(&r["kolicina"]) - TOLERANCIJA_ZALIHE;
         r["stanje"] = stanje;
         r["zadano"] = json!(zadano);
     }
@@ -332,7 +330,7 @@ fn validiraj_proizvode(db: &Db, ponuda_id: &Value, proizvodi: &[Value]) -> R<Vec
         let kljuc = js::stringify(&pr["productId"]);
         let ukupno = round4(zbir.get(&kljuc).copied().unwrap_or(0.0) + kolicina);
         let na_ponudi = to_number(&s["kolicina"]);
-        if ukupno > na_ponudi + TOLERANCIJA_KOLICINE {
+        if ukupno > na_ponudi + TOLERANCIJA_ZALIHE {
             baci!(
                 "Proizvod \"{naziv}\": nalog izrađuje {}, a na ponudi je {}",
                 js::num_str(ukupno),
@@ -667,7 +665,7 @@ pub fn kalkulacija(nalog: &Value, stavke: &[Value]) -> Value {
                 if to_number(cijena) <= 0.0 {
                     upozorenja.push(json!(format!("{naziv}: nema nabavne cijene (nema primke)")));
                 }
-                if otvoren && utrosak > to_number(stanje) + TOLERANCIJA_KOLICINE {
+                if otvoren && utrosak > to_number(stanje) + TOLERANCIJA_ZALIHE {
                     upozorenja.push(json!(format!(
                         "{naziv}: utrošak {} prelazi stanje {}",
                         js::num_str(utrosak),
@@ -820,7 +818,7 @@ pub fn vrati_u_izradu(db: &Db, id: &Value) -> R<()> {
     for u in &ulazi {
         let stanje = to_number(&stanje_artikla(db, &u["productId"])?);
         let kolicina = to_number(&u["kolicina"]);
-        if stanje < kolicina - TOLERANCIJA_KOLICINE {
+        if stanje < kolicina - TOLERANCIJA_ZALIHE {
             let naziv = if u["naziv"].is_null() { format!("#{}", js::to_string(&u["productId"])) } else { js::to_string(&u["naziv"]) };
             baci!(
                 "Proizvod \"{naziv}\" je već prodan/izdat — nalog se ne može vratiti u izradu (na stanju {}, nalog je uveo {})",

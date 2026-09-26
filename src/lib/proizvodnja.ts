@@ -2,6 +2,7 @@ import type { SqlDb } from './sqldb';
 import { localDateStr, round2 } from './novac';
 import { uNetto } from './pdvUnos';
 import { getProductStock } from './skladiste';
+import { TOLERANCIJA_ZALIHE } from './tolerancije';
 import { izracunajTotale, upisiRacun } from './racun';
 import { provjeriNacinPlacanja } from './placanje';
 import { buildTringRacun } from './tringRacun';
@@ -43,9 +44,6 @@ export interface NalogProizvodInput {
 }
 
 const round4 = (n: number) => Math.round(n * 10000) / 10000;
-
-/** Tolerancija pri poređenju količina (SUM kretanja nosi grešku zaokruživanja). */
-const TOLERANCIJA_KOLICINE = 1e-9;
 
 // ── numeracija ───────────────────────────────────────────
 
@@ -219,7 +217,7 @@ export function proizvodiPonude(db: SqlDb, ponudaId: number): ProizvodPonude[] {
   `).all(ponudaId) as ProizvodPonude[];
   for (const r of redovi) {
     r.stanje = getProductStock(db, r.productId);
-    r.zadano = r.stanje < r.kolicina - TOLERANCIJA_KOLICINE;
+    r.zadano = r.stanje < r.kolicina - TOLERANCIJA_ZALIHE;
   }
   return redovi;
 }
@@ -245,7 +243,7 @@ function validirajProizvode(db: SqlDb, ponudaId: number, proizvodi: NalogProizvo
     const kolicina = round4(pr.kolicina);
     if (!(kolicina > 0)) throw new Error('Količina proizvoda mora biti veća od nule');
     const ukupno = round4((zbir.get(pr.productId) ?? 0) + kolicina);
-    if (ukupno > s.kolicina + TOLERANCIJA_KOLICINE) {
+    if (ukupno > s.kolicina + TOLERANCIJA_ZALIHE) {
       throw new Error(`Proizvod "${naziv}": nalog izrađuje ${ukupno}, a na ponudi je ${round4(s.kolicina)}`);
     }
     zbir.set(pr.productId, ukupno);
@@ -504,7 +502,7 @@ export function kalkulacija(nalog: NalogZaKalkulaciju, stavke: StavkaZaKalkulaci
       upozoren.add(s.materijalId);
       const utrosak = round4(zbir.get(s.materijalId)!);
       if (cijena <= 0) upozorenja.push(`${naziv}: nema nabavne cijene (nema primke)`);
-      if (otvoren && utrosak > stanje + TOLERANCIJA_KOLICINE) upozorenja.push(`${naziv}: utrošak ${utrosak} prelazi stanje ${stanje}`);
+      if (otvoren && utrosak > stanje + TOLERANCIJA_ZALIHE) upozorenja.push(`${naziv}: utrošak ${utrosak} prelazi stanje ${stanje}`);
     }
     return {
       materijalId: s.materijalId, naziv, jm: s.materijalJm ?? '', kolicina: s.kolicina,
@@ -617,7 +615,7 @@ export function vratiUIzradu(db: SqlDb, id: number): void {
   `).all(id) as Array<{ productId: number; kolicina: number; naziv: string | null }>;
   for (const u of ulazi) {
     const stanje = getProductStock(db, u.productId);
-    if (stanje < u.kolicina - TOLERANCIJA_KOLICINE) {
+    if (stanje < u.kolicina - TOLERANCIJA_ZALIHE) {
       throw new Error(
         `Proizvod "${u.naziv ?? `#${u.productId}`}" je već prodan/izdat — nalog se ne može vratiti u izradu ` +
         `(na stanju ${round4(stanje)}, nalog je uveo ${round4(u.kolicina)})`
