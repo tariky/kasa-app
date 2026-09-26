@@ -1,4 +1,4 @@
-//! Kanali `product:*`, `materijal:search`, `dobavljac:*` i `kupac:*` (handlers.ts).
+//! Kanali `product:*`, `dobavljac:*` i `kupac:*` (handlers.ts).
 
 use serde_json::{json, Value};
 
@@ -28,18 +28,8 @@ const PDV_STOPE: [&str; 2] = ["E", "K"];
 /// Tring: naziv zajedno s JM ima 32–36 znakova, zavisno od uređaja.
 const SLOBODAN_NAZIV_MAX: usize = 32;
 
-/// Stanje artikla iz kretanja zaliha (podupit u product:getAll/search).
-const SELECT_SA_STANJEM: &str = "
-        SELECT p.*,
-          COALESCE(
-            (SELECT SUM(CASE WHEN sm.tip = 'ulaz' THEN sm.kolicina ELSE -sm.kolicina END)
-             FROM stock_movements sm WHERE sm.productId = p.id),
-            0
-          ) AS stanje
-        FROM products p";
-
-/// Kao `SELECT_SA_STANJEM`, plus šifre dobavljača artikla u jednom stringu —
-/// za pretragu u šifarniku, primci i kasi.
+/// Stanje artikla iz kretanja zaliha (podupit u product:getAll), plus šifre
+/// dobavljača artikla u jednom stringu — za pretragu u šifarniku, primci i kasi.
 const SELECT_SA_SIFRAMA: &str = "
         SELECT p.*,
           COALESCE(
@@ -276,15 +266,6 @@ fn product_adjust_stock(b: &Backend, product_id: &Value, new_stanje: &Value) -> 
     Ok(json!({ "changes": 1 }))
 }
 
-fn product_search(db: &Db, query: &Value) -> R<Value> {
-    let like = format!("%{}%", js::to_string(query));
-    db.all(
-        &format!("{SELECT_SA_SIFRAMA}\n        WHERE (p.naziv LIKE ? OR p.sifra LIKE ? OR p.barkod LIKE ?\n          OR EXISTS (SELECT 1 FROM artikal_dobavljac_sifre ds WHERE ds.productId = p.id AND ds.sifra LIKE ?))\n          AND p.tip != 'materijal' AND p.slobodan = 0\n        ORDER BY p.naziv\n      "),
-        p![like, like, like, like],
-    )
-    .map(Value::from)
-}
-
 // ─── Šifre dobavljača ───────────────────────────────────
 
 fn product_get_dobavljac_sifre(db: &Db, product_id: &Value) -> R<Value> {
@@ -430,15 +411,6 @@ fn product_slobodan(b: &Backend, data: &Value) -> R<Value> {
     })
 }
 
-fn materijal_search(db: &Db, query: &Value) -> R<Value> {
-    let like = format!("%{}%", js::to_string(query));
-    db.all(
-        &format!("{SELECT_SA_STANJEM}\n        WHERE p.tip = 'materijal' AND (p.naziv LIKE ? OR p.sifra LIKE ?)\n        ORDER BY p.naziv\n        LIMIT 30\n      "),
-        p![like, like],
-    )
-    .map(Value::from)
-}
-
 // ─── Dobavljači ─────────────────────────────────────────
 
 // Zajednička pravila za dobavljac:create (id = null) i dobavljac:update — na update-u
@@ -506,12 +478,6 @@ fn dobavljac_delete(db: &Db, id: &Value) -> R<Value> {
 }
 
 // ─── Kupci ──────────────────────────────────────────────
-
-fn kupac_search(db: &Db, query: &Value) -> R<Value> {
-    let like = format!("%{}%", js::to_string(query));
-    db.all("SELECT * FROM kupci WHERE naziv LIKE ? OR idBroj LIKE ? OR kontakt LIKE ? ORDER BY naziv", p![like, like, like])
-        .map(Value::from)
-}
 
 // Zajednička pravila za kupac:create (id = null) i kupac:update — na update-u se
 // provjerava samo ono što je poslano. Vraća trimovane naziv i JIB spremne za upis.
@@ -629,12 +595,10 @@ pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
         "product:update" => product_update(b, &a[0], &a[1]),
         "product:delete" => product_delete(db, &a[0]),
         "product:adjustStock" => product_adjust_stock(b, &a[0], &a[1]),
-        "product:search" => product_search(db, &a[0]),
         "product:slobodan" => product_slobodan(b, &a[0]),
         "product:getDobavljacSifre" => product_get_dobavljac_sifre(db, &a[0]),
         "product:setDobavljacSifre" => product_set_dobavljac_sifre(db, &a[0], &a[1]),
         "product:findByDobavljacSifra" => product_find_by_dobavljac_sifra(db, &a[0], &a[1]),
-        "materijal:search" => materijal_search(db, &a[0]),
         "dobavljac:getAll" => db.all("SELECT * FROM dobavljaci ORDER BY naziv", p![]).map(Value::from),
         "dobavljac:create" => dobavljac_create(db, &a[0]),
         "dobavljac:update" => dobavljac_update(db, &a[0], &a[1]),
@@ -646,7 +610,6 @@ pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
             )
             .map(Value::from),
         "kupac:getAll" => db.all("SELECT * FROM kupci ORDER BY naziv", p![]).map(Value::from),
-        "kupac:search" => kupac_search(db, &a[0]),
         "kupac:create" => kupac_create(db, &a[0]),
         "kupac:update" => kupac_update(db, &a[0], &a[1]),
         "kupac:delete" => kupac_delete(db, &a[0]),

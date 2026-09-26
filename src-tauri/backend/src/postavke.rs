@@ -7,7 +7,7 @@ use crate::greska::R;
 use crate::js::{self, is_integer, nn, to_string};
 use crate::sql::Db;
 use crate::audit::{self, NovaPostavka};
-use crate::sesija::TAJNE_POSTAVKE;
+use crate::sesija::pristup;
 use crate::{baci, p, proizvodnja, Args, Backend};
 
 const UPSERT: &str = "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value";
@@ -228,7 +228,7 @@ pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
         "settings:getFirma" => get_firma(db),
         "settings:saveFirma" => save_firma(b, &a[0]),
         "settings:get" => match a[0].as_str() {
-            Some(k) if TAJNE_POSTAVKE.contains(&k) => Ok(Value::Null),
+            Some(k) if pristup().tajne_postavke.contains(k) => Ok(Value::Null),
             _ => db.val("SELECT value FROM settings WHERE key = ?", p![a[0]]),
         },
         "settings:set" => set(b, &a[0], &a[1]),

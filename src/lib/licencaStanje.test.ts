@@ -138,7 +138,7 @@ test('razlog blokade: istekla licenca ima prednost nad modulom', () => {
   expect(razlogBlokade({ stanje: 'zakljucana', licenca: lic }, 'ponuda:create')?.razlog).toBe('istekla');
   expect(razlogBlokade({ stanje: 'aktivna', licenca: lic, danaDoIsteka: 9 }, 'ponuda:create'))
     .toEqual({ razlog: 'modul', poruka: 'Modul Ponude nije uključen u licencu.' });
-  expect(razlogBlokade({ stanje: 'aktivna', licenca: lic, danaDoIsteka: 9 }, 'order:create')).toBeNull();
+  expect(razlogBlokade({ stanje: 'aktivna', licenca: lic, danaDoIsteka: 9 }, 'order:finalize')).toBeNull();
   expect(razlogBlokade({ stanje: 'zakljucana', licenca: lic }, 'product:getAll')).toBeNull();
 });
 
@@ -168,7 +168,7 @@ test('kanali samo modula: bez važeće licence nisu "sve licencirano"', () => {
 });
 
 test('kanalPodLicencom: pisanje dokumenata i kanali modula, ne čitanje', () => {
-  expect(kanalPodLicencom('order:create')).toBe(true);
+  expect(kanalPodLicencom('order:finalize')).toBe(true);
   expect(kanalPodLicencom('normativ:save')).toBe(true);
   expect(kanalPodLicencom('primka:delete')).toBe(true);
   expect(kanalPodLicencom('product:getAll')).toBe(false);

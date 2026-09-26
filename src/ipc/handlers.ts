@@ -514,26 +514,6 @@ export function registerIpcHandlers(): void {
     return { changes: 1 };
   });
 
-  handle('product:search', (query: string) => {
-    const like = `%${query}%`;
-    return db
-      .prepare(`
-        SELECT p.*,
-          COALESCE(
-            (SELECT SUM(CASE WHEN sm.tip = 'ulaz' THEN sm.kolicina ELSE -sm.kolicina END)
-             FROM stock_movements sm WHERE sm.productId = p.id),
-            0
-          ) AS stanje,
-          ${SIFRE_DOBAVLJACA}
-        FROM products p
-        WHERE (p.naziv LIKE ? OR p.sifra LIKE ? OR p.barkod LIKE ?
-          OR EXISTS (SELECT 1 FROM artikal_dobavljac_sifre ds WHERE ds.productId = p.id AND ds.sifra LIKE ?))
-          AND p.tip != 'materijal' AND p.slobodan = 0
-        ORDER BY p.naziv
-      `)
-      .all(like, like, like, like);
-  });
-
   // ─── Šifre dobavljača ───────────────────────────────────
 
   handle('product:getDobavljacSifre', (productId: number) => {
@@ -640,24 +620,6 @@ export function registerIpcHandlers(): void {
     })();
   });
 
-  handle('materijal:search', (query: string) => {
-    const like = `%${query}%`;
-    return db
-      .prepare(`
-        SELECT p.*,
-          COALESCE(
-            (SELECT SUM(CASE WHEN sm.tip = 'ulaz' THEN sm.kolicina ELSE -sm.kolicina END)
-             FROM stock_movements sm WHERE sm.productId = p.id),
-            0
-          ) AS stanje
-        FROM products p
-        WHERE p.tip = 'materijal' AND (p.naziv LIKE ? OR p.sifra LIKE ?)
-        ORDER BY p.naziv
-        LIMIT 30
-      `)
-      .all(like, like);
-  });
-
   // ─── Dobavljači ─────────────────────────────────────────
 
   handle('dobavljac:getAll', () => {
@@ -724,13 +686,6 @@ export function registerIpcHandlers(): void {
 
   handle('kupac:getAll', () => {
     return db.prepare('SELECT * FROM kupci ORDER BY naziv').all();
-  });
-
-  handle('kupac:search', (query: string) => {
-    const like = `%${query}%`;
-    return db
-      .prepare('SELECT * FROM kupci WHERE naziv LIKE ? OR idBroj LIKE ? OR kontakt LIKE ? ORDER BY naziv')
-      .all(like, like, like);
   });
 
   // Zajednička pravila za kupac:create (id = null) i kupac:update — na update-u se

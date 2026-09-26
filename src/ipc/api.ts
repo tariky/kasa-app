@@ -38,7 +38,6 @@ export function napraviApi(pozovi: Pozovi, naDogadjaj: NaDogadjaj) {
     createProduct: (data: any) => pozovi('product:create', data),
     updateProduct: (id: number, data: any) => pozovi('product:update', id, data),
     deleteProduct: (id: number) => pozovi('product:delete', id),
-    searchProducts: (query: string) => pozovi('product:search', query),
     adjustStock: (productId: number, newStanje: number) => pozovi('product:adjustStock', productId, newStanje),
     getDobavljacSifre: (productId: number) => pozovi('product:getDobavljacSifre', productId),
     setDobavljacSifre: (productId: number, lista: { dobavljacId: number; sifra: string | null }[]) =>
@@ -54,7 +53,6 @@ export function napraviApi(pozovi: Pozovi, naDogadjaj: NaDogadjaj) {
 
     // Kupci
     getKupci: () => pozovi('kupac:getAll'),
-    searchKupci: (query: string) => pozovi('kupac:search', query),
     createKupac: (data: any) => pozovi('kupac:create', data),
     updateKupac: (id: number, data: any) => pozovi('kupac:update', id, data),
     deleteKupac: (id: number) => pozovi('kupac:delete', id),
@@ -122,7 +120,6 @@ export function napraviApi(pozovi: Pozovi, naDogadjaj: NaDogadjaj) {
     izdajRacunZaNalog: (data: { id: number; nacinPlacanja: string }) => pozovi('nalog:izdajRacun', data),
     getNormativ: (productId: number) => pozovi('normativ:get', productId),
     saveNormativ: (productId: number, stavke: any[]) => pozovi('normativ:save', productId, stavke),
-    searchMaterijal: (query: string) => pozovi('materijal:search', query),
     setProizvodnjaEnabled: (enabled: boolean) => pozovi('proizvodnja:setEnabled', enabled),
 
     // Tring

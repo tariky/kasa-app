@@ -111,8 +111,7 @@ describe.skipIf(!IZVOR)('stvarna baza: TS i Rust vraćaju isto', () => {
   function pozivi(): Array<[string, ...unknown[]]> {
     const p: Array<[string, ...unknown[]]> = [
       ['user:getAll'], ['product:getAll'], ['product:getAll', 'materijal'], ['product:getAll', 'usluga'],
-      ['product:search', 'a'], ['product:search', ''], ['materijal:search', ''],
-      ['dobavljac:getAll'], ['kupac:getAll'], ['kupac:search', 'a'],
+      ['dobavljac:getAll'], ['kupac:getAll'],
       ['primka:getAll'], ['primka:nextBroj'], ['nivelacija:getAll'], ['nivelacija:getAll', '2000-01-01', '2100-12-31'],
       ['order:getAll'], ['order:getFiscalGaps'], ['fiscal:getNumeracija'], ['pending:list'],
       ['ponuda:getAll'], ['ponuda:nextBroj'], ['nalog:getAll'], ['nalog:getAll', 'aktivni'], ['nalog:nextBroj'],
