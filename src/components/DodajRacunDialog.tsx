@@ -14,6 +14,8 @@ import {
 import { Kupac, Product } from '@/types';
 import { izracunajTotale, iznosStavke } from '@/lib/racun';
 import { cn, formatKM } from '@/lib/utils';
+import { localDateStr } from '@/lib/novac';
+import { Eyebrow } from '@/components/ui/ledger';
 import { PretragaProizvoda } from '@/components/PretragaProizvoda';
 import { PretragaStavki } from '@/components/ui/pretraga-stavki';
 
@@ -46,15 +48,7 @@ interface Props {
 function nowLocalInput(): string {
   const d = new Date();
   const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-function Eyebrow({ children, className }: { children: React.ReactNode; className?: string }) {
-  return (
-    <span className={cn('text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400', className)}>
-      {children}
-    </span>
-  );
+  return `${localDateStr(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 const poljaKupca = (k: Kupac) => ({ naziv: k.naziv, sifra: k.idBroj, dodatno: [k.adresa, k.grad].filter(Boolean).join(' ') });

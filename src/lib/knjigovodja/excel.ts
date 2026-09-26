@@ -3,6 +3,7 @@
 import ExcelJS from 'exceljs';
 import type { FirmaSettings } from '@/types';
 import { PDV_STOPA_E_PCT } from '../pdv';
+import { round2 } from '../novac';
 import { prikazPerioda } from './period';
 import { NAZIVI_LISTOVA } from './listovi';
 import type { KnjigovodjaIzvjestaj, VrstaUpozorenja } from './obracun';
@@ -111,7 +112,7 @@ function tabela<T>(ws: ExcelJS.Worksheet, start: number, kolone: Kolona<T>[], re
     if (!k.zbir) return;
     const rezultat = typeof k.zbir === 'object'
       ? k.zbir.rezultat
-      : Math.round(redovi.reduce((a, r) => a + (Number(k.v(r)) || 0), 0) * 100) / 100;
+      : round2(redovi.reduce((a, r) => a + (Number(k.v(r)) || 0), 0));
     const formula = typeof k.zbir === 'object' ? k.zbir.formula(raspon) : `SUM(${raspon(k.naslov)})`;
     const c = red.getCell(i + 1);
     c.value = redovi.length ? { formula, result: rezultat } : 0;

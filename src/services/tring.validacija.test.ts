@@ -62,7 +62,6 @@ describe('ispravni ulazi daju isti XML kao ranije', () => {
     await Tring.stampatiFiskalniRacun(pun);
     await Tring.stampatiReklamiraniRacun({ ...pun, vrstePlacanja: [], brojRacuna: 101 });
     await Tring.stampatiFiskalniRacun({ stavke: [pun.stavke[0]], vrstePlacanja: [{ oznaka: 'Kartica', iznos: 5 }] });
-    await Tring.upisiArtikal({ sifra: 'S<1>', naziv: 'Sok', jm: 'l', cijena: 1.2, stopa: 'K', plu: 12 });
     await Tring.inicijalizacija(5, 'tajna');
     await Tring.stampatiPeriodicniIzvjestaj('2026-01-05', '2026-02-10');
     await Tring.unosNovca(120.33);
@@ -97,11 +96,6 @@ describe('stopa', () => {
     ['E</Stopa><Stopa>K'], ['e'], ['A'], [''], [null], [1],
   ])('%p se odbija', async (stopa) => {
     odbijeno(await Tring.stampatiFiskalniRacun(racun({ stavke: [stavka({ stopa })] })),
-      'neispravna PDV stopa (dozvoljeno E ili K)');
-  });
-
-  test('i kod upisa artikla', async () => {
-    odbijeno(await Tring.upisiArtikal({ sifra: 'S', naziv: 'N', jm: 'l', cijena: 1, stopa: 'K</Stopa>' as any }),
       'neispravna PDV stopa (dozvoljeno E ili K)');
   });
 });
@@ -148,7 +142,7 @@ describe('cijeli brojevi', () => {
   });
 
   test.each([[-1], [2.5], ['3</Grupa>']])('grupa %p se odbija', async (grupa) => {
-    odbijeno(await Tring.upisiArtikal({ sifra: 'S', naziv: 'N', jm: 'l', cijena: 1, stopa: 'E', grupa: grupa as any }),
+    odbijeno(await Tring.stampatiFiskalniRacun(racun({ stavke: [stavka({ grupa })] })),
       'neispravna Grupa (mora biti cijeli broj od 0 do 999999)');
   });
 

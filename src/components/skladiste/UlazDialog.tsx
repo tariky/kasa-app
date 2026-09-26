@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { pdf } from '@react-pdf/renderer';
 import type { Dobavljac, PregledCijenaUlaza, Primka, PrimkaStavka, Product, PromijenjenoOdPregleda } from '@/types';
 import { jePloca, m2UKom } from '@/lib/ploca';
-import { localDateStr } from '@/lib/novac';
+import { localDateStr, round2 } from '@/lib/novac';
 import { nedostajeOpis, porukaUpozorenja, praznaStavka, redIzBaze, redStatus, ulazTotali, uPayload, type UlazRed } from '@/lib/ulaz';
 import { kalkulacijaPrimke, nabavnaVrijednost, type KalkulacijaPrimke } from '@/lib/kalkulacija';
 import { cn, formatKM, formatDate } from '@/lib/utils';
@@ -36,7 +36,7 @@ interface Forma {
 const praznaForma = (): Forma => ({
   brojPrimke: '', datum: localDateStr(), dobavljacNaziv: '', dobavljacId: '', dobavljacAdresa: '', brojFakture: '', napomena: '', zavisniTroskovi: '', rows: [praznaStavka()],
 });
-const zavisniDokumenta = (stavke: PrimkaStavka[]) => Math.round(stavke.reduce((s, x) => s + (x.zavisniTroskovi || 0), 0) * 100) / 100;
+const zavisniDokumenta = (stavke: PrimkaStavka[]) => round2(stavke.reduce((s, x) => s + (x.zavisniTroskovi || 0), 0));
 const izPrimke = (p: Primka, products: Product[]): Forma => ({
   brojPrimke: p.brojPrimke, datum: p.datum, dobavljacNaziv: p.dobavljacNaziv ?? '', dobavljacId: p.dobavljacId ?? '', dobavljacAdresa: p.dobavljacAdresa ?? '',
   brojFakture: p.brojFakture ?? '', napomena: p.napomena ?? '',

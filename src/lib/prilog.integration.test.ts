@@ -22,7 +22,7 @@ let server: Server;
 let db: SqlDb & Database;
 
 beforeAll(() => {
-  server = startMockTringServer(PORT);
+  server = startMockTringServer(PORT, { kasnjenjeMs: 0 });
   Tring.configure({ host: 'localhost', port: PORT });
 });
 

@@ -19,11 +19,13 @@ import {
   PRILOG_OPIS_DEFAULT, FAKTURA_VEZA, PRILOG_OPIS_MAX, PRILOG_VEZA_MAX, FAKTURA_NAPOMENA_MAX,
 } from '@/lib/prilog';
 import { iznosStavke } from '@/lib/racun';
-import { formatKM, cn, porukaGreske } from '@/lib/utils';
+import { formatKM, formatKolicina, cn, mnozina, porukaGreske } from '@/lib/utils';
 import type { Kupac, Product } from '@/types';
 import { PretragaProizvoda } from '@/components/PretragaProizvoda';
 import SlobodnaStavkaDialog from '@/components/kasa/SlobodnaStavkaDialog';
 import { localDateStr } from '@/lib/novac';
+import { plusDana } from '@/lib/ponuda';
+import { formatDatumValute } from '@/lib/valuta';
 import { otvoriNezavrseneRacune } from '@/lib/nezavrseniRacuni';
 import { obavijesti } from '@/lib/dijalog';
 import { useDokumentPostavke } from '@/components/DokumentPostavkeProvider';
@@ -114,23 +116,15 @@ export interface SkicaFakture {
 /** Zbirna stavka se fiskalizuje sa stopom E, pa samo takve stavke smiju na fakturu. */
 const nijeE = (pdvStopa: string) => (pdvStopa === 'E' ? null : `stopa ${pdvStopa}`);
 
-const fmtKol = (n: number) => String(Math.round(n * 1000) / 1000).replace('.', ',');
-
 /** Rokovi plaćanja koji se nude jednim klikom; „datum“ otvara izbor tačnog dana. */
 const ROKOVI = [8, 15, 30, 60] as const;
 type Rok = null | (typeof ROKOVI)[number] | 'datum';
 
-const plusDana = (dana: number) => {
-  const d = new Date();
-  d.setDate(d.getDate() + dana);
-  return localDateStr(d);
-};
 /** Rok u danima → stanje dijaloga: brzi izbor, ili tačan datum za ostale dane. */
 const rokIzDana = (dana: number | null): { rok: Rok; rokDatum: string } => {
   const r = rokUIzbor(dana, ROKOVI);
-  return { rok: r.rok as Rok, rokDatum: r.rok === 'datum' && r.dana != null ? plusDana(r.dana) : '' };
+  return { rok: r.rok as Rok, rokDatum: r.rok === 'datum' && r.dana != null ? plusDana(localDateStr(), r.dana) : '' };
 };
-const fmtDatum = (iso: string) => { const [y, m, d] = iso.split('-'); return `${d}.${m}.${y}.`; };
 /** "YYYY-MM-DD" ↔ lokalni Date, bez pomaka vremenske zone. */
 const izIso = (iso: string) => { const [y, m, d] = iso.split('-').map(Number); return new Date(y, m - 1, d); };
 
@@ -263,7 +257,7 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
 
   const sumaStavki = useMemo(() => sumaPriloga(stavke), [stavke]);
   const zabranjene = useMemo(() => stavke.filter(s => nijeE(s.pdvStopa)), [stavke]);
-  const datumValute = rok === null ? null : rok === 'datum' ? (rokDatum || null) : plusDana(rok);
+  const datumValute = rok === null ? null : rok === 'datum' ? (rokDatum || null) : plusDana(localDateStr(), rok);
   const iznos = mode === 'stavke' ? sumaStavki : (rucniIznos ?? 0);
   // Prazna veza bi na uređaju pala na „računu" — dijalog fakture drži „fakturi".
   const vezaZaSlanje = veza.trim() || FAKTURA_VEZA;
@@ -588,7 +582,7 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
                                     {stopa && <span className="ml-2 font-medium text-rose-600">PDV {stopa}: ne može na fakturu</span>}
                                     {!stopa && fali && (
                                       <span className="ml-2 font-medium text-amber-700">
-                                        {s.stanje! <= 0 ? 'nema na stanju' : `na stanju samo ${fmtKol(s.stanje!)} ${s.jm}`}
+                                        {s.stanje! <= 0 ? 'nema na stanju' : `na stanju samo ${formatKolicina(s.stanje!)} ${s.jm}`}
                                       </span>
                                     )}
                                   </p>
@@ -658,7 +652,7 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
                         </ScrollArea>
                         {/* Rabat na sve — ista radnja kao na kasi */}
                         <div className="flex items-center gap-2 border-t border-slate-100 bg-slate-50/70 px-4 py-2 text-[12px] text-slate-500">
-                          <span>{stavke.length} {stavke.length === 1 ? 'stavka' : stavke.length < 5 ? 'stavke' : 'stavki'}</span>
+                          <span>{stavke.length} {mnozina(stavke.length, ['stavka', 'stavke', 'stavki'])}</span>
                           <label className="ml-auto flex items-center gap-2">
                             Rabat na sve stavke
                             <DecimalInput
@@ -797,7 +791,7 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
                 <div className="pb-5">
                   <div className="flex items-baseline justify-between">
                     <p className="text-[12px] font-medium text-slate-600">Rok plaćanja</p>
-                    {datumValute && <span className="font-mono text-[11.5px] tabular-nums text-slate-500">valuta {fmtDatum(datumValute)}</span>}
+                    {datumValute && <span className="font-mono text-[11.5px] tabular-nums text-slate-500">valuta {formatDatumValute(datumValute)}</span>}
                   </div>
                   <div className="mt-2 flex flex-wrap gap-1" role="radiogroup" aria-label="Rok plaćanja">
                     {([null, ...ROKOVI] as Rok[]).map(r => {
@@ -834,7 +828,7 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
                           )}
                         >
                           <CalendarDays className="h-3.5 w-3.5" />
-                          {rok === 'datum' && rokDatum ? <span className="font-mono tabular-nums">{fmtDatum(rokDatum)}</span> : 'Datum…'}
+                          {rok === 'datum' && rokDatum ? <span className="font-mono tabular-nums">{formatDatumValute(rokDatum)}</span> : 'Datum…'}
                         </button>
                       </PopoverTrigger>
                       <PopoverContent className="w-auto p-0" align="end">

@@ -1,7 +1,7 @@
 import { test, expect } from 'bun:test';
 import { imeZaCuvanje, dozvoljeniFilteri, dozvoljenaEkstenzija } from './cuvanje';
 
-// Isti slučajevi kao Rust testovi ljuske (src-tauri/src/lib.rs, ime_za_cuvanje*).
+// Isti slučajevi kao Rust testovi (src-tauri/backend/src/cuvanje.rs, ime_za_cuvanje*).
 
 test('predloženo ime: separatori i ":" postaju crtice, ostaje samo ime u folderu dijaloga', () => {
   expect(imeZaCuvanje('Racun-1.pdf')).toBe('Racun-1.pdf');

@@ -4,6 +4,7 @@
 import { test, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import * as Tring from '@/services/tring';
 import { startMockTringServer } from '@/services/tring-mock-server';
 import { schema } from '@/database/schema';
@@ -17,7 +18,7 @@ let server: Server;
 let db: SqlDb & Database;
 
 beforeAll(() => {
-  server = startMockTringServer(PORT);
+  server = startMockTringServer(PORT, { kasnjenjeMs: 0 });
   Tring.configure({ host: 'localhost', port: PORT });
 });
 
@@ -121,13 +122,19 @@ test('dvoklik ne odštampa dva storna', async () => {
   dodajArtikal(1, '005', 5);
   const orderId = dodajRacun({ brojFiskalnog: '558', stavke: [{ productId: 1, kolicina: 2, cijena: 5 }] });
 
-  // Oba poziva krenu prije nego prvi završi štampu (uređaj kasni ~2.5s).
-  const [a, b] = await Promise.allSettled([
+  // Oba poziva krenu prije nego prvi završi štampu — ovaj uređaj kasni ~2.5s.
+  const spori = startMockTringServer(0);
+  if (!spori.listening) await new Promise(r => spori.once('listening', r));
+  Tring.configure({ host: 'localhost', port: (spori.address() as AddressInfo).port });
+  const rezultati = await Promise.allSettled([
     refundAndPrint(deps(), { id: orderId }),
     refundAndPrint(deps(), { id: orderId }),
-  ]);
+  ]).finally(() => {
+    Tring.configure({ host: 'localhost', port: PORT });
+    spori.close();
+  });
 
-  const uspjeli = [a, b].filter(r => r.status === 'fulfilled' && (r.value as any).success);
+  const uspjeli = rezultati.filter(r => r.status === 'fulfilled' && (r.value as any).success);
   expect(uspjeli.length).toBe(1);
   expect(getProductStock(db, 1)).toBe(100);
 }, 20000);

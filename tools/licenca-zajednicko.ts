@@ -5,7 +5,8 @@ import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFi
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { generateX25519Identity, identityToRecipient } from 'age-encryption';
-import { izdajLicencu, provjeriLicencu, lokalniDatum, Licenca, type R2Podaci } from '../src/lib/licenca';
+import { izdajLicencu, provjeriLicencu, Licenca, type R2Podaci } from '../src/lib/licenca';
+import { localDateStr } from '../src/lib/novac';
 
 export interface BackupUnos {
   bucket: string;
@@ -132,7 +133,7 @@ export function javniIzPrivatnog(): KeyObject {
 export function doNakonDana(dana: number, od = new Date()): string {
   const d = new Date(od);
   d.setDate(d.getDate() + dana - 1);
-  return lokalniDatum(d);
+  return localDateStr(d);
 }
 
 export async function izdaj(unos: { klijent: string; vrijediDo: string; uredjaj?: string; moduli: Modul[]; backup?: BackupUnos }): Promise<IzdanaLicenca> {
@@ -141,7 +142,7 @@ export async function izdaj(unos: { klijent: string; vrijediDo: string; uredjaj?
   const licenca: Licenca = {
     klijent: unos.klijent.trim(),
     vrijediDo: unos.vrijediDo,
-    izdana: lokalniDatum(new Date()),
+    izdana: localDateStr(new Date()),
     moduli: unos.moduli,
     ...(unos.uredjaj?.trim() ? { uredjaj: unos.uredjaj.trim() } : {}),
     ...(bucket ? { backup: { bucket } } : {}),

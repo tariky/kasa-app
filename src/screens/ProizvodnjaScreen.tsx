@@ -16,21 +16,12 @@ import { RefreshCw, Plus, Hammer, ClipboardList, AlertTriangle, X, Factory, User
 import { useIpcPodaci } from '@/hooks/useIpcPodaci';
 import { GreskaUcitavanja } from '@/components/GreskaUcitavanja';
 
-export const STATUS_META: Record<NalogStatus, { label: string; cls: string; dot: string }> = {
-  otvoren: { label: 'Otvoren', cls: 'bg-slate-50 text-slate-500 border-slate-200', dot: 'bg-slate-400' },
-  u_izradi: { label: 'U izradi', cls: 'bg-blue-50 text-blue-600 border-blue-100', dot: 'bg-blue-500' },
-  zavrsen: { label: 'Završen', cls: 'bg-emerald-50 text-emerald-600 border-emerald-100', dot: 'bg-emerald-500' },
-  fakturisan: { label: 'Fakturisan', cls: 'bg-violet-50 text-violet-600 border-violet-100', dot: 'bg-violet-500' },
+const STATUS_META: Record<NalogStatus, { label: string; dot: string }> = {
+  otvoren: { label: 'Otvoren', dot: 'bg-slate-400' },
+  u_izradi: { label: 'U izradi', dot: 'bg-blue-500' },
+  zavrsen: { label: 'Završen', dot: 'bg-emerald-500' },
+  fakturisan: { label: 'Fakturisan', dot: 'bg-violet-500' },
 };
-
-export function StatusChip({ status, size = 'sm' }: { status: NalogStatus; size?: 'sm' | 'md' }) {
-  const m = STATUS_META[status];
-  return (
-    <span className={cn('inline-flex items-center rounded-full font-semibold border text-[10px]', size === 'sm' ? 'px-2 py-0.5' : 'px-2.5 py-1', m.cls)}>
-      {m.label}
-    </span>
-  );
-}
 
 /** Status u listi — tačka + tekst, kao stanje zalihe u listi artikala. */
 function StatusTacka({ status }: { status: NalogStatus }) {

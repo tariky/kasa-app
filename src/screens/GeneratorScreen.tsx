@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { Product } from '@/types';
 import { formatKM, parseDecimal } from '@/lib/utils';
+import { round2 } from '@/lib/novac';
 import { generirajRacune, GeneratedRacun, GenerateResult } from '@/lib/batchRacuni';
 import { otvoriNezavrseneRacune } from '@/lib/nezavrseniRacuni';
 
@@ -64,8 +65,8 @@ export default function GeneratorScreen() {
   const removeRacun = (id: string) => {
     if (!result || running) return;
     const racuni = result.racuni.filter(r => r.id !== id);
-    const ukupnoGenerisano = Math.round(racuni.reduce((s, r) => s + r.ukupno, 0) * 100) / 100;
-    setResult({ ...result, racuni, ukupnoGenerisano, manjak: Math.max(0, Math.round((result.target - ukupnoGenerisano) * 100) / 100) });
+    const ukupnoGenerisano = round2(racuni.reduce((s, r) => s + r.ukupno, 0));
+    setResult({ ...result, racuni, ukupnoGenerisano, manjak: Math.max(0, round2(result.target - ukupnoGenerisano)) });
     setStatuses(prev => { const next = { ...prev }; delete next[id]; return next; });
   };
 

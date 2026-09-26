@@ -12,7 +12,7 @@ const PORT = 8096; // ne sudara se s ostalim testovima (8097, 8099)
 let server: Server;
 
 beforeAll(() => {
-  server = startMockTringServer(PORT);
+  server = startMockTringServer(PORT, { kasnjenjeMs: 0 });
   Tring.configure({ host: 'localhost', port: PORT });
   Tring.setLoggingEnabled(true);
 });

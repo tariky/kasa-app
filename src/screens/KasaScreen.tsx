@@ -9,7 +9,7 @@ import {
 import { Key } from '@/components/ui/ledger';
 import { PretragaStavki } from '@/components/ui/pretraga-stavki';
 import { PretragaProizvoda } from '@/components/PretragaProizvoda';
-import { cn, formatKM, parseDecimal } from '@/lib/utils';
+import { cn, formatKM, formatKolicina, mnozina, parseDecimal } from '@/lib/utils';
 import { localDateStr, prijedloziApoena, round2 } from '@/lib/novac';
 import { izracunajTotale } from '@/lib/racun';
 import { PDV_STOPA_E_PCT } from '@/lib/pdv';
@@ -45,19 +45,8 @@ const paymentIcons: Record<PaymentType, React.ReactNode> = {
 
 const ARTIKLI_I_USLUGE: Product['tip'][] = ['artikal', 'usluga'];
 
-/** Broj → tekst za polje količine (zarez kao separator, bez suvišnih nula). */
-function formatQty(n: number): string {
-  return String(Math.round(n * 1000) / 1000).replace('.', ',');
-}
-
 /** Bosanski plural za "artikal": 1 artikal, 2–4 artikla, 5+ artikala. */
-function formatArtikliCount(n: number): string {
-  const mod10 = n % 10;
-  const mod100 = n % 100;
-  if (mod10 === 1 && mod100 !== 11) return `${n} artikal`;
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return `${n} artikla`;
-  return `${n} artikala`;
-}
+const formatArtikliCount = (n: number) => `${n} ${mnozina(n, ['artikal', 'artikla', 'artikala'])}`;
 
 /** Kucanje van polja za unos ide u pretragu — skener radi i kad fokus pobjegne na dugme. */
 function uPoljuZaUnos(t: EventTarget | null): boolean {
@@ -234,7 +223,7 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
     setMessage(poslije - prije < qty
       ? { type: 'error', text: poslije === prije
           ? `„${product.naziv}“: nema više na stanju.`
-          : `„${product.naziv}“: na stanju je ${formatQty(product.stanje ?? 0)} ${product.jm || 'kom'}, dodano ${formatQty(poslije - prije)}.` }
+          : `„${product.naziv}“: na stanju je ${formatKolicina(product.stanje ?? 0)} ${product.jm || 'kom'}, dodano ${formatKolicina(poslije - prije)}.` }
       : null);
     fokusPretraga();
   }, [cart, allowZeroStock, kupacRabat, fokusPretraga]);
@@ -257,7 +246,7 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
   const urediKolicinu = useCallback((item: CartItem) => {
     setQtyMode('postavi');
     setQtyProduct(item.product);
-    setQtyValue(formatQty(item.kolicina));
+    setQtyValue(formatKolicina(item.kolicina));
     setTimeout(() => qtyInputRef.current?.select(), 50);
   }, []);
 
@@ -397,7 +386,7 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
   // ─── Rabat ───
   const openRabatDialog = useCallback((target: number | 'sve') => {
     const current = target === 'sve' ? 0 : (cart.find(i => i.product.id === target)?.rabat ?? 0);
-    setRabatValue(current > 0 ? formatQty(current) : '');
+    setRabatValue(current > 0 ? formatKolicina(current) : '');
     setRabatTarget(target);
   }, [cart]);
 
@@ -879,7 +868,7 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
             <div className="mt-5 flex items-center gap-3">
               <button
                 className="w-12 h-12 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center text-xl font-bold transition-colors"
-                onClick={() => setQtyValue(formatQty(Math.max(qtyMode === 'postavi' ? 0 : 1, (parseDecimal(qtyValue) || 1) - 1)))}
+                onClick={() => setQtyValue(formatKolicina(Math.max(qtyMode === 'postavi' ? 0 : 1, (parseDecimal(qtyValue) || 1) - 1)))}
               >
                 −
               </button>
@@ -894,14 +883,14 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
               />
               <button
                 className="w-12 h-12 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center text-xl font-bold transition-colors"
-                onClick={() => setQtyValue(formatQty(Math.min(qtyMax, (parseDecimal(qtyValue) || 0) + 1)))}
+                onClick={() => setQtyValue(formatKolicina(Math.min(qtyMax, (parseDecimal(qtyValue) || 0) + 1)))}
               >
                 +
               </button>
             </div>
             {qtyProduct && qtyProduct.tip !== 'usluga' && !qtyProduct.slobodan && (qtyProduct.stanje ?? 0) > 0 && (
               <p className="text-[11px] text-slate-400 mt-3 text-center font-mono tabular-nums">
-                Na stanju: {formatQty(qtyProduct.stanje ?? 0)} {qtyProduct.jm || 'kom'}
+                Na stanju: {formatKolicina(qtyProduct.stanje ?? 0)} {qtyProduct.jm || 'kom'}
               </p>
             )}
             {qtyMode === 'postavi' && (
@@ -971,7 +960,7 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
               const next = current === -1
                 ? (dir === 1 ? 0 : apoeni.length - 1)
                 : (current + dir + apoeni.length) % apoeni.length;
-              setKusurValue(formatQty(apoeni[next]));
+              setKusurValue(formatKolicina(apoeni[next]));
             };
             return (
               <>
@@ -1013,7 +1002,7 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
                       <button
                         key={iznos}
                         type="button"
-                        onClick={() => setKusurValue(formatQty(iznos))}
+                        onClick={() => setKusurValue(formatKolicina(iznos))}
                         className={cn(
                           'flex-1 h-9 rounded-lg text-[12px] font-semibold font-mono tabular-nums transition-all duration-150',
                           dato === iznos
