@@ -8,7 +8,7 @@
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
 import { otvoriBackend, type Backend } from './backend';
 import { pokreniPokvareniTring } from './laziTring';
-import { scenarij, ADMIN, uspjeh, postoji } from './scenarij';
+import { scenarij, ADMIN, uspjeh, upisan, postoji } from './scenarij';
 import { izracunajTotale } from '../../lib/racun';
 
 let b: Backend;
@@ -119,8 +119,8 @@ describe('prazan kupac → NULL na svakom putu upisa računa', () => {
     await b.call('fiscal:setZadnjiBroj', 100);
     for (const { opis, kupac, ocekivano } of KUPCI) {
       const r = await b.pozovi('order:finalizePrilog', { iznos: 10, nacinPlacanja: 'Virman', kupac });
-      expect(r.success, opis).toBe(true);
-      expect(kupacRacuna(postoji(r.id)), opis).toEqual(ocekivano);
+      expect(r, opis).toMatchObject({ success: true });
+      expect(kupacRacuna(upisan(r).id), opis).toEqual(ocekivano);
     }
   });
 

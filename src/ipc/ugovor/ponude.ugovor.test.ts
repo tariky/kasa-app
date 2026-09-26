@@ -1,7 +1,7 @@
 // Ugovor za kanale ponuda:*, prilog:* i fiscal:* — vidi backend.ts.
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
 import { otvoriBackend, ADMIN_PIN, type Backend } from './backend';
-import { scenarij, ADMIN, danas, stavka, postoji } from './scenarij';
+import { scenarij, ADMIN, danas, stavka, postoji, upisan } from './scenarij';
 
 let b: Backend;
 const baza = scenarij(() => b);
@@ -705,11 +705,10 @@ describe('prilog:saveStavke', () => {
   test('stavke unesene na kasi kod order:finalizePrilog se vide kroz prilog:getStavke', async () => {
     await b.call('fiscal:setZadnjiBroj', 100);
     const a = baza.artikal({ sifra: 'S9', cijena: 5, stanje: 10 });
-    const r = await b.pozovi('order:finalizePrilog', {
+    const r = upisan(await b.pozovi('order:finalizePrilog', {
       nacinPlacanja: 'Virman', stavke: [prilogStavka(a, 2, 5)],
-    });
-    expect(r.success).toBe(true);
-    expect((await b.pozovi('prilog:getStavke', postoji(r.id))).map(s => [s.productId, s.kolicina])).toEqual([[a, 2]]);
+    }));
+    expect((await b.pozovi('prilog:getStavke', r.id)).map(s => [s.productId, s.kolicina])).toEqual([[a, 2]]);
     expect(baza.stanje(a)).toBe(8);
   });
 });

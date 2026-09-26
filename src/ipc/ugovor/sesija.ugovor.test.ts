@@ -6,7 +6,7 @@ import { pbkdf2Sync } from 'node:crypto';
 import { otvoriBackend, pozoviBezTipova, prijavi, ADMIN_PIN, type Backend } from './backend';
 import type { Kanal } from '../kanali';
 import { hesirajPin, provjeriPin } from '../../lib/korisnici';
-import { scenarij, ADMIN, sada } from './scenarij';
+import { scenarij, ADMIN, sada, upisan } from './scenarij';
 import { KLJUCEVI_DOKUMENATA } from '../../lib/dokumentPostavke';
 
 let b: Backend;
@@ -815,7 +815,7 @@ describe('korisnikId se uzima iz sesije, ne iz payload-a', () => {
     await prijavi(b, ADMIN_PIN);
     await b.call('fiscal:setZadnjiBroj', 100);
     await prijavi(b, '1234');
-    const r = await b.call('order:finalizePrilog', { korisnikId: ADMIN, iznos: 10, nacinPlacanja: 'Virman' });
+    const r = upisan(await b.call('order:finalizePrilog', { korisnikId: ADMIN, iznos: 10, nacinPlacanja: 'Virman' }));
     expect(baza.red('SELECT korisnikId FROM orders WHERE id = ?', r.id).korisnikId).toBe(kasir);
 
     const ponuda = baza.upisi('ponude', {

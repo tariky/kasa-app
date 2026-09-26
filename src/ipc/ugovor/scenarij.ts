@@ -207,6 +207,16 @@ export function uspjeh<R extends { success: boolean }>(r: R): Extract<R, { succe
   return r as Extract<R, { success: true }>;
 }
 
+/**
+ * Uspješan ishod s id-em upisanog računa, i kad ishod nije unija
+ * (`success: boolean` i `id?` — order:finalizePrilog). Inače baci s cijelim
+ * odgovorom (greška uređaja, nepoznat ishod, već evidentiran), ne samo „nema id".
+ */
+export function upisan<R extends { success: boolean; id?: number | null }>(r: R): R & { success: true; id: number } {
+  if (!r.success || typeof r.id !== 'number') throw new Error('Očekivan upisan račun: ' + JSON.stringify(r));
+  return r as R & { success: true; id: number };
+}
+
 /** Neuspjeh (`success: false`) unije ishoda — i „već evidentiran". */
 export function neuspjeh<R extends { success: boolean }>(r: R): Exclude<R, { success: true }> {
   if (r.success) throw new Error('Očekivan neuspjeh: ' + JSON.stringify(r));
