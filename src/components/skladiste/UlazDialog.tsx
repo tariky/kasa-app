@@ -1,11 +1,11 @@
 // src/components/skladiste/UlazDialog.tsx
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { pdf } from '@react-pdf/renderer';
 import type { Dobavljac, PregledCijenaUlaza, Primka, PrimkaStavka, Product, PromijenjenoOdPregleda } from '@/types';
 import { jePloca, m2UKom } from '@/lib/ploca';
 import { localDateStr, round2 } from '@/lib/novac';
 import { nedostajeOpis, porukaUpozorenja, praznaStavka, redIzBaze, redStatus, ulazTotali, uPayload, type UlazRed } from '@/lib/ulaz';
 import { kalkulacijaPrimke, nabavnaVrijednost, type KalkulacijaPrimke } from '@/lib/kalkulacija';
+import { formatRucPct } from '@/lib/izvjestaji';
 import { cn, formatKM, formatDate } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -20,6 +20,7 @@ import { UlazPdf } from '@/components/UlazPdf';
 import { UlazStavkeEditor, type UlazStavkeHandle } from './UlazStavkeEditor';
 import { PregledCijenaAside, PregledCijenaTabela, PregledPromijenjen, imaSadrzaj } from './PregledCijenaUlaza';
 import { potvrdi } from '@/lib/dijalog';
+import { otvoriPdf, spremiPdf } from '@/lib/stampa';
 import { Pencil, Trash2, Printer, Download, Save, ChevronUp, ChevronDown, Building2, AlertTriangle, X } from 'lucide-react';
 
 export type UlazStanje = { kind: 'zatvoren' } | { kind: 'pregled'; id: number } | { kind: 'uredi'; id: number } | { kind: 'novi' };
@@ -93,7 +94,7 @@ function Kalkulacija({ k }: { k: KalkulacijaPrimke }) {
       {k.imaArtikala && (
         <div className="mt-2 pt-2 border-t border-dashed border-slate-200">
           <Red label="Prodajna bez PDV (artikli)" value={formatKM(k.prodajnaBezPdv)} />
-          <Red label={`RUC · ${k.rucPct.toFixed(1)} %`} value={formatKM(k.ruc)} tone="plus" strong />
+          <Red label={`RUC · ${formatRucPct(k.rucPct)} %`} value={formatKM(k.ruc)} tone="plus" strong />
           <Red label="PDV" value={formatKM(k.pdv)} />
           <Red label="MP vrijednost sa PDV" value={formatKM(k.prodajna)} />
         </div>
@@ -302,19 +303,14 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
     finally { setBrisem(false); }
   };
 
-  const buildPdf = async () => pdf(<UlazPdf primka={primka!} firma={await window.api.getFirmaSettings()} />).toBlob();
+  const primkaPdf = async () => <UlazPdf primka={primka!} firma={await window.api.getFirmaSettings()} />;
   const printPdf = async () => {
     if (!primka || edit) return;
-    const url = URL.createObjectURL(await buildPdf());
-    const win = window.open(url, '_blank');
-    if (win) win.onafterprint = () => URL.revokeObjectURL(url);
+    await otvoriPdf(await primkaPdf());
   };
   const exportPdf = async () => {
     if (!primka || edit) return;
-    const blob = await buildPdf();
-    const path = await window.api.showSaveDialog({ defaultName: `${primka.brojPrimke}.pdf`, filters: [{ name: 'PDF', extensions: ['pdf'] }] });
-    if (!path) return;
-    await window.api.writeFile(path, Array.from(new Uint8Array(await blob.arrayBuffer())) as any);
+    await spremiPdf(await primkaPdf(), `${primka.brojPrimke}.pdf`);
   };
 
   const anySub = brisiOpen || potvrda != null || pending != null;

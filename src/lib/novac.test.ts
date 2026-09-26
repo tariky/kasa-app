@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test';
-import { round2, localDateStr, prijedloziApoena } from './novac';
+import { round2, localDateStr, localDateTimeInput, prijedloziApoena } from './novac';
 
 test('prijedloziApoena nudi tačan iznos pa zaokruženja na novčanice', () => {
   expect(prijedloziApoena(12.6)).toEqual([12.6, 13, 15, 20, 50]);
@@ -32,4 +32,17 @@ test('localDateStr koristi lokalnu zonu, ne UTC', () => {
 
 test('localDateStr pada na nule ispred jednocifrenih', () => {
   expect(localDateStr(new Date(2026, 8, 5))).toBe('2026-09-05');
+});
+
+test('localDateTimeInput: lokalni datum i vrijeme do minute za polje datuma i vremena', () => {
+  expect(localDateTimeInput(new Date(2026, 8, 5, 7, 3, 59))).toBe('2026-09-05T07:03');
+  // Poslije ponoći lokalno — toISOString() bi u UTC+1 dao prethodni dan.
+  expect(localDateTimeInput(new Date(2026, 0, 1, 0, 30))).toBe('2026-01-01T00:30');
+});
+
+test('localDateTimeInput bez argumenta je sada', () => {
+  const prije = localDateTimeInput(new Date());
+  const sada = localDateTimeInput();
+  const poslije = localDateTimeInput(new Date());
+  expect([prije, poslije]).toContain(sada);
 });

@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { naOtvaranjeNezavrsenih } from '@/lib/nezavrseniRacuni';
+import { localDateTimeInput } from '@/lib/novac';
 
 interface PendingRow {
   id: number;
@@ -46,23 +47,17 @@ function opisZapisa(snap: PendingRow['snapshot']): { naslov: string; dokument: s
   }
 }
 
-function nowLocalInput(): string {
-  const d = new Date();
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
 export default function PendingRacuniDialog({ uloga }: { uloga: 'admin' | 'kasir' }) {
   const [rows, setRows] = useState<PendingRow[]>([]);
   const [broj, setBroj] = useState('');
-  const [datum, setDatum] = useState(nowLocalInput());
+  const [datum, setDatum] = useState(localDateTimeInput);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
   const load = useCallback(async () => {
     const data = await window.api.listPending();
     setRows(data as PendingRow[]);
-    setBroj(''); setDatum(nowLocalInput()); setError('');
+    setBroj(''); setDatum(localDateTimeInput()); setError('');
   }, []);
 
   useEffect(() => { load(); }, [load]);

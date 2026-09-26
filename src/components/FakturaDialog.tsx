@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject, type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
   Dialog, DialogContent, DialogDescription, DialogTitle,
 } from '@/components/ui/dialog';
@@ -6,7 +6,6 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { DecimalInput } from '@/components/ui/decimal-input';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { PretragaStavki } from '@/components/ui/pretraga-stavki';
 import { Key } from '@/components/ui/ledger';
 import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -15,13 +14,17 @@ import {
   FileClock, CalendarDays,
 } from 'lucide-react';
 import {
-  sumaPriloga,
   PRILOG_OPIS_DEFAULT, FAKTURA_VEZA, PRILOG_OPIS_MAX, PRILOG_VEZA_MAX, FAKTURA_NAPOMENA_MAX,
 } from '@/lib/prilog';
 import { iznosStavke } from '@/lib/racun';
+import { uPayload, type StavkaDokumenta } from '@/lib/stavkeDokumenta';
+import { useStavkeDokumenta } from '@/hooks/useStavkeDokumenta';
 import { formatKM, formatKolicina, cn, mnozina, porukaGreske } from '@/lib/utils';
 import type { Kupac, Product } from '@/types';
 import { PretragaProizvoda } from '@/components/PretragaProizvoda';
+import { PretragaKupaca, osvjeziKupce, useKupci } from '@/components/PretragaKupaca';
+import { KupacRacunaPolja } from '@/components/KupacRacunaPolja';
+import { PRAZAN_KUPAC, izKupca, zaSlanje, type KupacRacuna } from '@/lib/kupacRacuna';
 import SlobodnaStavkaDialog from '@/components/kasa/SlobodnaStavkaDialog';
 import { localDateStr } from '@/lib/novac';
 import { plusDana } from '@/lib/ponuda';
@@ -40,39 +43,11 @@ type Korak = 'firma' | 'faktura';
 /** Faktura se najčešće plaća virmanom — zato je prvi i zadani. */
 const NACINI_FAKTURE: readonly NacinPlacanja[] = ['Virman', 'Gotovina', 'Kartica', 'Ček'];
 
-export interface Firma {
-  naziv: string;
-  idBroj: string;
-  adresa: string;
-  grad: string;
-  postanskiBroj: string;
-}
-
-const PRAZNA_FIRMA: Firma = { naziv: '', idBroj: '', adresa: '', grad: '', postanskiBroj: '' };
-
-const firmaIzKupca = (k: Kupac): Firma => ({
-  naziv: k.naziv, idBroj: k.idBroj, adresa: k.adresa ?? '', grad: k.grad ?? '', postanskiBroj: k.postanskiBroj ?? '',
-});
-
-const poljaKupca = (k: Kupac) => ({ naziv: k.naziv, sifra: k.idBroj, dodatno: [k.adresa, k.grad].filter(Boolean).join(' ') });
+/** Firma na fakturi je kupac fiskalnog računa. */
+export type Firma = KupacRacuna;
 
 const adresaFirme = (f: Firma) =>
   [f.adresa, [f.postanskiBroj, f.grad].filter(Boolean).join(' ')].filter(Boolean).join(', ');
-
-export interface StavkaRed {
-  productId: number;
-  naziv: string;
-  jm: string;
-  sifra: string;
-  tip: string;
-  kolicina: number;
-  cijena: number;
-  /** Postotak 0–100. */
-  rabat: number;
-  pdvStopa: string;
-  /** Stanje u trenutku dodavanja; null = nepoznato ili usluga. */
-  stanje: number | null;
-}
 
 /** Faktura po ponudi: firma i stavke dolaze popunjeni, ponuda se na kraju označi konvertovanom. */
 export interface FakturaPocetno {
@@ -80,7 +55,7 @@ export interface FakturaPocetno {
   /** „12/2026“ — za naslov i napomenu. */
   ponudaOznaka: string;
   firma: Firma;
-  stavke: StavkaRed[];
+  stavke: StavkaDokumenta[];
 }
 
 /** Ponuda po kojoj se faktura izdaje — na kraju se označi konvertovanom. */
@@ -90,7 +65,7 @@ interface PonudaVeza { id: number; oznaka: string }
 export interface FakturaSkica {
   firma: Firma | null;
   mode: Mode;
-  stavke: StavkaRed[];
+  stavke: StavkaDokumenta[];
   rucniIznos: number | null;
   opis: string;
   veza: string;
@@ -155,10 +130,10 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
   const [firma, setFirma] = useState<Firma | null>(null);
   /** Ručni unos / uređivanje firme; null = pretraga šifarnika. */
   const [uredjivanje, setUredjivanje] = useState<Firma | null>(null);
-  const [allKupci, setAllKupci] = useState<Kupac[] | null>(null);
+  const allKupci = useKupci(open);
 
   const [mode, setMode] = useState<Mode>('stavke');
-  const [stavke, setStavke] = useState<StavkaRed[]>([]);
+  const { stavke, postavi: setStavke, dodaj, izmijeni: updateStavka, ukloni, totali } = useStavkeDokumenta();
   const [rucniIznos, setRucniIznos] = useState<number | null>(null);
   const [opis, setOpis] = useState(PRILOG_OPIS_DEFAULT);
   const [veza, setVeza] = useState(FAKTURA_VEZA);
@@ -233,10 +208,9 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
       .catch(() => setPredvidjeniBroj(null));
     // Faktura po ponudi: rok i način plaćanja kupca; rabat ne — stavke nose rabat iz ponude.
     const izPonude = !s && pocetno ? pocetno : null;
-    window.api.getKupci().then(k => {
-      setAllKupci(k);
-      if (izPonude) primijeniZadano(k.find(x => x.idBroj === izPonude.firma.idBroj), 'ponuda');
-    }).catch(() => setAllKupci([]));
+    osvjeziKupce().then(k => {
+      if (k && izPonude) primijeniZadano(k.find(x => x.idBroj === izPonude.firma.idBroj), 'ponuda');
+    });
     // Stavke iz ponude ne nose stanje, a u skici je zastarjelo — dopuni ga iz kataloga za upozorenje.
     if (pocetneStavke.length) {
       window.api.getProducts().then((rows: Product[]) => {
@@ -252,7 +226,7 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
     // pocetno i skica se čitaju samo pri otvaranju
   }, [open]);
 
-  const sumaStavki = useMemo(() => sumaPriloga(stavke), [stavke]);
+  const sumaStavki = totali.ukupno;
   const zabranjene = useMemo(() => stavke.filter(s => nijeE(s.pdvStopa)), [stavke]);
   const datumValute = rok === null ? null : rok === 'datum' ? (rokDatum || null) : plusDana(localDateStr(), rok);
   const iznos = mode === 'stavke' ? sumaStavki : (rucniIznos ?? 0);
@@ -276,7 +250,7 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
 
   const pocniRucniUnos = (tekst: string) => {
     const cifre = /^\d+$/.test(tekst.trim());
-    setUredjivanje({ ...PRAZNA_FIRMA, ...(cifre ? { idBroj: tekst.trim() } : { naziv: tekst.trim() }) });
+    setUredjivanje({ ...PRAZAN_KUPAC, ...(cifre ? { idBroj: tekst.trim() } : { naziv: tekst.trim() }) });
     requestAnimationFrame(() => firmaIdRef.current?.focus());
   };
 
@@ -301,18 +275,9 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
       return;
     }
     setObavijest(null);
-    const k = kol ?? 1;
-    setStavke(prev => {
-      const existing = prev.find(s => s.productId === p.id);
-      if (existing) return prev.map(s => s.productId === p.id ? { ...s, kolicina: Math.round((s.kolicina + k) * 1000) / 1000 } : s);
-      return [...prev, {
-        productId: p.id, naziv: p.naziv, jm: p.jm || 'kom', sifra: p.sifra, tip: p.tip,
-        kolicina: k, cijena: p.cijena, rabat: rabatKupca, pdvStopa: p.pdvStopa,
-        stanje: p.tip === 'usluga' || p.slobodan ? null : p.stanje ?? null,
-      }];
-    });
+    dodaj(p, kol, { rabat: rabatKupca });
     searchRef.current?.focus();
-  }, [rabatKupca]);
+  }, [dodaj, rabatKupca]);
 
   /** Isti rabat na sve stavke; prazno ili 0 skida rabat. */
   const primijeniRabatSve = () => {
@@ -325,13 +290,11 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
     searchRef.current?.focus();
   };
 
-  const updateStavka = (productId: number, patch: Partial<StavkaRed>) =>
-    setStavke(prev => prev.map(s => s.productId === productId ? { ...s, ...patch } : s));
   /** Strelice u polju količine: ±1, sa Shiftom ±10. Ne ide ispod 1. */
-  const nudgeKolicina = (s: StavkaRed, delta: number) =>
+  const nudgeKolicina = (s: StavkaDokumenta, delta: number) =>
     updateStavka(s.productId, { kolicina: Math.max(1, Math.round((s.kolicina + delta) * 1000) / 1000) });
   const removeStavka = (productId: number) => {
-    setStavke(prev => prev.filter(s => s.productId !== productId));
+    ukloni(productId);
     searchRef.current?.focus();
   };
 
@@ -377,7 +340,7 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
       const { ishod, res } = await izvrsiFiskalno(() => window.api.finalizePrilogOrder({
         nacinPlacanja,
         ...(mode === 'stavke'
-          ? { stavke: stavke.map(s => ({ productId: s.productId, kolicina: s.kolicina, cijena: s.cijena, rabat: s.rabat, pdvStopa: s.pdvStopa })) }
+          ? { stavke: uPayload(stavke) }
           : { iznos }),
         prilogOpis: opis.trim(),
         prilogVeza: vezaZaSlanje,
@@ -387,10 +350,7 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
         // Backend briše skicu kad faktura postoji u bazi — i kad se nezavršen
         // račun kasnije riješi kao odštampan, pa se ista skica ne fiskalizuje dvaput.
         skicaId: skicaId ?? null,
-        kupac: {
-          naziv: firma.naziv.trim(), idBroj: firma.idBroj.trim(), adresa: firma.adresa.trim(),
-          grad: firma.grad.trim(), postanskiBroj: firma.postanskiBroj.trim(),
-        },
+        kupac: zaSlanje(firma),
       }));
 
       if (ishod.vrsta === 'uspjeh' && res) {
@@ -931,11 +891,9 @@ function KorakFirma({ kupci, firma, uredjivanje, setUredjivanje, firmaIdRef, onI
   onRucno: (tekst: string) => void;
   error: string | null;
 }) {
-  const polje = (k: keyof Firma) => ({
-    value: uredjivanje?.[k] ?? '',
-    onChange: (e: ChangeEvent<HTMLInputElement>) => uredjivanje && setUredjivanje({ ...uredjivanje, [k]: e.target.value }),
-    onKeyDown: (e: ReactKeyboardEvent<HTMLInputElement>) => { if (e.key === 'Enter' && uredjivanje?.idBroj.trim()) { e.preventDefault(); onIzaberi(uredjivanje); } },
-  });
+  const enterPotvrdjuje = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && uredjivanje?.idBroj.trim()) { e.preventDefault(); onIzaberi(uredjivanje); }
+  };
 
   return (
     <div className="flex min-h-0 flex-1 justify-center overflow-y-auto px-6">
@@ -948,16 +906,10 @@ function KorakFirma({ kupci, firma, uredjivanje, setUredjivanje, firmaIdRef, onI
         {uredjivanje ? (
           <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-4">
             <p className="text-[13px] font-medium text-slate-800">Podaci firme</p>
-            <div className="mt-3 grid grid-cols-[1fr_1.4fr] gap-2">
-              <Input ref={firmaIdRef} placeholder="ID broj (JIB)" aria-label="ID broj firme" {...polje('idBroj')}
-                inputMode="numeric" maxLength={13} className="h-10 rounded-lg font-mono text-sm" />
-              <Input placeholder="Naziv" aria-label="Naziv firme" {...polje('naziv')} maxLength={32} className="h-10 rounded-lg text-sm" />
-            </div>
-            <Input placeholder="Adresa" aria-label="Adresa firme" {...polje('adresa')} maxLength={32} className="mt-2 h-10 rounded-lg text-sm" />
-            <div className="mt-2 flex gap-2">
-              <Input placeholder="Poš. broj" aria-label="Poštanski broj" {...polje('postanskiBroj')} maxLength={5} className="h-10 w-28 rounded-lg font-mono text-sm" />
-              <Input placeholder="Grad" aria-label="Grad" {...polje('grad')} maxLength={26} className="h-10 flex-1 rounded-lg text-sm" />
-            </div>
+            <KupacRacunaPolja
+              className="mt-3" varijanta="lg" value={uredjivanje} onChange={setUredjivanje}
+              idBrojRef={firmaIdRef} onKeyDown={enterPotvrdjuje}
+            />
             <div className="mt-4 flex items-center gap-2">
               <Button className="h-9 rounded-lg" disabled={!uredjivanje.idBroj.trim()} onClick={() => onIzaberi(uredjivanje)}>
                 Nastavi na stavke
@@ -970,24 +922,17 @@ function KorakFirma({ kupci, firma, uredjivanje, setUredjivanje, firmaIdRef, onI
           </div>
         ) : (
           <>
-            <PretragaStavki<Kupac>
+            <PretragaKupaca
               className="mt-6"
               stavke={kupci}
-              polja={poljaKupca}
-              kljuc={k => k.id}
-              onIzaberi={k => onIzaberi(firmaIzKupca(k))}
+              onIzaberi={k => onIzaberi(izKupca(k))}
               onNova={onRucno}
               novaLabel="Unesi firmu"
-              sifre={false}
-              kolicine={false}
               velicina="lg"
               nedavnoKljuc="kupci-faktura"
               naslovSvih="Sve firme"
-              oznaka={k => (k.adresa || k.grad) ? [k.adresa, k.grad].filter(Boolean).join(', ') : null}
-              meta={k => <span className="font-mono text-[11px] tabular-nums text-slate-400">{k.idBroj}</span>}
               placeholder="Naziv, ID broj ili grad firme"
               ariaLabel="Pretraga firmi"
-              akcija="odaberi"
               autoFocus
             />
 

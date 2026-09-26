@@ -1,13 +1,13 @@
-import { pdf } from '@react-pdf/renderer';
 import { Package } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { LedgerHead } from '@/components/ui/ledger';
 import { Stat } from '@/components/ui/stat';
 import { PrimkePdf } from '@/components/PrimkePdf';
 import { cn, formatKM, formatDate } from '@/lib/utils';
+import { otvoriPdf } from '@/lib/stampa';
 import { formatRucPct, sumePrimke } from '@/lib/izvjestaji';
 import type { FirmaSettings, Primka } from '@/types';
-import { IzvjestajKartica, PdfDugme, Prazno, PraznoStanje, fmtDisplay, openPdfInWindow, td } from './dijelovi';
+import { IzvjestajKartica, PdfDugme, Prazno, PraznoStanje, fmtDisplay, td } from './dijelovi';
 
 /** Prikazana stopa je veća od nule (ne „0,0“ ni negativna) — tada dobija „+“ i zelenu boju. */
 function rucRaste(rucPct: number): boolean {
@@ -35,10 +35,10 @@ export default function PrimkeTab({ primke, dateFrom, dateTo, firma, onGreska }:
   const exportPrimkePdf = async () => {
     if (!firma || primke.length === 0) return;
     try {
-      const blob = await pdf(
-        <PrimkePdf primke={primke} dateFrom={fmtDisplay(dateFrom)} dateTo={fmtDisplay(dateTo)} firma={firma} />
-      ).toBlob();
-      openPdfInWindow(blob, `Primke ${fmtDisplay(dateFrom)} - ${fmtDisplay(dateTo)}`);
+      await otvoriPdf(
+        <PrimkePdf primke={primke} dateFrom={fmtDisplay(dateFrom)} dateTo={fmtDisplay(dateTo)} firma={firma} />,
+        `Primke ${fmtDisplay(dateFrom)} - ${fmtDisplay(dateTo)}`,
+      );
     } catch {
       onGreska('Greška pri generisanju PDF-a za primke');
     }

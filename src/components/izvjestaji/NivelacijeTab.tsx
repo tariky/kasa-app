@@ -1,5 +1,4 @@
 import { useState, Fragment } from 'react';
-import { pdf } from '@react-pdf/renderer';
 import { ChevronRight, Download, FileText } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -7,9 +6,10 @@ import { LedgerHead } from '@/components/ui/ledger';
 import { Stat } from '@/components/ui/stat';
 import { NivelacijaPdf } from '@/components/NivelacijaPdf';
 import { cn, formatKM, formatDate } from '@/lib/utils';
+import { otvoriPdf } from '@/lib/stampa';
 import { razlikePoZnaku } from '@/lib/izvjestaji';
 import type { FirmaSettings, Nivelacija, NivelacijaStavka } from '@/types';
-import { IzvjestajKartica, PdfDugme, Prazno, PraznoStanje, openPdfInWindow, td } from './dijelovi';
+import { IzvjestajKartica, PdfDugme, Prazno, PraznoStanje, td } from './dijelovi';
 
 /** Tab Nivelacije: nivelacije za period; klik na red otvara stavke i PDF zapisnika. */
 export default function NivelacijeTab({ nivelacije, firma, onGreska }: {
@@ -41,8 +41,7 @@ export default function NivelacijeTab({ nivelacije, firma, onGreska }: {
     if (!firma) return;
     try {
       const niv = await window.api.getNivelacija(nivId);
-      const blob = await pdf(<NivelacijaPdf nivelacija={niv} firma={firma} />).toBlob();
-      openPdfInWindow(blob, `Nivelacija ${niv.brojNivelacije}`);
+      await otvoriPdf(<NivelacijaPdf nivelacija={niv} firma={firma} />, `Nivelacija ${niv.brojNivelacije}`);
     } catch {
       onGreska('Greška pri generisanju PDF-a za nivelaciju');
     }

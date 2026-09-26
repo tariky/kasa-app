@@ -1,27 +1,27 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { User as UserIcon, Printer, Percent, Paperclip, PencilLine, ScanBarcode, Eraser, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { DecimalInput } from '@/components/ui/decimal-input';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
 } from '@/components/ui/dialog';
 import { Key } from '@/components/ui/ledger';
-import { PretragaStavki } from '@/components/ui/pretraga-stavki';
 import { PretragaProizvoda } from '@/components/PretragaProizvoda';
+import { PretragaKupaca } from '@/components/PretragaKupaca';
+import { KupacRacunaPolja } from '@/components/KupacRacunaPolja';
 import { cn, formatKM, formatKolicina, mnozina, parseDecimal } from '@/lib/utils';
 import { localDateStr, prijedloziApoena, round2 } from '@/lib/novac';
 import { izracunajTotale } from '@/lib/racun';
 import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { nemaNaStanju } from '@/lib/izborArtikala';
+import { PRAZAN_KUPAC, izKupca, zaSlanje, type KupacRacuna } from '@/lib/kupacRacuna';
 import {
   dodajUKosaricu, dodajSlobodnuStavku, restoreCart, postaviRabat, postaviRabatNaSve, postaviKolicinu, stavkeTekst,
   type SavedCartItem,
 } from '@/lib/kosarica';
-import { pdf } from '@react-pdf/renderer';
 import { OtpremnicaPdf } from '@/components/OtpremnicaPdf';
 import { otvoriFakturuZaStampu } from '@/components/stampaFakture';
-import { ucitajZaStampu } from '@/lib/stampa';
+import { otvoriPdf, ucitajZaStampu } from '@/lib/stampa';
 import FakturaDialog, { type SkicaFakture } from '@/components/FakturaDialog';
 import SlobodnaStavkaDialog from '@/components/kasa/SlobodnaStavkaDialog';
 import StavkeRacuna from '@/components/kasa/StavkeRacuna';
@@ -49,8 +49,6 @@ function uPoljuZaUnos(t: EventTarget | null): boolean {
   return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable;
 }
 
-const poljaKupca = (k: Kupac) => ({ naziv: k.naziv, sifra: k.idBroj, dodatno: [k.adresa, k.grad].filter(Boolean).join(' ') });
-
 export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
   const { postavke } = useDokumentPostavke();
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -67,12 +65,7 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
   const [slobodnaOpen, setSlobodnaOpen] = useState(false);
   const [qtyValue, setQtyValue] = useState('1');
   const [kupacOpen, setKupacOpen] = useState(false);
-  const [kupacNaziv, setKupacNaziv] = useState('');
-  const [kupacIdBroj, setKupacIdBroj] = useState('');
-  const [kupacAdresa, setKupacAdresa] = useState('');
-  const [kupacGrad, setKupacGrad] = useState('');
-  const [kupacPostanskiBroj, setKupacPostanskiBroj] = useState('');
-  const [allKupci, setAllKupci] = useState<Kupac[] | null>(null);
+  const [kupac, setKupac] = useState<KupacRacuna>(PRAZAN_KUPAC);
   /** Rabat kupca izabranog iz šifarnika — dobijaju ga stavke dodane poslije izbora. */
   const [kupacRabat, setKupacRabat] = useState(0);
   const [dailyTotal, setDailyTotal] = useState<number | null>(null);
@@ -95,18 +88,8 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
 
   const fokusPretraga = useCallback(() => { setTimeout(() => searchInputRef.current?.focus(), 50); }, []);
 
-  // Učitaj sve kupce kad se dialog otvori — pretraga je lokalna.
-  useEffect(() => {
-    if (!kupacOpen) return;
-    window.api.getKupci().then(setAllKupci).catch(() => setAllKupci([]));
-  }, [kupacOpen]);
-
   const selectKupac = useCallback((k: Kupac) => {
-    setKupacNaziv(k.naziv);
-    setKupacIdBroj(k.idBroj);
-    setKupacAdresa(k.adresa ?? '');
-    setKupacGrad(k.grad ?? '');
-    setKupacPostanskiBroj(k.postanskiBroj ?? '');
+    setKupac(izKupca(k));
     // Na kasi važi samo kupčev način plaćanja — globalni način fakture ne mijenja Gotovinu.
     const nacinKupca = nacinKupcaNaKasi(k);
     const odPrethodnog = nacinOdKupcaRef.current;
@@ -125,11 +108,7 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
   }, [fokusPretraga, postavke]);
 
   const clearKupac = useCallback(() => {
-    setKupacNaziv('');
-    setKupacIdBroj('');
-    setKupacAdresa('');
-    setKupacGrad('');
-    setKupacPostanskiBroj('');
+    setKupac(PRAZAN_KUPAC);
     // Rabat ostaje na stavkama; samo nove stavke više ne dobijaju rabat kupca.
     setKupacRabat(0);
     const odKupca = nacinOdKupcaRef.current;
@@ -414,7 +393,7 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
   const handleFinalize = async () => {
     if (cart.length === 0 || loading) return;
     // Virman ide na žiro račun — bez kupca na računu nema ko da uplati.
-    if (paymentType === 'Virman' && !kupacIdBroj.trim()) {
+    if (paymentType === 'Virman' && !kupac.idBroj.trim()) {
       setKupacOpen(true);
       setMessage({ type: 'error', text: 'Za virman je obavezan kupac — odaberite ili unesite kupca.' });
       return;
@@ -423,10 +402,6 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
     setMessage(null);
     setLastOrderId(null);
     try {
-      const kupac = kupacIdBroj.trim()
-        ? { idBroj: kupacIdBroj.trim(), naziv: kupacNaziv.trim(), adresa: kupacAdresa.trim(), grad: kupacGrad.trim(), postanskiBroj: kupacPostanskiBroj.trim() }
-        : undefined;
-
       const stavke = cart.map(item => ({
         productId: item.product.id,
         sifra: item.product.sifra,
@@ -441,7 +416,7 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
 
       const { ishod, res } = await izvrsiFiskalno(() => window.api.finalizeOrder({
         ukupno: total, pdvIznos: pdvAmount, nacinPlacanja: paymentType,
-        kupac, napomena: racunNapomena || undefined, stavke,
+        kupac: zaSlanje(kupac), napomena: racunNapomena || undefined, stavke,
       }));
 
       // Odštampan i već upisan iz dijaloga nezavršenih računa: prodaja je
@@ -493,10 +468,7 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
       const fullOrder = await window.api.getOrder(orderId);
       if (!fullOrder) return;
       const { firma, postavke } = await ucitajZaStampu();
-      const blob = await pdf(<OtpremnicaPdf order={fullOrder} firma={firma} postavke={postavke} />).toBlob();
-      const url = URL.createObjectURL(blob);
-      const win = window.open(url, '_blank');
-      if (win) win.onafterprint = () => URL.revokeObjectURL(url);
+      await otvoriPdf(<OtpremnicaPdf order={fullOrder} firma={firma} postavke={postavke} />);
     } catch (err: any) {
       setMessage({ type: 'error', text: `Greška pri štampanju otpremnice: ${err?.message || 'Nepoznata greška'}` });
     }
@@ -625,15 +597,15 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
 
         {/* Kupac */}
         <div className="px-5 pb-4">
-          {kupacIdBroj.trim() ? (
+          {kupac.idBroj.trim() ? (
             <div className="flex items-start gap-3 rounded-xl border border-blue-100 bg-blue-50/60 px-3.5 py-2.5">
               <UserIcon className="mt-0.5 h-4 w-4 flex-shrink-0 text-blue-500" />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center justify-between gap-2">
                   <span className="truncate text-[13px] font-medium text-slate-800">
-                    {kupacNaziv.trim() || 'Kupac odabran'}
+                    {kupac.naziv.trim() || 'Kupac odabran'}
                   </span>
-                  <span className="flex-shrink-0 font-mono text-[11px] text-slate-500">{kupacIdBroj}</span>
+                  <span className="flex-shrink-0 font-mono text-[11px] text-slate-500">{kupac.idBroj}</span>
                 </div>
                 <div className="mt-1 flex gap-3">
                   <button type="button" onClick={() => setKupacOpen(true)} className="text-[11px] text-slate-500 transition-colors hover:text-slate-800">
@@ -711,7 +683,7 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
             onChange={nacin => {
               setPaymentType(nacin);
               // Virman zahtijeva kupca — odmah otvori dialog za odabir
-              if (nacin === 'Virman' && !kupacIdBroj.trim()) setKupacOpen(true);
+              if (nacin === 'Virman' && !kupac.idBroj.trim()) setKupacOpen(true);
             }}
           />
 
@@ -1020,20 +992,11 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
           </div>
 
           <div className="px-6 pb-5">
-            <PretragaStavki<Kupac>
-              stavke={allKupci}
-              polja={poljaKupca}
-              kljuc={k => k.id}
+            <PretragaKupaca
               onIzaberi={selectKupac}
-              sifre={false}
-              kolicine={false}
               nedavnoKljuc="kupci-kasa"
-              naslovSvih="Svi kupci"
-              oznaka={k => (k.adresa || k.grad) ? [k.adresa, k.grad].filter(Boolean).join(', ') : null}
-              meta={k => <span className={cn('font-mono text-[11px] tabular-nums', k.idBroj === kupacIdBroj.trim() ? 'font-semibold text-blue-600' : 'text-slate-400')}>{k.idBroj}</span>}
+              izabraniIdBroj={kupac.idBroj.trim()}
               placeholder="Traži kupca po nazivu, JIB-u ili gradu…"
-              ariaLabel="Pretraga kupaca"
-              akcija="odaberi"
               autoFocus
             />
           </div>
@@ -1041,20 +1004,12 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
           {/* Novi / uređivanje kupca */}
           <div className="border-t border-slate-100 px-6 pb-5 pt-4 space-y-2">
             <p className="text-[12px] font-medium text-slate-500">Podaci kupca na računu</p>
-            <div className="grid grid-cols-2 gap-2">
-              <Input placeholder="JIB (13 cifara)" value={kupacIdBroj} onChange={e => setKupacIdBroj(e.target.value)} className="h-9 text-sm rounded-lg font-mono" maxLength={13} />
-              <Input placeholder="Naziv" value={kupacNaziv} onChange={e => setKupacNaziv(e.target.value)} className="h-9 text-sm rounded-lg" maxLength={32} />
-            </div>
-            <Input placeholder="Adresa" value={kupacAdresa} onChange={e => setKupacAdresa(e.target.value)} className="h-9 text-sm rounded-lg" maxLength={32} />
-            <div className="flex gap-2">
-              <Input placeholder="Poš. br." value={kupacPostanskiBroj} onChange={e => setKupacPostanskiBroj(e.target.value)} className="h-9 text-sm w-24 rounded-lg font-mono" maxLength={5} />
-              <Input placeholder="Grad" value={kupacGrad} onChange={e => setKupacGrad(e.target.value)} className="h-9 text-sm flex-1 rounded-lg" maxLength={26} />
-            </div>
+            <KupacRacunaPolja value={kupac} onChange={setKupac} />
           </div>
 
           <div className="border-t border-slate-100 px-6 py-4 bg-slate-50/50 flex items-center justify-between">
             <div>
-              {kupacIdBroj.trim() && (
+              {kupac.idBroj.trim() && (
                 <button
                   type="button"
                   onClick={clearKupac}
@@ -1071,7 +1026,7 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
               <Button
                 size="sm"
                 className="rounded-lg px-5"
-                disabled={!kupacIdBroj.trim() || !kupacNaziv.trim()}
+                disabled={!kupac.idBroj.trim() || !kupac.naziv.trim()}
                 onClick={() => { setKupacOpen(false); fokusPretraga(); }}
               >
                 Potvrdi
