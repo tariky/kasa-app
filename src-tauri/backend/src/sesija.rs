@@ -17,7 +17,7 @@ use crate::greska::{Greska, R};
 use crate::js;
 use crate::pristup::pristup;
 use crate::sql::Db;
-use crate::{p, postavke, Backend};
+use crate::{korisnici, p, postavke, Backend};
 
 pub const PORUKA_NISTE_PRIJAVLJENI: &str = "Niste prijavljeni";
 pub const PORUKA_SAMO_ADMIN: &str = "Ovu radnju može izvršiti samo administrator";
@@ -120,7 +120,9 @@ pub fn sa_korisnikom(unos: &Value, korisnik_id: i64) -> Value {
 /// Baca grešku ako `korisnik` (None = niko nije prijavljen) ne smije zvati
 /// `kanal` s ovim argumentima. Poziva se prije handlera. `zadani_pin` =
 /// korisnik se prijavio PIN-om 0000 i još ga nije promijenio: smije samo ono
-/// što smije neprijavljen, plus promjenu svog PIN-a i odjavu.
+/// što smije neprijavljen, plus promjenu svog PIN-a i odjavu. Vraćanje
+/// završenog naloga u izradu (nalog:setStatus 'vrati') smije samo admin;
+/// ostale statuse svako.
 pub fn provjeri_pristup(kanal: &str, args: &[Value], korisnik: Option<&Korisnik>, zadani_pin: bool) -> R<()> {
     let p = pristup();
     let Some(k) = korisnik.filter(|_| !zadani_pin) else {
@@ -143,7 +145,40 @@ pub fn provjeri_pristup(kanal: &str, args: &[Value], korisnik: Option<&Korisnik>
     if kanal == "settings:set" {
         provjeri_upis_postavke(args.first().unwrap_or(&js::NULL), k)?;
     }
+    if kanal == "nalog:setStatus" && args.first().is_some_and(|a| a["status"] == "vrati") && !k.je_admin() {
+        return Err(Greska("Vraćanje naloga u izradu može samo administrator".into()));
+    }
     Ok(())
+}
+
+/// Admin PIN za radnju kasira (storno). Neuspjeh ulazi u ograničenje
+/// pokušaja; baca 'Neispravan admin PIN'. Uspjeh ne briše ranije neuspjehe.
+pub fn provjeri_admin_pin(b: &Backend, pin: &Value) -> R<Korisnik> {
+    let db = b.db();
+    let pokusaji = Pokusaji::novi(db, b.sat.ms());
+    pokusaji.provjeri()?;
+    match korisnici::nadji_po_pinu(db, pin, true, None)? {
+        Some(admin) => Ok(admin),
+        None => {
+            pokusaji.neuspjeh()?;
+            Err(Greska("Neispravan admin PIN".into()))
+        }
+    }
+}
+
+/// Kasir uz uključen "PIN za reklamaciju" (`kasa.requirePinRefund`) šalje
+/// admin PIN u istom pozivu order:refundAndPrint (`unos`). Provjera je u
+/// sesiji, prije handlera, a time i prije štampe — odvojen korak provjere
+/// renderer bi mogao preskočiti. Vraća admina koji je odobrio storno; `None`
+/// = odobrenje nije trebalo (admin ili isključena postavka).
+pub fn odobri_storno(b: &Backend, unos: &Value, k: &Korisnik) -> R<Option<i64>> {
+    if postavke::procitaj(b.db(), "kasa.requirePinRefund")? != "true" || k.je_admin() {
+        return Ok(None);
+    }
+    if !js::truthy(&unos["adminPin"]) {
+        return Err(Greska("Reklamacija traži PIN administratora".into()));
+    }
+    Ok(Some(provjeri_admin_pin(b, &unos["adminPin"])?.id))
 }
 
 fn provjeri_upis_postavke(kljuc: &Value, korisnik: &Korisnik) -> R<()> {
@@ -361,6 +396,35 @@ mod tests {
             greska(provjeri_pristup("settings:set", &[json!(7)], Some(&admin), false)).as_deref(),
             Some("Postavka \"\" se ne može mijenjati")
         );
+        // Završen nalog u izradu vraća samo admin; ostale statuse svako.
+        let vrati = [json!({ "id": 1, "status": "vrati" })];
+        assert_eq!(
+            greska(provjeri_pristup("nalog:setStatus", &vrati, Some(&kasir), false)).as_deref(),
+            Some("Vraćanje naloga u izradu može samo administrator")
+        );
+        assert_eq!(greska(provjeri_pristup("nalog:setStatus", &vrati, Some(&admin), false)), None);
+        assert_eq!(greska(provjeri_pristup("nalog:setStatus", &[json!({ "id": 1, "status": "zavrsen" })], Some(&kasir), false)), None);
+        assert_eq!(greska(provjeri_pristup("nalog:setStatus", &[json!(["vrati"])], Some(&kasir), false)), None);
+    }
+
+    /// Admin PIN za storno kasira (`kasa.requirePinRefund`) se provjerava u
+    /// sesiji, prije handlera i štampe; rezultat je admin koji je odobrio.
+    #[test]
+    fn odobrenje_storna() {
+        let p = crate::racun::tests::proba("odobrenje-storna");
+        let b = p.b();
+        let kasir = Korisnik { id: 2, ime: json!("Kasir"), uloga: "kasir".into() };
+        let admin = Korisnik { id: 1, ime: json!("Admin"), uloga: "admin".into() };
+        let odobri = |unos: Value, k: &Korisnik| odobri_storno(b, &unos, k).map_err(|g| g.0);
+        // Postavka isključena: bez odobrenja.
+        assert_eq!(odobri(json!({ "id": 1 }), &kasir), Ok(None));
+        postavke::upisi(b.db(), "kasa.requirePinRefund", "true").unwrap();
+        assert_eq!(odobri(json!({ "id": 1 }), &admin), Ok(None));
+        assert_eq!(odobri(json!({ "id": 1 }), &kasir), Err("Reklamacija traži PIN administratora".into()));
+        assert_eq!(odobri(json!([]), &kasir), Err("Reklamacija traži PIN administratora".into()));
+        assert_eq!(odobri(json!({ "id": 1, "adminPin": "9999" }), &kasir), Err("Neispravan admin PIN".into()));
+        // Seedovani admin (id 1) ima zadani PIN 0000.
+        assert_eq!(odobri(json!({ "id": 1, "adminPin": "0000" }), &kasir), Ok(Some(1)));
     }
 
     #[test]

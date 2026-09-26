@@ -207,21 +207,6 @@ pub fn pin_korisnika(db: &Db, id: i64, pin: &Value) -> R<bool> {
     Ok(db.get("SELECT pin FROM users WHERE id = ?", p![id])?.is_some_and(|r| provjeri_pin(pin, &js::to_string(&r["pin"]))))
 }
 
-/// Admin PIN za radnju kasira (storno). Neuspjeh ulazi u ograničenje
-/// pokušaja; baca 'Neispravan admin PIN'. Uspjeh ne briše ranije neuspjehe.
-pub fn provjeri_admin_pin(b: &Backend, pin: &Value) -> R<Korisnik> {
-    let db = b.db();
-    let pokusaji = Pokusaji::novi(db, b.sat.ms());
-    pokusaji.provjeri()?;
-    match nadji_po_pinu(db, pin, true, None)? {
-        Some(admin) => Ok(admin),
-        None => {
-            pokusaji.neuspjeh()?;
-            baci!("Neispravan admin PIN")
-        }
-    }
-}
-
 /// Admin koji je jedini admin u bazi — ne smije se obrisati ni degradirati.
 fn je_posljednji_admin(db: &Db, id: &Value) -> R<bool> {
     if db.val("SELECT uloga FROM users WHERE id = ?", p![id])? != "admin" {

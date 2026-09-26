@@ -10,14 +10,14 @@ use crate::js::{self, truthy};
 use crate::sql::Db;
 use crate::stampa::{self, Odstampan, Uredjaj};
 use crate::tring;
-use crate::sesija::{self, Korisnik};
+use crate::sesija;
 use crate::pending_racun::{self, preuzmi_pending_red, vec_evidentiran};
 use crate::prilog::{
     finalize_prilog_and_print, oznaci_ponudu_fakturisanom, prilog_naziv, save_prilog_stavke_in_transaction, PRILOG_SIFRA,
 };
 use crate::storno::{refund_and_print, refund_order_in_transaction};
 use crate::kanali::Kanal;
-use crate::{audit, baci, fiskalni, korisnici, p, ponude, postavke, proizvodnja, provjera_racuna, racun, tring_racun, Backend};
+use crate::{audit, baci, fiskalni, p, ponude, postavke, proizvodnja, provjera_racuna, racun, tring_racun, Backend};
 
 // ─── lib/valuta.ts ──────────────────────────────────────────
 
@@ -225,19 +225,12 @@ fn finalize(b: &Backend, unos: &Value) -> R<Value> {
     Ok(json!({ "success": true, "id": order_id, "brojFiskalnogRacuna": broj_fiskalnog_racuna, "odgovori": result["odgovori"] }))
 }
 
-/// `order:refundAndPrint`. Kasir uz uključen "PIN za reklamaciju" šalje admin
-/// PIN u istom pozivu; provjera je ovdje, prije štampe — odvojen korak
-/// provjere renderer bi mogao preskočiti.
-fn storno(b: &Backend, data: &Value) -> R<Value> {
+/// `order:refundAndPrint`. Admin PIN (`kasa.requirePinRefund`) je provjeren
+/// prije handlera, u sesiji (`sesija::odobri_storno`): `odobrio_admin_id`.
+fn storno(b: &Backend, data: &Value, odobrio_admin_id: Option<i64>) -> R<Value> {
     let db = b.db();
-    let k: Korisnik = sesija::korisnik(b)?;
-    let mut odobrio_admin_id = Value::Null;
-    if postavke::procitaj(db, "kasa.requirePinRefund")? == "true" && !k.je_admin() {
-        if !truthy(&data["adminPin"]) {
-            baci!("Reklamacija traži PIN administratora");
-        }
-        odobrio_admin_id = json!(korisnici::provjeri_admin_pin(b, &data["adminPin"])?.id);
-    }
+    let k = sesija::korisnik(b)?;
+    let odobrio_admin_id = json!(odobrio_admin_id);
     let original = db.get("SELECT brojFiskalnogRacuna, ukupno FROM orders WHERE id = ?", p![data["id"]])?;
     let rezultat = refund_and_print(b, data, k.id, &odobrio_admin_id)?;
     if truthy(&rezultat["success"]) {
@@ -481,7 +474,7 @@ pub const KANALI: &[Kanal] = &[
     },
     Kanal { ime: "order:setDatumValute", h: |b, a| postavi_datum_valute(b.db(), &a[0], &a[1]).map(|d| json!({ "datumValute": d })) },
     // Orkestracija (štampa → atomični upis) je u `refund_and_print`.
-    Kanal { ime: "order:refundAndPrint", h: |b, a| storno(b, &a[0]) },
+    Kanal { ime: "order:refundAndPrint", h: |b, a| storno(b, &a[0], a.odobrio_admin_id) },
     Kanal { ime: "pending:list", h: |b, _| pending_list(b.db()) },
     Kanal { ime: "pending:resolve", h: |b, a| pending_resolve(b, &a[0]) },
     Kanal { ime: "pending:discard", h: |b, a| pending_discard(b, &a[0]) },

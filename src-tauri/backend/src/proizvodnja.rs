@@ -989,9 +989,7 @@ fn set_status(b: &Backend, data: &Value) -> R<Value> {
     } else if status == "zavrsen" {
         db.tx(|| zavrsi_nalog(db, &data["id"]))?;
     } else if status == "vrati" {
-        if !sesija::korisnik(b)?.je_admin() {
-            baci!("Vraćanje naloga u izradu može samo administrator");
-        }
+        // 'vrati' smije samo admin — provjereno u sesija.rs, prije handlera.
         db.tx(|| vrati_u_izradu(db, &data["id"]))?;
     } else {
         baci!("Nepoznat status");
