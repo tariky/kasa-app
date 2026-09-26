@@ -24,6 +24,30 @@ test('Virman i Ček ne nose gotovinu', () => {
   expect(gotovinskiIznos('Ček', 100)).toBe(0);
 });
 
+// Stari zapisi (starija verzija, uvezen backup) čitaju se kao na izvozu
+// knjigovođi (raspodjelaPlacanja) — jedan parser za ladicu, izvoz i ekran.
+
+test('mala slova i razmaci oko naziva: gotovina je i dalje cijeli iznos', () => {
+  expect(gotovinskiIznos('gotovina', 25.5)).toBe(25.5);
+  expect(gotovinskiIznos(' Gotovina ', 25.5)).toBe(25.5);
+  expect(gotovinskiIznos('GOTOVINA', 25.5)).toBe(25.5);
+});
+
+test('JSON ključevi bez obzira na velika slova', () => {
+  expect(gotovinskiIznos('{"Gotovina":5,"kartica":3}', 8)).toBe(5);
+});
+
+test('cek bez kvačice je ček, ne gotovina', () => {
+  expect(gotovinskiIznos('cek', 100)).toBe(0);
+});
+
+test('nepoznat oblik ne nosi gotovinu (izvoz ga označava kao nepoznat)', () => {
+  expect(gotovinskiIznos('Bitcoin', 100)).toBe(0);
+  expect(gotovinskiIznos('{"gotovina":5,"zlato":3}', 8)).toBe(0);
+  expect(gotovinskiIznos('{"gotovina":5,"constructor":3}', 8)).toBe(0);
+  expect(gotovinskiIznos('constructor', 8)).toBe(0);
+});
+
 // ocekivanoStanje(kretanja, prodajeDanas, reklamiraneDanas):
 // polozi + gotovinski promet − povrati − gotovinske reklamacije.
 // prodajeDanas = računi prodani danas (bez obzira na kasniji storno);
@@ -78,6 +102,17 @@ test('prodan danas i storniran danas se poništavaju', () => {
   expect(r.gotovinskiPromet).toBe(20);
   expect(r.gotovinskeReklamacije).toBe(20);
   expect(r.ocekivanoStanje).toBe(50);
+});
+
+test('stari zapisi ulaze u gotovinski promet i reklamacije', () => {
+  const r = ocekivanoStanje(
+    [],
+    [{ nacinPlacanja: 'gotovina', ukupno: 10 }, { nacinPlacanja: '{"Gotovina":5,"kartica":3}', ukupno: 8 }],
+    [{ nacinPlacanja: ' Gotovina ', ukupno: 4 }]
+  );
+  expect(r.gotovinskiPromet).toBe(15);
+  expect(r.gotovinskeReklamacije).toBe(4);
+  expect(r.ocekivanoStanje).toBe(11);
 });
 
 test('mješovito plaćanje broji samo gotovinski dio', () => {

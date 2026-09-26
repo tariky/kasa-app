@@ -7,8 +7,8 @@ export const NACINI_PLACANJA = ['Gotovina', 'Kartica', 'Virman', 'Ček'] as cons
 export type NacinPlacanja = typeof NACINI_PLACANJA[number];
 
 /**
- * Ključ vrste u JSON raspodjeli razbijenog plaćanja — oblik koji već čitaju
- * `gotovinskiIznos` (drawer.ts) i `raspodjelaPlacanja` (knjigovođa).
+ * Ključ vrste u JSON raspodjeli razbijenog plaćanja — oblik koji čita
+ * `raspodjelaPlacanja` (ladica, knjigovođa, ekran).
  */
 const KLJUC_RASPODJELE: Record<NacinPlacanja, string> = {
   Gotovina: 'gotovina', Kartica: 'kartica', Virman: 'virman', 'Ček': 'cek',
@@ -72,30 +72,41 @@ export interface Placanja {
   cek: number;
 }
 
-const VRSTE: Record<string, keyof Placanja> = { gotovina: 'gotovina', kartica: 'kartica', virman: 'virman', cek: 'cek', 'ček': 'cek' };
+// Map, ne objekat: ključ kao 'constructor' ili '__proto__' nije vrsta plaćanja.
+const VRSTE = new Map<string, keyof Placanja>([
+  ['gotovina', 'gotovina'], ['kartica', 'kartica'], ['virman', 'virman'], ['cek', 'cek'], ['ček', 'cek'],
+]);
 const NAZIV_VRSTE: Record<keyof Placanja, string> = { gotovina: 'Gotovina', kartica: 'Kartica', virman: 'Virman', cek: 'Ček' };
 const VRSTE_REDOM: Array<keyof Placanja> = ['gotovina', 'kartica', 'virman', 'cek'];
 export const nulaPlacanja = (): Placanja => ({ gotovina: 0, kartica: 0, virman: 0, cek: 0 });
 const km = (n: number) => n.toFixed(2).replace('.', ',');
 
-/**
- * Način plaćanja → iznosi po vrsti. Tekst ('Kartica') nosi cijeli iznos,
- * JSON ({gotovina, kartica…}) je podijeljeno plaćanje (kao `gotovinskiIznos`
- * u drawer.ts). Nepoznat oblik: sve u gotovinu, `poznat: false` (Kontrola).
- */
-export function raspodjelaPlacanja(nacin: string, ukupno: number): { iznosi: Placanja; opis: string; poznat: boolean } {
-  const tekst = VRSTE[nacin.trim().toLowerCase()];
-  if (tekst) return { iznosi: { ...nulaPlacanja(), [tekst]: ukupno }, opis: NAZIV_VRSTE[tekst], poznat: true };
-
+/** JSON objekat iz upisanog načina plaćanja; `null` kad to nije. */
+function jsonObjekat(nacin: string): Record<string, unknown> | null {
   let json: unknown = null;
   try { json = JSON.parse(nacin); } catch { /* nije JSON */ }
-  if (json && typeof json === 'object' && !Array.isArray(json)) {
+  return json && typeof json === 'object' && !Array.isArray(json) ? json as Record<string, unknown> : null;
+}
+
+/**
+ * Način plaćanja → iznosi po vrsti. Tekst ('Kartica', bez obzira na slova i
+ * razmake) nosi cijeli iznos, JSON ({gotovina, kartica…}, ključevi bez obzira
+ * na slova) je podijeljeno plaćanje. Jedini parser: ladica (`gotovinskiIznos`),
+ * izvoz knjigovođi i ekran. Nepoznat oblik: sve u gotovinu, `poznat: false`
+ * (Kontrola); ladica ga ne broji.
+ */
+export function raspodjelaPlacanja(nacin: string, ukupno: number): { iznosi: Placanja; opis: string; poznat: boolean } {
+  const tekst = VRSTE.get(nacin.trim().toLowerCase());
+  if (tekst) return { iznosi: { ...nulaPlacanja(), [tekst]: ukupno }, opis: NAZIV_VRSTE[tekst], poznat: true };
+
+  const json = jsonObjekat(nacin);
+  if (json) {
     const iznosi = nulaPlacanja();
     const opis: string[] = [];
     let poznat = true;
     for (const [k, v] of Object.entries(json)) {
-      const vrsta = VRSTE[k.toLowerCase()];
-      if (!vrsta || typeof v !== 'number') { poznat = false; break; }
+      const vrsta = VRSTE.get(k.toLowerCase());
+      if (!vrsta || typeof v !== 'number' || !Number.isFinite(v)) { poznat = false; break; }
       if (v === 0) continue;
       iznosi[vrsta] = round2(iznosi[vrsta] + v);
       opis.push(`${NAZIV_VRSTE[vrsta]} ${km(v)}`);
@@ -103,6 +114,28 @@ export function raspodjelaPlacanja(nacin: string, ukupno: number): { iznosi: Pla
     if (poznat && opis.length) return { iznosi, opis: opis.join(' + '), poznat };
   }
   return { iznosi: { ...nulaPlacanja(), gotovina: ukupno }, opis: nacin, poznat: false };
+}
+
+/**
+ * Upisani način plaćanja u kanonskom obliku (migracija starih zapisa): tekst
+ * → 'Gotovina', 'Kartica', 'Virman', 'Ček' ('cek' je Ček); JSON raspodjela →
+ * ključevi 'gotovina', 'kartica', 'virman', 'cek', iznosi nepromijenjeni.
+ * Oblik koji `raspodjelaPlacanja` ne razumije (nepoznata vrsta, iznos koji
+ * nije broj, ista vrsta dvaput) ostaje kakav jeste. Idempotentna.
+ */
+export function kanonskiNacinPlacanja(nacin: string): string {
+  const tekst = VRSTE.get(nacin.trim().toLowerCase());
+  if (tekst) return NAZIV_VRSTE[tekst];
+
+  const json = jsonObjekat(nacin);
+  if (!json) return nacin;
+  const kanonski: Partial<Placanja> = {};
+  for (const [k, v] of Object.entries(json)) {
+    const vrsta = VRSTE.get(k.toLowerCase());
+    if (!vrsta || typeof v !== 'number' || !Number.isFinite(v) || Object.hasOwn(kanonski, vrsta)) return nacin;
+    kanonski[vrsta] = v;
+  }
+  return JSON.stringify(kanonski);
 }
 
 /**

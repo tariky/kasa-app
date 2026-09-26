@@ -4,7 +4,7 @@ import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { copyFileSync, existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { otvoriBackend, type Backend } from './backend';
+import { ADMIN_PIN, otvoriBackend, prijavi, type Backend } from './backend';
 
 let b: Backend;
 
@@ -444,6 +444,46 @@ describe('cash:drawerState', () => {
       gotovinskeReklamacije: 11, // 7 + 4
       ocekivanoStanje: 138,
     });
+  });
+
+  // Stari zapisi (starija verzija, uvezen backup): mala slova, razmaci, JSON
+  // ključevi drugačijeg slova. Ladica ih čita kao izvoz knjigovođi, a
+  // pokretanje programa ih prepiše u kanonski oblik — iznos ostaje isti.
+  function stariZapisi() {
+    dodajRacun(10, 'gotovina');
+    dodajRacun(20, ' Gotovina ');
+    dodajRacun(8, '{"Gotovina":5,"kartica":3}');
+    dodajRacun(7, 'cek');
+    dodajRacun(6, 'KARTICA');
+    dodajRacun(3, 'gotovina', { refundedAt: sada() });
+  }
+  const STANJE_STARIH = {
+    polozi: 0,
+    gotovinskiPromet: 38, // 10 + 20 + 5 + 3
+    povrati: 0,
+    gotovinskeReklamacije: 3,
+    ocekivanoStanje: 35,
+  };
+
+  test('stari zapisi načina plaćanja: gotovina bez obzira na slova i razmake', async () => {
+    stariZapisi();
+    expect(await b.call('cash:drawerState')).toEqual(STANJE_STARIH);
+  });
+
+  test('pokretanje programa normalizuje stare zapise; ladica daje isti iznos', async () => {
+    stariZapisi();
+    dodajRacun(4, 'Bitcoin'); // nepoznat oblik ostaje kakav jeste i ne nosi gotovinu
+    const nacini = () => (b.db.prepare('SELECT nacinPlacanja FROM orders ORDER BY id').all() as { nacinPlacanja: string }[])
+      .map(r => r.nacinPlacanja);
+
+    await b.ponovoPokreni();
+    await prijavi(b, ADMIN_PIN);
+    expect(nacini()).toEqual(['Gotovina', 'Gotovina', '{"gotovina":5,"kartica":3}', 'Ček', 'Kartica', 'Gotovina', 'Bitcoin']);
+    expect(await b.call('cash:drawerState')).toEqual(STANJE_STARIH);
+
+    await b.ponovoPokreni();
+    await prijavi(b, ADMIN_PIN);
+    expect(nacini()).toEqual(['Gotovina', 'Gotovina', '{"gotovina":5,"kartica":3}', 'Ček', 'Kartica', 'Gotovina', 'Bitcoin']);
   });
 });
 

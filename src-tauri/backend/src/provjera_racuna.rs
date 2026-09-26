@@ -151,8 +151,8 @@ pub fn provjeri_kupca(kupac: &Value) -> R<Option<Value>> {
 /// Načini plaćanja koje nude ekrani (u bazi se čuva "Ček" s kvačicom).
 pub const NACINI_PLACANJA: [&str; 4] = ["Gotovina", "Kartica", "Virman", "Ček"];
 
-/// Ključ vrste u JSON raspodjeli razbijenog plaćanja — oblik koji već čitaju
-/// `gotovinski_iznos` (cash.rs) i knjigovođa.
+/// Ključ vrste u JSON raspodjeli razbijenog plaćanja — oblik koji čita
+/// `raspodjela_placanja` (ladica, cash.rs) i knjigovođa.
 fn kljuc_raspodjele(nacin: &str) -> &'static str {
     match nacin {
         "Gotovina" => "gotovina",
@@ -220,6 +220,73 @@ pub fn pripremi_placanje(nacin: &Value, vrste: &Value, ukupno: f64) -> R<(String
         js::stringify(&Value::Object(m))
     };
     Ok((nacin_placanja, Value::Array(vrste_placanja)))
+}
+
+// ─── Čitanje upisanog načina plaćanja ───────────────────────
+// Jedini parser za `orders.nacinPlacanja` (`raspodjelaPlacanja` u placanje.ts).
+
+/// Vrsta plaćanja (indeks u `NACINI_PLACANJA`) iz naziva ili JSON ključa, bez
+/// obzira na velika/mala slova; "cek" i "ček" su Ček (`VRSTE` u placanje.ts).
+fn vrsta_placanja(naziv: &str) -> Option<usize> {
+    match naziv.to_lowercase().as_str() {
+        "gotovina" => Some(0),
+        "kartica" => Some(1),
+        "virman" => Some(2),
+        "cek" | "ček" => Some(3),
+        _ => None,
+    }
+}
+
+/// Način plaćanja → iznosi po vrsti, redom kao `NACINI_PLACANJA`
+/// (`raspodjelaPlacanja`). Tekst (bez obzira na slova i razmake) nosi cijeli
+/// iznos, JSON objekat (ključevi bez obzira na slova) je razbijeno plaćanje.
+/// `None` je nepoznat oblik (`poznat: false`).
+pub fn raspodjela_placanja(nacin: &str, ukupno: f64) -> Option<[f64; 4]> {
+    let mut iznosi = [0.0; 4];
+    if let Some(vrsta) = vrsta_placanja(nacin.trim()) {
+        iznosi[vrsta] = ukupno;
+        return Some(iznosi);
+    }
+    let Ok(Value::Object(json)) = js::parse(nacin) else {
+        return None;
+    };
+    let mut ima = false;
+    for (k, v) in &json {
+        let (Some(vrsta), Some(x)) = (vrsta_placanja(k), v.as_f64()) else {
+            return None;
+        };
+        if x == 0.0 {
+            continue;
+        }
+        iznosi[vrsta] = round2(iznosi[vrsta] + x);
+        ima = true;
+    }
+    ima.then_some(iznosi)
+}
+
+/// Upisani način plaćanja u kanonskom obliku (`kanonskiNacinPlacanja`,
+/// migracija starih zapisa): tekst → naziv s liste ("cek" je "Ček"); JSON
+/// raspodjela → ključevi `gotovina`, `kartica`, `virman`, `cek`, iznosi
+/// nepromijenjeni. Oblik koji `raspodjela_placanja` ne razumije (nepoznata
+/// vrsta, iznos koji nije broj, ista vrsta dvaput) ostaje kakav jeste.
+pub fn kanonski_nacin_placanja(nacin: &str) -> String {
+    if let Some(vrsta) = vrsta_placanja(nacin.trim()) {
+        return NACINI_PLACANJA[vrsta].into();
+    }
+    let Ok(Value::Object(json)) = js::parse(nacin) else {
+        return nacin.into();
+    };
+    let mut kanonski = Map::new();
+    for (k, v) in &json {
+        let kljuc = vrsta_placanja(k).map(|vrsta| kljuc_raspodjele(NACINI_PLACANJA[vrsta]));
+        match (kljuc, v.as_f64()) {
+            (Some(kljuc), Some(x)) if !kanonski.contains_key(kljuc) => {
+                kanonski.insert(kljuc.into(), js::f(x));
+            }
+            _ => return nacin.into(),
+        }
+    }
+    js::stringify(&Value::Object(kanonski))
 }
 
 /// Račun iz payload-a (`order:finalize`, `order:createManual`), provjeren.
@@ -294,6 +361,34 @@ mod tests {
             "Način plaćanja \"Kartica\" je naveden više puta"
         );
         assert_eq!(greska(json!("Gotovina"), json!([{ "oznaka": "Kartica", "iznos": 4 }])), "Zbir plaćanja (4.00) ne odgovara iznosu računa (5.00)");
+    }
+
+    #[test]
+    fn citanje_placanja() {
+        let r = |n: &str| raspodjela_placanja(n, 8.0);
+        assert_eq!(r(" gotovina "), Some([8.0, 0.0, 0.0, 0.0]));
+        assert_eq!(r("cek"), Some([0.0, 0.0, 0.0, 8.0]));
+        assert_eq!(r(r#"{"Gotovina":5,"KARTICA":3,"virman":0}"#), Some([5.0, 3.0, 0.0, 0.0]));
+        for nepoznat in ["Bitcoin", "", "constructor", "[1]", "null", r#"{"gotovina":5,"zlato":3}"#, r#"{"gotovina":"5"}"#, r#"{"gotovina":0}"#, "{}"] {
+            assert_eq!(r(nepoznat), None, "{nepoznat}");
+        }
+
+        let k = kanonski_nacin_placanja;
+        assert_eq!(k("gotovina"), "Gotovina");
+        assert_eq!(k(" Gotovina "), "Gotovina");
+        assert_eq!(k("KARTICA"), "Kartica");
+        assert_eq!(k("cek"), "Ček");
+        assert_eq!(k("Cek"), "Ček");
+        assert_eq!(k(r#"{"Gotovina":5,"Kartica":3}"#), r#"{"gotovina":5,"kartica":3}"#);
+        assert_eq!(k(r#" {"KARTICA": 2.50, "Ček": 1} "#), r#"{"kartica":2.5,"cek":1}"#);
+        assert_eq!(k(r#"{"gotovina":3,"gotovina":2}"#), r#"{"gotovina":2}"#);
+        for isti in ["Bitcoin", " Bitcoin ", "", "5", "null", "[1,2]", r#""Gotovina""#, r#"{"gotovina":5,"zlato":3}"#, r#"{"gotovina":"5"}"#, r#"{"Gotovina":3,"gotovina":2}"#, r#"{"constructor":1}"#] {
+            assert_eq!(k(isti), isti);
+        }
+        for n in ["gotovina", " Ček ", r#"{"Gotovina":5,"kartica":3}"#, r#"{"VIRMAN":1.25}"#, "Bitcoin"] {
+            assert_eq!(k(&k(n)), k(n));
+            assert_eq!(r(&k(n)), r(n));
+        }
     }
 
     #[test]

@@ -3,7 +3,10 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use serde_json::Value;
+
 use crate::greska::R;
+use crate::provjera_racuna::{kanonski_nacin_placanja, NACINI_PLACANJA};
 use crate::{korisnici, p};
 use crate::petlja::Petlja;
 use crate::sql::Db;
@@ -211,7 +214,28 @@ pub fn run_migrations(db: &Db) -> R<()> {
     if !historija.is_empty() && !ima(&historija, "cijenaUProdaji") {
         db.exec("ALTER TABLE cijena_historija ADD COLUMN cijenaUProdaji REAL")?;
     }
-    Ok(())
+
+    normalizuj_nacin_placanja(db)
+}
+
+/// Stari zapisi načina plaćanja ('gotovina', ' Gotovina ', 'cek',
+/// '{"Gotovina":5}') u kanonski oblik (`kanonski_nacin_placanja`), da ladica,
+/// izvoz i ekran vide isto. Oblik koji parser ne razumije ostaje kakav jeste.
+/// Idempotentno (`normalizujNacinPlacanja` u migrations.ts).
+fn normalizuj_nacin_placanja(db: &Db) -> R<()> {
+    let lista: Vec<Value> = NACINI_PLACANJA.iter().map(|n| Value::from(*n)).collect();
+    let mjesta = vec!["?"; lista.len()].join(", ");
+    let redovi = db.all(&format!("SELECT id, nacinPlacanja FROM orders WHERE nacinPlacanja NOT IN ({mjesta})"), &lista)?;
+    db.tx(|| {
+        for r in &redovi {
+            let Some(nacin) = r["nacinPlacanja"].as_str() else { continue };
+            let kanonski = kanonski_nacin_placanja(nacin);
+            if kanonski != nacin {
+                db.run("UPDATE orders SET nacinPlacanja = ? WHERE id = ?", p![kanonski, r["id"]])?;
+            }
+        }
+        Ok(())
+    })
 }
 
 fn seed_defaults(db: &Db) -> R<()> {

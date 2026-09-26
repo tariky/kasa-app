@@ -251,6 +251,32 @@ test('migracije su idempotentne — ponovljeni uvoz iste baze ne puca', () => {
   db.close();
 });
 
+test('stari zapisi načina plaćanja postaju kanonski; drugi prolaz ne mijenja ništa', () => {
+  const db = legacyDbWithData(); // račun 1: 'gotovina'
+  const racun = db.prepare(
+    "INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, status) VALUES (1, 8, 0, ?, 'completed')"
+  );
+  for (const nacin of [
+    'cek', '{"Gotovina":5,"Kartica":3}', ' Gotovina ', 'KARTICA', 'virman', 'Ček', '{"gotovina":3,"cek":5}', 'Bitcoin', '{"gotovina":5,"zlato":3}',
+  ]) racun.run(nacin);
+  const nacini = () => (db.prepare('SELECT nacinPlacanja FROM orders ORDER BY id').all() as { nacinPlacanja: string }[])
+    .map(r => r.nacinPlacanja);
+
+  openAsCurrentVersion(db);
+  const poslije = nacini();
+  expect(poslije).toEqual([
+    'Gotovina', 'Ček', '{"gotovina":5,"kartica":3}', 'Gotovina', 'Kartica', 'Virman', 'Ček', '{"gotovina":3,"cek":5}',
+    // Oblik koji parser ne razumije ostaje kakav jeste (izvoz ga označava).
+    'Bitcoin', '{"gotovina":5,"zlato":3}',
+  ]);
+
+  const promjene = db.prepare('SELECT total_changes() AS n').get() as { n: number };
+  openAsCurrentVersion(db);
+  expect(nacini()).toEqual(poslije);
+  expect((db.prepare('SELECT total_changes() AS n').get() as { n: number }).n).toBe(promjene.n);
+  db.close();
+});
+
 test('kupci dobijaju kolone za zadane vrijednosti dokumenata', () => {
   const db = new Database(':memory:');
   db.exec(LEGACY_SCHEMA);
