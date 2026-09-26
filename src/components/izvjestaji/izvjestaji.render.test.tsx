@@ -1,8 +1,11 @@
-// PDF-ovi ekrana Izvještaja: brojevi i oznake dolaze iz sume u lib/izvjestaji.
+// Tab Ulaz robe i PDF-ovi ekrana Izvještaja: brojevi i oznake dolaze iz suma u lib/izvjestaji.
 import { test, expect } from 'bun:test';
 import { isValidElement, type ReactNode } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { Text, renderToBuffer } from '@react-pdf/renderer';
 import { PrimkePdf } from '../PrimkePdf';
+import PrimkeTab from './PrimkeTab';
+import type { Primka } from '@/types';
 import { PrometPdf } from '../PrometPdf';
 import { NivelacijaPdf } from '../NivelacijaPdf';
 
@@ -44,6 +47,31 @@ test('primke: RUC bez PDV-a i samo nad artiklima, oznaka „RUC“', async () =>
   expect(t).toContain('293,00 KM');
   expect(t).toContain('351,00 KM');
   expect((await renderToBuffer(el)).subarray(0, 4).toString()).toBe('%PDF');
+});
+
+// Regresija (review A3): artikal 10 × 37 KM, rabat 5 %, zavisni 12 KM, MP 45,40 + materijal 2 × 15 KM —
+// UlazDialog kaže „RUC · 6.7 %“; Izvještaji i PDF su zbog zaokruživanja stope pisali 6,8 %.
+const RUC_67 = [{ id: 7, brojPrimke: 'U-7', datum: '2026-02-12', createdAt: '2026-02-12', stavke: [
+  stavka({ kolicina: 10, nabavnaCijena: 37, rabat: 5, zavisniTroskovi: 12, cijena: 45.4 }),
+  stavka({ kolicina: 2, nabavnaCijena: 15 }),
+] }];
+
+test('primke: stopa RUC u PDF-u i na tabu Ulaz robe je ista kao u UlazDialogu', () => {
+  const t = tekstovi(<PrimkePdf primke={RUC_67} dateFrom="01.02.2026" dateTo="28.02.2026" firma={FIRMA} />);
+  expect(t).toContain('24,53 KM (6,7%)');
+  const html = renderToStaticMarkup(
+    <PrimkeTab primke={RUC_67 as unknown as Primka[]} dateFrom={new Date(2026, 1, 1)} dateTo={new Date(2026, 1, 28)} firma={null} onGreska={() => undefined} />,
+  );
+  expect(html).toContain('+6,7%</td>');
+  expect(html).toContain('+6,7% RUC');
+  expect(html).not.toContain('6,8%');
+});
+
+test('primke: iznosi u PDF-u su isti kao u UlazDialogu (nabavna 11,495 → 11,49)', () => {
+  const primke = [{ id: 8, brojPrimke: 'U-8', datum: '2026-02-12', stavke: [stavka({ nabavnaCijena: 12.1, rabat: 5, cijena: 23.4, pdvStopa: 'K' })] }];
+  const t = tekstovi(<PrimkePdf primke={primke} dateFrom="01.02.2026" dateTo="28.02.2026" firma={FIRMA} />);
+  expect(t).toContain('11,49 KM');
+  expect(t).not.toContain('11,50 KM');
 });
 
 test('promet: sume izvršenih računa, storno odvojeno, neto promet', async () => {

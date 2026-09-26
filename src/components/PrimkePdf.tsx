@@ -3,7 +3,7 @@ import { Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
 import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
 import { POTPIS_AUTORA } from '@/lib/brend';
 import { kontaktFirme } from '@/lib/firma';
-import { sumePrimke } from '@/lib/izvjestaji';
+import { formatRucPct, sumePrimke } from '@/lib/izvjestaji';
 
 export interface PrimkePdfProps {
   primke: any[];
@@ -168,7 +168,7 @@ export function PrimkePdf({ primke, dateFrom, dateTo, firma }: PrimkePdfProps) {
             </View>
             <View style={s.summaryLineBold}>
               <Text style={[s.summaryLabel, { fontFamily: FB, fontWeight: 700 }]}>RUC:</Text>
-              <Text style={s.summaryValue}>{fmt(ukupno.ruc)} KM ({ukupno.rucPct.toFixed(1).replace('.', ',')}%)</Text>
+              <Text style={s.summaryValue}>{fmt(ukupno.ruc)} KM ({formatRucPct(ukupno.rucPct)}%)</Text>
             </View>
           </View>
         </View>

@@ -1,12 +1,19 @@
 import { test, expect, describe } from 'bun:test';
-import { sumePrimke, rucPrimke, sumePrometa, sumeNivelacija, razlikePoZnaku } from './izvjestaji';
+import { sumePrimke, rucPrimke, sumePrometa, sumeNivelacija, razlikePoZnaku, formatRucPct } from './izvjestaji';
 import { kalkulacijaPrimke, type StavkaZaKalkulaciju } from './kalkulacija';
-import { round2 } from './novac';
+import { formatKM } from './utils';
 import { izluciPdv } from './pdv';
 
 const st = (p: Partial<StavkaZaKalkulaciju>): StavkaZaKalkulaciju => ({
   kolicina: 1, nabavnaCijena: 0, rabat: 0, zavisniTroskovi: 0, cijena: 0, pdvStopa: 'E', ...p,
 });
+
+/** Sume primki nisu zaokružene (isti brojevi kao kalkulacija) — poređenje na 9 decimala, ista polja. */
+function blizu(dobiveno: object, ocekivano: Record<string, number>) {
+  const d = dobiveno as Record<string, number>;
+  expect(Object.keys(d).sort()).toEqual(Object.keys(ocekivano).sort());
+  for (const [k, v] of Object.entries(ocekivano)) expect(d[k]).toBeCloseTo(v, 9);
+}
 
 // RUC kao na kalkulaciji (obrazac KCM): prodajna bez PDV-a − nabavna (fakturna − rabat + zavisni),
 // samo stavke koje se prodaju; stopa RUC = RUC / nabavna tih stavki × 100.
@@ -43,7 +50,8 @@ describe('RUC primki', () => {
     expect(s.nabavna).toBe(85);
     expect(s.nabavnaArtikala).toBe(85);
     expect(s.ruc).toBe(15);
-    expect(s.rucPct).toBe(17.65); // 15 / 85 × 100 = 17,647…
+    expect(s.rucPct).toBeCloseTo(17.647, 3); // 15 / 85 × 100
+    expect(formatRucPct(s.rucPct)).toBe('17,6');
   });
 
   test('jedna primka daje isti RUC kao kalkulacijaPrimke (UlazDialog, PDF ulaza)', () => {
@@ -54,23 +62,48 @@ describe('RUC primki', () => {
     ];
     const k = kalkulacijaPrimke(stavke);
     expect(sumePrimke([{ stavke }])).toEqual({
-      nabavna: round2(k.nabavna),
-      nabavnaArtikala: round2(k.nabavnaArtikala),
-      prodajnaBezPdv: round2(k.prodajnaBezPdv),
-      prodajnaSaPdv: round2(k.prodajna),
-      ruc: round2(k.ruc),
-      rucPct: round2(k.rucPct),
+      nabavna: k.nabavna,
+      nabavnaArtikala: k.nabavnaArtikala,
+      prodajnaBezPdv: k.prodajnaBezPdv,
+      prodajnaSaPdv: k.prodajna,
+      ruc: k.ruc,
+      rucPct: k.rucPct,
     });
-    expect(rucPrimke({ stavke })).toEqual({ ruc: round2(k.ruc), rucPct: round2(k.rucPct) });
+    expect(rucPrimke({ stavke })).toEqual({ ruc: k.ruc, rucPct: k.rucPct });
     expect(k.ruc).not.toBe(0);
+  });
+
+  // Regresija (review A3): zaokruživanje stope prije prikaza s jednom decimalom
+  // davalo je 6,8 % na Izvještajima i u PDF-u, a UlazDialog 6.7 %.
+  test('prikazana stopa RUC je ista kao u UlazDialogu (bez dvostrukog zaokruživanja)', () => {
+    const stavke = [
+      st({ kolicina: 10, nabavnaCijena: 37, rabat: 5, zavisniTroskovi: 12, cijena: 45.4 }),
+      st({ kolicina: 2, nabavnaCijena: 15, cijena: 0 }),
+    ];
+    const k = kalkulacijaPrimke(stavke);
+    expect(k.rucPct.toFixed(1)).toBe('6.7'); // UlazDialog: `RUC · ${k.rucPct.toFixed(1)} %`
+    expect(rucPrimke({ stavke }).rucPct).toBe(k.rucPct);
+    expect(formatRucPct(sumePrimke([{ stavke }]).rucPct)).toBe('6,7');
+    expect(formatRucPct(-0.04)).toBe('-0,0');
+  });
+
+  // Isto za iznose: UlazDialog prikazuje formatKM(k.nabavna) i formatKM(k.ruc) — nabavna 11,495
+  // je tamo 11,49, a round2 u izvještaju davao je 11,50.
+  test('prikazani iznosi primke su isti kao u UlazDialogu', () => {
+    const stavke = [st({ kolicina: 1, nabavnaCijena: 12.1, rabat: 5, cijena: 23.4, pdvStopa: 'K' })];
+    const k = kalkulacijaPrimke(stavke);
+    const s = sumePrimke([{ stavke }]);
+    expect(formatKM(s.nabavna)).toBe(formatKM(k.nabavna));
+    expect(formatKM(s.ruc)).toBe(formatKM(k.ruc));
+    expect(formatKM(s.nabavna)).toBe('11,49 KM');
   });
 
   test('više primki: zbir iznosa, a stopa RUC iz zbira (ne prosjek stopa)', () => {
     const p1 = { stavke: [st({ kolicina: 1, nabavnaCijena: 100, cijena: 175.5 })] }; // bez PDV 150 → RUC 50 (50 %)
     const p2 = { stavke: [st({ kolicina: 1, nabavnaCijena: 300, cijena: 386.1 })] }; // bez PDV 330 → RUC 30 (10 %)
-    expect(rucPrimke(p1)).toEqual({ ruc: 50, rucPct: 50 });
-    expect(rucPrimke(p2)).toEqual({ ruc: 30, rucPct: 10 });
-    expect(sumePrimke([p1, p2])).toEqual({
+    blizu(rucPrimke(p1), { ruc: 50, rucPct: 50 });
+    blizu(rucPrimke(p2), { ruc: 30, rucPct: 10 });
+    blizu(sumePrimke([p1, p2]), {
       nabavna: 400, nabavnaArtikala: 400, prodajnaBezPdv: 480, prodajnaSaPdv: 561.6, ruc: 80, rucPct: 20,
     });
   });

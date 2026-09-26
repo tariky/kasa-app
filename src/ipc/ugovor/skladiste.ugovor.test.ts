@@ -662,7 +662,9 @@ describe('report:getData', () => {
     ]);
     // Artikal: nabavna 100 − 20 + 5 = 85, prodajna bez PDV-a 23,40 / 1,17 × 10 = 200 → RUC 115.
     // Materijal (108) je u nabavnoj, ali ne u RUC-u.
-    expect(rucPrimke(r)).toEqual({ ruc: 115, rucPct: 135.29 });
+    const { ruc, rucPct } = rucPrimke(r);
+    expect(ruc).toBeCloseTo(115, 9);
+    expect(rucPct).toBeCloseTo(135.294, 3); // 115 / 85 × 100
     expect(sumePrimke([r]).nabavna).toBe(193);
   });
 

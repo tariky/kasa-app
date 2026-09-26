@@ -5,13 +5,18 @@ import { LedgerHead } from '@/components/ui/ledger';
 import { Stat } from '@/components/ui/stat';
 import { PrimkePdf } from '@/components/PrimkePdf';
 import { cn, formatKM, formatDate } from '@/lib/utils';
-import { sumePrimke } from '@/lib/izvjestaji';
+import { formatRucPct, sumePrimke } from '@/lib/izvjestaji';
 import type { FirmaSettings, Primka } from '@/types';
 import { IzvjestajKartica, PdfDugme, Prazno, PraznoStanje, fmtDisplay, openPdfInWindow, td } from './dijelovi';
 
-/** Stopa RUC-a za prikaz: „+12,5%“, „0,0%“, „-3,2%“. */
+/** Prikazana stopa je veća od nule (ne „0,0“ ni negativna) — tada dobija „+“ i zelenu boju. */
+function rucRaste(rucPct: number): boolean {
+  return Number(rucPct.toFixed(1)) > 0;
+}
+
+/** Stopa RUC-a za prikaz: „+12,5%“, „0,0%“, „-3,2%“ — isti broj kao u UlazDialogu. */
 function rucTekst(rucPct: number): string {
-  return `${rucPct > 0 ? '+' : ''}${rucPct.toFixed(1).replace('.', ',')}%`;
+  return `${rucRaste(rucPct) ? '+' : ''}${formatRucPct(rucPct)}%`;
 }
 
 /**
@@ -98,7 +103,7 @@ export default function PrimkeTab({ primke, dateFrom, dateTo, firma, onGreska }:
                         {formatKM(red.prodajnaSaPdv)}
                       </td>
                       <td className={cn(td, 'pl-2 pr-5 text-right font-mono text-[12px] font-medium tabular-nums whitespace-nowrap',
-                        red.rucPct > 0 ? 'text-emerald-600' : 'text-slate-400')}>
+                        rucRaste(red.rucPct) ? 'text-emerald-600' : 'text-slate-400')}>
                         {rucTekst(red.rucPct)}
                       </td>
                     </tr>

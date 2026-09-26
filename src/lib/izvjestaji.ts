@@ -1,6 +1,7 @@
 // src/lib/izvjestaji.ts
 // Sume izvještaja (Promet, Ulaz robe, Nivelacije) na jednom mjestu — za ekran
-// Izvještaja i njegove PDF-ove. Iznosi su zaokruženi na fening (round2).
+// Izvještaja i njegove PDF-ove. Sume prometa i nivelacija su zaokružene na fening
+// (round2); sume primki nisu — vidi sumePrimke.
 
 import { kalkulacijaPrimke, type StavkaZaKalkulaciju } from './kalkulacija';
 import { round2 } from './novac';
@@ -24,6 +25,11 @@ export interface SumePrimki {
  * Sume primki po obrascu kalkulacije (`kalkulacijaPrimke`): RUC je bez PDV-a i
  * samo nad stavkama koje se prodaju — materijal je u nabavnoj, ali ne u RUC-u.
  * Stopa RUC se računa iz zbira, ne kao prosjek stopa primki.
+ *
+ * Namjerno bez zaokruživanja: za jednu primku to su tačno brojevi kalkulacije, pa
+ * ih ekran i PDF (formatKM / formatRucPct) prikazuju isto kao UlazDialog. round2
+ * prije prikaza je davao drugi broj (nabavna 11,495 → 11,50 umjesto 11,49; stopa
+ * 6,749 → 6,75 → „6,8“ umjesto „6,7“).
  */
 export function sumePrimke(primke: Array<{ stavke?: StavkaZaKalkulaciju[] }>): SumePrimki {
   let nabavna = 0, nabavnaArtikala = 0, prodajnaBezPdv = 0, prodajnaSaPdv = 0, ruc = 0;
@@ -36,13 +42,14 @@ export function sumePrimke(primke: Array<{ stavke?: StavkaZaKalkulaciju[] }>): S
     ruc += k.ruc;
   }
   return {
-    nabavna: round2(nabavna),
-    nabavnaArtikala: round2(nabavnaArtikala),
-    prodajnaBezPdv: round2(prodajnaBezPdv),
-    prodajnaSaPdv: round2(prodajnaSaPdv),
-    ruc: round2(ruc),
-    rucPct: nabavnaArtikala > 0 ? round2((ruc / nabavnaArtikala) * 100) : 0,
+    nabavna, nabavnaArtikala, prodajnaBezPdv, prodajnaSaPdv, ruc,
+    rucPct: nabavnaArtikala > 0 ? (ruc / nabavnaArtikala) * 100 : 0,
   };
+}
+
+/** Stopa RUC-a za prikaz: jedna decimala, zarez — isti zapis kao `toFixed(1)` u UlazDialogu. */
+export function formatRucPct(rucPct: number): string {
+  return rucPct.toFixed(1).replace('.', ',');
 }
 
 /** RUC jedne primke — isti broj koji pokazuje kalkulacija te primke. */
