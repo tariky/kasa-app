@@ -147,8 +147,9 @@ je drugi niz). Uspjeh i rješavanje iz dijaloga dijele istu funkciju upisa, pa
 ### Zaštita dokumenta dok red čeka
 
 Dok postoji red za isti dokument (`json_extract(snapshot, '$.ponudaId' |
-'$.nalogId' | '$.orderId')`, `baciAkoCekaNezavrsen`), odbija se prije štampe ili
-izmjene: nova štampa iste ponude (račun ili faktura iz ponude), novo izdavanje
+'$.nalogId' | '$.orderId' | '$.skicaId')`, `baciAkoCekaNezavrsen`), odbija se prije štampe ili
+izmjene: nova štampa iste ponude (račun ili faktura iz ponude), nova faktura iz
+iste skice, novo izdavanje
 za isti nalog, novi storno istog računa; vraćanje naloga u izradu i brisanje
 naloga (po `nalogId` i po `ponudaId` naloga); izmjena, brisanje i promjena
 statusa ponude.
@@ -157,7 +158,8 @@ statusa ponude.
 
 Faktura iz skice nosi `skicaId` u snapshotu (ključ samo kad postoji). Uspješan
 upis i rješavanje reda brišu `faktura_skice` u istoj transakciji; odbacivanje
-je ostavlja (nije odštampano — skica se može ponovo koristiti).
+je ostavlja (nije odštampano — skica se može ponovo koristiti). Dok red čeka,
+skica ostaje, ali nova faktura iz nje se odbija prije štampe (vidi gore).
 
 ### Trag storna
 

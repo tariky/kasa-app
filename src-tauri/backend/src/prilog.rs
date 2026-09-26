@@ -208,6 +208,10 @@ pub fn finalize_prilog_and_print(b: &Backend, data: &Value) -> R<Value> {
     // se nezavršeni račun riješi kao odštampan), da se ne fiskalizuje ponovo.
     // `Number.isInteger(data.skicaId)`.
     let skica_id = data["skicaId"].as_f64().filter(|x| x.fract() == 0.0).map(|x| x as i64);
+    // Skica ostaje dok je ishod fakture nepoznat — ponovna fiskalizacija bila bi drugi račun za isti posao.
+    if let Some(id) = skica_id {
+        baci_ako_ceka_nezavrsen(db, "skicaId", &json!(id), "Račun po ovoj skici", "prije nove štampe")?;
+    }
 
     // Naziv stavke mora nositi broj isječka na koji se kuca, a njega uređaj vrati
     // tek nakon štampe — zato predviđanje iz fiskalnog niza. Poslije štampe se

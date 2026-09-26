@@ -181,13 +181,13 @@ export function zapisiPending(db: SqlDb, korisnikId: number, snapshot: object): 
  * Nova štampa dokumenta za koji postoji nerazriješen write-ahead red mogla bi
  * dati drugi fiskalni račun za isti posao — odbija se prije štampe, dok
  * operater ne riješi red (odštampan) ili ga admin ne odbaci (i nalog se tada
- * ne vraća u izradu i ne briše — `radnja`). `kljuc` je polje
- * snapshota (i stara faktura iz ponude nosi `ponudaId`); obje strane se
- * porede kao cijeli brojevi (id iz payload-a može stići i kao tekst).
+ * ne vraća u izradu i ne briše — `radnja`). `kljuc` je polje snapshota (i
+ * stara faktura iz ponude nosi `ponudaId`, a faktura iz skice `skicaId`); obje
+ * strane se porede kao cijeli brojevi (id iz payload-a može stići i kao tekst).
  * Rust: `baci_ako_ceka_nezavrsen`.
  */
 export function baciAkoCekaNezavrsen(
-  db: SqlDb, kljuc: 'ponudaId' | 'nalogId' | 'orderId', id: number, dokument: string,
+  db: SqlDb, kljuc: 'ponudaId' | 'nalogId' | 'orderId' | 'skicaId', id: number, dokument: string,
   radnja = 'prije nove štampe',
 ): void {
   const red = db.prepare(`

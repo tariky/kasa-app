@@ -648,6 +648,63 @@ describe('order:refundAndPrint — write-ahead', () => {
   });
 });
 
+// ─── faktura iz skice ───────────────────────────────────────
+// Skica ostaje dok je ishod fakture nepoznat (možda nije odštampana), pa bi je
+// operater mogao fiskalizovati ponovo — drugi račun za isti posao.
+
+describe('order:finalizePrilog iz skice — write-ahead', () => {
+  const dodajSkicu = () => baza.upisi('faktura_skice', { naziv: 'Skica', podaci: '{}', ukupno: 40 });
+  const imaSkicu = (id: number) => baza.broj('SELECT COUNT(*) FROM faktura_skice WHERE id = ?', id) === 1;
+  const fakturisi = (skicaId?: number) => b.pozovi('order:finalizePrilog', { iznos: 40, nacinPlacanja: 'Virman', ...(skicaId != null ? { skicaId } : {}) });
+
+  /** Faktura iz skice s nepoznatim ishodom; nastavlja se s ispravnim uređajem. */
+  async function skicaNaCekanju(): Promise<number> {
+    await b.call('fiscal:setZadnjiBroj', 100);
+    const skica = dodajSkicu();
+    await uredjajBezPotvrde();
+    const r = await fakturisi(skica);
+    expect(r.ishodNepoznat).toBe(true);
+    expect(pending()).toMatchObject([{ skicaId: skica }]);
+    ispravanUredjaj();
+    return skica;
+  }
+
+  test('dok red postoji, nova faktura iz iste skice se odbija prije štampe i ništa ne upisuje', async () => {
+    const skica = await skicaNaCekanju();
+
+    await expect(fakturisi(skica))
+      .rejects.toThrow('Račun po ovoj skici čeka u nezavršenim računima (ishod štampe nije poznat) — riješite ga prije nove štampe');
+    expect(b.tring.zahtjevi).toEqual([]);
+    expect(brojRacuna()).toBe(0);
+    expect(pending()).toHaveLength(1);
+    expect(imaSkicu(skica)).toBe(true);
+
+    // Druga skica i faktura bez skice nisu blokirane.
+    expect(await fakturisi(dodajSkicu())).toMatchObject({ success: true, brojFiskalnogRacuna: '101' });
+    expect(await fakturisi()).toMatchObject({ success: true, brojFiskalnogRacuna: '102' });
+  });
+
+  test('odbačen red (nije odštampan) otključava skicu', async () => {
+    const skica = await skicaNaCekanju();
+    await b.call('pending:discard', await pendingId());
+
+    expect(await fakturisi(skica)).toMatchObject({ success: true, brojFiskalnogRacuna: '101' });
+    expect(baza.redovi('SELECT ukupno FROM orders')).toEqual([{ ukupno: 40 }]);
+    expect(imaSkicu(skica)).toBe(false);
+    expect(pending()).toEqual([]);
+  });
+
+  test('riješen red (odštampan) briše skicu i skida blokadu', async () => {
+    const skica = await skicaNaCekanju();
+    await b.call('pending:resolve', { id: await pendingId(), brojFiskalnogRacuna: '101', createdAt: DATUM });
+
+    expect(imaSkicu(skica)).toBe(false);
+    expect(pending()).toEqual([]);
+    b.tring.sljedeciBroj('/sfr', '102');
+    expect(await fakturisi(skica)).toMatchObject({ success: true, brojFiskalnogRacuna: '102' });
+  });
+});
+
 // ─── Stari snapshoti ────────────────────────────────────────
 
 describe('snapshot bez vrste', () => {

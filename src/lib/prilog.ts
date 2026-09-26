@@ -252,6 +252,8 @@ export async function finalizePrilogAndPrint(
   // Faktura iz ponude čiji račun još čeka u nezavršenim bila bi drugi račun za isti posao.
   if (ponudaId != null) baciAkoCekaNezavrsen(db, 'ponudaId', ponudaId, 'Račun po ovoj ponudi');
   const skicaId = Number.isInteger(data.skicaId) ? data.skicaId as number : null;
+  // Skica ostaje dok je ishod fakture nepoznat — ponovna fiskalizacija bila bi drugi račun za isti posao.
+  if (skicaId != null) baciAkoCekaNezavrsen(db, 'skicaId', skicaId, 'Račun po ovoj skici');
 
   // Naziv stavke mora nositi broj isječka na koji se kuca, a njega uređaj vrati
   // tek nakon štampe — zato predviđanje iz fiskalnog niza. Poslije štampe se
