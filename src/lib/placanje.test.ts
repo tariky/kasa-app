@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test';
-import { kanonskiNacinPlacanja, opisPlacanja, raspodjelaPlacanja, pripremiPlacanje } from './placanje';
+import { kanonskiNacinPlacanja, opisPlacanja, raspodjelaPlacanja, pripremiPlacanje, prikazPlacanja } from './placanje';
 
 test('opisPlacanja: stari tekstualni oblici ostaju, razbijeno plaćanje po vrstama s iznosima', () => {
   expect(opisPlacanja('Gotovina', 10)).toBe('Gotovina');
@@ -57,4 +57,14 @@ test('kanonskiNacinPlacanja je idempotentna i ne mijenja ono što parser pročit
     expect(kanonskiNacinPlacanja(kanonski)).toBe(kanonski);
     expect(raspodjelaPlacanja(kanonski, 8)).toEqual(raspodjelaPlacanja(nacin, 8));
   }
+});
+
+test('prikazPlacanja: vrste s iznosom za ikone na ekranu računa; nepoznat oblik nije gotovina', () => {
+  expect(prikazPlacanja('Gotovina', 10)).toEqual({ opis: 'Gotovina', poznat: true, vrste: ['gotovina'] });
+  expect(prikazPlacanja('{"gotovina":3,"kartica":2}', 5))
+    .toEqual({ opis: 'Gotovina 3,00 KM + Kartica 2,00 KM', poznat: true, vrste: ['gotovina', 'kartica'] });
+  // Nepoznat oblik ide kako je upisan i bez ijedne vrste — raspodjela ga
+  // interno knjiži kao gotovinu (Kontrola), ali ladica ga ne broji.
+  expect(prikazPlacanja('Bitcoin', 10)).toEqual({ opis: 'Bitcoin', poznat: false, vrste: [] });
+  expect(prikazPlacanja('{"zlato":4}', 4)).toEqual({ opis: '{"zlato":4}', poznat: false, vrste: [] });
 });

@@ -8,7 +8,7 @@ import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { prilogKompletan, sumaPriloga } from '@/lib/prilog';
 import { formatDatumValute } from '@/lib/valuta';
 import { gotovinskiIznos } from '@/lib/drawer';
-import { opisPlacanja, raspodjelaPlacanja } from '@/lib/placanje';
+import { prikazPlacanja } from '@/lib/placanje';
 import { round2 } from '@/lib/novac';
 import { ucitajZaStampu } from '@/lib/stampa';
 import { otvoriNezavrseneRacune } from '@/lib/nezavrseniRacuni';
@@ -34,12 +34,6 @@ type Notice = { type: 'success' | 'error'; text: string };
 
 const TH = 'text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400 pb-2 border-b border-slate-200/80 whitespace-nowrap';
 const TD = 'py-2.5 border-b border-slate-100 align-top';
-
-/** Način plaćanja za zaglavlje: tekst ili razbijeno plaćanje (lib/placanje.ts), ikone po vrstama. */
-function placanje(nacin: string, ukupno: number): { label: string; kartica: boolean; gotovina: boolean } {
-  const { iznosi } = raspodjelaPlacanja(nacin, ukupno);
-  return { label: opisPlacanja(nacin, ukupno), kartica: iznosi.kartica > 0, gotovina: iznosi.gotovina > 0 };
-}
 
 /** Oznaka na tamnom zaglavlju — status i porijeklo računa. */
 function HeaderChip({ tone, children }: { tone: 'ok' | 'storno' | 'muted' | 'warn'; children: React.ReactNode }) {
@@ -315,7 +309,8 @@ export function RacunDetailDialog({ orderId, redoslijed, uloga, onClose, onNavig
   // Faktura sa dodijeljenim stavkama pokazuje njih; zbirna stavka je samo ono što je otišlo na uređaj.
   const stavkeFakture = imaFakturu && !!fakturaStavke?.length;
   const stavke: any[] = stavkeFakture ? fakturaStavke! : order?.stavke ?? [];
-  const nacin = order ? placanje(order.nacinPlacanja, order.ukupno) : null;
+  // Tekst ili razbijeno plaćanje, ikone po vrstama; nepoznat oblik bez ikone gotovine (lib/placanje.ts).
+  const nacin = order ? prikazPlacanja(order.nacinPlacanja, order.ukupno) : null;
   const imaRabat = stavke.some(s => (s.rabat || 0) > 0);
   const kupacAdresa = order ? [order.kupacAdresa, [order.kupacPostanskiBroj, order.kupacGrad].filter(Boolean).join(' ')].filter(Boolean).join(', ') : '';
 
@@ -365,9 +360,15 @@ export function RacunDetailDialog({ orderId, redoslijed, uloga, onClose, onNavig
                     <Fact label="Plaćanje" className="col-span-2">
                       <span className="flex items-center gap-2">
                         <span className="flex items-center gap-1 text-slate-400">
-                          {nacin.gotovina && <Banknote size={14} />}{nacin.kartica && <CreditCard size={14} />}
+                          {nacin.vrste.includes('gotovina') && <Banknote size={14} />}
+                          {nacin.vrste.includes('kartica') && <CreditCard size={14} />}
+                          {!nacin.poznat && (
+                            <span title="Nepoznat oblik načina plaćanja — ladica ga ne broji kao gotovinu">
+                              <AlertTriangle size={14} className="text-amber-500" />
+                            </span>
+                          )}
                         </span>
-                        {nacin.label}
+                        {nacin.opis}
                       </span>
                     </Fact>
                     <Fact label="Valuta">
