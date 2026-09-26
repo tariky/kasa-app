@@ -1,20 +1,16 @@
 //! Kanali `ponuda:*` (handlers.ts) i logika iz `lib/ponuda.ts`.
 
-use std::collections::BTreeSet;
-use std::sync::Mutex;
-
 use chrono::{Datelike, Duration, NaiveDate};
 use regex::Regex;
 use serde_json::{json, Map, Value};
 
 use crate::greska::R;
-use crate::pending_racun::{
-    baci_ako_ceka_nezavrsen, neuspjela_stampa, preuzmi_pending_red, snapshot_kupca, vec_evidentiran, zapisi_pending,
-};
+use crate::pending_racun::{baci_ako_ceka_nezavrsen, preuzmi_pending_red, snapshot_kupca, vec_evidentiran, zapisi_pending};
 use crate::js::{self, or, truthy};
 use crate::postavke::postavka;
 use crate::racun::{izracunaj_totale, upisi_racun};
 use crate::sql::Db;
+use crate::stampa::{self, Odstampan, UToku, Uredjaj};
 use crate::tring::uspjeh;
 use crate::tring_racun::build_tring_racun;
 use crate::sesija;
@@ -243,49 +239,6 @@ pub fn update_ponuda(db: &Db, id: &Value, data: &Value) -> R<()> {
     upisi_stavke(db, id, stavke)
 }
 
-/// Ponude kojima se konverzija trenutno štampa — zaštita od dvoklika.
-static KONVERZIJE_IN_FLIGHT: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
-
-/// Oznaka "u toku" koja se skida kad izađe iz opsega (`finally { set.delete(id) }`).
-pub(crate) struct UToku {
-    skup: &'static Mutex<BTreeSet<String>>,
-    kljuc: String,
-}
-
-impl UToku {
-    /// `None` kad je ključ već u toku (`set.has(id)`).
-    pub(crate) fn zauzmi(skup: &'static Mutex<BTreeSet<String>>, id: &Value) -> Option<UToku> {
-        let kljuc = js::stringify(id);
-        let mut s = skup.lock().unwrap_or_else(|e| e.into_inner());
-        if !s.insert(kljuc.clone()) {
-            return None;
-        }
-        Some(UToku { skup, kljuc })
-    }
-
-    pub(crate) fn zauzet(skup: &'static Mutex<BTreeSet<String>>, id: &Value) -> bool {
-        skup.lock().unwrap_or_else(|e| e.into_inner()).contains(&js::stringify(id))
-    }
-}
-
-impl Drop for UToku {
-    fn drop(&mut self) {
-        self.skup.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.kljuc);
-    }
-}
-
-/// `print` iz handlera: štampa fiskalnog računa, uz dnevnik kad je uključen.
-pub(crate) fn stampaj(b: &Backend, kanal: &str, racun: &Value) -> Value {
-    if b.tring.is_logging_enabled() {
-        eprintln!("[Tring] {kanal} request: {}", js::stringify(racun));
-    }
-    let result = b.tring.stampati_fiskalni_racun(racun);
-    if b.tring.is_logging_enabled() {
-        eprintln!("[Tring] {kanal} response: {}", js::stringify(&result));
-    }
-    result
-}
-
 /// `{ success: true, racunId, brojFiskalnogRacuna, odgovori }` — `odgovori`
 /// izostaje kad ga uređaj nije vratio (JS `undefined`).
 pub(crate) fn uspjesna_stampa(racun_id: &Value, broj: &Value, odgovori: &Value) -> Value {
@@ -308,13 +261,6 @@ pub(crate) fn kupac_za_racun(kupac: &Option<Value>) -> Value {
         }),
         None => Value::Null,
     }
-}
-
-/// `Račun X JE odštampan, ali ...` — greška upisa nakon uspješne štampe.
-pub(crate) fn poruka_nakon_stampe(broj: &Value, sredina: &str, greska: &str, kraj: &str) -> String {
-    let broj = if broj.is_null() { "?".to_string() } else { js::to_string(broj) };
-    let greska = if greska.is_empty() { "nepoznata greška" } else { greska };
-    format!("Račun {broj} JE odštampan, ali {sredina}: {greska}. {kraj}")
 }
 
 /// Upis računa po ponudi iz write-ahead snapshota: račun + razduženje skladišta,
@@ -363,9 +309,7 @@ pub fn konvertuj_ponudu(b: &Backend, kanal: &str, data: &Value, nalog_id: Option
     let db = b.baza()?;
     let id = &data["id"];
 
-    if UToku::zauzet(&KONVERZIJE_IN_FLIGHT, id) {
-        baci!("Konverzija ove ponude je već u toku");
-    }
+    let _u_toku = UToku::zauzmi(b, "ponuda", id, "Konverzija ove ponude je već u toku")?;
 
     let korisnik = if truthy(&data["korisnikId"]) {
         db.get("SELECT id FROM users WHERE id = ?", p![data["korisnikId"]])?
@@ -410,7 +354,6 @@ pub fn konvertuj_ponudu(b: &Backend, kanal: &str, data: &Value, nalog_id: Option
 
     let kupac = db.get("SELECT * FROM kupci WHERE id = ?", p![ponuda["kupacId"]])?;
 
-    let _u_toku = UToku::zauzmi(&KONVERZIJE_IN_FLIGHT, id);
     let racun = build_tring_racun(&json!({
         "stavke": stavke,
         "ukupno": ponuda["ukupno"],
@@ -430,17 +373,18 @@ pub fn konvertuj_ponudu(b: &Backend, kanal: &str, data: &Value, nalog_id: Option
     if let Some(n) = nalog_id {
         snapshot["nalogId"] = n.clone();
     }
+    let uredjaj = Uredjaj::iz_postavki(b)?;
     let pending_id = zapisi_pending(db, &data["korisnikId"], &snapshot)?;
 
     // Štampa u Rustu ne baca — greška veze stiže kao neuspješan odgovor.
-    let result = stampaj(b, kanal, &racun);
+    let result = uredjaj.fiskalni(kanal, &racun);
 
     // Siguran neuspjeh briše pending red; nepoznat ishod ga ostavlja.
     if !uspjeh(&result) {
-        return neuspjela_stampa(db, pending_id, &result);
+        return stampa::neuspjeh(db, pending_id, &result);
     }
 
-    let broj_fiskalnog_racuna = js::or_null(&result["odgovori"]["BrojFiskalnogRacuna"]);
+    let broj_fiskalnog_racuna = stampa::broj_sa_uredjaja(&result);
 
     let upis = db.tx(|| {
         // Red riješen iz dijaloga dok je štampa trajala → bez drugog zapisa.
@@ -454,10 +398,7 @@ pub fn konvertuj_ponudu(b: &Backend, kanal: &str, data: &Value, nalog_id: Option
         Ok(Some(racun_id)) => Ok(uspjesna_stampa(&json!(racun_id), &broj_fiskalnog_racuna, &result["odgovori"])),
         Ok(None) => Ok(vec_evidentiran(&broj_fiskalnog_racuna)),
         // Račun je već na papiru; pending red ostaje (rollback) za dijalog.
-        Err(e) => baci!(
-            "{}",
-            poruka_nakon_stampe(&broj_fiskalnog_racuna, "nije zabilježen u bazi", e.poruka(), "Riješite ga kroz nezavršene račune.")
-        ),
+        Err(e) => Err(stampa::nije_zabiljezen(Odstampan::Racun(&broj_fiskalnog_racuna), &e)),
     }
 }
 
@@ -538,7 +479,6 @@ pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
         // kao što je u TS-u živjela u lib/ponuda.ts.
         "ponuda:konvertuj" => sesija::korisnik(b).and_then(|k| {
             let data = sesija::sa_korisnikom(&a[0], k.id);
-            b.load_tring_config()?;
             konvertuj_ponudu(b, kanal, &data, None)
         }),
         _ => return None,

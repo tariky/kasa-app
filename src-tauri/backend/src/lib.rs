@@ -16,6 +16,7 @@ pub mod tring;
 pub mod tring_racun;
 pub mod fiskalni;
 pub mod racun;
+pub mod stampa;
 pub mod licenca;
 pub mod kanali;
 pub mod petlja;
@@ -31,6 +32,8 @@ pub mod katalog;
 pub mod skladiste;
 pub mod pending_racun;
 pub mod racuni;
+pub mod prilog;
+pub mod storno;
 pub mod cash;
 pub mod ponude;
 pub mod proizvodnja;
@@ -93,6 +96,8 @@ pub struct Backend {
     pub sesija: sesija::Sesija,
     /// Najnoviji datum iz baze za licencu, jednom po otvaranju baze.
     pub datum_iz_baze: licenca::DatumIzBaze,
+    /// Dokumenti čija je štampa u toku (zaštita od dvoklika, stampa.rs).
+    u_toku: stampa::UTokuSkup,
 }
 
 impl Backend {
@@ -110,6 +115,7 @@ impl Backend {
             odobrena_putanja: Mutex::new(None),
             sesija: sesija::Sesija::default(),
             datum_iz_baze: licenca::DatumIzBaze::default(),
+            u_toku: stampa::UTokuSkup::default(),
         })
     }
 
@@ -211,30 +217,5 @@ impl Backend {
     fn provjeri_sesiju(&self, kanal: &str, a: &Args) -> R<()> {
         let korisnik = sesija::trenutni(self)?;
         sesija::provjeri_pristup(kanal, &a.0, korisnik.as_ref(), self.sesija.zadani_pin())
-    }
-
-    /// Tring postavke iz baze → klijent (`loadTringConfig`). Vraća operatora i lozinku.
-    pub fn load_tring_config(&self) -> R<(Value, Value)> {
-        let db = self.baza()?;
-        let rows = db.all("SELECT key, value FROM settings WHERE key LIKE 'tring.%'", p![])?;
-        let mut map = serde_json::Map::new();
-        for r in rows {
-            let k = r["key"].as_str().unwrap_or("").replacen("tring.", "", 1);
-            map.insert(k, r["value"].clone());
-        }
-        let g = |k: &str, zadano: &str| -> Value {
-            match map.get(k) {
-                Some(v) if !v.is_null() => v.clone(),
-                _ => Value::String(zadano.into()),
-            }
-        };
-        let host = js::to_string(&g("host", "localhost"));
-        let port = js::parse_int(&js::to_string(&g("port", "8085")));
-        self.tring.configure(&host, port);
-
-        let dev = db.val("SELECT value FROM settings WHERE key = 'dev.logging'", p![])?;
-        self.tring.set_logging_enabled(dev == "true");
-
-        Ok((js::parse_int_value(&g("operatorId", "0")), g("operatorPassword", "0")))
     }
 }

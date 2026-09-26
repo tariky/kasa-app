@@ -11,54 +11,8 @@ use serde_json::{json, Value};
 use crate::greska::{Greska, R};
 use crate::js;
 use crate::sql::Db;
-use crate::tring::Odgovor;
+use crate::stampa::Uredjaj;
 use crate::{audit, baci, baza, cuvanje, p, Args, Backend};
-
-// ─── Tring ──────────────────────────────────────────────
-
-/// `loadTringConfig()` — aktivna baza se otvori ako je zatvorena (getDb).
-fn load_tring_config(b: &Backend) -> R<(Value, Value)> {
-    b.db()?;
-    b.load_tring_config()
-}
-
-/// `if (Tring.isLoggingEnabled()) console.log(...)`. Ide na stderr: stdout
-/// ugovor-servera je kanal odgovora.
-fn loguj(b: &Backend, sta: &str, v: &Value) {
-    if b.tring.is_logging_enabled() {
-        eprintln!("[Tring] {sta}: {}", js::stringify(v));
-    }
-}
-
-fn init(b: &Backend) -> R<Odgovor> {
-    let (operator_id, operator_password) = load_tring_config(b)?;
-    // `parseInt` koji ne uspije je NaN, a `${NaN}` u XML-u je "NaN".
-    let operator_id = if operator_id.is_null() { json!("NaN") } else { operator_id };
-    let result = b.tring.inicijalizacija(&operator_id, &operator_password);
-    loguj(b, "init", &result);
-    Ok(result)
-}
-
-fn x_report(b: &Backend) -> R<Odgovor> {
-    load_tring_config(b)?;
-    let result = b.tring.stampati_presjek_stanja();
-    loguj(b, "xReport", &result);
-    Ok(result)
-}
-
-fn z_report(b: &Backend) -> R<Odgovor> {
-    load_tring_config(b)?;
-    let result = b.tring.stampati_dnevni_izvjestaj();
-    loguj(b, "zReport", &result);
-    Ok(result)
-}
-
-fn periodic_report(b: &Backend, from: &Value, to: &Value) -> R<Odgovor> {
-    load_tring_config(b)?;
-    let result = b.tring.stampati_periodicni_izvjestaj(from, to);
-    loguj(b, "periodicReport", &result);
-    Ok(result)
-}
 
 // ─── Dialog / File System ─────────────────────────────────
 
@@ -402,10 +356,11 @@ fn replace_db_file(source_path: &Path, db_path: &Path) -> R<()> {
 
 pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
     Some(match kanal {
-        "tring:init" => init(b),
-        "tring:xReport" => x_report(b),
-        "tring:zReport" => z_report(b),
-        "tring:periodicReport" => periodic_report(b, &a[0], &a[1]),
+        // Postavke uređaja i dnevnik: `stampa::Uredjaj`.
+        "tring:init" => Uredjaj::iz_postavki(b).map(|u| u.inicijalizacija()),
+        "tring:xReport" => Uredjaj::iz_postavki(b).map(|u| u.presjek_stanja()),
+        "tring:zReport" => Uredjaj::iz_postavki(b).map(|u| u.dnevni_izvjestaj()),
+        "tring:periodicReport" => Uredjaj::iz_postavki(b).map(|u| u.periodicni_izvjestaj(&a[0], &a[1])),
         "tring:getLogs" => Ok(b.tring.get_logs()),
         "tring:clearLogs" => {
             b.tring.clear_logs();
