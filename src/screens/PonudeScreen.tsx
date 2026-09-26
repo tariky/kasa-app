@@ -20,14 +20,14 @@ import {
 import { pdf } from '@react-pdf/renderer';
 import { PonudaPdf } from '@/components/PonudaPdf';
 import { filtriraj, type PoljaPretrage } from '@/lib/pretraga';
-import { formatBrojPonude, efektivniStatus, plusDana, danaIzmedju, DEFAULT_ROK_DANA } from '@/lib/ponuda';
+import { formatBrojPonude, efektivniStatus, plusDana, danaIzmedju } from '@/lib/ponuda';
 import { izracunajTotale, pdvStavke } from '@/lib/racun';
 import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { localDateStr } from '@/lib/novac';
 import { cn, formatKM, formatDate } from '@/lib/utils';
 import { useModuli } from '@/hooks/useModuli';
 import { formatBrojNaloga } from '@/lib/proizvodnja';
-import type { FormatBroja } from '@/lib/dokumentPostavke';
+import { zadanoZaKupca, primijeniRabatKupca, formatRabat, type FormatBroja } from '@/lib/dokumentPostavke';
 import { useDokumentPostavke } from '@/components/DokumentPostavkeProvider';
 import { ucitajZaStampu } from '@/lib/stampa';
 import { PretragaProizvoda } from '@/components/PretragaProizvoda';
@@ -157,6 +157,9 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
   const [napomena, setNapomena] = useState('');
   const [stavke, setStavke] = useState<FormStavka[]>([]);
   const [formError, setFormError] = useState('');
+  const [formInfo, setFormInfo] = useState('');
+  /** Rabat izabranog kupca — dobijaju ga stavke dodane poslije izbora. */
+  const [rabatKupca, setRabatKupca] = useState(0);
   const [saving, setSaving] = useState(false);
 
   // Konverzija — iste opcije plaćanja kao na kasi
@@ -184,6 +187,8 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
   const danas = localDateStr();
 
   useEffect(() => { loadPonude(); }, []);
+  // Konverzija treba način plaćanja kupca i prije nego što se forma otvori.
+  useEffect(() => { window.api.getKupci().then(setKupci).catch(() => { /* bez liste: globalni način */ }); }, []);
 
   useEffect(() => {
     setNalogZaPonudu(null);
@@ -233,7 +238,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
   // ── Forma ──────────────────────────────────────────────────
 
   /** Rok važenja u danima — izveden iz para datuma, ne drži se posebno. */
-  const rokDana = datum && vaziDo ? danaIzmedju(datum, vaziDo) : DEFAULT_ROK_DANA;
+  const rokDana = datum && vaziDo ? danaIzmedju(datum, vaziDo) : postavke.ponuda.vaziDana;
 
   /**
    * Pomjeranje datuma ponude nosi i rok sa sobom: dogovoreno je "8 dana",
@@ -249,13 +254,15 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
     setKupacId('');
     const danasnji = localDateStr();
     setDatum(danasnji);
-    setVaziDo(plusDana(danasnji, DEFAULT_ROK_DANA));
+    setVaziDo(plusDana(danasnji, postavke.ponuda.vaziDana));
     setNapomena('');
     setStavke([]);
     setFormError('');
+    setFormInfo('');
+    setRabatKupca(0);
     setKupci(await window.api.getKupci());
     setFormOpen(true);
-  }, []);
+  }, [postavke.ponuda.vaziDana]);
 
   const openUredi = useCallback(async (p: PonudaRow) => {
     const full = p.stavke ? p : await window.api.getPonuda(p.id);
@@ -274,9 +281,32 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
       pdvStopa: s.pdvStopa,
     })));
     setFormError('');
+    // Spremljena ponuda se ne preračunava dok korisnik ne promijeni kupca.
+    setFormInfo('');
+    setRabatKupca(0);
     setKupci(await window.api.getKupci());
     setFormOpen(true);
   }, []);
+
+  /** Izbor kupca u formi: njegov rabat ide na stavke bez rabata i na nove stavke. */
+  const izaberiKupca = (novi: string) => {
+    setKupacId(novi);
+    const r = kupci.find(k => String(k.id) === novi)?.rabat ?? 0;
+    setRabatKupca(r);
+    if (r > 0) {
+      setStavke(prev => primijeniRabatKupca(prev, r));
+      setFormError('');
+      setFormInfo(`Primijenjen rabat kupca ${formatRabat(r)}`);
+    } else setFormInfo('');
+  };
+
+  /** Konverzija u račun kreće od načina plaćanja kupca ponude, pa od postavke ponuda. */
+  const otvoriKonverziju = useCallback(() => {
+    const kupac = selected ? kupci.find(k => k.id === selected.kupacId) : undefined;
+    setKonvertujMsg(null);
+    setPaymentType(zadanoZaKupca(kupac, postavke, 'ponuda').nacinPlacanja);
+    setKonvertujOpen(true);
+  }, [selected, kupci, postavke]);
 
   const addStavka = (p: Product, kol: number | null) => {
     const k = kol ?? 1;
@@ -287,7 +317,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
       }
       return [...prev, {
         productId: p.id, naziv: p.naziv, jm: p.jm || 'kom',
-        kolicina: k, cijena: p.cijena, rabat: 0, pdvStopa: p.pdvStopa,
+        kolicina: k, cijena: p.cijena, rabat: rabatKupca, pdvStopa: p.pdvStopa,
       }];
     });
   };
@@ -528,9 +558,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
         case 'k':
           if (selKonvertibilna && !nalogZaPonudu) {
             e.preventDefault();
-            setKonvertujMsg(null);
-            setPaymentType('Gotovina');
-            setKonvertujOpen(true);
+            otvoriKonverziju();
           }
           break;
         case 'f':
@@ -547,7 +575,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selected, selEditable, selKonvertibilna, filter, anyDialogOpen, openNova, openUredi, nalogZaPonudu, visible.length, focusRow]);
+  }, [selected, selEditable, selKonvertibilna, filter, anyDialogOpen, openNova, openUredi, otvoriKonverziju, nalogZaPonudu, visible.length, focusRow]);
 
   /** ⌘↵ potvrđuje dijalog s bilo kojeg polja. */
   const submitOnMeta = (fn: () => void) => (e: React.KeyboardEvent) => {
@@ -901,7 +929,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
                           label={selStatus === 'istekla' ? 'Konvertuj (istekla)' : 'Konvertuj u račun'}
                           hint="K"
                           tone="primary"
-                          onClick={() => { setKonvertujMsg(null); setPaymentType('Gotovina'); setKonvertujOpen(true); }}
+                          onClick={otvoriKonverziju}
                         />
                         <div className="mt-1.5">
                           <ActionRow icon={Paperclip} label="Faktura po ponudi" hint="F" onClick={otvoriFakturu} />
@@ -967,7 +995,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
             <div className="grid grid-cols-2 gap-3">
               <div className="col-span-2 space-y-1.5">
                 <Eyebrow className="block">Kupac</Eyebrow>
-                <Select value={kupacId} onValueChange={setKupacId}>
+                <Select value={kupacId} onValueChange={izaberiKupca}>
                   <SelectTrigger className="h-9 text-[13px]">
                     <SelectValue placeholder="Odaberite kupca" />
                   </SelectTrigger>
@@ -984,6 +1012,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
                     Nema kupaca u šifarniku — dodajte kupca u Postavkama.
                   </p>
                 )}
+                {formInfo && <p className="text-[11px] text-slate-500">{formInfo}</p>}
               </div>
               <div className="space-y-1.5">
                 <Eyebrow className="block">Datum</Eyebrow>
