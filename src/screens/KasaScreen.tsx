@@ -1,22 +1,21 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { User as UserIcon, Printer, Percent, Paperclip, PencilLine, ScanBarcode, Eraser, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { DecimalInput } from '@/components/ui/decimal-input';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
 } from '@/components/ui/dialog';
-import { Key } from '@/components/ui/ledger';
+import { Key, jePoljeZaUnos } from '@/components/ui/ledger';
 import { PretragaProizvoda } from '@/components/PretragaProizvoda';
 import { PretragaKupaca } from '@/components/PretragaKupaca';
 import { KupacRacunaPolja } from '@/components/KupacRacunaPolja';
 import { cn, formatKM, formatKolicina, mnozina, parseDecimal } from '@/lib/utils';
-import { localDateStr, prijedloziApoena, round2 } from '@/lib/novac';
+import { localDateStr, round2 } from '@/lib/novac';
 import { izracunajTotale } from '@/lib/racun';
 import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { nemaNaStanju } from '@/lib/izborArtikala';
 import { PRAZAN_KUPAC, izKupca, zaSlanje, type KupacRacuna } from '@/lib/kupacRacuna';
 import {
-  dodajUKosaricu, dodajSlobodnuStavku, restoreCart, postaviRabat, postaviRabatNaSve, postaviKolicinu, stavkeTekst,
+  dodaj, dodajSlobodnuStavku, restoreCart, postaviRabat, postaviRabatNaSve, postaviKolicinu, pomjeriKolicinu, stavkeTekst,
   type SavedCartItem,
 } from '@/lib/kosarica';
 import { OtpremnicaPdf } from '@/components/OtpremnicaPdf';
@@ -26,6 +25,9 @@ import FakturaDialog, { type SkicaFakture } from '@/components/FakturaDialog';
 import SlobodnaStavkaDialog from '@/components/kasa/SlobodnaStavkaDialog';
 import StavkeRacuna from '@/components/kasa/StavkeRacuna';
 import SpremljeneKosarice, { type SavedCartRow } from '@/components/kasa/SpremljeneKosarice';
+import KusurDialog from '@/components/kasa/KusurDialog';
+import BrojDialog from '@/components/kasa/BrojDialog';
+import { useKasaPostavke } from '@/hooks/useKasaPostavke';
 import type { Product, CartItem, Kupac } from '@/types';
 import { potvrdi } from '@/lib/dijalog';
 import { otvoriNezavrseneRacune } from '@/lib/nezavrseniRacuni';
@@ -42,20 +44,13 @@ const ARTIKLI_I_USLUGE: Product['tip'][] = ['artikal', 'usluga'];
 /** Bosanski plural za "artikal": 1 artikal, 2–4 artikla, 5+ artikala. */
 const formatArtikliCount = (n: number) => `${n} ${mnozina(n, ['artikal', 'artikla', 'artikala'])}`;
 
-/** Kucanje van polja za unos ide u pretragu — skener radi i kad fokus pobjegne na dugme. */
-function uPoljuZaUnos(t: EventTarget | null): boolean {
-  const el = t as HTMLElement | null;
-  if (!el) return false;
-  return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable;
-}
-
 export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
   const { postavke } = useDokumentPostavke();
+  const { allowZeroStock, kusurEnabled, racunNapomena, scanMode, prikaziDnevniPromet, postaviScanMode } = useKasaPostavke();
   const [cart, setCart] = useState<CartItem[]>([]);
   const [zadnje, setZadnje] = useState<{ id: number; n: number } | null>(null);
   const [paymentType, setPaymentType] = useState<NacinPlacanja>('Gotovina');
   const [kusurTotal, setKusurTotal] = useState<number | null>(null);
-  const [kusurValue, setKusurValue] = useState('');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [lastOrderId, setLastOrderId] = useState<number | null>(null);
@@ -69,10 +64,6 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
   /** Rabat kupca izabranog iz šifarnika — dobijaju ga stavke dodane poslije izbora. */
   const [kupacRabat, setKupacRabat] = useState(0);
   const [dailyTotal, setDailyTotal] = useState<number | null>(null);
-  const [allowZeroStock, setAllowZeroStock] = useState(false);
-  const [kusurEnabled, setKusurEnabled] = useState(true);
-  const [racunNapomena, setRacunNapomena] = useState('');
-  const [scanMode, setScanMode] = useState(false);
   const [savedCarts, setSavedCarts] = useState<SavedCartRow[]>([]);
   const [prilogOpen, setPrilogOpen] = useState(false);
   const [skiceFaktura, setSkiceFaktura] = useState<SkicaFakture[]>([]);
@@ -116,30 +107,21 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
     setPaymentType(prev => nacinBezKupca(prev, odKupca));
   }, []);
 
-  // Load daily total setting + data
+  // Promet današnjih završenih računa (kad je uključen u postavkama kase)
   const loadDailyTotal = useCallback(async () => {
-    const enabled = await window.api.getSetting('kasa.showDailyTotal');
-    if (enabled !== 'true') { setDailyTotal(null); return; }
+    if (!prikaziDnevniPromet) { setDailyTotal(null); return; }
     const today = localDateStr();
     const orders = await window.api.getReportData('dnevni', today, today);
     const completed = orders.filter((o: any) => o.status === 'completed');
     setDailyTotal(completed.reduce((s: number, o: any) => s + o.ukupno, 0));
-  }, []);
+  }, [prikaziDnevniPromet]);
 
   useEffect(() => { loadDailyTotal(); }, [loadDailyTotal]);
 
-  useEffect(() => {
-    window.api.getSetting('kasa.allowZeroStock').then((v) => setAllowZeroStock(v === 'true'));
-    window.api.getSetting('kasa.kusurKalkulacija').then((v) => setKusurEnabled(v !== 'false'));
-    window.api.getSetting('racun.napomena').then((v) => setRacunNapomena(v || ''));
-    window.api.getSetting('kasa.scanMode').then((v) => setScanMode(v === 'true'));
-  }, []);
-
   const toggleScanMode = useCallback((on: boolean) => {
-    setScanMode(on);
-    window.api.setSetting('kasa.scanMode', on ? 'true' : 'false');
+    postaviScanMode(on);
     fokusPretraga();
-  }, [fokusPretraga]);
+  }, [postaviScanMode, fokusPretraga]);
 
   const loadSavedCarts = useCallback(async () => {
     try {
@@ -166,7 +148,6 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
 
   const closeKusur = useCallback(() => {
     setKusurTotal(null);
-    setKusurValue('');
     fokusPretraga();
   }, [fokusPretraga]);
 
@@ -185,19 +166,12 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
 
   // Cart actions
   const addToCart = useCallback((product: Product, qty: number) => {
-    const prije = cart.find(i => i.product.id === product.id)?.kolicina ?? 0;
-    const next = dodajUKosaricu(cart, product, qty, allowZeroStock);
-    const saRabatom = prije === 0 && kupacRabat > 0 ? postaviRabat(next, product.id, kupacRabat) : next;
-    const poslije = saRabatom.find(i => i.product.id === product.id)?.kolicina ?? 0;
-    setCart(saRabatom);
+    const r = dodaj(cart, product, qty, { allowZeroStock, rabatKupca: kupacRabat });
+    setCart(r.cart);
     setQtyProduct(null);
-    if (poslije > prije) setZadnje(z => ({ id: product.id, n: (z?.n ?? 0) + 1 }));
+    if (r.dodano > 0) setZadnje(z => ({ id: product.id, n: (z?.n ?? 0) + 1 }));
     // Stanje je ograničilo dodavanje — kasir mora znati da nije ušlo sve što je tražio.
-    setMessage(poslije - prije < qty
-      ? { type: 'error', text: poslije === prije
-          ? `„${product.naziv}“: nema više na stanju.`
-          : `„${product.naziv}“: na stanju je ${formatKolicina(product.stanje ?? 0)} ${product.jm || 'kom'}, dodano ${formatKolicina(poslije - prije)}.` }
-      : null);
+    setMessage(r.upozorenje ? { type: 'error', text: r.upozorenje } : null);
     fokusPretraga();
   }, [cart, allowZeroStock, kupacRabat, fokusPretraga]);
 
@@ -230,10 +204,9 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
 
   // Vraća poruku greške koju dijalog prikaže; bez greške se dijalog zatvara.
   const dodajSlobodnu = useCallback((product: Product, qty: number): string | undefined => {
-    const r = dodajSlobodnuStavku(cart, product, qty);
+    const r = dodajSlobodnuStavku(cart, product, qty, kupacRabat);
     if (r.greska) return r.greska;
-    const nova = !cart.some(i => i.product.id === product.id);
-    setCart(nova && kupacRabat > 0 ? postaviRabat(r.cart, product.id, kupacRabat) : r.cart);
+    setCart(r.cart);
     setZadnje(z => ({ id: product.id, n: (z?.n ?? 0) + 1 }));
     setMessage(null);
     zatvoriSlobodnu();
@@ -258,16 +231,7 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
   }, [qtyProduct, qtyValue, qtyMode, allowZeroStock, addToCart, closeQty]);
 
   const updateQuantity = useCallback((productId: number, delta: number) => {
-    setCart(prev =>
-      prev
-        .map(item => {
-          if (item.product.id !== productId) return item;
-          const newQty = item.kolicina + delta;
-          if (delta > 0 && !allowZeroStock && item.product.tip !== 'usluga' && newQty > (item.product.stanje ?? 0)) return item;
-          return { ...item, kolicina: Math.max(0, newQty) };
-        })
-        .filter(item => item.kolicina > 0)
-    );
+    setCart(prev => pomjeriKolicinu(prev, productId, delta, allowZeroStock));
   }, [allowZeroStock]);
 
   const removeFromCart = useCallback((productId: number) => {
@@ -382,7 +346,8 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
       if (anyDialogOpen || loading) return;
       if (e.key === 'F2') { e.preventDefault(); toggleScanMode(!scanMode); return; }
       if (e.key === 'F3') { e.preventDefault(); setSlobodnaOpen(true); return; }
-      if (e.metaKey || e.ctrlKey || e.altKey || uPoljuZaUnos(e.target)) return;
+      if (e.metaKey || e.ctrlKey || e.altKey || jePoljeZaUnos(e.target)) return;
+      // Kucanje van polja za unos ide u pretragu — skener radi i kad fokus pobjegne na dugme.
       // Znak ili Backspace van polja: fokus u pretragu prije nego znak stigne, pa završi u njoj.
       if (e.key.length === 1 || e.key === 'Backspace') searchInputRef.current?.focus();
     };
@@ -453,7 +418,6 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
       loadDailyTotal();
       if (kusurEnabled && paymentType === 'Gotovina') {
         // Kusur mod — mušterija tek sad predaje novac, modal preuzima fokus.
-        setKusurValue('');
         setKusurTotal(total);
       } else {
         fokusPretraga();
@@ -786,198 +750,53 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
 
       <SlobodnaStavkaDialog open={slobodnaOpen} onClose={zatvoriSlobodnu} onDodaj={dodajSlobodnu} />
 
-      {/* Quantity dialog */}
-      <Dialog open={!!qtyProduct} onOpenChange={(open) => { if (!open) closeQty(); }}>
-        <DialogContent className="sm:max-w-[340px] p-0 gap-0 overflow-hidden rounded-2xl">
-          <div className="px-6 pt-6 pb-5">
-            <DialogHeader>
-              <DialogTitle className="text-[15px]">{qtyMode === 'postavi' ? 'Promijeni količinu' : 'Količina'}</DialogTitle>
-              <DialogDescription className="text-sm text-slate-500 truncate mt-0.5">
-                {qtyProduct?.naziv}
-              </DialogDescription>
-            </DialogHeader>
-            <div className="mt-5 flex items-center gap-3">
-              <button
-                className="w-12 h-12 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center text-xl font-bold transition-colors"
-                onClick={() => setQtyValue(formatKolicina(Math.max(qtyMode === 'postavi' ? 0 : 1, (parseDecimal(qtyValue) || 1) - 1)))}
-              >
-                −
-              </button>
-              <DecimalInput
-                ref={qtyInputRef}
-                maxDecimals={3}
-                value={qtyValue}
-                onValueChange={text => setQtyValue(text)}
-                onKeyDown={e => { if (e.key === 'Enter') confirmQty(); }}
-                className="h-12 text-center font-mono text-2xl font-bold flex-1 rounded-xl border-slate-200"
-                autoFocus
-              />
-              <button
-                className="w-12 h-12 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center text-xl font-bold transition-colors"
-                onClick={() => setQtyValue(formatKolicina(Math.min(qtyMax, (parseDecimal(qtyValue) || 0) + 1)))}
-              >
-                +
-              </button>
-            </div>
-            {qtyProduct && qtyProduct.tip !== 'usluga' && !qtyProduct.slobodan && (qtyProduct.stanje ?? 0) > 0 && (
-              <p className="text-[11px] text-slate-400 mt-3 text-center font-mono tabular-nums">
-                Na stanju: {formatKolicina(qtyProduct.stanje ?? 0)} {qtyProduct.jm || 'kom'}
-              </p>
-            )}
-            {qtyMode === 'postavi' && (
-              <p className="text-[11px] text-slate-400 mt-2 text-center">0 uklanja stavku s računa</p>
-            )}
-          </div>
-          <div className="border-t border-slate-100 px-6 py-4 bg-slate-50/50 flex justify-end gap-2">
-            <Button variant="ghost" size="sm" className="rounded-lg" onClick={closeQty}>
-              Otkaži
-            </Button>
-            <Button size="sm" className="rounded-lg px-5" onClick={confirmQty}>
-              {qtyMode === 'postavi' ? 'Sačuvaj' : 'Dodaj'}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {/* Količina: 'dodaj' dodaje na stavku, 'postavi' ispravlja red na računu */}
+      <BrojDialog
+        open={!!qtyProduct}
+        naslov={qtyMode === 'postavi' ? 'Promijeni količinu' : 'Količina'}
+        opis={qtyProduct?.naziv}
+        vrijednost={qtyValue}
+        onVrijednost={setQtyValue}
+        onPotvrdi={confirmQty}
+        onZatvori={closeQty}
+        onOtkazi={closeQty}
+        potvrda={qtyMode === 'postavi' ? 'Sačuvaj' : 'Dodaj'}
+        maxDecimals={3}
+        inputRef={qtyInputRef}
+        korak={{ min: qtyMode === 'postavi' ? 0 : 1, max: qtyMax }}
+      >
+        {qtyProduct && qtyProduct.tip !== 'usluga' && !qtyProduct.slobodan && (qtyProduct.stanje ?? 0) > 0 && (
+          <p className="text-[11px] text-slate-400 mt-3 text-center font-mono tabular-nums">
+            Na stanju: {formatKolicina(qtyProduct.stanje ?? 0)} {qtyProduct.jm || 'kom'}
+          </p>
+        )}
+        {qtyMode === 'postavi' && (
+          <p className="text-[11px] text-slate-400 mt-2 text-center">0 uklanja stavku s računa</p>
+        )}
+      </BrojDialog>
 
-      {/* Rabat dialog */}
-      <Dialog open={rabatTarget !== null} onOpenChange={(open) => { if (!open) { setRabatTarget(null); fokusPretraga(); } }}>
-        <DialogContent className="sm:max-w-[340px] p-0 gap-0 overflow-hidden rounded-2xl">
-          <div className="px-6 pt-6 pb-5">
-            <DialogHeader>
-              <DialogTitle className="text-[15px]">
-                {rabatTarget === 'sve' ? 'Rabat na cijelu košaricu' : 'Rabat na stavku'}
-              </DialogTitle>
-              <DialogDescription className="text-sm text-slate-500 truncate mt-0.5">
-                {rabatTarget === 'sve'
-                  ? 'Postotak se primjenjuje na sve stavke.'
-                  : cart.find(i => i.product.id === rabatTarget)?.product.naziv}
-              </DialogDescription>
-            </DialogHeader>
-            <div className="mt-5 relative">
-              <DecimalInput
-                maxDecimals={2}
-                value={rabatValue}
-                onValueChange={setRabatValue}
-                onKeyDown={e => { if (e.key === 'Enter') confirmRabat(); }}
-                placeholder="0"
-                className="h-12 text-center font-mono text-2xl font-bold rounded-xl border-slate-200 pr-10"
-                autoFocus
-              />
-              <span className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 font-mono text-lg">%</span>
-            </div>
-            <p className="text-[11px] text-slate-400 mt-3 text-center">0–100% · 0 uklanja rabat</p>
-          </div>
-          <div className="border-t border-slate-100 px-6 py-4 bg-slate-50/50 flex justify-end gap-2">
-            <Button variant="ghost" size="sm" className="rounded-lg" onClick={() => setRabatTarget(null)}>
-              Otkaži
-            </Button>
-            <Button size="sm" className="rounded-lg px-5" onClick={confirmRabat}>
-              Primijeni
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {/* Rabat na stavku ili na cijelu košaricu; „Otkaži“ ne vraća fokus u pretragu (kao i do sada) */}
+      <BrojDialog
+        open={rabatTarget !== null}
+        naslov={rabatTarget === 'sve' ? 'Rabat na cijelu košaricu' : 'Rabat na stavku'}
+        opis={rabatTarget === 'sve'
+          ? 'Postotak se primjenjuje na sve stavke.'
+          : cart.find(i => i.product.id === rabatTarget)?.product.naziv}
+        vrijednost={rabatValue}
+        onVrijednost={setRabatValue}
+        onPotvrdi={confirmRabat}
+        onZatvori={() => { setRabatTarget(null); fokusPretraga(); }}
+        onOtkazi={() => setRabatTarget(null)}
+        potvrda="Primijeni"
+        maxDecimals={2}
+        placeholder="0"
+        sufiks="%"
+      >
+        <p className="text-[11px] text-slate-400 mt-3 text-center">0–100% · 0 uklanja rabat</p>
+      </BrojDialog>
 
-      {/* Kusur modal — otvara se poslije štampe gotovinskog računa */}
-      <Dialog open={kusurTotal !== null} onOpenChange={(open) => { if (!open) closeKusur(); }}>
-        <DialogContent className="sm:max-w-[400px] p-0 gap-0 overflow-hidden rounded-2xl">
-          {kusurTotal !== null && (() => {
-            const apoeni = prijedloziApoena(kusurTotal);
-            const dato = kusurValue ? parseDecimal(kusurValue) : null;
-            const kusur = dato !== null ? round2(dato - kusurTotal) : null;
-            const cycleApoen = (dir: 1 | -1) => {
-              if (apoeni.length === 0) return;
-              const current = apoeni.indexOf(dato ?? NaN);
-              const next = current === -1
-                ? (dir === 1 ? 0 : apoeni.length - 1)
-                : (current + dir + apoeni.length) % apoeni.length;
-              setKusurValue(formatKolicina(apoeni[next]));
-            };
-            return (
-              <>
-                <div className="px-6 pt-6 pb-5">
-                  <DialogHeader>
-                    <DialogTitle className="text-[15px]">Kalkulacija kusura</DialogTitle>
-                    <DialogDescription className="text-[12px] text-slate-500 mt-0.5">
-                      Upišite koliko je mušterija dala — kusur se računa automatski
-                    </DialogDescription>
-                  </DialogHeader>
-
-                  {/* Ukupno */}
-                  <div className="mt-4 flex items-baseline justify-between">
-                    <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Ukupno</span>
-                    <span className="text-[24px] font-bold font-mono tabular-nums text-slate-900 leading-none">
-                      {formatKM(kusurTotal)}
-                    </span>
-                  </div>
-
-                  {/* Mušterija dala */}
-                  <DecimalInput
-                    placeholder="Mušterija dala..."
-                    value={kusurValue}
-                    onValueChange={text => setKusurValue(text)}
-                    onKeyDown={e => {
-                      // Enter u prazno polje zatvara — s upisanim iznosom kusur
-                      // ostaje na ekranu dok kasir ne pritisne Esc.
-                      if (e.key === 'Enter') { e.preventDefault(); if (!kusurValue.trim()) closeKusur(); }
-                      else if (e.key === 'ArrowDown') { e.preventDefault(); cycleApoen(1); }
-                      else if (e.key === 'ArrowUp') { e.preventDefault(); cycleApoen(-1); }
-                    }}
-                    className="mt-4 h-12 text-center font-mono text-xl font-bold rounded-xl border-slate-200"
-                    autoFocus
-                  />
-
-                  {/* Apoeni — klik ili ↑/↓ */}
-                  <div className="flex gap-1.5 mt-2.5">
-                    {apoeni.map(iznos => (
-                      <button
-                        key={iznos}
-                        type="button"
-                        onClick={() => setKusurValue(formatKolicina(iznos))}
-                        className={cn(
-                          'flex-1 h-9 rounded-lg text-[12px] font-semibold font-mono tabular-nums transition-all duration-150',
-                          dato === iznos
-                            ? 'bg-slate-900 text-white'
-                            : 'bg-white text-slate-600 border border-slate-200 hover:border-slate-400',
-                        )}
-                      >
-                        {iznos === round2(kusurTotal) ? formatKM(iznos) : iznos}
-                      </button>
-                    ))}
-                  </div>
-
-                  {/* Kusur — ogromno, vidi ga i mušterija */}
-                  {kusur !== null && kusur >= 0 && (
-                    <div className="mt-4 rounded-xl bg-emerald-50 border border-emerald-100 px-5 py-4 text-center">
-                      <p className="text-[11px] font-semibold text-emerald-600 uppercase tracking-wider">Kusur</p>
-                      <p className="text-[40px] font-bold font-mono tabular-nums text-emerald-600 leading-tight">
-                        {formatKM(kusur)}
-                      </p>
-                    </div>
-                  )}
-                  {kusur !== null && kusur < 0 && (
-                    <div className="mt-4 rounded-xl bg-amber-50 border border-amber-100 px-5 py-3 text-center">
-                      <p className="text-[11px] font-semibold text-amber-600 uppercase tracking-wider">Nedostaje</p>
-                      <p className="text-[26px] font-bold font-mono tabular-nums text-amber-600 leading-tight">
-                        {formatKM(-kusur)}
-                      </p>
-                    </div>
-                  )}
-                </div>
-
-                <div className="border-t border-slate-100 px-6 py-3 bg-slate-50/50 flex items-center justify-between">
-                  <span className="text-[11px] text-slate-400">
-                    Esc za zatvaranje
-                  </span>
-                  <Button size="sm" className="rounded-lg px-5" onClick={closeKusur}>
-                    Gotovo
-                  </Button>
-                </div>
-              </>
-            );
-          })()}
-        </DialogContent>
-      </Dialog>
+      {/* Kusur — otvara se poslije štampe gotovinskog računa */}
+      <KusurDialog iznos={kusurTotal} onZatvori={closeKusur} />
 
       {/* Kupac dialog */}
       <Dialog open={kupacOpen} onOpenChange={(open) => { if (!open) { setKupacOpen(false); fokusPretraga(); } }}>

@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test';
-import { dodajUKosaricu, dodajSlobodnuStavku, restoreCart, postaviRabat, postaviRabatNaSve, postaviKolicinu } from './kosarica';
+import { dodaj, dodajUKosaricu, dodajSlobodnuStavku, restoreCart, postaviRabat, postaviRabatNaSve, postaviKolicinu, pomjeriKolicinu } from './kosarica';
 import type { Product, CartItem } from '@/types';
 
 function artikal(overrides: Partial<Product> = {}): Product {
@@ -193,4 +193,103 @@ test('usluga i allowZeroStock ne gledaju stanje', () => {
 test('količina 0 ili manje uklanja stavku', () => {
   const p = artikal();
   expect(postaviKolicinu([{ product: p, kolicina: 2, rabat: 0 }], p.id, 0, false)).toEqual([]);
+});
+
+// --- dodaj (izbor artikla na kasi) ---
+
+test('dodaj: novi artikal ulazi cijeli, bez upozorenja', () => {
+  const p = artikal({ stanje: 5 });
+  expect(dodaj([], p, 3, { allowZeroStock: false, rabatKupca: 0 })).toEqual({
+    cart: [{ product: p, kolicina: 3, rabat: 0 }], dodano: 3, upozorenje: null,
+  });
+});
+
+test('dodaj: stanje ograničava — dodaje se ostatak i kasir dobija poruku koliko je ušlo', () => {
+  const p = artikal({ naziv: 'Sir gauda', jm: 'kg', stanje: 2.5 });
+  const r = dodaj([], p, 5, { allowZeroStock: false, rabatKupca: 0 });
+  expect(r.cart).toEqual([{ product: p, kolicina: 2.5, rabat: 0 }]);
+  expect(r.dodano).toBe(2.5);
+  expect(r.upozorenje).toBe('„Sir gauda“: na stanju je 2,5 kg, dodano 2,5.');
+});
+
+test('dodaj: kad više nema na stanju, košarica ostaje ista i poruka to kaže', () => {
+  const p = artikal({ naziv: 'Sok', stanje: 2 });
+  const cart = [{ product: p, kolicina: 2, rabat: 0 }];
+  const r = dodaj(cart, p, 1, { allowZeroStock: false, rabatKupca: 0 });
+  expect(r.cart).toEqual(cart);
+  expect(r.dodano).toBe(0);
+  expect(r.upozorenje).toBe('„Sok“: nema više na stanju.');
+});
+
+test('dodaj: bez jedinice mjere poruka kaže kom', () => {
+  const p = artikal({ naziv: 'Keks', jm: '', stanje: 1 });
+  expect(dodaj([], p, 3, { allowZeroStock: false, rabatKupca: 0 }).upozorenje).toBe('„Keks“: na stanju je 1 kom, dodano 1.');
+});
+
+test('dodaj: allowZeroStock i usluga ne gledaju stanje', () => {
+  const a = artikal({ stanje: 0 });
+  const u = artikal({ id: 2, tip: 'usluga', stanje: 0 });
+  expect(dodaj([], a, 4, { allowZeroStock: true, rabatKupca: 0 })).toEqual({ cart: [{ product: a, kolicina: 4, rabat: 0 }], dodano: 4, upozorenje: null });
+  expect(dodaj([], u, 2, { allowZeroStock: false, rabatKupca: 0 }).upozorenje).toBeNull();
+});
+
+test('dodaj: rabat kupca dobija samo stavka koja je tek ušla u košaricu', () => {
+  const a = artikal({ id: 1 });
+  const b = artikal({ id: 2, sifra: '002' });
+  const postojeca = [{ product: a, kolicina: 1, rabat: 0 }];
+  const r = dodaj(dodaj(postojeca, a, 1, { allowZeroStock: false, rabatKupca: 10 }).cart, b, 1, { allowZeroStock: false, rabatKupca: 10 });
+  expect(r.cart).toEqual([{ product: a, kolicina: 2, rabat: 0 }, { product: b, kolicina: 1, rabat: 10 }]);
+});
+
+test('dodaj: artikal koji nije ušao (nema stanja) ne dobija rabat ni red', () => {
+  const p = artikal({ stanje: 0 });
+  expect(dodaj([], p, 1, { allowZeroStock: false, rabatKupca: 10 })).toEqual({
+    cart: [], dodano: 0, upozorenje: '„Test artikal“: nema više na stanju.',
+  });
+});
+
+test('dodajSlobodnuStavku: nova slobodna stavka dobija rabat kupca, postojeća ga zadržava', () => {
+  const p = artikal({ id: 7, tip: 'usluga', slobodan: 1, cijena: 12 });
+  const { cart } = dodajSlobodnuStavku([], p, 1, 10);
+  expect(cart).toEqual([{ product: p, kolicina: 1, rabat: 10 }]);
+  const saRucnimRabatom = postaviRabat(cart, 7, 5);
+  expect(dodajSlobodnuStavku(saRucnimRabatom, { ...p }, 2, 10).cart).toEqual([{ product: p, kolicina: 3, rabat: 5 }]);
+});
+
+// --- pomjeriKolicinu (+ i − na redu računa) ---
+
+test('pomjeriKolicinu: + i − mijenjaju količinu za korak', () => {
+  const p = artikal({ stanje: 5 });
+  const cart = [{ product: p, kolicina: 2, rabat: 3 }];
+  expect(pomjeriKolicinu(cart, p.id, 1, false)).toEqual([{ product: p, kolicina: 3, rabat: 3 }]);
+  expect(pomjeriKolicinu(cart, p.id, -1, false)).toEqual([{ product: p, kolicina: 1, rabat: 3 }]);
+});
+
+test('pomjeriKolicinu: − do nule uklanja stavku', () => {
+  const p = artikal();
+  expect(pomjeriKolicinu([{ product: p, kolicina: 1, rabat: 0 }], p.id, -1, false)).toEqual([]);
+  expect(pomjeriKolicinu([{ product: p, kolicina: 0.5, rabat: 0 }], p.id, -1, false)).toEqual([]);
+});
+
+test('pomjeriKolicinu: korak preko stanja se ne radi — ni do ostatka (2 od 2,5 kg ostaje 2)', () => {
+  const p = artikal({ jm: 'kg', stanje: 2.5 });
+  const cart = [{ product: p, kolicina: 2, rabat: 0 }];
+  expect(pomjeriKolicinu(cart, p.id, 1, false)).toBe(cart);
+  const pun = [{ product: p, kolicina: 2.5, rabat: 0 }];
+  expect(pomjeriKolicinu(pun, p.id, 1, false)).toBe(pun);
+});
+
+test('pomjeriKolicinu: usluga i allowZeroStock rastu bez obzira na stanje', () => {
+  const u = artikal({ tip: 'usluga', stanje: 0 });
+  const a = artikal({ id: 2, stanje: 1 });
+  expect(pomjeriKolicinu([{ product: u, kolicina: 1, rabat: 0 }], u.id, 1, false)[0].kolicina).toBe(2);
+  expect(pomjeriKolicinu([{ product: a, kolicina: 1, rabat: 0 }], a.id, 1, true)[0].kolicina).toBe(2);
+});
+
+test('pomjeriKolicinu: ostale stavke i nepoznat artikal ostaju netaknuti', () => {
+  const a = artikal({ id: 1, stanje: 9 });
+  const b = artikal({ id: 2, sifra: '002', stanje: 9 });
+  const cart = [{ product: a, kolicina: 1, rabat: 0 }, { product: b, kolicina: 4, rabat: 0 }];
+  expect(pomjeriKolicinu(cart, 1, 1, false)[1]).toBe(cart[1]);
+  expect(pomjeriKolicinu(cart, 99, 1, false)).toBe(cart);
 });

@@ -11,8 +11,8 @@ import { cn, formatKM, formatDate } from '@/lib/utils';
 import { otvoriPdf, spremiPdf, ucitajZaStampu } from '@/lib/stampa';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Key, mod } from '@/components/ui/ledger';
-import { FullDialog, FullDialogContent, FullDialogHeader, FullDialogFooter, FullDialogNotice, FullDialogTitle, FooterBtn, Fact, HeaderBtn, LegendKey } from '@/components/ui/full-dialog';
+import { Key, jePoljeZaUnos, mod } from '@/components/ui/ledger';
+import { FullDialog, FullDialogContent, FullDialogHeader, FullDialogFooter, FullDialogNotice, FullDialogTitle, FooterBtn, Fact, HeaderBtn, LegendKey, SusjedniNav } from '@/components/ui/full-dialog';
 import { RadniNalogPdf } from '@/components/RadniNalogPdf';
 import { StatusRail } from './StatusRail';
 import { StavkeUtroska, type StavkeHandle } from './StavkeUtroska';
@@ -20,10 +20,11 @@ import { KalkulacijaPanel } from './KalkulacijaPanel';
 import { ProizvodiNaloga } from './ProizvodiNaloga';
 import { NalogDialog } from './NalogDialog';
 import { IzdajRacunDialog } from './IzdajRacunDialog';
-import { Pencil, Trash2, Play, CheckCircle2, Undo2, Receipt, Printer, Download, ChevronUp, ChevronDown, User, Package } from 'lucide-react';
+import { useSusjedni } from '@/hooks/useSusjedni';
+import { useCuvarIzmjena } from '@/hooks/useCuvarIzmjena';
+import { Pencil, Trash2, Play, CheckCircle2, Undo2, Receipt, Printer, Download, User, Package } from 'lucide-react';
 
 type Notice = { type: 'success' | 'error'; text: string };
-type Pending = { kind: 'close' } | { kind: 'nav'; id: number };
 
 const ROK_TONE = { ok: 'bg-emerald-50 text-emerald-700', warn: 'bg-amber-50 text-amber-700', late: 'bg-rose-50 text-rose-700' } as const;
 
@@ -47,7 +48,6 @@ export function NalogDetailDialog({ nalogId, redoslijed, uloga, onClose, onNavig
   const [zavrsiOpen, setZavrsiOpen] = useState(false);
   const [vratiOpen, setVratiOpen] = useState(false);
   const [racunOpen, setRacunOpen] = useState(false);
-  const [pending, setPending] = useState<Pending | null>(null);
   const stavkeRef = useRef<StavkeHandle>(null);
   const contentRef = useRef<HTMLDivElement>(null);
 
@@ -88,21 +88,15 @@ export function NalogDetailDialog({ nalogId, redoslijed, uloga, onClose, onNavig
   };
   useEffect(() => { if (!uredivo) setStavkeDirty(false); }, [uredivo]);
 
-  const idx = nalogId != null ? redoslijed.indexOf(nalogId) : -1;
-  const prevId = idx > 0 ? redoslijed[idx - 1] : null;
-  const nextId = idx >= 0 && idx < redoslijed.length - 1 ? redoslijed[idx + 1] : null;
+  const susjedni = useSusjedni(redoslijed, nalogId);
 
   // Nespremljene stavke čuvaju od zatvaranja i skakanja na drugi nalog — prvo pitamo.
-  const guarded = (p: Pending) => {
-    if (stavkeDirty) { setPending(p); return; }
-    if (p.kind === 'close') onClose(); else onNavigate(p.id);
-  };
-  const spremiPaNastavi = async () => { if (await stavkeRef.current?.save()) izvrsiPending(); };
-  const izvrsiPending = () => {
-    const p = pending; setPending(null);
-    if (!p) return;
-    if (p.kind === 'close') onClose(); else onNavigate(p.id);
-  };
+  const cuvar = useCuvarIzmjena(stavkeDirty, {
+    onClose, onNavigate,
+    onSpremi: async () => !!(await stavkeRef.current?.save()),
+    naslov: 'Nespremljene stavke',
+    opis: 'Utrošak materijala ima izmjene koje nisu spremljene.',
+  });
 
   // ── akcije ────────────────────────────────────────────
   const uIzradu = async () => {
@@ -145,7 +139,7 @@ export function NalogDetailDialog({ nalogId, redoslijed, uloga, onClose, onNavig
   const mozeZavrsiti = uredivo && (nalog?.stavke?.length ?? 0) > 0;
   const mozeRacun = nalog?.status === 'zavrsen' && nalog.vrsta === 'narudzba';
   const primarna = mozeZavrsiti ? () => setZavrsiOpen(true) : mozeRacun ? () => setRacunOpen(true) : null;
-  const anySub = editOpen || brisiOpen || zavrsiOpen || vratiOpen || racunOpen || pending != null;
+  const anySub = editOpen || brisiOpen || zavrsiOpen || vratiOpen || racunOpen || cuvar.otvoren;
 
   // ── tastatura ─────────────────────────────────────────
   // Sluša samo događaje iz ovog dijaloga: ugniježdeni dijalozi su portali izvan njega
@@ -162,12 +156,12 @@ export function NalogDetailDialog({ nalogId, redoslijed, uloga, onClose, onNavig
       }
       if (e.altKey) return;
       const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+      if (jePoljeZaUnos(t)) return;
       if (t && t.getAttribute('role') === 'combobox') return;
 
       switch (e.key) {
-        case 'ArrowUp': if (prevId != null) { e.preventDefault(); guarded({ kind: 'nav', id: prevId }); } return;
-        case 'ArrowDown': if (nextId != null) { e.preventDefault(); guarded({ kind: 'nav', id: nextId }); } return;
+        case 'ArrowUp': if (susjedni.prev != null) { e.preventDefault(); cuvar.zatrazi({ kind: 'nav', id: susjedni.prev }); } return;
+        case 'ArrowDown': if (susjedni.next != null) { e.preventDefault(); cuvar.zatrazi({ kind: 'nav', id: susjedni.next }); } return;
         case '/': if (uredivo) { e.preventDefault(); stavkeRef.current?.focusSearch(); } return;
         default:
       }
@@ -187,8 +181,8 @@ export function NalogDetailDialog({ nalogId, redoslijed, uloga, onClose, onNavig
   const rok = nalog ? rokOznaka(nalog.rok, danas, nalog.status === 'zavrsen' || nalog.status === 'fakturisan') : null;
 
   return (
-    <FullDialog open={open} onRequestClose={() => guarded({ kind: 'close' })}>
-      <FullDialogContent ref={contentRef} onRequestClose={() => guarded({ kind: 'close' })}>
+    <FullDialog open={open} onRequestClose={() => cuvar.zatrazi({ kind: 'close' })}>
+      <FullDialogContent ref={contentRef} onRequestClose={() => cuvar.zatrazi({ kind: 'close' })}>
           {!nalog && <FullDialogTitle className="sr-only">Radni nalog</FullDialogTitle>}
           {nalog && (
             <>
@@ -284,15 +278,7 @@ export function NalogDetailDialog({ nalogId, redoslijed, uloga, onClose, onNavig
 
               {/* ── Podnožje: sljedeći korak desno, tastatura lijevo ── */}
               <FullDialogFooter legend={<>
-                  <span className="flex items-center gap-1">
-                    <button onClick={() => prevId != null && guarded({ kind: 'nav', id: prevId })} disabled={prevId == null} aria-label="Prethodni nalog"
-                      className="h-6 w-6 flex items-center justify-center rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 disabled:opacity-30 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"><ChevronUp size={14} /></button>
-                    <button onClick={() => nextId != null && guarded({ kind: 'nav', id: nextId })} disabled={nextId == null} aria-label="Sljedeći nalog"
-                      className="h-6 w-6 flex items-center justify-center rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 disabled:opacity-30 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"><ChevronDown size={14} /></button>
-                    <span className="font-mono tabular-nums ml-1">{idx >= 0 ? `${idx + 1} / ${redoslijed.length}` : ''}</span>
-                  </span>
-                  <span className="text-slate-300">·</span>
-                  <LegendKey k="↑↓">nalog</LegendKey>
+                  <SusjedniNav susjedni={susjedni} naziv="nalog" onIdi={nId => cuvar.zatrazi({ kind: 'nav', id: nId })} />
                   {uredivo && <LegendKey k="/">materijal</LegendKey>}
                   <LegendKey k="esc">zatvori</LegendKey>
                 </>}>
@@ -322,21 +308,7 @@ export function NalogDetailDialog({ nalogId, redoslijed, uloga, onClose, onNavig
             onIzdat={async (bf) => { await reload(); setNotice({ type: 'success', text: `Račun #${bf ?? ''} izdat po nalogu ${formatBrojNaloga(nalog, postavke.nalog.broj)}` }); }}
             onNezavrseno={async (poruka) => { await reload(); setNotice({ type: 'error', text: poruka }); }} />
 
-          <Dialog open={pending != null} onOpenChange={v => { if (!v) setPending(null); }}>
-            <DialogContent className="sm:max-w-[420px]" onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); spremiPaNastavi(); } }}>
-              <DialogHeader>
-                <DialogTitle>Nespremljene stavke</DialogTitle>
-                <DialogDescription>Utrošak materijala ima izmjene koje nisu spremljene.</DialogDescription>
-              </DialogHeader>
-              <div className="flex justify-between items-center gap-2 pt-2">
-                <Button variant="ghost" className="text-rose-600 hover:text-rose-700 hover:bg-rose-50" onClick={izvrsiPending}>Odbaci izmjene</Button>
-                <div className="flex gap-2">
-                  <Button variant="ghost" onClick={() => setPending(null)}>Ostani</Button>
-                  <Button onClick={() => spremiPaNastavi()}>Spremi <Key tone="dark">{mod('↵')}</Key></Button>
-                </div>
-              </div>
-            </DialogContent>
-          </Dialog>
+          {cuvar.dijalog}
 
           <Dialog open={brisiOpen} onOpenChange={setBrisiOpen}>
             <DialogContent className="sm:max-w-[400px]" onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); obrisi(); } }}>

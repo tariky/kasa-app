@@ -17,16 +17,17 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { DatePicker } from '@/components/ui/date-picker';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Eyebrow, Key, mod } from '@/components/ui/ledger';
-import { FullDialog, FullDialogContent, FullDialogHeader, FullDialogFooter, FullDialogNotice, FullDialogTitle, FooterBtn, Fact, LegendKey } from '@/components/ui/full-dialog';
+import { Eyebrow, Key, jePoljeZaUnos, mod } from '@/components/ui/ledger';
+import { FullDialog, FullDialogContent, FullDialogHeader, FullDialogFooter, FullDialogNotice, FullDialogTitle, FooterBtn, Fact, LegendKey, SusjedniNav } from '@/components/ui/full-dialog';
 import { RacunPdf, type InvoiceLang } from '@/components/RacunPdf';
 import { OtpremnicaPdf } from '@/components/OtpremnicaPdf';
 import { PrilogPdf } from '@/components/PrilogPdf';
 import PrilogStavkeDialog from '@/components/PrilogStavkeDialog';
 import CashMovementDialog from '@/components/CashMovementDialog';
+import { useSusjedni } from '@/hooks/useSusjedni';
 import {
   Printer, Download, Truck, Paperclip, Undo2, AlertTriangle, KeyRound, CalendarClock,
-  ChevronUp, ChevronDown, User, Banknote, CreditCard,
+  User, Banknote, CreditCard,
 } from 'lucide-react';
 
 type Notice = { type: 'success' | 'error'; text: string };
@@ -108,9 +109,7 @@ export function RacunDetailDialog({ orderId, redoslijed, uloga, onClose, onNavig
     onChanged();
   };
 
-  const idx = orderId != null ? redoslijed.indexOf(orderId) : -1;
-  const prevId = idx > 0 ? redoslijed[idx - 1] : null;
-  const nextId = idx >= 0 && idx < redoslijed.length - 1 ? redoslijed[idx + 1] : null;
+  const susjedni = useSusjedni(redoslijed, orderId);
 
   const refunded = order?.status === 'refunded';
   const mozeReklamaciju = order?.status === 'completed' && !!order.brojFiskalnogRacuna;
@@ -271,11 +270,11 @@ export function RacunDetailDialog({ orderId, redoslijed, uloga, onClose, onNavig
       if (!contentRef.current?.contains(e.target as Node)) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+      if (jePoljeZaUnos(t)) return;
 
       switch (e.key) {
-        case 'ArrowUp': if (prevId != null) { e.preventDefault(); onNavigate(prevId); } return;
-        case 'ArrowDown': if (nextId != null) { e.preventDefault(); onNavigate(nextId); } return;
+        case 'ArrowUp': if (susjedni.prev != null) { e.preventDefault(); onNavigate(susjedni.prev); } return;
+        case 'ArrowDown': if (susjedni.next != null) { e.preventDefault(); onNavigate(susjedni.next); } return;
         default:
       }
       switch (e.key.toLowerCase()) {
@@ -480,15 +479,7 @@ export function RacunDetailDialog({ orderId, redoslijed, uloga, onClose, onNavig
 
             {/* ── Podnožje: dokumenti desno, tastatura lijevo ── */}
             <FullDialogFooter legend={<>
-                <span className="flex items-center gap-1">
-                  <button onClick={() => prevId != null && onNavigate(prevId)} disabled={prevId == null} aria-label="Prethodni račun"
-                    className="h-6 w-6 flex items-center justify-center rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 disabled:opacity-30 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"><ChevronUp size={14} /></button>
-                  <button onClick={() => nextId != null && onNavigate(nextId)} disabled={nextId == null} aria-label="Sljedeći račun"
-                    className="h-6 w-6 flex items-center justify-center rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 disabled:opacity-30 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"><ChevronDown size={14} /></button>
-                  <span className="font-mono tabular-nums ml-1">{idx >= 0 ? `${idx + 1} / ${redoslijed.length}` : ''}</span>
-                </span>
-                <span className="text-slate-300">·</span>
-                <LegendKey k="↑↓">račun</LegendKey>
+                <SusjedniNav susjedni={susjedni} naziv="račun" onIdi={onNavigate} />
                 <LegendKey k="esc">zatvori</LegendKey>
               </>}>
                 {mozeReklamaciju && <FooterBtn icon={Undo2} label="Reklamacija" hint="R" tone="danger" onClick={otvoriReklamaciju} />}

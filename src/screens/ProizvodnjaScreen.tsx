@@ -1,5 +1,5 @@
 // src/screens/ProizvodnjaScreen.tsx
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { RadniNalog, NalogStatus } from '@/types';
 import { formatBrojNaloga } from '@/lib/proizvodnja';
 import { useDokumentPostavke } from '@/components/DokumentPostavkeProvider';
@@ -15,6 +15,8 @@ import { NormativiTab } from '@/components/proizvodnja/NormativiTab';
 import { RefreshCw, Plus, Hammer, ClipboardList, AlertTriangle, X, Factory, User, Package } from 'lucide-react';
 import { useIpcPodaci } from '@/hooks/useIpcPodaci';
 import { GreskaUcitavanja } from '@/components/GreskaUcitavanja';
+import { useLedgerLista } from '@/hooks/useLedgerLista';
+import { usePreciceListe } from '@/hooks/usePreciceListe';
 
 const STATUS_META: Record<NalogStatus, { label: string; dot: string }> = {
   otvoren: { label: 'Otvoren', dot: 'bg-slate-400' },
@@ -57,19 +59,13 @@ export default function ProizvodnjaScreen({ uloga, initialNalogId }: {
 }) {
   const { postavke } = useDokumentPostavke();
   const [tab, setTab] = useState<Tab>('nalozi');
-  const [selectedId, setSelectedId] = useState<number | null>(null);
   const [openId, setOpenId] = useState<number | null>(null);
   const [filter, setFilter] = useState<Filter>('aktivni');
   const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [formOpen, setFormOpen] = useState(false);
-  const rowRefs = useRef<(HTMLTableRowElement | null)[]>([]);
 
   const { podaci, greska, osvjezi: load } = useIpcPodaci(() => window.api.getNalozi(), []);
   const nalozi = useMemo<RadniNalog[]>(() => podaci ?? [], [podaci]);
-
-  useEffect(() => {
-    if (initialNalogId) { setTab('nalozi'); setSelectedId(initialNalogId); setOpenId(initialNalogId); }
-  }, [initialNalogId]);
 
   const visible = useMemo(() => nalozi.filter(n =>
     filter === 'sve' ? true : filter === 'aktivni' ? n.status !== 'fakturisan' : n.status === filter
@@ -82,75 +78,27 @@ export default function ProizvodnjaScreen({ uloga, initialNalogId }: {
     return c;
   }, [nalozi]);
 
-  const selIndex = visible.findIndex(n => n.id === selectedId);
+  const lista = useLedgerLista(visible, { onOtvori: setOpenId });
+  const selIndex = lista.izabraniIndeks;
   const danas = localDateStr();
 
-  const focusRow = useCallback((index: number) => {
-    const n = visible[index];
-    if (!n) return;
-    setSelectedId(n.id);
-    const el = rowRefs.current[index];
-    el?.focus();
-    el?.scrollIntoView({ block: 'nearest' });
-  }, [visible]);
-
-  const otvori = (id: number) => { setSelectedId(id); setOpenId(id); };
-
-  const handleListKeyDown = (e: React.KeyboardEvent<HTMLTableSectionElement>) => {
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
-    const current = selIndex < 0 ? -1 : selIndex;
-    const last = visible.length - 1;
-    const go = (i: number) => { e.preventDefault(); focusRow(Math.max(0, Math.min(last, i))); };
-    switch (e.key) {
-      case 'ArrowDown': return go(current + 1);
-      case 'ArrowUp': return go(current < 0 ? 0 : current - 1);
-      case 'PageDown': return go(current + 10);
-      case 'PageUp': return go(current < 0 ? 0 : current - 10);
-      case 'Home': return go(0);
-      case 'End': return go(last);
-      case 'Enter': case ' ':
-        if (selectedId != null) { e.preventDefault(); otvori(selectedId); }
-        return;
-      default:
-    }
-  };
-
-  const anyDialogOpen = formOpen || openId != null;
+  useEffect(() => {
+    if (initialNalogId) { setTab('nalozi'); lista.otvori(initialNalogId); }
+  }, [initialNalogId]);
 
   // Prečice ekrana — dijalog naloga ima svoje, pa se ove gase dok je otvoren.
-  useEffect(() => {
-    if (anyDialogOpen || tab !== 'nalozi') return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
-      if (t && t.closest('[role="combobox"], [role="listbox"]')) return;
-
-      const cycleFilter = (step: number) => {
-        e.preventDefault();
-        const i = FILTERS.findIndex(f => f.id === filter);
-        setFilter(FILTERS[(i + step + FILTERS.length) % FILTERS.length].id);
-      };
-      // Strelice rade na svakom rasporedu; zagrade su alias jer na bosanskom traže AltGr.
-      if (e.key === 'ArrowLeft' || e.key === '[') return cycleFilter(-1);
-      if (e.key === 'ArrowRight' || e.key === ']') return cycleFilter(1);
-      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-        // Fokus nije na listi — uvedi ga na selektovani ili prvi red.
-        if (!t?.closest('tbody')) { e.preventDefault(); focusRow(selIndex < 0 ? 0 : selIndex); }
-        return;
-      }
-      if (e.key.toLowerCase() === 'n') { e.preventDefault(); setFormOpen(true); return; }
-      if (e.key.toLowerCase() === 'r') { e.preventDefault(); load(); return; }
-      if (e.key === 'Enter' && selectedId != null) { e.preventDefault(); otvori(selectedId); }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [anyDialogOpen, tab, filter, selectedId, selIndex, focusRow, load]);
+  usePreciceListe({
+    aktivno: !formOpen && openId == null && tab === 'nalozi',
+    lista,
+    onNovi: () => setFormOpen(true),
+    onOsvjezi: load,
+    filteri: { opcije: FILTERS, vrijednost: filter, postavi: setFilter },
+  });
 
   // Po zatvaranju dijaloga fokus se vraća na red naloga da ↑↓ odmah rade dalje.
   const zatvori = () => {
     setOpenId(null);
-    requestAnimationFrame(() => { const i = visible.findIndex(n => n.id === selectedId); if (i >= 0) rowRefs.current[i]?.focus(); });
+    lista.vratiFokus();
   };
 
   const td = 'py-2.5 border-b border-slate-100';
@@ -217,20 +165,17 @@ export default function ProizvodnjaScreen({ uloga, initialNalogId }: {
                 { label: 'Cijena', className: 'text-right px-3 w-[120px]' },
                 { label: 'Status', className: 'text-left pl-3 pr-6 w-[120px]' },
               ]} />
-              <tbody onKeyDown={handleListKeyDown}>
+              <tbody onKeyDown={lista.onTbodyKeyDown}>
                 {visible.map((n, i) => {
-                  const isSel = selectedId === n.id;
+                  const isSel = lista.izabranId === n.id;
                   const zatvoren = n.status === 'zavrsen' || n.status === 'fakturisan';
                   const rok = rokOznaka(n.rok, danas, zatvoren);
                   const Icon = n.vrsta === 'narudzba' ? User : Package;
                   const naziv = n.vrsta === 'narudzba' ? n.kupacNaziv : n.productNaziv;
                   return (
                     <tr key={n.id}
-                      ref={el => { rowRefs.current[i] = el; }}
-                      tabIndex={isSel || (selIndex < 0 && i === 0) ? 0 : -1}
-                      aria-selected={isSel}
-                      onClick={() => otvori(n.id)}
-                      onFocus={() => setSelectedId(n.id)}
+                      {...lista.rowProps(i)}
+                      onClick={() => lista.otvori(n.id)}
                       className={cn('group cursor-pointer transition-colors',
                         'focus:outline focus:outline-2 focus:-outline-offset-2 focus:outline-blue-500',
                         isSel ? 'bg-blue-50/70' : 'hover:bg-slate-50')}>
@@ -283,16 +228,16 @@ export default function ProizvodnjaScreen({ uloga, initialNalogId }: {
       )}
 
       <NalogDialog open={formOpen} onOpenChange={setFormOpen} nalog={null}
-        onSaved={async (id) => { await load(); setMsg({ type: 'success', text: 'Nalog otvoren' }); otvori(id); }} />
+        onSaved={async (id) => { await load(); setMsg({ type: 'success', text: 'Nalog otvoren' }); lista.otvori(id); }} />
 
       <NalogDetailDialog
         nalogId={openId}
         redoslijed={visibleIds}
         uloga={uloga}
         onClose={zatvori}
-        onNavigate={otvori}
+        onNavigate={lista.otvori}
         onChanged={load}
-        onDeleted={async (n) => { setOpenId(null); setSelectedId(null); await load(); setMsg({ type: 'success', text: `Nalog ${formatBrojNaloga(n, postavke.nalog.broj)} obrisan` }); }}
+        onDeleted={async (n) => { setOpenId(null); lista.postaviIzabran(null); await load(); setMsg({ type: 'success', text: `Nalog ${formatBrojNaloga(n, postavke.nalog.broj)} obrisan` }); }}
       />
     </div>
   );
