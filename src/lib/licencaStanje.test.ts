@@ -2,7 +2,7 @@ import { test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { generateKeyPairSync } from 'node:crypto';
 import { izdajLicencu } from './licenca';
-import { izracunajStanje, efektivniDanas, najnovijiDatumIzBaze, najnovijiDatumIzBazeJednom, smijeRaditi, razlikaDana, opisLicence, brojDana, razlogBlokade, kanalPodLicencom, type StanjeLicence } from './licencaStanje';
+import { izracunajStanje, efektivniDanas, najnovijiDatumIzBaze, najnovijiDatumIzBazeJednom, smijeRaditi, razlikaDana, opisLicence, brojDana, razlogBlokade, kanalPodLicencom, backupDozvoljen, type StanjeLicence } from './licencaStanje';
 
 const { privateKey, publicKey } = generateKeyPairSync('ed25519');
 const token = izdajLicencu({ klijent: 'Pekara', vrijediDo: '2026-10-31', izdana: '2026-10-01' }, privateKey);
@@ -173,4 +173,16 @@ test('kanalPodLicencom: pisanje dokumenata i kanali modula, ne čitanje', () => 
   expect(kanalPodLicencom('primka:delete')).toBe(true);
   expect(kanalPodLicencom('product:getAll')).toBe(false);
   expect(kanalPodLicencom('toString')).toBe(false);
+});
+
+test('backup: samo kad licenca radi i ima backup', () => {
+  const licenca = { klijent: 'Pekara', vrijediDo: '2026-10-31', izdana: '2026-10-01' };
+  const sa = { ...licenca, backup: { bucket: 'pazar-pekara' } };
+  expect(backupDozvoljen({ stanje: 'aktivna', licenca: sa, danaDoIsteka: 20 })).toBe(true);
+  expect(backupDozvoljen({ stanje: 'upozorenje', licenca: sa, danaDoIsteka: 3 })).toBe(true);
+  expect(backupDozvoljen({ stanje: 'milost', licenca: sa, danaDoBlokade: 5 })).toBe(true);
+  expect(backupDozvoljen({ stanje: 'zakljucana', licenca: sa })).toBe(false);
+  expect(backupDozvoljen({ stanje: 'aktivna', licenca, danaDoIsteka: 20 })).toBe(false);
+  expect(backupDozvoljen({ stanje: 'nema' })).toBe(false);
+  expect(backupDozvoljen({ stanje: 'neispravna', razlog: 'potpis' })).toBe(false);
 });
