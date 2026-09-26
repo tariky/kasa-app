@@ -16,8 +16,8 @@ const s = StyleSheet.create({
   red: { flexDirection: 'row', justifyContent: 'space-between' },
 });
 
-/** Tekst firme u podnožju (npr. sudski registar); ništa kad ga nema. Dijele ga i dokumenti s vlastitim podnožjem. */
-export function PodnozjeTekst({ tekst }: { tekst?: string }) {
+/** Tekst firme u podnožju (npr. sudski registar); ništa kad ga nema. */
+function PodnozjeTekst({ tekst }: { tekst?: string }) {
   return tekst ? <Text style={s.tekst}>{tekst}</Text> : null;
 }
 
