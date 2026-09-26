@@ -37,8 +37,6 @@ export interface FiskalniOdgovor {
  */
 const ODSTAMPAN_NIJE_UPISAN = /JE odštampan/;
 
-const NEZAVRSENI = /nezavršen/i;
-
 function odgovoriUredjaja(odgovori: Record<string, string> | undefined): string {
   return odgovori ? Object.entries(odgovori).map(([k, v]) => `${k}: ${v}`).join(', ') : '';
 }
@@ -46,8 +44,8 @@ function odgovoriUredjaja(odgovori: Record<string, string> | undefined): string 
 /**
  * Odgovor fiskalnog kanala ili greška koju je poziv bacio → ishod za ekran.
  * Bačena greška s oznakom "JE odštampan" je `nepoznat`; ostale bačene greške
- * su validacija prije štampe (`greska`) — osim kad write-ahead red ostane,
- * što provjerava `izvrsiFiskalno`.
+ * su validacija prije štampe (`greska`) — osim kad poziv ostavi novi
+ * write-ahead red, što provjerava `izvrsiFiskalno`.
  */
 export function procitajIshod(res: FiskalniOdgovor | null | undefined, bacio?: unknown): Ishod {
   if (bacio !== undefined) {
@@ -64,23 +62,32 @@ export function procitajIshod(res: FiskalniOdgovor | null | undefined, bacio?: u
   return { vrsta: 'greska', poruka: detalji ? `${greska} (${detalji})` : greska };
 }
 
-/** Postoji li write-ahead red koji čeka dijalog nezavršenih računa. */
-export async function imaNezavrsenihRacuna(): Promise<boolean> {
+/** Id-evi write-ahead redova koji čekaju dijalog nezavršenih računa (AUTOINCREMENT — id se ne ponavlja). */
+export async function idNezavrsenih(): Promise<number[]> {
   const redovi = await window.api.listPending();
-  return Array.isArray(redovi) && redovi.length > 0;
+  if (!Array.isArray(redovi)) throw new Error('Nezavršeni računi nisu pročitani');
+  return redovi.map(r => r.id);
+}
+
+async function procitaj(nezavrseni: () => Promise<number[]>): Promise<Set<number> | null> {
+  try { return new Set(await nezavrseni()); } catch { return null; }
 }
 
 /**
  * Pozove fiskalni kanal i pročita ishod. Greška bačena bez oznake nije uvijek
  * validacija: order:finalize (oba backenda) grešku transakcije upisa poslije
- * uspješne štampe baca sirovu, a IPC može pasti bez odgovora. U svim tim
- * slučajevima write-ahead red ostaje, pa njegovo postojanje odlučuje: red
- * postoji (ili se ne može provjeriti) → `nepoznat`, inače `greska`.
+ * uspješne štampe baca sirovu, a IPC može pasti bez odgovora. Tada ostaje
+ * write-ahead red koji je upisao ovaj poziv, pa se nezavršeni čitaju prije i
+ * poslije: novi red (ili čitanje koje nije uspjelo) → `nepoznat`, inače
+ * `greska`. Red koji je čekao i prije ne odlučuje — nevezan dokument ne
+ * smije pretvoriti grešku validacije u nepoznat ishod, a red istog dokumenta
+ * ionako odbija štampu (`baciAkoCekaNezavrsen`).
  */
 export async function izvrsiFiskalno<R extends FiskalniOdgovor>(
   poziv: () => Promise<R | null | undefined>,
-  cekaNezavrsen: () => Promise<boolean> = imaNezavrsenihRacuna,
+  nezavrseni: () => Promise<number[]> = idNezavrsenih,
 ): Promise<{ ishod: Ishod; res: R | null }> {
+  const prije = await procitaj(nezavrseni);
   let res: R | null = null;
   let ishod: Ishod;
   try {
@@ -92,11 +99,14 @@ export async function izvrsiFiskalno<R extends FiskalniOdgovor>(
     if (ishod.vrsta !== 'greska') return { ishod, res: null };
   }
 
-  let ceka = true;
-  try { ceka = await cekaNezavrsen(); } catch { /* ne zna se — kao da čeka */ }
-  if (!ceka) return { ishod, res };
-  const poruka = NEZAVRSENI.test(ishod.poruka)
-    ? ishod.poruka
-    : `Ishod štampe nije poznat (${ishod.poruka}). Provjerite papirni isječak i riješite zapis u nezavršenim računima.`;
-  return { ishod: { vrsta: 'nepoznat', poruka }, res };
+  const poslije = await procitaj(nezavrseni);
+  const noviRed = !prije || !poslije || [...poslije].some(id => !prije.has(id));
+  if (!noviRed) return { ishod, res };
+  return {
+    ishod: {
+      vrsta: 'nepoznat',
+      poruka: `Ishod štampe nije poznat (${ishod.poruka}). Provjerite papirni isječak i riješite zapis u nezavršenim računima.`,
+    },
+    res,
+  };
 }

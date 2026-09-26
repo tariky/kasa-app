@@ -413,6 +413,7 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
         onOpenChange(false);
         otvoriNezavrseneRacune();
         onSkicePromijenjene?.();
+        await obavijesti(ishod.poruka);
       } else if (ishod.vrsta === 'vecEvidentiran') {
         // Odštampana i već upisana iz dijaloga nezavršenih računa — završeno.
         onOpenChange(false);

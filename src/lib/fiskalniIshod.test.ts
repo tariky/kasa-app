@@ -152,57 +152,73 @@ test('bačena greška bez oznake je greska (tekst ili ne-Error vrijednost)', () 
 });
 
 // ─── izvrsiFiskalno: bačena greška bez oznake i write-ahead red ─────
+// Nezavršeni se čitaju iz iste baze kao što ih renderer čita kroz pending:list.
 
-test('izvrsiFiskalno: vraćen odgovor se čita direktno, bez provjere nezavršenih', async () => {
-  let provjera = 0;
-  const ceka = async () => { provjera++; return true; };
-  const ok = await izvrsiFiskalno(async () => ({ success: true, id: 5 }), ceka);
-  expect(ok.ishod.vrsta).toBe('uspjeh');
-  expect(ok.res).toEqual({ success: true, id: 5 });
+const nezavrseni = async () => (db.prepare('SELECT id FROM pending_receipts ORDER BY id').all() as Array<{ id: number }>).map(r => r.id);
+const pada = async (): Promise<number[]> => { throw new Error('IPC pao'); };
+/** Nevezan red koji čeka odluku admina (pending:discard je samo za admina). */
+const stariRed = () => zapisiPending(db, 1, { ukupno: 5, stavke: [] });
 
-  const greska = await izvrsiFiskalno(async () => ({ success: false, error: 'Uređaj odbio' }), ceka);
+test('izvrsiFiskalno: vraćen odgovor se čita direktno', async () => {
+  const ok = await izvrsiFiskalno(async () => ({ success: true, id: 5 }), nezavrseni);
+  expect(ok).toEqual({ ishod: { vrsta: 'uspjeh', poruka: '' }, res: { success: true, id: 5 } });
+  stariRed();
+  // Siguran neuspjeh je presuda backenda — ni postojeći red ga ne mijenja.
+  const greska = await izvrsiFiskalno(async () => ({ success: false, error: 'Uređaj odbio' }), nezavrseni);
   expect(greska.ishod).toEqual({ vrsta: 'greska', poruka: 'Uređaj odbio' });
-  expect(provjera).toBe(0);
 });
 
-test('izvrsiFiskalno: bačena greška bez oznake uz write-ahead red (order:finalize, upis pao poslije štampe) je nepoznat', async () => {
-  // handlers.ts order:finalize: greška transakcije upisa poslije uspješne
-  // štampe izlazi sirova (bez "JE odštampan"), a rollback ostavlja red.
-  const r = await izvrsiFiskalno(async () => { throw new Error('database is locked'); }, async () => true);
-  expect(r.res).toBeNull();
-  expect(r.ishod.vrsta).toBe('nepoznat');
-  expect(r.ishod.poruka).toBe(
-    'Ishod štampe nije poznat (database is locked). Provjerite papirni isječak i riješite zapis u nezavršenim računima.'
-  );
-});
-
-test('izvrsiFiskalno: bačena greška bez oznake i bez write-ahead reda je greska (validacija prije štampe)', async () => {
-  const r = await izvrsiFiskalno(async () => { throw new Error('Korisnik nije prijavljen'); }, async () => false);
+test('izvrsiFiskalno: greška validacije uz NEVEZAN postojeći red je greska (korpa ostaje)', async () => {
+  stariRed();
+  const id = napraviPonudu();
+  const r = await izvrsiFiskalno(() => konvertujPonudu(deps(stampaOk), { id, korisnikId: 0, nacinPlacanja: 'Gotovina' }), nezavrseni);
   expect(r).toEqual({ ishod: { vrsta: 'greska', poruka: 'Korisnik nije prijavljen' }, res: null });
+  expect(brojPending()).toBe(1);
 });
 
-test('izvrsiFiskalno: dokument koji već čeka u nezavršenim ide u dijalog, bez dvostruke poruke', async () => {
-  const poruka = 'Račun po ovoj ponudi čeka u nezavršenim računima (ishod štampe nije poznat) — riješite ga prije nove štampe';
-  const r = await izvrsiFiskalno(async () => { throw new Error(poruka); }, async () => true);
-  expect(r.ishod).toEqual({ vrsta: 'nepoznat', poruka });
+test('izvrsiFiskalno: novi red poslije sirove greške upisa (order:finalize, upis pao poslije štampe) je nepoznat', async () => {
+  stariRed();
+  // handlers.ts order:finalize: red se upiše prije štampe, greška transakcije
+  // upisa poslije uspješne štampe izlazi sirova (bez "JE odštampan"), rollback ostavlja red.
+  const finalize = async () => { zapisiPending(db, 1, { ukupno: 10, stavke: [] }); throw new Error('database is locked'); };
+  const r = await izvrsiFiskalno(finalize, nezavrseni);
+  expect(r.res).toBeNull();
+  expect(r.ishod).toEqual({
+    vrsta: 'nepoznat',
+    poruka: 'Ishod štampe nije poznat (database is locked). Provjerite papirni isječak i riješite zapis u nezavršenim računima.',
+  });
 });
 
-test('izvrsiFiskalno: kad se nezavršeni ne mogu pročitati, bačena greška je nepoznat (nikad ponovo na uređaj)', async () => {
-  const r = await izvrsiFiskalno(async () => { throw new Error('x'); }, async () => { throw new Error('IPC pao'); });
-  expect(r.ishod.vrsta).toBe('nepoznat');
+test('izvrsiFiskalno: red koji za isti dokument već čeka blokira štampu — greska, bez novog reda', async () => {
+  const id = napraviPonudu();
+  zapisiPending(db, 1, { vrsta: 'ponuda', ponudaId: id });
+  const r = await izvrsiFiskalno(() => konvertujPonudu(deps(stampaOk), { id, korisnikId: 1, nacinPlacanja: 'Gotovina' }), nezavrseni);
+  expect(r.ishod.vrsta).toBe('greska');
+  expect(r.ishod.poruka).toStartWith('Račun po ovoj ponudi čeka u nezavršenim računima');
 });
 
-test('izvrsiFiskalno: bačena greška s oznakom je nepoznat i bez provjere nezavršenih', async () => {
-  let provjera = 0;
+test('izvrsiFiskalno: kad se nezavršeni ne mogu pročitati (prije ili poslije), bačena greška je nepoznat', async () => {
+  const baca = async () => { throw new Error('x'); };
+  expect((await izvrsiFiskalno(baca, pada)).ishod.vrsta).toBe('nepoznat');
+  // Čitanje prije poziva palo, poslije uspjelo: ne zna se šta je bilo prije.
+  let citanja = 0;
+  const prvoPada = async () => { if (citanja++ === 0) throw new Error('IPC pao'); return []; };
+  expect((await izvrsiFiskalno(baca, prvoPada)).ishod.vrsta).toBe('nepoznat');
+  // Uspjeh ne zavisi od čitanja nezavršenih.
+  expect((await izvrsiFiskalno(async () => ({ success: true }), pada)).ishod.vrsta).toBe('uspjeh');
+});
+
+test('izvrsiFiskalno: bačena greška s oznakom je nepoznat i bez novog reda', async () => {
   const r = await izvrsiFiskalno(
     async () => { throw new Error('Račun 41 JE odštampan, ali nije zabilježen u bazi: x. Riješite ga kroz nezavršene račune.'); },
-    async () => { provjera++; return false; },
+    async () => [],
   );
   expect(r.ishod.vrsta).toBe('nepoznat');
-  expect(provjera).toBe(0);
 });
 
-test('izvrsiFiskalno: poziv koji vrati null bez greške provjerava nezavršene', async () => {
-  expect((await izvrsiFiskalno(async () => null, async () => true)).ishod.vrsta).toBe('nepoznat');
-  expect((await izvrsiFiskalno(async () => null, async () => false)).ishod).toEqual({ vrsta: 'greska', poruka: 'Nepoznata greška' });
+test('izvrsiFiskalno: poziv koji vrati null bez greške — nepoznat samo uz novi red', async () => {
+  stariRed();
+  expect((await izvrsiFiskalno(async () => null, nezavrseni)).ishod).toEqual({ vrsta: 'greska', poruka: 'Nepoznata greška' });
+  const noviRed = async () => { stariRed(); return null; };
+  expect((await izvrsiFiskalno(noviRed, nezavrseni)).ishod.vrsta).toBe('nepoznat');
 });
