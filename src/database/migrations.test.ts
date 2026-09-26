@@ -4,8 +4,11 @@ import { test, expect } from 'bun:test';
 // prepare().all() i exec() — je identičan).
 import { Database } from 'bun:sqlite';
 import { schema } from './schema';
-import { runMigrations } from './migrations';
+import { runMigrations, KORACI_MIGRACIJA, KOD_MIGRACIJA } from './migrations';
+import migracije from './migracije.json';
+import { TABELE_SHEME } from './restore';
 import { LEGACY_SCHEMA } from '../ipc/ugovor/staraBaza';
+import { provjeriPin } from '../lib/korisnici';
 
 type Db = any;
 
@@ -102,8 +105,10 @@ test('podaci iz backup-a preživljavaju nadogradnju', () => {
   const db = legacyDbWithData();
   openAsCurrentVersion(db);
 
-  const user = db.prepare("SELECT ime, uloga FROM users WHERE pin = '1234'").get() as any;
-  expect(user).toEqual({ ime: 'Stari Kasir', uloga: 'kasir' });
+  // PIN iz čistog teksta postaje heš (korak hesirajStarePinove).
+  const user = db.prepare('SELECT ime, uloga, pin FROM users WHERE id = 1').get() as any;
+  expect({ ime: user.ime, uloga: user.uloga }).toEqual({ ime: 'Stari Kasir', uloga: 'kasir' });
+  expect(provjeriPin('1234', user.pin)).toBe(true);
 
   // Nove kolone dobijaju defaulte, stare vrijednosti ostaju.
   const product = db
@@ -182,14 +187,17 @@ test('nakon nadogradnje se prilog može upisati na stari račun', () => {
   db.close();
 });
 
-test('migracije su idempotentne — ponovljeni uvoz iste baze ne puca', () => {
+test('migracije su idempotentne — ponovljeni uvoz iste baze ne mijenja ništa', () => {
   const db = legacyDbWithData();
   openAsCurrentVersion(db);
-  const first = [...tables(db)].sort().join(',');
+  const shema = () => db.prepare('SELECT type, name, sql FROM sqlite_master ORDER BY type, name').all();
+  const prvi = shema();
+  const promjene = (db.prepare('SELECT total_changes() AS n').get() as { n: number }).n;
 
   expect(() => openAsCurrentVersion(db)).not.toThrow();
   expect(() => openAsCurrentVersion(db)).not.toThrow();
-  expect([...tables(db)].sort().join(',')).toBe(first);
+  expect(shema()).toEqual(prvi);
+  expect((db.prepare('SELECT total_changes() AS n').get() as { n: number }).n).toBe(promjene);
   db.close();
 });
 
@@ -236,4 +244,54 @@ test('aktuelna baza prolazi kroz migracije bez promjena', () => {
   runMigrations(db);
   expect([...tables(db)].sort().join(',')).toBe(before);
   db.close();
+});
+
+// ─── migracije.json ─────────────────────────────────────────
+
+const SQL_KLJUCEVI = ['tabela', 'kolona', 'sql', 'samoAkoTabelaPostoji', 'opis'];
+
+test('migracije.json: svaki korak je SQL (tabela + sql) ili kod, bez nepoznatih ključeva', () => {
+  expect(migracije.length).toBeGreaterThan(0);
+  for (const k of migracije as Record<string, unknown>[]) {
+    const gdje = JSON.stringify(k);
+    if ('kod' in k) {
+      expect(Object.keys(k).filter(x => x !== 'kod' && x !== 'opis'), gdje).toEqual([]);
+      expect(typeof k.kod, gdje).toBe('string');
+      continue;
+    }
+    expect(Object.keys(k).filter(x => !SQL_KLJUCEVI.includes(x)), gdje).toEqual([]);
+    expect(typeof k.tabela, gdje).toBe('string');
+    expect(Array.isArray(k.sql) && k.sql.length > 0 && k.sql.every(s => typeof s === 'string'), gdje).toBe(true);
+    if ('kolona' in k) expect(typeof k.kolona, gdje).toBe('string');
+    if ('samoAkoTabelaPostoji' in k) expect(typeof k.samoAkoTabelaPostoji, gdje).toBe('boolean');
+  }
+});
+
+test('svaki kod korak iz migracije.json ima funkciju i svaka funkcija je korak (jednom)', () => {
+  const uJsonu = KORACI_MIGRACIJA.flatMap(k => ('kod' in k ? [k.kod] : []));
+  expect(new Set(uJsonu).size).toBe(uJsonu.length);
+  expect([...uJsonu].sort()).toEqual([...KOD_MIGRACIJA.keys()].sort());
+});
+
+// Korak s kolonom se preskače kad kolona postoji — ako ALTER dodaje drugu
+// kolonu (ili u drugu tabelu), drugi prolaz ponovi ALTER i pukne.
+test('korak s kolonom dodaje baš tu kolonu u svoju tabelu (prvi ALTER), ostali SQL je ALTER te tabele', () => {
+  for (const k of KORACI_MIGRACIJA) {
+    if ('kod' in k || k.kolona === undefined) continue;
+    const alteri = k.sql.map(s => s.match(/^ALTER TABLE (\w+) ADD COLUMN (\w+) /)?.slice(1));
+    expect(alteri[0], k.kolona).toEqual([k.tabela, k.kolona]);
+    for (const a of alteri) expect(a?.[0], k.kolona).toBe(k.tabela);
+  }
+});
+
+// Uvoz backup-a odbija tabele kojih nema u shemi (restore.ts), pa ni
+// migracija ne smije praviti drugu.
+test('migracije prave samo tabele iz schema.ts', () => {
+  for (const k of KORACI_MIGRACIJA) {
+    if ('kod' in k) continue;
+    for (const sql of k.sql) {
+      const nova = sql.match(/^CREATE TABLE IF NOT EXISTS (\w+)/)?.[1];
+      if (nova) expect(TABELE_SHEME.has(nova), nova).toBe(true);
+    }
+  }
 });
