@@ -212,6 +212,12 @@ export const schema = `
   -- staraCijena je cijena prije ove promjene među izvorima koji još postoje:
   -- kad se prethodna promjena poništi, ovdje se prepiše njena staraCijena.
   -- Promjene prije uvođenja tabele nisu upisane (nema izmišljene historije).
+  -- Za izvoz ("Zalihe na dan") historija je samo-dodavanje: poništena promjena
+  -- se ne briše nego dobija ponistena = 1 (lanac je više ne vidi), a vraćena
+  -- cijena novi red s današnjim datumom (isto ponistena = 1). cijenaUProdaji:
+  -- cijena koja je stvarno bila u prodaji kad se novaCijena kasnije ispravi u
+  -- lancu (izmjena primke čiju je cijenu poslije mijenjalo nešto drugo); NULL
+  -- = novaCijena.
   CREATE TABLE IF NOT EXISTS cijena_historija (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     productId INTEGER NOT NULL,
@@ -219,6 +225,8 @@ export const schema = `
     izvorId INTEGER,
     staraCijena REAL NOT NULL,
     novaCijena REAL NOT NULL,
+    ponistena INTEGER NOT NULL DEFAULT 0,
+    cijenaUProdaji REAL,
     createdAt TEXT DEFAULT (datetime('now','localtime')),
     FOREIGN KEY (productId) REFERENCES products(id)
   );

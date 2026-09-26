@@ -4,6 +4,13 @@ import type { PregledCijenaUlaza } from '../types';
 /** Tolerancija pri poređenju cijena (fening). */
 const EPS = 0.001;
 
+/**
+ * Tolerancija za stanje zalihe: |stanje| < 1e-9 je nula. Stanje je zbir
+ * kretanja u REAL-u, pa ostaje šum (0,1 + 0,2 − 0,3 ≠ 0) — takva "zaliha" ne
+ * pravi nivelaciju, upozorenje ni korekciju. Ista granica važi u izvozu.
+ */
+export const TOLERANCIJA_ZALIHE = 1e-9;
+
 export interface PriceChange {
   productId: number;
   kolicina: number;
@@ -57,7 +64,7 @@ export function collectPriceChanges(
       novaCijena: stavka.cijena,
       pdvStopa: stavka.pdvStopa,
     };
-    if (existingStock > 0) nivelacija.push(change);
+    if (existingStock > TOLERANCIJA_ZALIHE) nivelacija.push(change);
     else bezZaliha.push(change);
   }
 
@@ -98,14 +105,21 @@ export function stareCijeneStavki(
 /**
  * Vrati `staraCijena` artiklima koji još uvijek stoje na `novaCijena`. Ako je
  * cijenu u međuvremenu promijenilo nešto drugo (kasnija primka, ručna izmjena),
- * ta vrijednost se ne smije pregaziti. Vraća broj vraćenih artikala.
+ * ta vrijednost se ne smije pregaziti. Vraćena cijena se upisuje u historiju s
+ * današnjim datumom (poništen red — samo trag za izvoz, nije dio lanca), pa
+ * izvoz za raniji dan i dalje vidi cijenu koja je tada važila. Vraća broj
+ * vraćenih artikala.
  */
 function vratiCijeneAkoNepromijenjene(
   db: SqlDb,
+  primkaId: number,
   promjene: Array<{ productId: number; staraCijena: number; novaCijena: number }>
 ): number {
   const revertPrice = db.prepare(
     "UPDATE products SET cijena = ?, updatedAt = datetime('now','localtime') WHERE id = ?"
+  );
+  const trag = db.prepare(
+    "INSERT INTO cijena_historija (productId, izvor, izvorId, staraCijena, novaCijena, ponistena) VALUES (?, 'primka', ?, ?, ?, 1)"
   );
   let reverted = 0;
 
@@ -114,6 +128,7 @@ function vratiCijeneAkoNepromijenjene(
       .get(p.productId) as { cijena: number } | undefined;
     if (current && Math.abs(current.cijena - p.novaCijena) <= EPS) {
       revertPrice.run(p.staraCijena, p.productId);
+      trag.run(p.productId, primkaId, current.cijena, p.staraCijena);
       reverted++;
     }
   }
@@ -143,7 +158,7 @@ export function revertNivelacijaPrices(db: SqlDb, primkaId: number, preskoci: Se
     ORDER BY ns.id
   `).all(primkaId, primkaId) as Array<{ productId: number; staraCijena: number; novaCijena: number }>;
 
-  return vratiCijeneAkoNepromijenjene(db, oldNivStavke.filter(p =>
+  return vratiCijeneAkoNepromijenjene(db, primkaId, oldNivStavke.filter(p =>
     !preskoci.has(p.productId) && (!samo || samo.has(p.productId)) && !cijenaKasnijeMijenjana(db, primkaId, p.productId)));
 }
 
@@ -159,7 +174,7 @@ export function revertPricesWithoutStock(db: SqlDb, primkaId: number, preskoci: 
     WHERE primkaId = ? AND staraCijena IS NOT NULL
   `).all(primkaId) as Array<{ productId: number; staraCijena: number; novaCijena: number }>;
 
-  return vratiCijeneAkoNepromijenjene(db, promjene.filter(p => !preskoci.has(p.productId) && (!samo || samo.has(p.productId))));
+  return vratiCijeneAkoNepromijenjene(db, primkaId, promjene.filter(p => !preskoci.has(p.productId) && (!samo || samo.has(p.productId))));
 }
 
 // ── Historija promjena cijena (cijena_historija) ───────────────────────
@@ -187,26 +202,27 @@ export function zapisiPromjeneCijena(
  *    njeno kasnije poništavanje vraća cijenu koja stvarno važi bez ove primke;
  *  - posljednja je: artikal se vraća na staru cijenu, ali samo ako još stoji
  *    na cijeni ove primke (zaštita od izmjene mimo historije).
+ * Red se ne briše nego označi poništenim (`ponistena = 1`): lanac ga više ne
+ * vidi, a izvoz i dalje zna koja je cijena tada važila.
  * Vraća artikle koje je historija pokrila (za njih se stari put ne koristi).
  * `samo` ograniči poništavanje na te artikle (izmjena primke).
  */
 export function ponistiPromjeneCijenaPrimke(db: SqlDb, primkaId: number, samo?: Set<number>): Set<number> {
   const promjene = (db.prepare(
-    "SELECT id, productId, staraCijena, novaCijena FROM cijena_historija WHERE izvor = 'primka' AND izvorId = ? ORDER BY id"
+    "SELECT id, productId, staraCijena, novaCijena FROM cijena_historija WHERE izvor = 'primka' AND izvorId = ? AND ponistena = 0 ORDER BY id"
   ).all(primkaId) as Array<{ id: number; productId: number; staraCijena: number; novaCijena: number }>)
     .filter(p => !samo || samo.has(p.productId));
 
-  const sljedeca = db.prepare('SELECT id FROM cijena_historija WHERE productId = ? AND id > ? ORDER BY id LIMIT 1');
   const premosti = db.prepare('UPDATE cijena_historija SET staraCijena = ? WHERE id = ?');
-  const obrisi = db.prepare('DELETE FROM cijena_historija WHERE id = ?');
+  const ponisti = db.prepare('UPDATE cijena_historija SET ponistena = 1 WHERE id = ?');
   const pokriveni = new Set<number>();
 
   for (const p of promjene) {
     pokriveni.add(p.productId);
-    const s = sljedeca.get(p.productId, p.id) as { id: number } | undefined;
+    const s = sljedecaPromjena(db, p.productId, p.id);
     if (s) premosti.run(p.staraCijena, s.id);
-    else vratiCijeneAkoNepromijenjene(db, [p]);
-    obrisi.run(p.id);
+    else vratiCijeneAkoNepromijenjene(db, primkaId, [p]);
+    ponisti.run(p.id);
   }
 
   return pokriveni;
@@ -239,7 +255,7 @@ export function artikliPrimke(db: SqlDb, primkaId: number): number[] {
   return (db.prepare(`
     SELECT productId FROM primka_stavke WHERE primkaId = ?
     UNION
-    SELECT productId FROM cijena_historija WHERE izvor = 'primka' AND izvorId = ?
+    SELECT productId FROM cijena_historija WHERE izvor = 'primka' AND izvorId = ? AND ponistena = 0
   `).all(primkaId, primkaId) as Array<{ productId: number }>).map(r => r.productId);
 }
 
@@ -269,7 +285,7 @@ export function promjeneUProdaji(db: SqlDb, prije: Map<number, number>): PriceCh
     const p = get.get(productId) as { cijena: number; pdvStopa: string; tip: string } | undefined;
     if (!p || p.tip === 'materijal' || Math.abs(p.cijena - staraCijena) <= EPS) continue;
     const kolicina = getProductStock(db, productId);
-    if (kolicina > 0) out.push({ productId, kolicina, staraCijena, novaCijena: p.cijena, pdvStopa: p.pdvStopa });
+    if (kolicina > TOLERANCIJA_ZALIHE) out.push({ productId, kolicina, staraCijena, novaCijena: p.cijena, pdvStopa: p.pdvStopa });
   }
   return out;
 }
@@ -297,12 +313,13 @@ export function napomenaProtunivelacije(razlog: string, brojevi: string[]): stri
 /** Promjena cijene artikla koju je primka upisala u historiju (najviše jedna po artiklu). */
 function promjenaCijenePrimke(db: SqlDb, primkaId: number, productId: number) {
   return db.prepare(
-    "SELECT id, staraCijena, novaCijena FROM cijena_historija WHERE izvor = 'primka' AND izvorId = ? AND productId = ? ORDER BY id DESC LIMIT 1"
+    "SELECT id, staraCijena, novaCijena FROM cijena_historija WHERE izvor = 'primka' AND izvorId = ? AND productId = ? AND ponistena = 0 ORDER BY id DESC LIMIT 1"
   ).get(primkaId, productId) as { id: number; staraCijena: number; novaCijena: number } | undefined;
 }
 
+/** Sljedeća promjena u lancu (poništeni redovi nisu dio lanca). */
 function sljedecaPromjena(db: SqlDb, productId: number, id: number) {
-  return db.prepare('SELECT id FROM cijena_historija WHERE productId = ? AND id > ? ORDER BY id LIMIT 1')
+  return db.prepare('SELECT id FROM cijena_historija WHERE productId = ? AND id > ? AND ponistena = 0 ORDER BY id LIMIT 1')
     .get(productId, id) as { id: number } | undefined;
 }
 
@@ -321,7 +338,7 @@ export function cijenaKasnijeMijenjana(db: SqlDb, primkaId: number, productId: n
   if (h) return !!sljedecaPromjena(db, productId, h.id);
   return !!db.prepare(`
     SELECT 1 FROM cijena_historija
-    WHERE productId = ? AND (
+    WHERE productId = ? AND ponistena = 0 AND (
       (izvor = 'primka' AND izvorId > ?) OR
       (izvor = 'rucno' AND createdAt >= (SELECT createdAt FROM primke WHERE id = ?))
     ) LIMIT 1
@@ -374,7 +391,9 @@ export function pripremiIzmjenuPrimke(
   const kreiraj = new Set<number>();
   const ponisti = new Set<number>();
   const zadrzaneStareCijene = new Map<number, number | null>();
-  const upisiNovu = db.prepare('UPDATE cijena_historija SET novaCijena = ? WHERE id = ?');
+  // Nova cijena u lancu se ispravlja, a ona koja je stvarno bila u prodaji
+  // (za izvoz) ostaje zapamćena u cijenaUProdaji — prva, jednom.
+  const upisiNovu = db.prepare('UPDATE cijena_historija SET cijenaUProdaji = COALESCE(cijenaUProdaji, novaCijena), novaCijena = ? WHERE id = ?');
   const upisiStaru = db.prepare('UPDATE cijena_historija SET staraCijena = ? WHERE id = ?');
 
   for (const productId of stare.keys()) if (!nove.has(productId)) ponisti.add(productId);
@@ -426,13 +445,29 @@ export function stareCijeneIzmjene(
 // Operacija se pokrene u transakciji koja se poništi; ovdje se samo pročita
 // šta je napravila. Tako najava na ekranu i prava operacija dijele istu logiku.
 
-export interface PocetakPregleda { zadnjaNivelacija: number; cijene: Map<number, number> }
+export interface PocetakPregleda {
+  zadnjaNivelacija: number;
+  cijene: Map<number, number>;
+  /** Izmjena/brisanje: zaliha artikala primke prije operacije i zaliha bez robe iz te primke (redom artikala). */
+  zalihe: Map<number, { stanje: number; bezPrimke: number }>;
+}
 
-/** Stanje prije operacije: zadnja nivelacija i sve prodajne cijene. */
-export function pocetakPregleda(db: SqlDb): PocetakPregleda {
+/**
+ * Stanje prije operacije: zadnja nivelacija i sve prodajne cijene; uz
+ * `primkaId` (izmjena, brisanje) i zaliha njenih artikala — za upozorenja.
+ */
+export function pocetakPregleda(db: SqlDb, primkaId?: number): PocetakPregleda {
   const zadnja = db.prepare('SELECT COALESCE(MAX(id), 0) AS id FROM nivelacije').get() as { id: number };
   const cijene = new Map((db.prepare('SELECT id, cijena FROM products').all() as Array<{ id: number; cijena: number }>).map(p => [p.id, p.cijena]));
-  return { zadnjaNivelacija: zadnja.id, cijene };
+  const zalihe: PocetakPregleda['zalihe'] = new Map();
+  if (primkaId !== undefined) {
+    const ulaz = db.prepare("SELECT COALESCE(SUM(kolicina), 0) AS k FROM stock_movements WHERE referenceType = 'primka' AND referenceId = ? AND productId = ? AND tip = 'ulaz'");
+    for (const productId of artikliPrimke(db, primkaId).sort((a, b) => a - b)) {
+      const stanje = getProductStock(db, productId);
+      zalihe.set(productId, { stanje, bezPrimke: stanje - (ulaz.get(primkaId, productId) as { k: number }).k });
+    }
+  }
+  return { zadnjaNivelacija: zadnja.id, cijene, zalihe };
 }
 
 /**
@@ -464,14 +499,29 @@ export function rezultatPregleda(db: SqlDb, pocetak: PocetakPregleda, cijenaOsta
     if (!uDokumentu.has(p.id)) bezZalihe.push({ productId: p.id, productNaziv: p.naziv, staraCijena: stara, novaCijena: p.cijena });
   }
 
-  return { dokumenti, bezZalihe, cijenaOstaje: cijenaOstaje.filter(c => !promijenjene.has(c.productId)) };
+  // Upozorenja (izmjena, brisanje): negativno stanje ne blokira, ali korisnik
+  // mora znati — (a) zaliha poslije je u minusu i manja nego prije; (b) cijena
+  // se mijenja, a roba s ove primke je već (djelimično) prodana po staroj
+  // cijeni (zaliha bez primke je bila u minusu, pa nivelacije nema).
+  const naziv = db.prepare('SELECT naziv FROM products WHERE id = ?');
+  const upozorenja: PregledCijenaUlaza['upozorenja'] = [];
+  for (const [productId, z] of pocetak.zalihe) {
+    const stanjePoslije = getProductStock(db, productId);
+    const productNaziv = (naziv.get(productId) as { naziv: string } | undefined)?.naziv ?? '';
+    const r = { productId, productNaziv, stanjePrije: z.stanje, stanjePoslije };
+    if (stanjePoslije < -TOLERANCIJA_ZALIHE && stanjePoslije < z.stanje - TOLERANCIJA_ZALIHE) upozorenja.push({ vrsta: 'minus', ...r });
+    if (promijenjene.has(productId) && z.bezPrimke < -TOLERANCIJA_ZALIHE) upozorenja.push({ vrsta: 'prodano', ...r });
+  }
+
+  return { dokumenti, bezZalihe, cijenaOstaje: cijenaOstaje.filter(c => !promijenjene.has(c.productId)), upozorenja };
 }
 
 /**
  * Kanonski otisak pregleda — ono što korisnik potvrđuje pri spremanju ili
  * brisanju ulaza: svaki dokument (vrsta, broj, datum, napomena, stavke s
  * artiklom, količinom, starom i novom cijenom i razlikama), promjene cijena
- * bez dokumenta i cijene koje ostaju. Naziv artikla nije dio otiska: to je
+ * bez dokumenta, cijene koje ostaju i upozorenja (vrsta, artikal, stanje prije
+ * i poslije). Naziv artikla nije dio otiska: to je
  * oznaka za prikaz, dokument artikal veže po id-u, pa preimenovanje ne mijenja
  * ništa što se upisuje. Brojevi se zaokružuju na 6 decimala (šum pri
  * sabiranju), redoslijed dokumenata ostaje (to je redoslijed brojeva).
@@ -491,6 +541,7 @@ export function otisakPregleda(p: unknown): string | null {
       ]),
       bezZalihe: poArtiklu(niz(q.bezZalihe).map(s => ({ productId: n(s.productId), v: [n(s.staraCijena), n(s.novaCijena)] }))),
       cijenaOstaje: poArtiklu(niz(q.cijenaOstaje).map(s => ({ productId: n(s.productId), v: [n(s.cijena)] }))),
+      upozorenja: poArtiklu(niz(q.upozorenja).map(s => ({ productId: n(s.productId), v: [String(s.vrsta), n(s.stanjePrije), n(s.stanjePoslije)] }))),
     });
   } catch {
     return null;
@@ -543,7 +594,7 @@ export function datumKretanjaPrimke(datum: string): string {
  */
 export function validirajPrimku(
   db: SqlDb,
-  data: { brojPrimke?: string; stavke?: Array<{ productId: number }> },
+  data: { brojPrimke?: string; stavke?: Array<{ productId: number; kolicina?: unknown; cijena?: unknown; nabavnaCijena?: unknown }> },
   primkaId?: number
 ): string {
   const brojPrimke = data.brojPrimke?.trim();
@@ -554,9 +605,18 @@ export function validirajPrimku(
     .get(brojPrimke, primkaId ?? null);
   if (postojeca) throw new Error(`Primka sa brojem "${data.brojPrimke}" već postoji`);
 
-  const postojiArtikal = db.prepare('SELECT 1 FROM products WHERE id = ?');
+  // Stavka: artikal koji ide na zalihu (ne usluga ni slobodna stavka s kase),
+  // količina konačan broj > 0, prodajna i nabavna konačne i ≥ 0.
+  const artikal = db.prepare('SELECT naziv, tip, slobodan FROM products WHERE id = ?');
+  const konacan = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x);
   for (const s of data.stavke) {
-    if (!postojiArtikal.get(s.productId)) throw new Error(`Artikal (ID ${s.productId}) ne postoji`);
+    const a = artikal.get(s.productId) as { naziv: string; tip: string; slobodan: number } | undefined;
+    if (!a) throw new Error(`Artikal (ID ${s.productId}) ne postoji`);
+    if (a.tip === 'usluga') throw new Error(`"${a.naziv}" je usluga i ne ide na ulaz robe`);
+    if (a.slobodan === 1) throw new Error(`"${a.naziv}" je slobodna stavka i ne ide na ulaz robe`);
+    if (!(konacan(s.kolicina) && s.kolicina > 0)) throw new Error(`Količina za "${a.naziv}" mora biti veća od nule`);
+    if (!(konacan(s.cijena) && s.cijena >= 0)) throw new Error(`Prodajna cijena za "${a.naziv}" nije ispravna`);
+    if (!(konacan(s.nabavnaCijena) && s.nabavnaCijena >= 0)) throw new Error(`Nabavna cijena za "${a.naziv}" nije ispravna`);
   }
 
   return brojPrimke;

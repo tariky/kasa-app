@@ -7,6 +7,7 @@ import { fakturnaVrijednost, rabatIznos, nabavnaVrijednost, pdvStopaPct } from '
 import { parseFiskalniBroj, izracunajPraznine, MAX_PRAZNINA } from '../fiskalni';
 import { prikazDatuma } from './period';
 import { raspodjelaPlacanja, nulaPlacanja, type Placanja } from '../placanje';
+import { TOLERANCIJA_ZALIHE } from '../skladiste';
 
 export { raspodjelaPlacanja, type Placanja };
 import type {
@@ -308,7 +309,7 @@ export function obracunaj(
   const tipoviZaliha = moduli.proizvodnja ? ['artikal', 'materijal'] : ['artikal'];
   const zalihe: ZalihaRed[] = moduli.skladiste
     ? p.zalihe
-      .filter(z => tipoviZaliha.includes(z.tip) && Math.abs(z.kolicina) > 1e-9)
+      .filter(z => tipoviZaliha.includes(z.tip) && Math.abs(z.kolicina) >= TOLERANCIJA_ZALIHE)
       .map(z => {
         const kolicina = round3(z.kolicina);
         const prosjecna = z.nabavnaKolicina > 0 ? round4(z.nabavnaVrijednost / z.nabavnaKolicina) : 0;

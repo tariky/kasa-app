@@ -2,9 +2,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { pdf } from '@react-pdf/renderer';
 import type { Dobavljac, PregledCijenaUlaza, Primka, PrimkaStavka, Product, PromijenjenoOdPregleda } from '@/types';
-import { izBazePrimke, jePloca, m2UKom } from '@/lib/ploca';
+import { jePloca, m2UKom } from '@/lib/ploca';
 import { localDateStr } from '@/lib/novac';
-import { nedostajeOpis, praznaStavka, redStatus, ulazTotali, uPayload, type UlazRed } from '@/lib/ulaz';
+import { nedostajeOpis, porukaUpozorenja, praznaStavka, redIzBaze, redStatus, ulazTotali, uPayload, type UlazRed } from '@/lib/ulaz';
 import { kalkulacijaPrimke, nabavnaVrijednost, type KalkulacijaPrimke } from '@/lib/kalkulacija';
 import { cn, formatKM, formatDate } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -18,7 +18,8 @@ import { Eyebrow, Key, mod } from '@/components/ui/ledger';
 import { FullDialog, FullDialogContent, FullDialogHeader, FullDialogFooter, FullDialogNotice, FullDialogTitle, FooterBtn, Fact, HeaderBtn, LegendKey } from '@/components/ui/full-dialog';
 import { UlazPdf } from '@/components/UlazPdf';
 import { UlazStavkeEditor, type UlazStavkeHandle } from './UlazStavkeEditor';
-import { PregledCijenaAside, PregledCijenaTabela, PregledPromijenjen, imaPromjena } from './PregledCijenaUlaza';
+import { PregledCijenaAside, PregledCijenaTabela, PregledPromijenjen, imaSadrzaj } from './PregledCijenaUlaza';
+import { potvrdi } from '@/lib/dijalog';
 import { Pencil, Trash2, Printer, Download, Save, ChevronUp, ChevronDown, Building2, AlertTriangle, X } from 'lucide-react';
 
 export type UlazStanje = { kind: 'zatvoren' } | { kind: 'pregled'; id: number } | { kind: 'uredi'; id: number } | { kind: 'novi' };
@@ -40,11 +41,7 @@ const izPrimke = (p: Primka, products: Product[]): Forma => ({
   brojPrimke: p.brojPrimke, datum: p.datum, dobavljacNaziv: p.dobavljacNaziv ?? '', dobavljacId: p.dobavljacId ?? '', dobavljacAdresa: p.dobavljacAdresa ?? '',
   brojFakture: p.brojFakture ?? '', napomena: p.napomena ?? '',
   zavisniTroskovi: zavisniDokumenta(p.stavke ?? []) > 0 ? String(zavisniDokumenta(p.stavke ?? [])) : '',
-  rows: (p.stavke ?? []).map(s => {
-    const prod = products.find(x => x.id === s.productId);
-    const prikaz = izBazePrimke(prod, s.kolicina, s.nabavnaCijena);
-    return { productId: s.productId, kolicina: prikaz.kolicina, nabavnaCijena: prikaz.nabavnaCijena, rabat: s.rabat ? String(s.rabat) : '', cijena: String(s.cijena) };
-  }),
+  rows: (p.stavke ?? []).map(s => redIzBaze(products.find(x => x.id === s.productId), s)),
 });
 
 /** Payload za primka:create / primka:update (i njihov pregled) iz forme. */
@@ -257,6 +254,9 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
     }
     setSaving(true);
     try {
+      // Upozorenja (stanje u minusu, roba s ulaza već prodana po staroj cijeni)
+      // ne blokiraju, ali se uvijek potvrđuju — i kad nema nivelacije.
+      if (pregled.upozorenja.length > 0 && !(await potvrdi(porukaUpozorenja(pregled.upozorenja, 'izmjena')))) return;
       // Backend sprema samo ako operacija napravi tačno ovaj pregled; inače
       // ništa ne upiše i vrati novi — korisnik ga mora ponovo potvrditi.
       const r = primka ? await window.api.updatePrimka(payload, pregled) : await window.api.createPrimka(payload, pregled);
@@ -292,6 +292,8 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
     if (!primka || !potvrdaBrisanja || brisem) return;
     setBrisem(true);
     try {
+      const { upozorenja } = potvrdaBrisanja.pregled;
+      if (upozorenja.length > 0 && !(await potvrdi(porukaUpozorenja(upozorenja, 'brisanje')))) return;
       const r = await window.api.deletePrimka(primka.id, potvrdaBrisanja.pregled);
       if (odbijeno(r)) { setPregledBrisanja({ kljuc: String(primka.id), pregled: r.pregled, promijenjeno: true }); return; }
       setBrisiOpen(false); onDeleted(primka);
@@ -500,7 +502,7 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
                     <Eyebrow className="block mb-1">Kalkulacija</Eyebrow>
                     <Kalkulacija k={edit ? totali : pregled} />
                   </section>
-                  {edit && prikazPregleda && imaPromjena(prikazPregleda) && (
+                  {edit && prikazPregleda && imaSadrzaj(prikazPregleda) && (
                     <PregledCijenaAside pregled={prikazPregleda} zastario={!pregledAktuelan} />
                   )}
                   {edit && pregledCijena && pregledCijena.kljuc === kljuc && 'greska' in pregledCijena && (
@@ -561,7 +563,7 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
 
       {primka && (
         <Dialog open={brisiOpen} onOpenChange={setBrisiOpen}>
-          <DialogContent className={cn(potvrdaBrisanja && (imaPromjena(potvrdaBrisanja.pregled) || potvrdaBrisanja.promijenjeno) ? 'sm:max-w-lg' : 'sm:max-w-[420px]')} onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); obrisi(); } }}>
+          <DialogContent className={cn(potvrdaBrisanja && (imaSadrzaj(potvrdaBrisanja.pregled) || potvrdaBrisanja.promijenjeno) ? 'sm:max-w-lg' : 'sm:max-w-[420px]')} onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); obrisi(); } }}>
             <DialogHeader>
               <DialogTitle>Obrisati ulaz {primka.brojPrimke}?</DialogTitle>
               <DialogDescription>Stanje robe sa ovog ulaza se skida sa skladišta, a prodajna cijena koju je ulaz postavio se vraća. Nivelacija uz ulaz ostaje. Brisanje se ne može poništiti.</DialogDescription>
@@ -571,7 +573,7 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
               <p className="text-[12px] text-slate-400">Provjeravam prodajne cijene…</p>
             ) : 'greska' in pregledBrisanja ? (
               <p className="flex items-center gap-1.5 text-[12px] text-rose-600"><AlertTriangle size={12} /> {pregledBrisanja.greska}</p>
-            ) : !imaPromjena(pregledBrisanja.pregled) ? (
+            ) : !imaSadrzaj(pregledBrisanja.pregled) ? (
               <p className="text-[12px] text-slate-500">Prodajne cijene se ne mijenjaju.</p>
             ) : (
               <>

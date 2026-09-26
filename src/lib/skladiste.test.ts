@@ -9,7 +9,7 @@ import {
   cijeneArtikala, promjeneUProdaji, artikliPrimke, brojeviNivelacijaPrimke, napomenaProtunivelacije,
   revertPricesWithoutStock, revertPrimkaPrices, stareCijeneStavki, datumKretanjaPrimke,
   zapisiPromjeneCijena, ponistiPromjeneCijenaPrimke,
-  getProductStock, isDobavljacUsed, otisakPregleda, istiPregled,
+  getProductStock, isDobavljacUsed, otisakPregleda, istiPregled, validirajPrimku, TOLERANCIJA_ZALIHE,
 } from './skladiste';
 import type { SqlDb } from './sqldb';
 
@@ -266,9 +266,15 @@ test('revertPrimkaPrices vraća i nivelaciju i cijene bez zalihe iste primke', (
 
 // ── Historija cijena (cijena_historija) ────────────────────────────────
 
+/** Lanac promjena cijena (ono po čemu se poništava) — bez poništenih redova koji ostaju samo za izvoz. */
 function historija(productId: number): Array<{ izvor: string; izvorId: number | null; staraCijena: number; novaCijena: number }> {
-  return db.prepare('SELECT izvor, izvorId, staraCijena, novaCijena FROM cijena_historija WHERE productId = ? ORDER BY id')
+  return db.prepare('SELECT izvor, izvorId, staraCijena, novaCijena FROM cijena_historija WHERE productId = ? AND ponistena = 0 ORDER BY id')
     .all(productId) as any;
+}
+
+/** Svi redovi historije, i poništeni — ono što čita izvoz ("Zalihe na dan"). */
+function sviRedovi(productId: number) {
+  return db.prepare('SELECT izvor, izvorId, staraCijena, novaCijena, ponistena FROM cijena_historija WHERE productId = ? ORDER BY id').all(productId);
 }
 
 test('poništavanje primke usred lanca premošćuje lanac: sljedeća promjena preuzima njenu staru cijenu', () => {
@@ -315,6 +321,102 @@ test('revertPrimkaPrices: artikal iz historije ne ide i starim putem (nivelacija
   expect(historija(id)[0].staraCijena).toBe(10);
 });
 
+// Historija je samo-dodavanje za izvoz: poništenje primke ne smije promijeniti
+// cijenu na raniji dan ("Zalihe na dan" u izvozu). Poništen red ostaje
+// (označen), a vraćena cijena dobija novi red s današnjim datumom; lanac za
+// buduća poništenja vidi samo neoznačene redove.
+
+test('poništenje posljednje promjene: red ostaje označen, vraćena cijena dobija novi (poništen) red', () => {
+  const id = dodajArtikal('034', 12);
+  zapisiPromjeneCijena(db, 'primka', 1, [{ productId: id, staraCijena: 10, novaCijena: 12 }]);
+
+  ponistiPromjeneCijenaPrimke(db, 1);
+  expect(cijenaArtikla(id)).toBe(10);
+  expect(historija(id)).toEqual([]);
+  expect(sviRedovi(id)).toEqual([
+    { izvor: 'primka', izvorId: 1, staraCijena: 10, novaCijena: 12, ponistena: 1 },
+    { izvor: 'primka', izvorId: 1, staraCijena: 12, novaCijena: 10, ponistena: 1 },
+  ]);
+});
+
+test('poništenje usred lanca: red ostaje označen, cijena se ne mijenja pa nema novog reda', () => {
+  const id = dodajArtikal('035', 14);
+  zapisiPromjeneCijena(db, 'primka', 1, [{ productId: id, staraCijena: 10, novaCijena: 12 }]);
+  zapisiPromjeneCijena(db, 'primka', 2, [{ productId: id, staraCijena: 12, novaCijena: 14 }]);
+
+  ponistiPromjeneCijenaPrimke(db, 1);
+  expect(sviRedovi(id)).toEqual([
+    { izvor: 'primka', izvorId: 1, staraCijena: 10, novaCijena: 12, ponistena: 1 },
+    { izvor: 'primka', izvorId: 2, staraCijena: 10, novaCijena: 14, ponistena: 0 },
+  ]);
+  // Poništen red se više ne vidi kao dio lanca: primka 2 je sada jedina promjena.
+  ponistiPromjeneCijenaPrimke(db, 2);
+  expect(cijenaArtikla(id)).toBe(10);
+  expect(historija(id)).toEqual([]);
+});
+
+test('stari put (primka bez historije) upisuje vraćenu cijenu u historiju s današnjim danom', () => {
+  const id = dodajArtikal('036', 12);
+  dodajStavku(1, id, 12, 10);
+
+  expect(revertPricesWithoutStock(db, 1)).toBe(1);
+  expect(cijenaArtikla(id)).toBe(10);
+  expect(sviRedovi(id)).toEqual([{ izvor: 'primka', izvorId: 1, staraCijena: 12, novaCijena: 10, ponistena: 1 }]);
+  expect(db.prepare("SELECT date(createdAt) = date('now','localtime') AS danas FROM cijena_historija").get()).toEqual({ danas: 1 });
+});
+
+// ── Tolerancija zalihe ────────────────────────────────────────────────
+
+function dodajIzlaz(productId: number, kolicina: number): void {
+  db.prepare("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'izlaz', ?, 'test', 0)")
+    .run(productId, kolicina);
+}
+
+test('ostatak zaokruživanja (0,1 + 0,2 − 0,3) je prazna zaliha: nema nivelacije, cijena ide bez dokumenta', () => {
+  expect(TOLERANCIJA_ZALIHE).toBe(1e-9);
+  const id = dodajArtikal('037', 10);
+  dodajZalihu(id, 0.1); dodajZalihu(id, 0.2); dodajIzlaz(id, 0.3);
+  expect(getProductStock(db, id)).not.toBe(0);
+  expect(Math.abs(getProductStock(db, id))).toBeLessThan(TOLERANCIJA_ZALIHE);
+
+  const { nivelacija, bezZaliha } = collectPriceChanges(db, [{ productId: id, cijena: 12, pdvStopa: 'E' }]);
+  expect(nivelacija).toEqual([]);
+  expect(bezZaliha.map(c => c.productId)).toEqual([id]);
+
+  upisiCijene(db, bezZaliha);
+  expect(promjeneUProdaji(db, new Map([[id, 10]]))).toEqual([]);
+});
+
+// ── validirajPrimku ───────────────────────────────────────────────────
+
+test('validirajPrimku: količina i cijene stavke moraju biti ispravni brojevi', () => {
+  const id = dodajArtikal('038', 10);
+  const s = { productId: id, kolicina: 2, cijena: 12, nabavnaCijena: 5 };
+  const probaj = (x: Record<string, unknown>) => () => validirajPrimku(db, { brojPrimke: 'U-1', stavke: [{ ...s, ...x }] as any });
+
+  expect(probaj({})()).toBe('U-1');
+  expect(probaj({ cijena: 0, nabavnaCijena: 0 })()).toBe('U-1');
+  for (const kolicina of [0, -1, NaN, Infinity, '2', null, undefined]) {
+    expect(probaj({ kolicina })).toThrow('Količina za "Artikal 038" mora biti veća od nule');
+  }
+  for (const cijena of [-0.01, NaN, Infinity, '12', null, undefined]) {
+    expect(probaj({ cijena })).toThrow('Prodajna cijena za "Artikal 038" nije ispravna');
+  }
+  for (const nabavnaCijena of [-1, NaN, -Infinity, '5', null, undefined]) {
+    expect(probaj({ nabavnaCijena })).toThrow('Nabavna cijena za "Artikal 038" nije ispravna');
+  }
+});
+
+test('validirajPrimku: usluga i slobodna stavka ne idu na ulaz robe', () => {
+  const usluga = dodajArtikal('039', 10, 'usluga');
+  const slobodan = dodajArtikal('040', 10);
+  db.prepare('UPDATE products SET slobodan = 1 WHERE id = ?').run(slobodan);
+  const stavke = (productId: number) => [{ productId, kolicina: 1, cijena: 10, nabavnaCijena: 5 }];
+
+  expect(() => validirajPrimku(db, { brojPrimke: 'U-1', stavke: stavke(usluga) })).toThrow('"Artikal 039" je usluga i ne ide na ulaz robe');
+  expect(() => validirajPrimku(db, { brojPrimke: 'U-1', stavke: stavke(slobodan) })).toThrow('"Artikal 040" je slobodna stavka i ne ide na ulaz robe');
+});
+
 test('datumKretanjaPrimke: datum primke u formatu kretanja zalihe (ponoć)', () => {
   expect(datumKretanjaPrimke('2026-03-10')).toBe('2026-03-10 00:00:00');
   // Ako datum već nosi vrijeme, ostaje kakav jeste.
@@ -355,6 +457,7 @@ const pregledPrimjer = () => ({
   ] }],
   bezZalihe: [{ productId: 3, productNaziv: 'C', staraCijena: 20, novaCijena: 25 }],
   cijenaOstaje: [],
+  upozorenja: [{ vrsta: 'minus' as const, productId: 1, productNaziv: 'A', stanjePrije: 2, stanjePoslije: -8 }],
 });
 
 test('otisak: isti sadržaj s drugim nazivom, redom stavki i šumom zaokruživanja je isti', () => {
@@ -380,6 +483,11 @@ test('otisak: svako polje dokumenta je u poređenju', () => {
     p => { p.bezZalihe[0].novaCijena = 26; },
     p => { p.bezZalihe = []; },
     p => { (p.cijenaOstaje as any) = [{ productId: 4, productNaziv: 'D', cijena: 1 }]; },
+    p => { (p.upozorenja[0] as any).vrsta = 'prodano'; },
+    p => { p.upozorenja[0].productId = 2; },
+    p => { p.upozorenja[0].stanjePrije = 3; },
+    p => { p.upozorenja[0].stanjePoslije = -7; },
+    p => { p.upozorenja = []; },
   ];
   for (const izmijeni of izmjene) {
     const p = pregledPrimjer();
@@ -393,4 +501,8 @@ test('otisak: neispravan oblik nije nikad isti', () => {
   expect(otisakPregleda({})).toBeNull();
   expect(otisakPregleda({ dokumenti: [], bezZalihe: [], cijenaOstaje: [{ productId: 1, cijena: 'x' }] })).toBeNull();
   expect(istiPregled({}, pregledPrimjer())).toBe(false);
+  // Pregled bez upozorenja (stari oblik) nije potvrda ničega.
+  const bezUpozorenja: Partial<ReturnType<typeof pregledPrimjer>> = pregledPrimjer();
+  delete bezUpozorenja.upozorenja;
+  expect(otisakPregleda(bezUpozorenja)).toBeNull();
 });

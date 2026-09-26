@@ -430,6 +430,14 @@ describe('product:adjustStock', () => {
     expect(broj("SELECT COUNT(*) AS n FROM stock_movements WHERE referenceType = 'adjustment'")).toBe(0);
   });
 
+  test('ostatak zaokruživanja (0,1 + 0,2 − 0,3) je isto stanje: ništa se ne upisuje', async () => {
+    const id = dodajArtikal('S1', { stanje: 0.1 });
+    b.db.prepare("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'ulaz', 0.2, 'test', 0), (?, 'izlaz', 0.3, 'test', 0)").run(id, id);
+    expect(stanje(id)).not.toBe(0);
+    expect(await b.call('product:adjustStock', id, 0)).toEqual({ changes: 0 });
+    expect(broj("SELECT COUNT(*) AS n FROM stock_movements WHERE referenceType = 'adjustment'")).toBe(0);
+  });
+
   test('nepostojeći artikal se odbija jasnom porukom', async () => {
     await expect(b.call('product:adjustStock', 999, 5)).rejects.toThrow('Artikal ne postoji');
     await expect(b.call('product:adjustStock', 999, 0)).rejects.toThrow('Artikal ne postoji');

@@ -166,4 +166,15 @@ export function runMigrations(database: Database.Database): void {
   if (!productCols2.find(c => c.name === 'slobodan')) {
     database.exec("ALTER TABLE products ADD COLUMN slobodan INTEGER NOT NULL DEFAULT 0");
   }
+
+  // Historija cijena je samo-dodavanje za izvoz: poništena promjena se označi
+  // (ne briše), a cijena iz prodaje ostaje zapamćena kad se lanac ispravi.
+  // (Bez tabele nema šta dorađivati — schema je pravi s novim kolonama.)
+  const historijaCols = database.prepare("PRAGMA table_info(cijena_historija)").all() as { name: string }[];
+  if (historijaCols.length > 0 && !historijaCols.find(c => c.name === 'ponistena')) {
+    database.exec("ALTER TABLE cijena_historija ADD COLUMN ponistena INTEGER NOT NULL DEFAULT 0");
+  }
+  if (historijaCols.length > 0 && !historijaCols.find(c => c.name === 'cijenaUProdaji')) {
+    database.exec("ALTER TABLE cijena_historija ADD COLUMN cijenaUProdaji REAL");
+  }
 }

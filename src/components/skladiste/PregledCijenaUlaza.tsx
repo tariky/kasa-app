@@ -11,6 +11,9 @@ type Dokument = PregledCijenaUlaza['dokumenti'][number];
 export const imaPromjena = (p: PregledCijenaUlaza | null | undefined) =>
   !!p && (p.dokumenti.length > 0 || p.bezZalihe.length > 0 || p.cijenaOstaje.length > 0);
 
+/** Ima li pregled šta prikazati: promjene cijena ili upozorenja (izmjena/brisanje). */
+export const imaSadrzaj = (p: PregledCijenaUlaza | null | undefined) => imaPromjena(p) || (!!p && p.upozorenja.length > 0);
+
 /** Nivelacija nosi novu cijenu s ulaza; protunivelacija poništava cijenu (uklonjena stavka, povrat, brisanje). */
 const VRSTA = {
   nivelacija: {
@@ -26,10 +29,38 @@ const VRSTA = {
 const razlikaTon = (x: number) => (x >= 0 ? 'text-emerald-600' : 'text-rose-600');
 const kol = (x: number) => (Number.isInteger(x) ? String(x) : x.toFixed(3).replace(/\.?0+$/, ''));
 
+/**
+ * Upozorenja izmjene/brisanja ulaza: stanje odlazi u minus, ili se mijenja cijena
+ * robe koja je s ovog ulaza već prodavana. Ne blokiraju — spremanje ih potvrđuje.
+ */
+export function PregledUpozorenja({ upozorenja }: { upozorenja: PregledCijenaUlaza['upozorenja'] }) {
+  if (upozorenja.length === 0) return null;
+  return (
+    <section role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3" aria-label="Upozorenja">
+      <p className="flex items-center gap-1.5 text-[11.5px] font-semibold text-rose-700"><AlertTriangle size={12} /> Provjerite prije potvrde</p>
+      <ul className="mt-1.5 space-y-1">
+        {upozorenja.map(u => (
+          <li key={`${u.vrsta}-${u.productId}`} className="text-[11px] text-rose-700">
+            {u.vrsta === 'minus' ? (
+              <span className="flex items-center justify-between gap-2">
+                <span className="truncate">{u.productNaziv}</span>
+                <span className="font-mono tabular-nums whitespace-nowrap">stanje {kol(u.stanjePrije)} → {kol(u.stanjePoslije)}</span>
+              </span>
+            ) : (
+              <span><span className="font-medium">{u.productNaziv}</span>: roba s ovog ulaza je već prodavana po staroj cijeni — cijena se mijenja bez nivelacije.</span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 /** Sažet prikaz za bočnu kolonu forme ulaza. */
 export function PregledCijenaAside({ pregled, zastario }: { pregled: PregledCijenaUlaza; zastario?: boolean }) {
   return (
     <div className={cn('space-y-4 transition-opacity', zastario && 'opacity-50')} aria-busy={zastario || undefined}>
+      <PregledUpozorenja upozorenja={pregled.upozorenja} />
       {pregled.dokumenti.map(d => <DokumentKartica key={d.brojNivelacije} d={d} />)}
       {pregled.bezZalihe.length > 0 && (
         <section className="rounded-xl bg-slate-50 border border-slate-200/70 px-4 py-3" aria-label="Promjena cijene bez nivelacije">
@@ -100,6 +131,7 @@ function DokumentKartica({ d }: { d: Dokument }) {
 export function PregledCijenaTabela({ pregled }: { pregled: PregledCijenaUlaza }) {
   return (
     <div className="max-h-[340px] overflow-y-auto space-y-4">
+      <PregledUpozorenja upozorenja={pregled.upozorenja} />
       {pregled.dokumenti.map(d => {
         const v = VRSTA[d.vrsta];
         return (

@@ -76,14 +76,18 @@ export function uBazuPrimke(
   };
 }
 
-/** Inverz od uBazuPrimke — za prikaz postojeće primke u formi (komadi, nabavna po komadu). */
+/**
+ * Inverz od uBazuPrimke — za prikaz postojeće primke u formi (komadi, nabavna po
+ * komadu). Komadi na 3 decimale, da se unos poput 2,125 kom prikaže kako je
+ * ukucan; spremljeni m² se ionako ne preračunava dok se polje ne dira (ulaz.ts).
+ */
 export function izBazePrimke(
   p: PlocaLike | undefined, kolicina: number, nabavnaCijena: number
 ): { kolicina: string; nabavnaCijena: string } {
   if (!p || !jePloca(p)) return { kolicina: String(kolicina), nabavnaCijena: String(nabavnaCijena) };
   const poPloci = m2PoPloci(p.plocaSirina!, p.plocaVisina!);
   return {
-    kolicina: String(m2UKom(kolicina, p.plocaSirina!, p.plocaVisina!)),
+    kolicina: String(Math.round((kolicina / poPloci) * 1000) / 1000),
     nabavnaCijena: String(round2(nabavnaCijena * poPloci)),
   };
 }

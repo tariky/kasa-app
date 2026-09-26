@@ -189,6 +189,12 @@ export interface PregledCijenaUlaza {
   bezZalihe: Array<{ productId: number; productNaziv: string; staraCijena: number; novaCijena: number }>;
   /** Izmjena: cijena na ulazu promijenjena, ali u prodaji ostaje (kasnije ju je mijenjalo nešto drugo). */
   cijenaOstaje: Array<{ productId: number; productNaziv: string; cijena: number }>;
+  /**
+   * Izmjena/brisanje: ono što korisnik mora potvrditi (negativno stanje ne blokira).
+   * `minus` — zaliha poslije je negativna i manja nego prije; `prodano` — cijena se
+   * mijenja, a roba s ove primke je već (djelimično) prodana po staroj cijeni.
+   */
+  upozorenja: Array<{ vrsta: 'minus' | 'prodano'; productId: number; productNaziv: string; stanjePrije: number; stanjePoslije: number }>;
 }
 
 /**
