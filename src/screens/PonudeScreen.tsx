@@ -6,11 +6,6 @@ import {
   Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
 import { Separator } from '@/components/ui/separator';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
-import { DecimalInput } from '@/components/ui/decimal-input';
-import { DatePicker } from '@/components/ui/date-picker';
 import { ActionRow, Eyebrow, FilterSelect, Key, LedgerHead, SegmentedFilter } from '@/components/ui/ledger';
 import {
   RefreshCw, FileText, AlertTriangle, Printer, Download, Plus, Trash2, Pencil,
@@ -19,12 +14,11 @@ import {
 } from 'lucide-react';
 import { PonudaPdf } from '@/components/PonudaPdf';
 import { filtriraj, type PoljaPretrage } from '@/lib/pretraga';
-import { formatBrojPonude, efektivniStatus, plusDana, danaIzmedju } from '@/lib/ponuda';
+import { formatBrojPonude, efektivniStatus, danaIzmedju } from '@/lib/ponuda';
 import type { NacinPlacanja } from '@/lib/placanje';
 import FiskalnaNaplataDialog from '@/components/FiskalnaNaplataDialog';
 import { pdvStavke } from '@/lib/racun';
-import { izReda, uPayload } from '@/lib/stavkeDokumenta';
-import { useStavkeDokumenta } from '@/hooks/useStavkeDokumenta';
+import { izReda } from '@/lib/stavkeDokumenta';
 import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { localDateStr } from '@/lib/novac';
 import { cn, formatKM, formatDate } from '@/lib/utils';
@@ -32,23 +26,16 @@ import { useModuli } from '@/hooks/useModuli';
 import { formatBrojNaloga } from '@/lib/proizvodnja';
 import { zadaniIzbor, proizvodiIzIzbora } from '@/lib/nalogPrikaz';
 import { ProizvodiNaloga } from '@/components/proizvodnja/ProizvodiNaloga';
-import { zadanoZaKupca, primijeniRabatKupca, formatRabat, type FormatBroja } from '@/lib/dokumentPostavke';
+import { zadanoZaKupca, type FormatBroja } from '@/lib/dokumentPostavke';
 import { useDokumentPostavke } from '@/components/DokumentPostavkeProvider';
 import { otvoriPdf, spremiPdf, ucitajZaStampu } from '@/lib/stampa';
-import { PretragaProizvoda } from '@/components/PretragaProizvoda';
 import { useKupci } from '@/components/PretragaKupaca';
-import type { Product, ProizvodPonude } from '@/types';
+import type { ProizvodPonude } from '@/types';
 import FakturaDialog, { type FakturaPocetno } from '@/components/FakturaDialog';
 import { otvoriFakturuZaStampu } from '@/components/stampaFakture';
+import { PonudaFormaDialog, type ZahtjevForme } from '@/components/ponude/PonudaFormaDialog';
 import { useLedgerLista } from '@/hooks/useLedgerLista';
 import { usePreciceListe } from '@/hooks/usePreciceListe';
-
-/** "8 dana od datuma ponude" — bosanska množina: 1/21/31 dan, ostalo dana. */
-function opisRoka(dana: number): string {
-  if (dana <= 0) return 'Važi samo na dan ponude';
-  const jednina = dana % 10 === 1 && dana % 100 !== 11;
-  return `${dana} ${jednina ? 'dan' : 'dana'} od datuma ponude`;
-}
 
 interface PonudaRow {
   id: number;
@@ -136,24 +123,11 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
   const [search, setSearch] = useState('');
   const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // Forma (nova / uredi)
-  const [formOpen, setFormOpen] = useState(false);
-  const [editId, setEditId] = useState<number | null>(null);
+  // Forma (nova / uredi): null = zatvorena
+  const [forma, setForma] = useState<ZahtjevForme>(null);
   // Konverzija treba način plaćanja kupca i prije nego što se forma otvori.
   const sifarnikKupaca = useKupci();
   const kupci = sifarnikKupaca ?? [];
-  const [kupacId, setKupacId] = useState<string>('');
-  const [datum, setDatum] = useState('');
-  const [vaziDo, setVaziDo] = useState('');
-  const [napomena, setNapomena] = useState('');
-  const {
-    stavke, postavi: postaviStavke, dodaj: dodajStavku, izmijeni: izmijeniStavku, ukloni: ukloniStavku, totali: formTotali,
-  } = useStavkeDokumenta();
-  const [formError, setFormError] = useState('');
-  const [formInfo, setFormInfo] = useState('');
-  /** Rabat izabranog kupca — dobijaju ga stavke dodane poslije izbora. */
-  const [rabatKupca, setRabatKupca] = useState(0);
-  const [saving, setSaving] = useState(false);
 
   // Konverzija — iste opcije plaćanja kao na kasi
   const [konvertujOpen, setKonvertujOpen] = useState(false);
@@ -223,57 +197,18 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
 
   // ── Forma ──────────────────────────────────────────────────
 
-  /** Rok važenja u danima — izveden iz para datuma, ne drži se posebno. */
-  const rokDana = datum && vaziDo ? danaIzmedju(datum, vaziDo) : postavke.ponuda.vaziDana;
-
-  /**
-   * Pomjeranje datuma ponude nosi i rok sa sobom: dogovoreno je "8 dana",
-   * a ne "do 18.08." — pa ostaje 8 dana i kad se ponuda datira unaprijed.
-   */
-  const promijeniDatum = (novi: string) => {
-    setDatum(novi);
-    setVaziDo(plusDana(novi, rokDana));
-  };
-
-  const openNova = useCallback(() => {
-    setEditId(null);
-    setKupacId('');
-    const danasnji = localDateStr();
-    setDatum(danasnji);
-    setVaziDo(plusDana(danasnji, postavke.ponuda.vaziDana));
-    setNapomena('');
-    postaviStavke([]);
-    setFormError('');
-    setFormInfo('');
-    setRabatKupca(0);
-    setFormOpen(true);
-  }, [postavke.ponuda.vaziDana]);
+  const openNova = useCallback(() => setForma({ ponuda: null }), []);
 
   const openUredi = useCallback(async (p: PonudaRow) => {
     const full = p.stavke ? p : await window.api.getPonuda(p.id);
-    setEditId(full.id);
-    setKupacId(String(full.kupacId));
-    setDatum(full.datum);
-    setVaziDo(full.vaziDo);
-    setNapomena(full.napomena || '');
-    postaviStavke((full.stavke || []).map(izReda));
-    setFormError('');
-    // Spremljena ponuda se ne preračunava dok korisnik ne promijeni kupca.
-    setFormInfo('');
-    setRabatKupca(0);
-    setFormOpen(true);
+    setForma({ ponuda: full });
   }, []);
 
-  /** Izbor kupca u formi: njegov rabat ide na stavke bez rabata i na nove stavke. */
-  const izaberiKupca = (novi: string) => {
-    setKupacId(novi);
-    const r = kupci.find(k => String(k.id) === novi)?.rabat ?? 0;
-    setRabatKupca(r);
-    if (r > 0) {
-      postaviStavke(prev => primijeniRabatKupca(prev, r));
-      setFormError('');
-      setFormInfo(`Primijenjen rabat kupca ${formatRabat(r)}`);
-    } else setFormInfo('');
+  const poslijeSnimanja = async (poruka: string, izmijenjenaId: number | null) => {
+    setMsg({ type: 'success', text: poruka });
+    setForma(null);
+    await loadPonude();
+    if (izmijenjenaId != null) setSelected(await window.api.getPonuda(izmijenjenaId));
   };
 
   /** Konverzija u račun kreće od načina plaćanja kupca ponude, pa od postavke ponuda. */
@@ -282,41 +217,6 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
     setKonvertujNacin(zadanoZaKupca(kupac, postavke, 'ponuda').nacinPlacanja);
     setKonvertujOpen(true);
   }, [selected, kupci, postavke]);
-
-  const addStavka = (p: Product, kol: number | null) => dodajStavku(p, kol, { rabat: rabatKupca });
-
-  const savePonuda = async () => {
-    setFormError('');
-    if (!kupacId) { setFormError('Odaberite kupca'); return; }
-    if (stavke.length === 0) { setFormError('Dodajte najmanje jednu stavku'); return; }
-    if (stavke.some(s => !s.kolicina || s.kolicina <= 0 || isNaN(s.cijena) || s.cijena < 0)) {
-      setFormError('Provjerite količine i cijene stavki'); return;
-    }
-    setSaving(true);
-    try {
-      const payload = {
-        kupacId: Number(kupacId),
-        datum,
-        vaziDo,
-        napomena: napomena.trim() || undefined,
-        stavke: uPayload(stavke),
-      };
-      if (editId != null) {
-        await window.api.updatePonuda(editId, payload);
-        setMsg({ type: 'success', text: 'Ponuda izmijenjena' });
-      } else {
-        const res = await window.api.createPonuda(payload);
-        setMsg({ type: 'success', text: `Ponuda ${formatBrojPonude(res, postavke.ponuda.broj)} kreirana` });
-      }
-      setFormOpen(false);
-      await loadPonude();
-      if (editId != null) setSelected(await window.api.getPonuda(editId));
-    } catch (err: any) {
-      setFormError(err?.message || 'Nepoznata greška');
-    } finally {
-      setSaving(false);
-    }
-  };
 
   // ── Akcije nad ponudom ─────────────────────────────────────
 
@@ -434,7 +334,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
   });
   const selIndex = lista.izabraniIndeks;
 
-  const anyDialogOpen = formOpen || konvertujOpen || brisiOpen || fakturaOpen || nalogIzbor != null;
+  const anyDialogOpen = forma != null || konvertujOpen || brisiOpen || fakturaOpen || nalogIzbor != null;
 
   /**
    * Prečice ekrana. Filteri idu na zagrade jer su cifre rezervisane za promjenu
@@ -866,172 +766,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
       </div>
 
       {/* ── Nova / Uredi ponuda ── */}
-      <Dialog open={formOpen} onOpenChange={setFormOpen}>
-        <DialogContent
-          className="sm:max-w-[640px] p-0 gap-0 overflow-hidden max-h-[90vh] flex flex-col"
-          onKeyDown={submitOnMeta(savePonuda)}
-        >
-          <div className="px-6 pt-6 pb-4 flex-shrink-0">
-            <DialogHeader>
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center">
-                  <FileText className="h-5 w-5 text-blue-500" />
-                </div>
-                <div>
-                  <DialogTitle className="text-lg">
-                    {editId != null ? 'Uredi ponudu' : 'Nova ponuda'}
-                  </DialogTitle>
-                  <DialogDescription className="text-xs mt-0.5">
-                    Nefiskalni predračun — cijene se zamrzavaju u trenutku snimanja
-                  </DialogDescription>
-                </div>
-              </div>
-            </DialogHeader>
-          </div>
-          <Separator />
-
-          <div className="px-6 py-4 space-y-4 overflow-y-auto flex-1">
-            {/* Kupac + datumi */}
-            <div className="grid grid-cols-2 gap-3">
-              <div className="col-span-2 space-y-1.5">
-                <Eyebrow className="block">Kupac</Eyebrow>
-                <Select value={kupacId} onValueChange={izaberiKupca}>
-                  <SelectTrigger className="h-9 text-[13px]">
-                    <SelectValue placeholder="Odaberite kupca" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {kupci.map(k => (
-                      <SelectItem key={k.id} value={String(k.id)}>
-                        {k.naziv} <span className="text-slate-400 font-mono text-[11px]">({k.idBroj})</span>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {sifarnikKupaca?.length === 0 && (
-                  <p className="text-[11px] text-amber-600">
-                    Nema kupaca u šifarniku — dodajte kupca u Postavkama.
-                  </p>
-                )}
-                {formInfo && <p className="text-[11px] text-slate-500">{formInfo}</p>}
-              </div>
-              <div className="space-y-1.5">
-                <Eyebrow className="block">Datum</Eyebrow>
-                <DatePicker value={datum} onChange={promijeniDatum} className="h-9 text-[13px]" />
-              </div>
-              <div className="space-y-1.5">
-                <Eyebrow className="block">Važi do</Eyebrow>
-                <DatePicker
-                  value={vaziDo} onChange={setVaziDo} minDate={datum}
-                  className="h-9 text-[13px]"
-                />
-                <p className="text-[10px] text-slate-400">{opisRoka(rokDana)}</p>
-              </div>
-            </div>
-
-            {/* Stavke */}
-            <div className="space-y-2">
-              <Eyebrow className="block">Stavke</Eyebrow>
-              <PretragaProizvoda tipovi={['artikal', 'usluga']} onIzaberi={addStavka} nedavnoKljuc="ponuda"
-                placeholder="Dodaj artikal ili uslugu: naziv, šifra ili barkod" />
-
-              {stavke.length > 0 && (
-                <div className="border border-slate-100 rounded-lg divide-y divide-slate-50">
-                  <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-50/70 text-[10px] font-semibold text-slate-400 uppercase tracking-[0.14em]">
-                    <span className="w-4 flex-shrink-0" />
-                    <span className="flex-1 min-w-0">Artikal</span>
-                    <span className="w-16 text-right">Kol.</span>
-                    <span className="w-20 text-right">Cijena</span>
-                    <span className="w-14 text-right">Rabat %</span>
-                    <span className="w-20 text-right">PDV</span>
-                    <span className="w-[14px] flex-shrink-0" />
-                  </div>
-                  {stavke.map((s, i) => (
-                    <div key={s.productId} className="flex items-center gap-2 px-3 py-2">
-                      <span className="text-[10px] text-slate-300 font-mono w-4 text-right flex-shrink-0">{i + 1}</span>
-                      <p className="flex-1 min-w-0 text-[12px] font-medium text-slate-700 truncate">{s.naziv}</p>
-                      <div className="w-16">
-                        <DecimalInput
-                          value={s.kolicina}
-                          onValueChange={(_, v) => izmijeniStavku(s.productId, { kolicina: isNaN(v) ? 0 : v })}
-                          maxDecimals={3}
-                          className="h-7 text-[12px] text-right font-mono"
-                          title="Količina"
-                        />
-                      </div>
-                      <div className="w-20">
-                        <DecimalInput
-                          value={s.cijena}
-                          onValueChange={(_, v) => izmijeniStavku(s.productId, { cijena: isNaN(v) ? NaN : v })}
-                          className="h-7 text-[12px] text-right font-mono"
-                          title="Cijena"
-                        />
-                      </div>
-                      <div className="w-14">
-                        <DecimalInput
-                          value={s.rabat}
-                          onValueChange={(_, v) => izmijeniStavku(s.productId, { rabat: isNaN(v) ? 0 : Math.min(100, v) })}
-                          className="h-7 text-[12px] text-right font-mono"
-                          title="Rabat %"
-                        />
-                      </div>
-                      <span className="w-20 text-right text-[12px] font-mono tabular-nums text-slate-500">
-                        {s.pdvStopa === 'E'
-                          ? formatKM(pdvStavke({
-                              cijena: s.cijena || 0, kolicina: s.kolicina || 0,
-                              rabat: s.rabat || 0, pdvStopa: s.pdvStopa,
-                            }) || 0)
-                          : '—'}
-                      </span>
-                      <button
-                        onClick={() => ukloniStavku(s.productId)}
-                        title={`Ukloni ${s.naziv}`}
-                        aria-label={`Ukloni ${s.naziv}`}
-                        className="text-slate-300 hover:text-rose-500 transition-colors flex-shrink-0"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  ))}
-                  <div className="flex items-center justify-between px-3 py-2 bg-slate-50/50">
-                    <span className="text-[11px] text-slate-400">Ukupno</span>
-                    <span className="text-[13px] font-mono font-bold text-slate-800 tabular-nums">
-                      {formatKM(formTotali.ukupno)}
-                    </span>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Napomena */}
-            <div className="space-y-1.5">
-              <Eyebrow className="block">Napomena</Eyebrow>
-              <Input
-                value={napomena} onChange={e => setNapomena(e.target.value)}
-                placeholder="Napomena na ponudi (opcionalno)" className="h-9 text-[13px]"
-              />
-            </div>
-
-            {formError && (
-              <div className="flex items-center gap-2 rounded-lg bg-rose-50 border border-rose-100 px-3 py-2 text-[12px] font-medium text-rose-600">
-                <AlertTriangle size={13} />
-                {formError}
-              </div>
-            )}
-          </div>
-
-          <div className="border-t bg-slate-50/50 px-6 py-4 flex items-center justify-between gap-3 flex-shrink-0">
-            <span className="flex items-center gap-1.5 text-[10.5px] text-slate-400">
-              <Key className="ml-0">⌘↵</Key> snimi · <Key className="ml-0">esc</Key> otkaži
-            </span>
-            <div className="flex items-center gap-3">
-              <Button variant="ghost" onClick={() => setFormOpen(false)}>Otkaži</Button>
-              <Button onClick={savePonuda} disabled={saving} className="min-w-[140px]">
-                {saving ? 'Snimam…' : editId != null ? 'Snimi izmjene' : 'Kreiraj ponudu'}
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <PonudaFormaDialog zahtjev={forma} kupci={sifarnikKupaca} onZatvori={() => setForma(null)} onSpremljena={poslijeSnimanja} />
 
       <FakturaDialog
         open={fakturaOpen}
