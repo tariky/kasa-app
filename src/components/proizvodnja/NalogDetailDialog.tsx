@@ -325,7 +325,8 @@ export function NalogDetailDialog({ nalogId, redoslijed, uloga, onClose, onNavig
             onSaved={async () => { await reload(); setNotice({ type: 'success', text: 'Nalog izmijenjen' }); }} />
 
           <IzdajRacunDialog open={racunOpen} onOpenChange={setRacunOpen} nalog={nalog}
-            onIzdat={async (bf) => { await reload(); setNotice({ type: 'success', text: `Račun #${bf ?? ''} izdat po nalogu ${formatBrojNaloga(nalog, postavke.nalog.broj)}` }); }} />
+            onIzdat={async (bf) => { await reload(); setNotice({ type: 'success', text: `Račun #${bf ?? ''} izdat po nalogu ${formatBrojNaloga(nalog, postavke.nalog.broj)}` }); }}
+            onNezavrseno={async (poruka) => { await reload(); setNotice({ type: 'error', text: poruka }); }} />
 
           <Dialog open={pending != null} onOpenChange={v => { if (!v) setPending(null); }}>
             <DialogContent className="sm:max-w-[420px]" onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); spremiPaNastavi(); } }}>

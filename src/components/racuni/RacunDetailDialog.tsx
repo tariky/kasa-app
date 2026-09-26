@@ -11,6 +11,7 @@ import { gotovinskiIznos } from '@/lib/drawer';
 import { opisPlacanja, raspodjelaPlacanja } from '@/lib/placanje';
 import { round2 } from '@/lib/novac';
 import { ucitajZaStampu } from '@/lib/stampa';
+import { otvoriNezavrseneRacune } from '@/lib/nezavrseniRacuni';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -219,6 +220,16 @@ export function RacunDetailDialog({ orderId, redoslijed, uloga, onClose, onNavig
         dozvoliPolog,
         adminPin: trebaPin ? pinValue : undefined,
       });
+      // Storno je možda odštampan (ili već upisan iz dijaloga nezavršenih
+      // računa): bez ponovnog slanja i bez ponude pologa.
+      if (result && !result.success && (result.ishodNepoznat || result.vecEvidentiran)) {
+        setReklamacijaOpen(false);
+        setReklamacijaBroj('');
+        setNotice({ type: 'error', text: result.error || 'Ishod štampe nije poznat.' });
+        if (result.ishodNepoznat) otvoriNezavrseneRacune();
+        await reload();
+        return;
+      }
       if (!result || !result.success) {
         const details = result?.odgovori ? Object.entries(result.odgovori).map(([k, v]) => `${k}: ${v}`).join(', ') : '';
         setReklamacijaGreska(`${result?.error || 'Nepoznata greška'}${details ? ` (${details})` : ''}`);

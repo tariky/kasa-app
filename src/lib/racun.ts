@@ -57,8 +57,11 @@ export interface UpisRacunaInput {
   stavke: Array<{
     productId: number; kolicina: number; cijena: number; rabat: number; pdvStopa: string;
     /** 'usluga' ne razdužuje skladište. */
-    productTip?: string;
+    productTip?: string | null;
   }>;
+  /** Račun upisan iz dijaloga nezavršenih računa: datum s papira, označen kao ručni. */
+  createdAt?: string;
+  isManual?: 0 | 1;
 }
 
 /**
@@ -68,13 +71,16 @@ export interface UpisRacunaInput {
  */
 export function upisiRacun(db: SqlDb, input: UpisRacunaInput): number {
   const k = input.kupac;
+  // Bez datuma: zadani datum kolone (sada), kao i ranije.
+  const createdAt = input.createdAt || null;
   const orderRes = db.prepare(`
     INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, status,
-      kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj)
-    VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?)
+      kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj, isManual, createdAt)
+    VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now','localtime')))
   `).run(
     input.korisnikId, input.ukupno, input.pdvIznos, input.nacinPlacanja, input.brojFiskalnogRacuna,
-    k?.naziv ?? null, k?.idBroj ?? null, k?.adresa ?? null, k?.grad ?? null, k?.postanskiBroj ?? null
+    k?.naziv ?? null, k?.idBroj ?? null, k?.adresa ?? null, k?.grad ?? null, k?.postanskiBroj ?? null,
+    input.isManual ?? 0, createdAt
   );
   const orderId = Number(orderRes.lastInsertRowid);
 
@@ -82,11 +88,11 @@ export function upisiRacun(db: SqlDb, input: UpisRacunaInput): number {
     'INSERT INTO order_items (orderId, productId, kolicina, cijena, rabat, pdvStopa) VALUES (?, ?, ?, ?, ?, ?)'
   );
   const insertStock = db.prepare(
-    "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'izlaz', ?, 'order', ?)"
+    "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId, createdAt) VALUES (?, 'izlaz', ?, 'order', ?, COALESCE(?, datetime('now','localtime')))"
   );
   for (const s of input.stavke) {
     insertItem.run(orderId, s.productId, s.kolicina, s.cijena, s.rabat, s.pdvStopa);
-    if (s.productTip !== 'usluga') insertStock.run(s.productId, s.kolicina, orderId);
+    if (s.productTip !== 'usluga') insertStock.run(s.productId, s.kolicina, orderId, createdAt);
   }
   return orderId;
 }

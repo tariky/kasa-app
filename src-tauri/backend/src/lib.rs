@@ -29,6 +29,7 @@ pub mod korisnici;
 pub mod postavke;
 pub mod katalog;
 pub mod skladiste;
+pub mod pending_racun;
 pub mod racuni;
 pub mod cash;
 pub mod ponude;

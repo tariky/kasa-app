@@ -64,6 +64,10 @@ interface Window {
     }) => Promise<{
       success: boolean; brojReklamacije?: string | null; error?: string; odgovori?: Record<string, string>;
       nedovoljnoSredstava?: boolean; manjak?: number; pologIznos?: number;
+      /** Uređaj nije potvrdio storno — riješava se u dijalogu nezavršenih računa. */
+      ishodNepoznat?: boolean;
+      /** Storno odštampan, ali već upisan iz dijaloga nezavršenih računa. */
+      vecEvidentiran?: boolean;
     }>;
     finalizeOrder: (data: any) => Promise<{
       success: boolean; id?: number; brojFiskalnogRacuna?: string | null; error?: string; odgovori?: Record<string, string>;
@@ -104,6 +108,7 @@ interface Window {
     deletePonuda: (id: number) => Promise<{ changes: number }>;
     konvertujPonudu: (data: { id: number; nacinPlacanja: string }) => Promise<{
       success: boolean; racunId?: number; brojFiskalnogRacuna?: string | null; error?: string; odgovori?: Record<string, string>;
+      ishodNepoznat?: boolean; vecEvidentiran?: boolean;
     }>;
     getNalozi: (filter?: string) => Promise<import('@/types').RadniNalog[]>;
     getNalog: (id: number) => Promise<import('@/types').RadniNalog>;

@@ -8,6 +8,9 @@ use regex::Regex;
 use serde_json::{json, Map, Value};
 
 use crate::greska::R;
+use crate::pending_racun::{
+    baci_ako_ceka_nezavrsen, neuspjela_stampa, preuzmi_pending_red, snapshot_kupca, vec_evidentiran, zapisi_pending,
+};
 use crate::js::{self, or, truthy};
 use crate::postavke::postavka;
 use crate::racun::{izracunaj_totale, upisi_racun};
@@ -278,15 +281,6 @@ pub(crate) fn stampaj(b: &Backend, kanal: &str, racun: &Value) -> Value {
     result
 }
 
-/// `{ success: false, error, odgovori }` za neuspjelu štampu.
-pub(crate) fn neuspjela_stampa(result: &Value) -> Value {
-    json!({
-        "success": false,
-        "error": or(&result["error"], or(&result["vrstaOdgovora"], &json!("Nepoznata greška"))),
-        "odgovori": js::nn(&result["odgovori"], &json!({})),
-    })
-}
-
 /// `{ success: true, racunId, brojFiskalnogRacuna, odgovori }` — `odgovori`
 /// izostaje kad ga uređaj nije vratio (JS `undefined`).
 pub(crate) fn uspjesna_stampa(racun_id: &Value, broj: &Value, odgovori: &Value) -> Value {
@@ -318,17 +312,49 @@ pub(crate) fn poruka_nakon_stampe(broj: &Value, sredina: &str, greska: &str, kra
     format!("Račun {broj} JE odštampan, ali {sredina}: {greska}. {kraj}")
 }
 
+/// Upis računa po ponudi iz write-ahead snapshota: račun + razduženje skladišta,
+/// ponuda → konvertovana, a nalog iz kojeg je račun izdat → fakturisan. Isti
+/// upis ide nakon uspješne štampe i iz dijaloga nezavršenih računa (tada s
+/// datumom s papira, kao ručni račun). Ponuda koja je u međuvremenu već
+/// konvertovana i nalog koji više nije završen ostaju kakvi jesu — račun je na
+/// papiru i mora postojati u bazi. U transakciji. TS: `upisiKonverzijuPonude`.
+pub fn upisi_konverziju_ponude(db: &Db, snap: &Value, broj_fiskalnog_racuna: &Value, created_at: &Value, is_manual: i64) -> R<i64> {
+    let order_id = upisi_racun(
+        db,
+        &json!({
+            "korisnikId": snap["korisnikId"], "ukupno": snap["ukupno"], "pdvIznos": snap["pdvIznos"],
+            "nacinPlacanja": snap["nacinPlacanja"], "brojFiskalnogRacuna": broj_fiskalnog_racuna,
+            "kupac": snap["kupac"], "stavke": snap["stavke"], "createdAt": created_at, "isManual": is_manual,
+        }),
+    )?;
+    db.run(
+        "UPDATE ponude SET status = 'konvertovana', racunId = ? WHERE id = ? AND status <> 'konvertovana'",
+        p![order_id, snap["ponudaId"]],
+    )?;
+    // Kao fakturisiNalog (proizvodnja.rs), bez bacanja: nalog vraćen u izradu ostaje.
+    if !snap["nalogId"].is_null() {
+        db.run(
+            "UPDATE radni_nalozi SET status = 'fakturisan', racunId = ? WHERE id = ? AND status = 'zavrsen' AND vrsta = 'narudzba'",
+            p![order_id, snap["nalogId"]],
+        )?;
+    }
+    Ok(order_id)
+}
+
 /// Odštampa fiskalni račun po ponudi i tek nakon uspješne štampe upiše račun,
-/// razduži skladište i zaključa ponudu — u jednoj transakciji (isti obrazac
-/// kao refundAndPrint). Račun ide po cijenama zamrznutim na ponudi, ne po
-/// trenutnom cjenovniku. Istekla ponuda se smije konvertovati — operater
-/// odlučuje da li dogovor još važi; odbijena ne smije.
+/// razduži skladište i zaključa ponudu — u jednoj transakciji. Račun ide po
+/// cijenama zamrznutim na ponudi, ne po trenutnom cjenovniku. Istekla ponuda se
+/// smije konvertovati — operater odlučuje da li dogovor još važi; odbijena ne smije.
 ///
 /// Sve što bi upis u bazu moglo oboriti (korisnik, način plaćanja, artikli)
 /// provjerava se PRIJE štampe — odštampan fiskalni račun se ne može povući.
+/// Write-ahead kao order:finalize (pending_racun.rs): snapshot `vrsta:
+/// 'ponuda'` prije štampe; nepoznat ishod ga ostavlja za dijalog nezavršenih.
 ///
 /// `kanal` je samo oznaka za dnevnik štampe (ponuda:konvertuj / nalog:izdajRacun).
-pub fn konvertuj_ponudu(b: &Backend, kanal: &str, data: &Value) -> R<Value> {
+/// `nalog_id` (samo iz `izdaj_racun_za_nalog`, ne iz IPC payload-a): nalog iz
+/// kojeg se račun izdaje — fakturiše se u istoj transakciji.
+pub fn konvertuj_ponudu(b: &Backend, kanal: &str, data: &Value, nalog_id: Option<&Value>) -> R<Value> {
     let db = b.baza()?;
     let id = &data["id"];
 
@@ -356,6 +382,7 @@ pub fn konvertuj_ponudu(b: &Backend, kanal: &str, data: &Value) -> R<Value> {
     if ponuda["status"] == "odbijena" {
         baci!("Odbijena ponuda se ne može pretvoriti u račun — ako kupac ipak prihvata, prvo promijenite status");
     }
+    baci_ako_ceka_nezavrsen(db, "ponudaId", &ponuda["id"], "Račun po ovoj ponudi")?;
 
     let stavke = db.all(
         "
@@ -386,33 +413,45 @@ pub fn konvertuj_ponudu(b: &Backend, kanal: &str, data: &Value) -> R<Value> {
         "kupac": kupac_za_racun(&kupac),
     }));
 
+    let mut snapshot = json!({
+        "vrsta": "ponuda", "ponudaId": ponuda["id"], "ponudaBroj": ponuda["broj"], "ponudaGodina": ponuda["godina"],
+        "korisnikId": data["korisnikId"], "ukupno": ponuda["ukupno"], "pdvIznos": ponuda["pdvIznos"],
+        "nacinPlacanja": nacin_placanja, "kupac": snapshot_kupca(&kupac),
+        "stavke": stavke.iter().map(|s| json!({
+            "productId": s["productId"], "naziv": s["productNaziv"], "kolicina": s["kolicina"], "cijena": s["cijena"],
+            "rabat": s["rabat"], "pdvStopa": s["pdvStopa"], "productTip": s["productTip"],
+        })).collect::<Vec<_>>(),
+    });
+    if let Some(n) = nalog_id {
+        snapshot["nalogId"] = n.clone();
+    }
+    let pending_id = zapisi_pending(db, &data["korisnikId"], &snapshot)?;
+
+    // Štampa u Rustu ne baca — greška veze stiže kao neuspješan odgovor.
     let result = stampaj(b, kanal, &racun);
 
+    // Siguran neuspjeh briše pending red; nepoznat ishod ga ostavlja.
     if !uspjeh(&result) {
-        return Ok(neuspjela_stampa(&result));
+        return neuspjela_stampa(db, pending_id, &result);
     }
 
     let broj_fiskalnog_racuna = js::or_null(&result["odgovori"]["BrojFiskalnogRacuna"]);
 
     let upis = db.tx(|| {
-        let order_id = upisi_racun(
-            db,
-            &json!({
-                "korisnikId": data["korisnikId"], "ukupno": ponuda["ukupno"], "pdvIznos": ponuda["pdvIznos"],
-                "nacinPlacanja": nacin_placanja, "brojFiskalnogRacuna": broj_fiskalnog_racuna,
-                "kupac": kupac.clone().unwrap_or(Value::Null), "stavke": stavke,
-            }),
-        )?;
-        db.run("UPDATE ponude SET status = 'konvertovana', racunId = ? WHERE id = ?", p![order_id, id])?;
-        Ok(order_id)
+        // Red riješen iz dijaloga dok je štampa trajala → bez drugog zapisa.
+        if !preuzmi_pending_red(db, pending_id)? {
+            return Ok(None);
+        }
+        upisi_konverziju_ponude(db, &snapshot, &broj_fiskalnog_racuna, &Value::Null, 0).map(Some)
     });
 
     match upis {
-        Ok(racun_id) => Ok(uspjesna_stampa(&json!(racun_id), &broj_fiskalnog_racuna, &result["odgovori"])),
-        // Račun je već na papiru i u fiskalnom uređaju — operater to mora znati.
+        Ok(Some(racun_id)) => Ok(uspjesna_stampa(&json!(racun_id), &broj_fiskalnog_racuna, &result["odgovori"])),
+        Ok(None) => Ok(vec_evidentiran(&broj_fiskalnog_racuna)),
+        // Račun je već na papiru; pending red ostaje (rollback) za dijalog.
         Err(e) => baci!(
             "{}",
-            poruka_nakon_stampe(&broj_fiskalnog_racuna, "nije zabilježen u bazi", e.poruka(), "Evidentirajte račun ručno.")
+            poruka_nakon_stampe(&broj_fiskalnog_racuna, "nije zabilježen u bazi", e.poruka(), "Riješite ga kroz nezavršene račune.")
         ),
     }
 }
@@ -495,7 +534,7 @@ pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
         "ponuda:konvertuj" => sesija::korisnik(b).and_then(|k| {
             let data = sesija::sa_korisnikom(&a[0], k.id);
             b.load_tring_config()?;
-            konvertuj_ponudu(b, kanal, &data)
+            konvertuj_ponudu(b, kanal, &data, None)
         }),
         _ => return None,
     })

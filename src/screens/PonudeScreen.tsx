@@ -21,6 +21,7 @@ import { pdf } from '@react-pdf/renderer';
 import { PonudaPdf } from '@/components/PonudaPdf';
 import { filtriraj, type PoljaPretrage } from '@/lib/pretraga';
 import { formatBrojPonude, efektivniStatus, plusDana, danaIzmedju } from '@/lib/ponuda';
+import { otvoriNezavrseneRacune } from '@/lib/nezavrseniRacuni';
 import { izracunajTotale, pdvStavke } from '@/lib/racun';
 import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { localDateStr } from '@/lib/novac';
@@ -402,6 +403,16 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
       const result = await window.api.konvertujPonudu({
         id: selected.id, nacinPlacanja: paymentType,
       });
+      // Nepoznat ishod (račun je možda odštampan) ili račun već upisan iz
+      // dijaloga nezavršenih: dijalog se zatvara da se ponuda ne pošalje ponovo.
+      if (result && !result.success && (result.ishodNepoznat || result.vecEvidentiran)) {
+        setKonvertujOpen(false);
+        setMsg({ type: 'error', text: result.error || 'Ishod štampe nije poznat.' });
+        if (result.ishodNepoznat) otvoriNezavrseneRacune();
+        await loadPonude();
+        setSelected(await window.api.getPonuda(selected.id));
+        return;
+      }
       if (!result || !result.success) {
         const details = result?.odgovori ? Object.entries(result.odgovori).map(([k, v]) => `${k}: ${v}`).join(', ') : '';
         setKonvertujMsg(`Greška: ${result?.error || 'Nepoznata greška'}${details ? ` (${details})` : ''}`);

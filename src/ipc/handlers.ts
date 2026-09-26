@@ -19,10 +19,10 @@ import {
   jeArtikalUProizvodnji, nextBrojNaloga, createNalog, createNalogIzPonude, nalogZaPonudu, updateNalog, replaceStavke,
   proizvodiPonude, setProizvodiNaloga,
   getNalog, listNalozi, deleteNalog, kalkulacijaNaloga, setStatusNaloga, zavrsiNalog, vratiUIzradu,
-  izdajRacunZaNalog, getNormativ, saveNormativ, osigurajProdajnuUslugu,
+  izdajRacunZaNalog, upisiRacunNaloga, getNormativ, saveNormativ, osigurajProdajnuUslugu,
 } from '../lib/proizvodnja';
-import { refundAndPrint } from '../lib/refund';
-import { neuspjelaStampa, preuzmiPendingRed, vecEvidentiran } from '../lib/pendingRacun';
+import { refundAndPrint, refundOrderInTransaction } from '../lib/refund';
+import { neuspjelaStampa, preuzmiPendingRed, vecEvidentiran, type VrstaNezavrsenog } from '../lib/pendingRacun';
 import { postaviDatumValute } from '../lib/valuta';
 import {
   savePrilogStavkeInTransaction, finalizePrilogAndPrint, oznaciPonuduFakturisanom,
@@ -37,7 +37,7 @@ import {
 import type { SavedCartItem } from '../lib/kosarica';
 import {
   nextBrojPonude, createPonuda, updatePonuda, setStatusPonude, deletePonuda, konvertujPonudu,
-  type PonudaStatus,
+  upisiKonverzijuPonude, type PonudaStatus,
 } from '../lib/ponuda';
 import { buildTringRacun } from '../lib/tringRacun';
 import { pripremiRacun, PDV_STOPE } from '../lib/provjeraRacuna';
@@ -1372,7 +1372,7 @@ export function registerIpcHandlers(): void {
           throw new Error(`Unos novca od ${iznos} KM nije prihvaćen na printeru: ${res.error || res.vrstaOdgovora}`);
         }
       },
-    }, data);
+    }, { ...data, korisnikId: k.id });
     if (rezultat.success) {
       // Storno je već odštampan i upisan — greška traga ne smije to sakriti.
       // Korisnik je onaj s početka poziva: dok se čekala štampa, neko se mogao
@@ -1406,35 +1406,58 @@ export function registerIpcHandlers(): void {
     const row = db.prepare('SELECT snapshot FROM pending_receipts WHERE id = ?').get(data.id) as { snapshot: string } | undefined;
     if (!row) throw new Error('Zapis više ne postoji');
     const snap = JSON.parse(row.snapshot);
+    const broj = data.brojFiskalnogRacuna.trim();
+    const vrsta: VrstaNezavrsenog | undefined = snap.vrsta;
+    if (vrsta !== undefined && !['ponuda', 'nalog', 'storno'].includes(vrsta)) {
+      throw new Error(`Nepoznata vrsta nezavršenog zapisa: "${vrsta}"`);
+    }
 
-    const existing = db.prepare('SELECT id FROM orders WHERE brojFiskalnogRacuna = ?').get(data.brojFiskalnogRacuna.trim());
-    if (existing) throw new Error('Fiskalni račun sa tim brojem već postoji');
+    // Storno nosi broj reklamacije — drugi niz, ne broj računa.
+    if (vrsta !== 'storno') {
+      const existing = db.prepare('SELECT id FROM orders WHERE brojFiskalnogRacuna = ?').get(broj);
+      if (existing) throw new Error('Fiskalni račun sa tim brojem već postoji');
+    }
 
     const resolveTx = db.transaction(() => {
-      const orderId = insertCompletedOrder(db, {
-        ...snap,
-        brojFiskalnogRacuna: data.brojFiskalnogRacuna.trim(),
-        // Prilog račun: broj fakture je BF koji operater ovdje ukuca; rezervni
-        // broj iz snapshota ostaje samo kad BF nije numerički.
-        prilogBroj: snap.prilogBroj == null
-          ? null
-          : parseFiskalniBroj(data.brojFiskalnogRacuna.trim()) ?? snap.prilogBroj,
-        isManual: 1,
-        createdAt: data.createdAt,
-      });
-      // Prilog račun: stvarne stavke žive u snapshotu odvojeno od order_items.
-      if (Array.isArray(snap.prilogStavke) && snap.prilogStavke.length > 0) {
-        savePrilogStavkeInTransaction(db, orderId, snap.prilogStavke);
+      let orderId: number;
+      // Odštampan dokument upisuje se istom operacijom kao nakon uspješne štampe,
+      // s brojem i datumom s papira (ručni račun).
+      if (vrsta === 'ponuda') {
+        orderId = upisiKonverzijuPonude(db, snap, { brojFiskalnogRacuna: broj, createdAt: data.createdAt, isManual: 1 });
+      } else if (vrsta === 'nalog') {
+        orderId = upisiRacunNaloga(db, snap, { brojFiskalnogRacuna: broj, createdAt: data.createdAt, isManual: 1 });
+      } else if (vrsta === 'storno') {
+        orderId = snap.orderId;
+        refundOrderInTransaction(db, orderId, broj, data.createdAt);
+      } else {
+        // Snapshot bez vrste: račun sa kase ili faktura (i sve stare baze).
+        orderId = insertCompletedOrder(db, {
+          ...snap,
+          brojFiskalnogRacuna: broj,
+          // Prilog račun: broj fakture je BF koji operater ovdje ukuca; rezervni
+          // broj iz snapshota ostaje samo kad BF nije numerički.
+          prilogBroj: snap.prilogBroj == null
+            ? null
+            : parseFiskalniBroj(broj) ?? snap.prilogBroj,
+          isManual: 1,
+          createdAt: data.createdAt,
+        });
+        // Prilog račun: stvarne stavke žive u snapshotu odvojeno od order_items.
+        if (Array.isArray(snap.prilogStavke) && snap.prilogStavke.length > 0) {
+          savePrilogStavkeInTransaction(db, orderId, snap.prilogStavke);
+        }
+        // Faktura iz ponude: ponuda se veže tek kad račun stvarno postoji u bazi.
+        if (snap.ponudaId != null) {
+          const ponuda = db.prepare('SELECT status FROM ponude WHERE id = ?').get(snap.ponudaId) as { status: string } | undefined;
+          if (ponuda && ponuda.status !== 'konvertovana') oznaciPonuduFakturisanom(db, snap.ponudaId, orderId);
+        }
+        // Faktura iz skice: odštampana faktura se ne smije moći fiskalizovati ponovo.
+        if (snap.skicaId != null) db.prepare('DELETE FROM faktura_skice WHERE id = ?').run(snap.skicaId);
       }
-      // Faktura iz ponude: ponuda se veže tek kad račun stvarno postoji u bazi.
-      if (snap.ponudaId != null) {
-        const ponuda = db.prepare('SELECT status FROM ponude WHERE id = ?').get(snap.ponudaId) as { status: string } | undefined;
-        if (ponuda && ponuda.status !== 'konvertovana') oznaciPonuduFakturisanom(db, snap.ponudaId, orderId);
-      }
-      // Faktura iz skice: odštampana faktura se ne smije moći fiskalizovati ponovo.
-      if (snap.skicaId != null) db.prepare('DELETE FROM faktura_skice WHERE id = ?').run(snap.skicaId);
       db.prepare('DELETE FROM pending_receipts WHERE id = ?').run(data.id);
-      audit('pending:rijesi', { pendingId: data.id, brojFiskalnogRacuna: data.brojFiskalnogRacuna.trim(), orderId });
+      audit('pending:rijesi', {
+        pendingId: data.id, brojFiskalnogRacuna: broj, orderId, ...(vrsta !== undefined ? { vrsta } : {}),
+      });
       return orderId;
     });
     return { id: resolveTx() };

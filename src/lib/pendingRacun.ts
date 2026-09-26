@@ -1,5 +1,4 @@
 import type * as Tring from '@/services/tring';
-import { ishodNepoznat } from '../services/tring';
 import type { SqlDb } from './sqldb';
 
 /**
@@ -29,7 +28,9 @@ export function neuspjelaStampa(
 ): NeuspjehStampe {
   const greska = result?.error || result?.vrstaOdgovora || 'Nepoznata greška';
   const odgovori = result?.odgovori ?? {};
-  if (ishodNepoznat(result)) {
+  // Kao `ishodNepoznat` iz services/tring — bez runtime importa, jer lib/ se
+  // (preko ponuda.ts, prilog.ts, proizvodnja.ts) učitava i u rendereru.
+  if (!!result && !result.success && result.ishodNepoznat === true) {
     return {
       success: false,
       error: `Uređaj nije potvrdio račun (${greska}) — ishod štampe nije poznat. ` +
@@ -69,4 +70,93 @@ export interface VecEvidentiran {
 /** Odgovor kad `preuzmiPendingRed` vrati false. */
 export function vecEvidentiran(brojFiskalnogRacuna: string | null): VecEvidentiran {
   return { success: false, vecEvidentiran: true, error: porukaVecEvidentiran(brojFiskalnogRacuna), brojFiskalnogRacuna };
+}
+
+// ─── Dokumenti s vlastitom operacijom upisa ─────────────────
+// Ponuda→račun, nalog→račun i storno idu kroz isti write-ahead red; snapshot
+// nosi `vrsta` da dijalog nezavršenih računa zna kojom operacijom ga upisati.
+// Snapshot bez `vrsta` je običan račun (kasa, faktura) — stare baze.
+
+export type VrstaNezavrsenog = 'ponuda' | 'nalog' | 'storno';
+
+/** Stavka računa u snapshotu ponude/naloga — dovoljna za upis i za prikaz u dijalogu. */
+export interface SnapshotStavka {
+  productId: number;
+  naziv: string;
+  kolicina: number;
+  cijena: number;
+  rabat: number;
+  pdvStopa: string;
+  /** 'usluga' ne razdužuje skladište (upisiRacun). */
+  productTip?: string | null;
+}
+
+export interface SnapshotKupac {
+  naziv: string | null; idBroj: string | null; adresa: string | null; grad: string | null; postanskiBroj: string | null;
+}
+
+/** Račun po ponudi (ekran Ponude ili nalog iz ponude — tada nosi `nalogId`). */
+export interface SnapshotPonude {
+  vrsta: 'ponuda';
+  ponudaId: number; ponudaBroj: number; ponudaGodina: number;
+  nalogId?: number;
+  korisnikId: number; ukupno: number; pdvIznos: number; nacinPlacanja: string;
+  kupac: SnapshotKupac | null;
+  stavke: SnapshotStavka[];
+}
+
+/** Račun za samostalni nalog po narudžbi (jedna stavka usluge NAMJ). */
+export interface SnapshotNaloga {
+  vrsta: 'nalog';
+  nalogId: number; nalogBroj: number; nalogGodina: number;
+  korisnikId: number; ukupno: number; pdvIznos: number; nacinPlacanja: string;
+  kupac: SnapshotKupac | null;
+  stavke: SnapshotStavka[];
+}
+
+/** Storno (reklamacija) računa; stavke su samo za prikaz u dijalogu. */
+export interface SnapshotStorna {
+  vrsta: 'storno';
+  orderId: number;
+  /** Fiskalni broj računa koji se stornira. */
+  brojRacuna: string | null;
+  korisnikId: number; ukupno: number;
+  stavke: Array<{ naziv: string; kolicina: number; cijena: number; rabat: number }>;
+}
+
+export function snapshotKupca(k: Partial<Record<keyof SnapshotKupac, string | null>> | null | undefined): SnapshotKupac | null {
+  if (!k) return null;
+  return {
+    naziv: k.naziv ?? null, idBroj: k.idBroj ?? null, adresa: k.adresa ?? null,
+    grad: k.grad ?? null, postanskiBroj: k.postanskiBroj ?? null,
+  };
+}
+
+/** Write-ahead: snapshot se upiše (odmah, van transakcije) prije štampe. */
+export function zapisiPending(db: SqlDb, korisnikId: number, snapshot: object): number {
+  return Number(db.prepare('INSERT INTO pending_receipts (korisnikId, snapshot) VALUES (?, ?)')
+    .run(korisnikId, JSON.stringify(snapshot)).lastInsertRowid);
+}
+
+/**
+ * Nova štampa dokumenta za koji postoji nerazriješen write-ahead red mogla bi
+ * dati drugi fiskalni račun za isti posao — odbija se prije štampe, dok
+ * operater ne riješi red (odštampan) ili ga admin ne odbaci. `kljuc` je polje
+ * snapshota (i stara faktura iz ponude nosi `ponudaId`); obje strane se
+ * porede kao cijeli brojevi (id iz payload-a može stići i kao tekst).
+ * Rust: `baci_ako_ceka_nezavrsen`.
+ */
+export function baciAkoCekaNezavrsen(
+  db: SqlDb, kljuc: 'ponudaId' | 'nalogId' | 'orderId', id: number, dokument: string,
+): void {
+  const red = db.prepare(`
+    SELECT id FROM pending_receipts
+    WHERE CAST(CASE WHEN json_valid(snapshot) THEN json_extract(snapshot, ?) END AS INTEGER) = CAST(? AS INTEGER)
+    LIMIT 1
+  `).get(`$.${kljuc}`, id);
+  if (red) {
+    throw new Error(
+      `${dokument} čeka u nezavršenim računima (ishod štampe nije poznat) — riješite ga prije nove štampe`
+    );
+  }
 }
