@@ -2,6 +2,7 @@
  * Preračuni za pločasti materijal (iverica, MDF, lesonit). Ploča se kupuje
  * po komadu, a troši u m²; da unos ostane jednostavan, app radi preračun.
  */
+import { round2 } from './novac';
 
 export const JM_PLOCA = 'm²';
 
@@ -12,7 +13,6 @@ export interface Element {
 }
 
 const round4 = (n: number) => Math.round(n * 10000) / 10000;
-const round2 = (n: number) => Math.round(n * 100) / 100;
 
 /** Ploča = materijal u m² sa upisanom dimenzijom. Bez dimenzije je običan m² materijal. */
 export function jePloca(p: { jm: string; plocaSirina?: number | null; plocaVisina?: number | null }): boolean {

@@ -23,6 +23,12 @@ test('zavisni se raspoređuju srazmjerno vrijednosti, zbir je tačno ukupno', ()
   expect(rasporediZavisne([50, 0, 0], 10)).toEqual([10, 0, 0]);
 });
 
+test('udio od tačno pola feninga se zaokružuje naviše (round2 iz novac.ts), ostatak nosi zadnja stavka', () => {
+  // 2,01 / 2 = 1,005 — Math.round(1.005 * 100) bi dao 1,00 (float je 1,00499…)
+  expect(rasporediZavisne([50, 50], 2.01)).toEqual([1.01, 1]);
+  expect(rasporediZavisne([100, 100, 200], 9.38)).toEqual([2.35, 2.35, 4.68]);
+});
+
 test('bez zavisnih ili bez vrijednosti raspored je nule', () => {
   expect(rasporediZavisne([100, 200], 0)).toEqual([0, 0]);
   expect(rasporediZavisne([0, 0], 30)).toEqual([0, 0]);

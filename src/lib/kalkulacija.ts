@@ -9,6 +9,7 @@
 // Jedan izvor istine za dijalog, PDF-ove i izvještaje; bez React-a.
 
 import { PDV_STOPA_E_PCT } from './pdv';
+import { round2 } from './novac';
 
 export interface StavkaZaKalkulaciju {
   kolicina: number;
@@ -21,8 +22,6 @@ export interface StavkaZaKalkulaciju {
   cijena: number;
   pdvStopa: string;
 }
-
-const round2 = (n: number) => Math.round(n * 100) / 100;
 
 export const pdvStopaPct = (stopa: string) => (stopa === 'E' ? PDV_STOPA_E_PCT : 0);
 
