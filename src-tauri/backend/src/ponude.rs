@@ -306,7 +306,7 @@ pub fn upisi_konverziju_ponude(db: &Db, snap: &Value, broj_fiskalnog_racuna: &Va
 /// `nalog_id` (samo iz `izdaj_racun_za_nalog`, ne iz IPC payload-a): nalog iz
 /// kojeg se račun izdaje — fakturiše se u istoj transakciji.
 pub fn konvertuj_ponudu(b: &Backend, kanal: &str, data: &Value, nalog_id: Option<&Value>) -> R<Value> {
-    let db = b.baza()?;
+    let db = b.db();
     let id = &data["id"];
 
     let _u_toku = UToku::zauzmi(b, "ponuda", id, "Konverzija ove ponude je već u toku")?;
@@ -456,14 +456,7 @@ fn create(db: &Db, data: &Value, danas: &str) -> R<Value> {
 }
 
 pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
-    if let Err(e) = b.db() {
-        return Some(Err(e));
-    }
-    let b: &Backend = b;
-    let db = match b.baza() {
-        Ok(db) => db,
-        Err(e) => return Some(Err(e)),
-    };
+    let db = b.db();
     Some(match kanal {
         "ponuda:getAll" => get_all(db),
         "ponuda:get" => get(db, &a[0]),

@@ -186,7 +186,7 @@ pub fn oznaci_ponudu_fakturisanom(db: &Db, ponuda_id: &Value, order_id: &Value) 
 /// Isti write-ahead obrazac kao order:finalize — snapshot u pending_receipts
 /// prije štampe, pa atomični upis ordera + brisanje pending reda.
 pub fn finalize_prilog_and_print(b: &Backend, data: &Value) -> R<Value> {
-    let db = b.baza()?;
+    let db = b.db();
     if !truthy(&data["korisnikId"]) {
         baci!("Korisnik nije prijavljen");
     }

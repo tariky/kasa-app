@@ -226,7 +226,7 @@ impl DatumIzBaze {
 }
 
 fn danas_za_licencu(b: &Backend, z: &Value) -> String {
-    let iz_baze = b.db().ok().and_then(|db| b.datum_iz_baze.procitaj(db));
+    let iz_baze = b.datum_iz_baze.procitaj(b.db());
     efektivni_danas(&b.sat.danas(), z["zadnjiDatum"].as_str(), iz_baze.as_deref())
 }
 

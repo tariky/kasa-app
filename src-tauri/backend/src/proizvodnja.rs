@@ -908,7 +908,7 @@ pub fn upisi_racun_naloga(db: &Db, snap: &Value, broj_fiskalnog_racuna: &Value, 
 /// konvertovana direktno (npr. sa ekrana Ponude), nalog se samo poveže sa
 /// postojećim računom — bez ponovne štampe.
 pub fn izdaj_racun_za_nalog(b: &Backend, kanal: &str, data: &Value) -> R<Value> {
-    let db = b.baza()?;
+    let db = b.db();
     let nalog = get_nalog(db, &data["id"])?;
     if nalog["vrsta"] != "narudzba" {
         baci!("Račun se izdaje samo za nalog po narudžbi");
@@ -1000,7 +1000,7 @@ pub fn izdaj_racun_za_nalog(b: &Backend, kanal: &str, data: &Value) -> R<Value> 
 }
 
 fn set_status(b: &Backend, data: &Value) -> R<Value> {
-    let db = b.db()?;
+    let db = b.db();
     let status = &data["status"];
     if status == "u_izradi" {
         set_status_naloga(db, &data["id"], "u_izradi")?;
@@ -1018,14 +1018,7 @@ fn set_status(b: &Backend, data: &Value) -> R<Value> {
 }
 
 pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
-    if let Err(e) = b.db() {
-        return Some(Err(e));
-    }
-    let b: &Backend = b;
-    let db = match b.baza() {
-        Ok(db) => db,
-        Err(e) => return Some(Err(e)),
-    };
+    let db = b.db();
     let ok = |r: R<()>| r.map(|_| json!({ "success": true }));
     Some(match kanal {
         "nalog:getAll" => list_nalozi(db, &a[0]),

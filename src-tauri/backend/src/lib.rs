@@ -129,13 +129,8 @@ impl Backend {
     }
 
     /// Aktivna baza (`getDb()`); zatvorena se otvori pri prvom upitu.
-    pub fn db(&self) -> R<&Db> {
-        Ok(&self.db)
-    }
-
-    /// Isto što i [`Backend::db`] (ostalo iz vremena kad je `db()` tražio `&mut`).
-    pub fn baza(&self) -> R<&Db> {
-        Ok(&self.db)
+    pub fn db(&self) -> &Db {
+        &self.db
     }
 
     /// Otvori aktivnu bazu odmah, s greškom ako schema/migracije puknu.

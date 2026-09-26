@@ -40,7 +40,7 @@ pub fn zapisi(db: &Db, korisnik_id: Option<i64>, akcija: &str, detalji: Value) -
 
 /// Trag radnje s prijavljenim korisnikom iz sesije, u aktivnu bazu.
 pub fn zabiljezi(b: &Backend, akcija: &str, detalji: Value) -> R<()> {
-    zapisi(b.db()?, b.sesija.id(), akcija, detalji)
+    zapisi(b.db(), b.sesija.id(), akcija, detalji)
 }
 
 /// Nova vrijednost postavke; `None` = JS `undefined` (polje nije poslano).

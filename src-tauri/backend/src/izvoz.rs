@@ -72,10 +72,7 @@ fn knjigovodja(db: &Db, od: &Value, do_: &Value) -> R<Value> {
 }
 
 pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
-    let db = match b.db() {
-        Ok(db) => db,
-        Err(e) => return Some(Err(e)),
-    };
+    let db = b.db();
     Some(match kanal {
         "izvoz:knjigovodja" => knjigovodja(db, &a[0], &a[1]),
         _ => return None,

@@ -32,7 +32,7 @@ impl<'a> Uredjaj<'a> {
     /// Tring postavke iz baze → klijent (`loadTringConfig`): host, port i
     /// dnevnik (`dev.logging`), a operator i lozinka za inicijalizaciju.
     pub fn iz_postavki(b: &'a Backend) -> R<Uredjaj<'a>> {
-        let db = b.db()?;
+        let db = b.db();
         let rows = db.all("SELECT key, value FROM settings WHERE key LIKE 'tring.%'", p![])?;
         let mut map = serde_json::Map::new();
         for r in rows {
@@ -334,7 +334,6 @@ mod tests {
         let d = dokumenti(&p);
         p.b()
             .db()
-            .unwrap()
             .exec(
                 "CREATE TRIGGER bez_racuna BEFORE INSERT ON orders BEGIN SELECT RAISE(ABORT, 'upis pao'); END;
                  CREATE TRIGGER bez_storna BEFORE UPDATE ON orders BEGIN SELECT RAISE(ABORT, 'upis pao'); END;",

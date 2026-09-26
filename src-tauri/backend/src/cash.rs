@@ -90,7 +90,7 @@ fn rezultat(id: Value, tring_status: &str, result: &Odgovor) -> Value {
 /// provjera.
 pub fn add_cash_movement(b: &Backend, data: &Value) -> R<Value> {
     let uredjaj = Uredjaj::iz_postavki(b)?;
-    let db = b.baza()?;
+    let db = b.db();
     // Sve provjere prije slanja: uređaj je fizički primio/izdao novac čim
     // odgovori, pa upis nakon toga ne smije pasti na CHECK ili FOREIGN KEY.
     let tip = match data["tip"].as_str() {
@@ -118,7 +118,7 @@ pub fn add_cash_movement(b: &Backend, data: &Value) -> R<Value> {
 
 pub fn retry_cash_movement(b: &Backend, id: &Value) -> R<Value> {
     let uredjaj = Uredjaj::iz_postavki(b)?;
-    let db = b.baza()?;
+    let db = b.db();
     let Some(row) = db.get("SELECT * FROM cash_movements WHERE id = ?", p![id])? else {
         baci!("Zapis ne postoji");
     };
@@ -215,14 +215,7 @@ pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
     if !matches!(kanal, "cash:add" | "cash:retry" | "cash:getToday" | "cash:lastPolog" | "cash:drawerState") {
         return None;
     }
-    if let Err(e) = b.otvori_db() {
-        return Some(Err(e));
-    }
-    let b: &Backend = b;
-    let db = match b.baza() {
-        Ok(db) => db,
-        Err(e) => return Some(Err(e)),
-    };
+    let db = b.db();
     Some(match kanal {
         "cash:add" => sesija::korisnik(b).and_then(|k| add_cash_movement(b, &sesija::sa_korisnikom(&a[0], k.id))),
         "cash:retry" => retry_cash_movement(b, &a[0]),

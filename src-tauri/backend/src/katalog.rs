@@ -156,7 +156,7 @@ fn product_create(db: &Db, data: &Value) -> R<Value> {
 }
 
 fn product_update(b: &Backend, id: &Value, data: &Value) -> R<Value> {
-    let db = b.db()?;
+    let db = b.db();
     let upis = validiraj_artikal(db, data, id)?;
     let mut fields: Vec<&str> = Vec::new();
     let mut values: Vec<Value> = Vec::new();
@@ -231,7 +231,7 @@ fn product_delete(db: &Db, id: &Value) -> R<Value> {
 }
 
 fn product_adjust_stock(b: &Backend, product_id: &Value, new_stanje: &Value) -> R<Value> {
-    let db = b.db()?;
+    let db = b.db();
     if !db.ima("SELECT 1 FROM products WHERE id = ?", p![product_id])? {
         baci!("Artikal ne postoji");
     }
@@ -344,7 +344,7 @@ fn product_find_by_dobavljac_sifra(db: &Db, dobavljac_id: &Value, sifra: &Value)
 // isti naziv (bez obzira na velika slova), stopa i JM uvijek vraćaju na isti
 // artikal, kome se mijenja samo cijena.
 fn product_slobodan(b: &Backend, data: &Value) -> R<Value> {
-    let db = b.db()?;
+    let db = b.db();
     let naziv = js::trim(&data["naziv"]).unwrap_or("").to_string();
     if naziv.is_empty() {
         baci!("Naziv stavke je obavezan");
@@ -572,10 +572,7 @@ fn kupac_delete(db: &Db, id: &Value) -> R<Value> {
 }
 
 pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
-    let db = match b.db() {
-        Ok(db) => db,
-        Err(e) => return Some(Err(e)),
-    };
+    let db = b.db();
     Some(match kanal {
         "product:getAll" => product_get_all(db, &a[0]),
         "product:get" => db.get("SELECT * FROM products WHERE id = ?", p![a[0]]).map(|r| r.unwrap_or(Value::Null)),

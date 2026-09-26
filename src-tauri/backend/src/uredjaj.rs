@@ -295,7 +295,7 @@ fn u_delete_mode(db: &Db) -> R<()> {
 /// Kopija aktivne baze kao jedan samostalan fajl (DELETE journal mode), koji
 /// SQLite otvara bilo kako, i read-only, bez -wal/-shm pored njega.
 fn samostalna_kopija(b: &Backend, db_path: &Path, cilj: &Path) -> R<()> {
-    b.db()?.pragma("wal_checkpoint(TRUNCATE)")?;
+    b.db().pragma("wal_checkpoint(TRUNCATE)")?;
     // Ostaci ranijeg fajla na istoj putanji bi se primijenili na novu kopiju.
     obrisi(&sa_sufiksom(cilj, "-wal"))?;
     obrisi(&sa_sufiksom(cilj, "-shm"))?;

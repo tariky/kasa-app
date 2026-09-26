@@ -126,7 +126,7 @@ fn get(db: &Db, id: &Value) -> R<Value> {
 // stopa i cijena stavke smiju odstupati od današnjeg artikla — prepisuje se
 // stari isječak.
 fn create_manual(b: &Backend, unos: &Value) -> R<Value> {
-    let db = b.baza()?;
+    let db = b.db();
     let korisnik_id = sesija::korisnik(b)?.id;
     let r = provjera_racuna::pripremi_racun(db, unos, false)?;
     let broj = unos["brojFiskalnogRacuna"].as_str().map(str::trim).unwrap_or("").to_string();
@@ -162,7 +162,7 @@ fn create_manual(b: &Backend, unos: &Value) -> R<Value> {
 }
 
 fn finalize(b: &Backend, unos: &Value) -> R<Value> {
-    let db = b.baza()?;
+    let db = b.db();
     // Račun izdaje prijavljeni korisnik — korisnikId iz payload-a se ne čita.
     let korisnik_id = sesija::korisnik(b)?.id;
     // Sve provjere prije write-ahead zapisa i štampe; iznosi se računaju iz stavki.
@@ -241,7 +241,7 @@ fn finalize(b: &Backend, unos: &Value) -> R<Value> {
 /// PIN u istom pozivu; provjera je ovdje, prije štampe — odvojen korak
 /// provjere renderer bi mogao preskočiti.
 fn storno(b: &Backend, data: &Value) -> R<Value> {
-    let db = b.baza()?;
+    let db = b.db();
     let k: Korisnik = sesija::korisnik(b)?;
     let mut odobrio_admin_id = Value::Null;
     if db.val("SELECT value FROM settings WHERE key = ?", p!["kasa.requirePinRefund"])? == "true" && !k.je_admin() {
@@ -287,7 +287,7 @@ fn pending_list(db: &Db) -> R<Value> {
 }
 
 fn pending_resolve(b: &Backend, data: &Value) -> R<Value> {
-    let db = b.db()?;
+    let db = b.db();
     if js::blank(&data["brojFiskalnogRacuna"]) {
         baci!("Fiskalni broj je obavezan");
     }
@@ -411,7 +411,7 @@ fn get_fiscal_gaps(db: &Db) -> R<Value> {
 }
 
 fn dismiss_fiscal_gap(b: &Backend, broj: &Value) -> R<Value> {
-    let db = b.baza()?;
+    let db = b.db();
     let mut dismissed = odbacene_praznine(db)?;
     // `includes` poredi brojeve po vrijednosti (5 i 5.0 su isti).
     let isti = |v: &Value| match (v.as_f64(), broj.as_f64()) {
@@ -433,7 +433,7 @@ fn dismiss_fiscal_gap(b: &Backend, broj: &Value) -> R<Value> {
 }
 
 fn pending_discard(b: &Backend, id: &Value) -> R<Value> {
-    let db = b.baza()?;
+    let db = b.db();
     db.tx(|| {
         let row = db.get("SELECT snapshot FROM pending_receipts WHERE id = ?", p![id])?;
         let r = db.run("DELETE FROM pending_receipts WHERE id = ?", p![id])?;
@@ -448,7 +448,7 @@ fn pending_discard(b: &Backend, id: &Value) -> R<Value> {
 }
 
 fn set_zadnji_broj(b: &Backend, broj: &Value) -> R<Value> {
-    let db = b.baza()?;
+    let db = b.db();
     db.tx(|| {
         let stari_broj = fiskalni::zadnji_upisani_fiskalni_broj(db)?;
         fiskalni::postavi_zadnji_fiskalni_broj(db, broj)?;
@@ -470,15 +470,7 @@ pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
     if !KANALI.contains(&kanal) {
         return None;
     }
-    if let Err(e) = b.otvori_db() {
-        return Some(Err(e));
-    }
-    // `&Backend` da baza i Tring klijent idu zajedno.
-    let b: &Backend = b;
-    let db = match b.baza() {
-        Ok(db) => db,
-        Err(e) => return Some(Err(e)),
-    };
+    let db = b.db();
     Some(match kanal {
         "order:getAll" => get_all(db),
         "order:get" => get(db, &a[0]),

@@ -147,7 +147,7 @@ fn korisnik_po_id(db: &Db, id: i64) -> R<Option<Korisnik>> {
 pub fn trenutni(b: &Backend) -> R<Option<Korisnik>> {
     match b.sesija.id() {
         None => Ok(None),
-        Some(id) => korisnik_po_id(b.db()?, id),
+        Some(id) => korisnik_po_id(b.db(), id),
     }
 }
 

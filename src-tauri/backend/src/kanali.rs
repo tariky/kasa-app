@@ -85,7 +85,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("kasa-kanali-test-{}", std::process::id()));
         let b = Backend::novi(&dir, Box::new(BezDijaloga), Sat::sistemski(), false).unwrap();
         // Tring bez uređaja: veza se odbije odmah.
-        b.db().unwrap().run("UPDATE settings SET value = '1' WHERE key = 'tring.port'", &[]).unwrap();
+        b.db().run("UPDATE settings SET value = '1' WHERE key = 'tring.port'", &[]).unwrap();
         b.sesija.postavi(Some(1), false);
         for kanal in SVI_KANALI {
             let r = b.call(kanal, vec![]);

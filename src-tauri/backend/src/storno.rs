@@ -86,7 +86,7 @@ fn je_nedovoljno_sredstava(r: &Odgovor) -> bool {
 /// `odobrio_admin_id` (admin koji je odobrio storno kasira PIN-om) ide u
 /// snapshot — trag 'storno' se upisuje i kad se storno riješi iz dijaloga.
 pub fn refund_and_print(b: &Backend, data: &Value, korisnik_id: i64, odobrio_admin_id: &Value) -> R<Value> {
-    let db = b.baza()?;
+    let db = b.db();
     let id = &data["id"];
 
     let _u_toku = UToku::zauzmi(b, "storno", id, "Storniranje ovog računa je već u toku")?;

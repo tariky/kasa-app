@@ -174,11 +174,11 @@ pub(crate) mod tests {
         }
 
         pub fn run(&self, sql: &str, params: &[Value]) -> i64 {
-            self.b().db().unwrap().run(sql, params).unwrap().last_insert_rowid
+            self.b().db().run(sql, params).unwrap().last_insert_rowid
         }
 
         pub fn all(&self, sql: &str) -> Vec<Value> {
-            self.b().db().unwrap().all(sql, &[]).unwrap()
+            self.b().db().all(sql, &[]).unwrap()
         }
 
         pub fn call(&self, kanal: &str, args: Vec<Value>) -> Result<Value, String> {
@@ -214,7 +214,7 @@ pub(crate) mod tests {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         let b = Backend::novi(&dir, Box::new(BezDijaloga), Sat::sistemski(), false).unwrap();
-        let db = b.db().unwrap();
+        let db = b.db();
         db.run("UPDATE settings SET value = '127.0.0.1' WHERE key = 'tring.host'", &[]).unwrap();
         let (port, zahtjevi) = lazi_tring();
         db.run("UPDATE settings SET value = ? WHERE key = 'tring.port'", &[json!(port.to_string())]).unwrap();

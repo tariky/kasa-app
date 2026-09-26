@@ -1261,10 +1261,7 @@ fn report_get_data(db: &Db, tip: &Value, from: &Value, to: &Value) -> R<Value> {
 
 pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
     let dan = Dan { danas: b.sat.danas(), godina: b.sat.godina(), korisnik: b.sesija.id() };
-    let db = match b.db() {
-        Ok(db) => db,
-        Err(e) => return Some(Err(e)),
-    };
+    let db = b.db();
     let dan = &dan;
     Some(match kanal {
         "primka:getAll" => db.all("SELECT * FROM primke ORDER BY datum DESC", p![]).map(Value::from),

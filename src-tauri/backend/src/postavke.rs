@@ -57,7 +57,7 @@ pub(crate) fn postavka(db: &Db, kljuc: &str) -> R<Value> {
 }
 
 fn save_tring(b: &Backend, data: &Value) -> R<Value> {
-    let db = b.db()?;
+    let db = b.db();
     if js::blank(&data["host"]) {
         baci!("Host je obavezan");
     }
@@ -117,7 +117,7 @@ fn get_firma(db: &Db) -> R<Value> {
 }
 
 fn save_firma(b: &Backend, data: &Value) -> R<Value> {
-    let db = b.db()?;
+    let db = b.db();
     // `data.naziv` koji nije poslan je `undefined` (None): upisuje se kao null,
     // a za audit je uvijek promjena.
     let polje = |k: &str| js::has(data, k).then(|| data[k].clone());
@@ -153,7 +153,7 @@ fn save_firma(b: &Backend, data: &Value) -> R<Value> {
 /// Audit: svaka promjena vrijednosti osim kasa.scanMode (prekidač skenera na
 /// kasi, F2 — UI izbor kasira, ne postavka programa).
 fn set(b: &Backend, kljuc: &Value, vrijednost: &Value) -> R<Value> {
-    let db = b.db()?;
+    let db = b.db();
     let Some(nova) = vrijednost.as_str() else {
         baci!("Vrijednost postavke mora biti tekst");
     };
@@ -170,7 +170,7 @@ fn set(b: &Backend, kljuc: &Value, vrijednost: &Value) -> R<Value> {
 }
 
 fn set_enabled(b: &Backend, enabled: &Value) -> R<Value> {
-    let db = b.db()?;
+    let db = b.db();
     let nova = to_string(enabled);
     db.tx(|| {
         let stara = postavka(db, "proizvodnja.enabled")?;
@@ -218,10 +218,7 @@ fn spremi_skicu_fakture(db: &Db, id: &Value, naziv: &Value, podaci: &Value, ukup
 }
 
 pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
-    let db = match b.db() {
-        Ok(db) => db,
-        Err(e) => return Some(Err(e)),
-    };
+    let db = b.db();
     Some(match kanal {
         "settings:getTring" => get_tring(db),
         "settings:saveTring" => save_tring(b, &a[0]),

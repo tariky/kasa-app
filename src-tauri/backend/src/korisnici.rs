@@ -213,7 +213,7 @@ pub fn pin_korisnika(db: &Db, id: i64, pin: &Value) -> R<bool> {
 /// Admin PIN za radnju kasira (storno). Neuspjeh ulazi u ograničenje
 /// pokušaja; baca 'Neispravan admin PIN'. Uspjeh ne briše ranije neuspjehe.
 pub fn provjeri_admin_pin(b: &Backend, pin: &Value) -> R<Korisnik> {
-    let db = b.db()?;
+    let db = b.db();
     let pokusaji = Pokusaji::novi(db, b.sat.ms());
     pokusaji.provjeri()?;
     match nadji_po_pinu(db, pin, true, None)? {
@@ -238,7 +238,7 @@ fn je_posljednji_admin(db: &Db, id: &Value) -> R<bool> {
 fn login(b: &Backend, pin: &Value) -> R<Value> {
     // Nova prijava uvijek poništi staru sesiju, i kad ne uspije.
     b.sesija.postavi(None, false);
-    let db = b.db()?;
+    let db = b.db();
     let pokusaji = Pokusaji::novi(db, b.sat.ms());
     pokusaji.provjeri()?;
     let Some(u) = nadji_po_pinu(db, pin, false, None)? else {
@@ -261,7 +261,7 @@ fn promijeni_svoj_pin(b: &Backend, stari: &Value, novi: &Value) -> R<Value> {
     if novi_pin == ZADANI_PIN {
         baci!("Novi PIN ne smije biti {ZADANI_PIN}");
     }
-    let db = b.db()?;
+    let db = b.db();
     let sada = b.sat.ms();
     let pokusaji = Pokusaji::novi(db, sada);
     pokusaji.provjeri()?;
@@ -284,7 +284,7 @@ fn promijeni_svoj_pin(b: &Backend, stari: &Value, novi: &Value) -> R<Value> {
 }
 
 fn create(b: &Backend, data: &Value) -> R<Value> {
-    let db = b.db()?;
+    let db = b.db();
     if js::blank(&data["ime"]) {
         baci!("Ime korisnika je obavezno");
     }
@@ -302,7 +302,7 @@ fn create(b: &Backend, data: &Value) -> R<Value> {
 }
 
 fn update(b: &Backend, id: &Value, data: &Value) -> R<Value> {
-    let db = b.db()?;
+    let db = b.db();
     let mut fields: Vec<&str> = Vec::new();
     let mut values: Vec<Value> = Vec::new();
     // Audit: nova imena i uloga, a za PIN samo da je promijenjen.
@@ -351,7 +351,7 @@ fn update(b: &Backend, id: &Value, data: &Value) -> R<Value> {
 }
 
 fn delete(b: &Backend, id: &Value) -> R<Value> {
-    let db = b.db()?;
+    let db = b.db();
     for (tabela, poruka) in VEZE_KORISNIKA {
         if db.ima(&format!("SELECT 1 FROM {tabela} WHERE korisnikId = ? LIMIT 1"), p![id])? {
             baci!("{poruka}");
@@ -371,10 +371,7 @@ fn delete(b: &Backend, id: &Value) -> R<Value> {
 }
 
 pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
-    let db = match b.db() {
-        Ok(db) => db,
-        Err(e) => return Some(Err(e)),
-    };
+    let db = b.db();
     Some(match kanal {
         "user:login" => login(b, &a[0]),
         "user:logout" => {
