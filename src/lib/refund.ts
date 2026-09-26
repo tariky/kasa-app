@@ -7,7 +7,7 @@ import { PRILOG_SIFRA, prilogNaziv } from './prilog';
 import { gotovinskiIznos } from './drawer';
 import { round2 } from './novac';
 import {
-  baciAkoCekaNezavrsen, neuspjelaStampa, preuzmiPendingRed, vecEvidentiran, zapisiPending, type SnapshotStorna,
+  baciAkoCekaNezavrsen, neuspjelaStampa, preuzmiPendingRed, vecEvidentiranStorno, zapisiPending, type SnapshotStorna,
 } from './pendingRacun';
 
 /**
@@ -284,7 +284,7 @@ export async function refundAndPrint(
         `${err?.message || 'nepoznata greška'}. Riješite je kroz nezavršene račune.`
       );
     }
-    if (vecUpisan) return vecEvidentiran(brojReklamacije);
+    if (vecUpisan) return vecEvidentiranStorno(brojReklamacije);
 
     return { success: true, brojReklamacije, odgovori: result.odgovori, pologIznos };
   } finally {

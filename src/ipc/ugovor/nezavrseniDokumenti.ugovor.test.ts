@@ -586,7 +586,12 @@ describe('order:refundAndPrint — write-ahead', () => {
     await rijesiTokomStampe(stampa, 'R-9');
 
     const odgovor = await r;
-    expect(odgovor.error).toContain('već evidentiran');
+    // Poruka govori o reklamaciji, ne o "fiskalnom računu BF <broj reklamacije>".
+    expect(odgovor.error).toBe(
+      'Reklamacija #R-1 JE odštampana, ali je njen nezavršeni zapis u međuvremenu riješen ili odbačen — ' +
+      'storno je već evidentiran i drugi zapis nije napravljen. Ako je zapis odbačen, storno je na papiru, ali ne i u bazi — ' +
+      'ne ponavljajte ga, javite se administratoru.',
+    );
     expect({ ...odgovor, error: null }).toEqual({ success: false, vecEvidentiran: true, brojFiskalnogRacuna: 'R-1', error: null });
     expect(order(id)).toEqual({ status: 'refunded', brojReklamacije: 'R-9', refundedAt: DATUM });
     expect(stanje(p)).toBe(10);

@@ -13,7 +13,8 @@ use crate::sql::Db;
 use crate::tring::{self, Odgovor};
 use crate::sesija::{self, Korisnik};
 use crate::pending_racun::{
-    baci_ako_ceka_nezavrsen, neuspjela_stampa, preuzmi_pending_red, vec_evidentiran, zapisi_pending,
+    baci_ako_ceka_nezavrsen, neuspjela_stampa, preuzmi_pending_red, vec_evidentiran, vec_evidentiran_storno,
+    zapisi_pending,
 };
 use crate::{audit, baci, cash, fiskalni, korisnici, p, ponude, proizvodnja, provjera_racuna, racun, tring_racun, Args, Backend};
 
@@ -734,7 +735,7 @@ fn refund_and_print(b: &Backend, data: &Value, korisnik_id: i64, odobrio_admin_i
     });
     match upis {
         Ok(true) => {}
-        Ok(false) => return Ok(vec_evidentiran(&broj_reklamacije)),
+        Ok(false) => return Ok(vec_evidentiran_storno(&broj_reklamacije)),
         // Storno je već na papiru; pending red ostaje (rollback) za dijalog.
         Err(e) => baci!(
             "Reklamacija #{} JE odštampana, ali nije zabilježena u bazi: {}. Riješite je kroz nezavršene račune.",

@@ -67,6 +67,22 @@ pub fn vec_evidentiran(broj_fiskalnog_racuna: &Value) -> Value {
     })
 }
 
+/// Isto za storno: broj je broj reklamacije (drugi niz od BF računa), a storno
+/// se ne može unijeti ručno kao račun. TS: `vecEvidentiranStorno`.
+pub fn vec_evidentiran_storno(broj_reklamacije: &Value) -> Value {
+    json!({
+        "success": false,
+        "vecEvidentiran": true,
+        "error": format!(
+            "Reklamacija #{} JE odštampana, ali je njen nezavršeni zapis u međuvremenu riješen ili odbačen — \
+             storno je već evidentiran i drugi zapis nije napravljen. Ako je zapis odbačen, storno je na papiru, \
+             ali ne i u bazi — ne ponavljajte ga, javite se administratoru.",
+            if broj_reklamacije.is_null() { "?".to_string() } else { js::to_string(broj_reklamacije) }
+        ),
+        "brojFiskalnogRacuna": broj_reklamacije,
+    })
+}
+
 /// Kupac u snapshotu ponude/naloga (`snapshotKupca`): samo polja računa.
 pub fn snapshot_kupca(k: &Option<Value>) -> Value {
     match k {

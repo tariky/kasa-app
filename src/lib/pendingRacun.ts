@@ -72,6 +72,17 @@ export function vecEvidentiran(brojFiskalnogRacuna: string | null): VecEvidentir
   return { success: false, vecEvidentiran: true, error: porukaVecEvidentiran(brojFiskalnogRacuna), brojFiskalnogRacuna };
 }
 
+/**
+ * Isto za storno: broj je broj reklamacije (drugi niz od BF računa), a storno
+ * se ne može unijeti ručno kao račun. Rust: `vec_evidentiran_storno`.
+ */
+export function vecEvidentiranStorno(brojReklamacije: string | null): VecEvidentiran {
+  const error = `Reklamacija #${brojReklamacije ?? '?'} JE odštampana, ali je njen nezavršeni zapis u međuvremenu ` +
+    'riješen ili odbačen — storno je već evidentiran i drugi zapis nije napravljen. ' +
+    'Ako je zapis odbačen, storno je na papiru, ali ne i u bazi — ne ponavljajte ga, javite se administratoru.';
+  return { success: false, vecEvidentiran: true, error, brojFiskalnogRacuna: brojReklamacije };
+}
+
 // ─── Dokumenti s vlastitom operacijom upisa ─────────────────
 // Ponuda→račun, nalog→račun i storno idu kroz isti write-ahead red; snapshot
 // nosi `vrsta` da dijalog nezavršenih računa zna kojom operacijom ga upisati.
