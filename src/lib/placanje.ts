@@ -151,3 +151,14 @@ export function opisPlacanja(nacin: string, ukupno: number, nazivi: Partial<Reco
   if (dijelovi.length === 1) return naziv(dijelovi[0]);
   return dijelovi.map(v => `${naziv(v)} ${km(iznosi[v])} KM`).join(' + ');
 }
+
+/**
+ * Način plaćanja za ekran računa: opis (`opisPlacanja`) i vrste koje nose
+ * iznos, za ikone. Nepoznat oblik nema nijednu vrstu — raspodjela ga knjiži
+ * kao gotovinu samo za Kontrolu, a ladica ga ne broji, pa ni ekran ne smije
+ * pokazati gotovinu.
+ */
+export function prikazPlacanja(nacin: string, ukupno: number): { opis: string; poznat: boolean; vrste: Array<keyof Placanja> } {
+  const { iznosi, poznat } = raspodjelaPlacanja(nacin, ukupno);
+  return { opis: opisPlacanja(nacin, ukupno), poznat, vrste: poznat ? VRSTE_REDOM.filter(v => iznosi[v] > 0) : [] };
+}

@@ -8,13 +8,15 @@ import { DecimalInput } from '@/components/ui/decimal-input';
 import { DateTimePicker } from '@/components/ui/date-time-picker';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
-  Trash2, Banknote, CreditCard, Landmark, FileCheck,
+  Trash2,
   ChevronRight, Building2, AlertTriangle, PackageOpen, CornerDownLeft, X,
 } from 'lucide-react';
 import { Kupac, Product } from '@/types';
 import { izracunajTotale, iznosStavke } from '@/lib/racun';
 import { cn, formatKM } from '@/lib/utils';
 import { localDateStr } from '@/lib/novac';
+import { NACINI_PLACANJA, type NacinPlacanja } from '@/lib/placanje';
+import { IKONA_PLACANJA } from '@/components/NacinPlacanjaBirac';
 import { Eyebrow } from '@/components/ui/ledger';
 import { PretragaProizvoda } from '@/components/PretragaProizvoda';
 import { PretragaStavki } from '@/components/ui/pretraga-stavki';
@@ -25,15 +27,6 @@ interface StavkaUnos {
   rabat: number;
   cijena: number;
 }
-
-type PaymentType = 'Gotovina' | 'Kartica' | 'Virman' | 'Ček';
-
-const PAYMENTS: { id: PaymentType; icon: typeof Banknote }[] = [
-  { id: 'Gotovina', icon: Banknote },
-  { id: 'Kartica', icon: CreditCard },
-  { id: 'Virman', icon: Landmark },
-  { id: 'Ček', icon: FileCheck },
-];
 
 /** Kolone reda stavke — isti raster za zaglavlje i za redove. */
 const GRID = 'grid grid-cols-[minmax(0,1fr)_74px_96px_74px_100px_30px] gap-2 items-center';
@@ -56,7 +49,7 @@ const poljaKupca = (k: Kupac) => ({ naziv: k.naziv, sifra: k.idBroj, dodatno: [k
 export default function DodajRacunDialog({ open, onOpenChange, onSaved, prefillBroj }: Props) {
   const [brojFiskalnog, setBrojFiskalnog] = useState('');
   const [datum, setDatum] = useState(nowLocalInput());
-  const [nacinPlacanja, setNacinPlacanja] = useState<PaymentType>('Gotovina');
+  const [nacinPlacanja, setNacinPlacanja] = useState<NacinPlacanja>('Gotovina');
   const [stavke, setStavke] = useState<StavkaUnos[]>([]);
   const [kupacOpen, setKupacOpen] = useState(false);
   const [allKupci, setAllKupci] = useState<Kupac[] | null>(null);
@@ -212,21 +205,24 @@ export default function DodajRacunDialog({ open, onOpenChange, onSaved, prefillB
           <div className="flex items-center gap-3 mt-4">
             <Eyebrow className="flex-shrink-0">Plaćanje</Eyebrow>
             <div className="inline-flex rounded-lg bg-slate-100 p-0.5">
-              {PAYMENTS.map(({ id, icon: Icon }) => (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => setNacinPlacanja(id)}
-                  className={cn(
-                    'flex items-center gap-1.5 rounded-[6px] px-2.5 h-7 text-[11.5px] font-medium transition-colors duration-150',
-                    'focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50',
-                    nacinPlacanja === id ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700',
-                  )}
-                >
-                  <Icon size={13} strokeWidth={1.75} />
-                  {id}
-                </button>
-              ))}
+              {NACINI_PLACANJA.map(id => {
+                const Icon = IKONA_PLACANJA[id];
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setNacinPlacanja(id)}
+                    className={cn(
+                      'flex items-center gap-1.5 rounded-[6px] px-2.5 h-7 text-[11.5px] font-medium transition-colors duration-150',
+                      'focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50',
+                      nacinPlacanja === id ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700',
+                    )}
+                  >
+                    <Icon size={13} strokeWidth={1.75} />
+                    {id}
+                  </button>
+                );
+              })}
             </div>
           </div>
         </div>

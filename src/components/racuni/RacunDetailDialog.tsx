@@ -8,10 +8,11 @@ import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { prilogKompletan, sumaPriloga } from '@/lib/prilog';
 import { formatDatumValute } from '@/lib/valuta';
 import { gotovinskiIznos } from '@/lib/drawer';
-import { opisPlacanja, raspodjelaPlacanja } from '@/lib/placanje';
+import { prikazPlacanja } from '@/lib/placanje';
 import { round2 } from '@/lib/novac';
 import { ucitajZaStampu } from '@/lib/stampa';
 import { otvoriNezavrseneRacune } from '@/lib/nezavrseniRacuni';
+import { izvrsiFiskalno } from '@/lib/fiskalniIshod';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -33,12 +34,6 @@ type Notice = { type: 'success' | 'error'; text: string };
 
 const TH = 'text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400 pb-2 border-b border-slate-200/80 whitespace-nowrap';
 const TD = 'py-2.5 border-b border-slate-100 align-top';
-
-/** Način plaćanja za zaglavlje: tekst ili razbijeno plaćanje (lib/placanje.ts), ikone po vrstama. */
-function placanje(nacin: string, ukupno: number): { label: string; kartica: boolean; gotovina: boolean } {
-  const { iznosi } = raspodjelaPlacanja(nacin, ukupno);
-  return { label: opisPlacanja(nacin, ukupno), kartica: iznosi.kartica > 0, gotovina: iznosi.gotovina > 0 };
-}
 
 /** Oznaka na tamnom zaglavlju — status i porijeklo računa. */
 function HeaderChip({ tone, children }: { tone: 'ok' | 'storno' | 'muted' | 'warn'; children: React.ReactNode }) {
@@ -214,28 +209,29 @@ export function RacunDetailDialog({ orderId, redoslijed, uloga, onClose, onNavig
     try {
       // Štampa i upis storna idu kroz jedan poziv da ne ostane odštampana
       // reklamacija bez zapisa u bazi ako nešto pukne između.
-      const result = await window.api.refundAndPrintOrder({
+      const { ishod, res: result } = await izvrsiFiskalno(() => window.api.refundAndPrintOrder({
         id: order.id,
         brojReklamacije: reklamacijaBroj.trim() || undefined,
         dozvoliPolog,
         adminPin: trebaPin ? pinValue : undefined,
-      });
+      }));
       // Storno je možda odštampan (ili već upisan iz dijaloga nezavršenih
       // računa): bez ponovnog slanja i bez ponude pologa.
-      if (result && !result.success && (result.ishodNepoznat || result.vecEvidentiran)) {
+      if (ishod.vrsta === 'nepoznat' || ishod.vrsta === 'vecEvidentiran') {
         setReklamacijaOpen(false);
         setReklamacijaBroj('');
-        setNotice({ type: 'error', text: result.error || 'Ishod štampe nije poznat.' });
-        if (result.ishodNepoznat) otvoriNezavrseneRacune();
+        setNotice({ type: 'error', text: ishod.poruka });
+        if (ishod.vrsta === 'nepoznat') otvoriNezavrseneRacune();
         await reload();
         return;
       }
-      if (!result || !result.success) {
-        const details = result?.odgovori ? Object.entries(result.odgovori).map(([k, v]) => `${k}: ${v}`).join(', ') : '';
-        setReklamacijaGreska(`${result?.error || 'Nepoznata greška'}${details ? ` (${details})` : ''}`);
+      if (ishod.vrsta === 'greska' || !result) {
+        setReklamacijaGreska(ishod.poruka);
         // Prazna ladica nije razlog da se storno ne može napraviti — operateru
         // se ponudi override koji manjak evidentira kao polog i ponovi štampu.
         setOverrideManjak(result?.nedovoljnoSredstava ? (result.manjak ?? 0) : null);
+        // Odbijen poziv (npr. pogrešan PIN administratora) — PIN se upisuje ponovo.
+        if (!result) setPinValue('');
         return;
       }
       setReklamacijaOpen(false);
@@ -246,10 +242,6 @@ export function RacunDetailDialog({ orderId, redoslijed, uloga, onClose, onNavig
           + (result.pologIznos ? ` (evidentiran polog ${formatKM(result.pologIznos)})` : ''),
       });
       await reload();
-    } catch (err: any) {
-      console.error('Reklamacija error:', err);
-      setReklamacijaGreska(err?.message || 'Nepoznata greška');
-      setPinValue('');
     } finally {
       setReklamacijaLoading(false);
     }
@@ -317,7 +309,8 @@ export function RacunDetailDialog({ orderId, redoslijed, uloga, onClose, onNavig
   // Faktura sa dodijeljenim stavkama pokazuje njih; zbirna stavka je samo ono što je otišlo na uređaj.
   const stavkeFakture = imaFakturu && !!fakturaStavke?.length;
   const stavke: any[] = stavkeFakture ? fakturaStavke! : order?.stavke ?? [];
-  const nacin = order ? placanje(order.nacinPlacanja, order.ukupno) : null;
+  // Tekst ili razbijeno plaćanje, ikone po vrstama; nepoznat oblik bez ikone gotovine (lib/placanje.ts).
+  const nacin = order ? prikazPlacanja(order.nacinPlacanja, order.ukupno) : null;
   const imaRabat = stavke.some(s => (s.rabat || 0) > 0);
   const kupacAdresa = order ? [order.kupacAdresa, [order.kupacPostanskiBroj, order.kupacGrad].filter(Boolean).join(' ')].filter(Boolean).join(', ') : '';
 
@@ -367,9 +360,15 @@ export function RacunDetailDialog({ orderId, redoslijed, uloga, onClose, onNavig
                     <Fact label="Plaćanje" className="col-span-2">
                       <span className="flex items-center gap-2">
                         <span className="flex items-center gap-1 text-slate-400">
-                          {nacin.gotovina && <Banknote size={14} />}{nacin.kartica && <CreditCard size={14} />}
+                          {nacin.vrste.includes('gotovina') && <Banknote size={14} />}
+                          {nacin.vrste.includes('kartica') && <CreditCard size={14} />}
+                          {!nacin.poznat && (
+                            <span title="Nepoznat oblik načina plaćanja — ladica ga ne broji kao gotovinu">
+                              <AlertTriangle size={14} className="text-amber-500" />
+                            </span>
+                          )}
                         </span>
-                        {nacin.label}
+                        {nacin.opis}
                       </span>
                     </Fact>
                     <Fact label="Valuta">

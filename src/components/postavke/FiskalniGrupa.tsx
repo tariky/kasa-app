@@ -2,6 +2,7 @@ import { Fragment, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn, porukaGreske } from '@/lib/utils';
+import { procitajIshod } from '@/lib/fiskalniIshod';
 import type { TringSettings } from '@/types';
 import { ChevronDown, Loader2, RefreshCw, Save, Trash2, Wifi } from 'lucide-react';
 import {
@@ -69,8 +70,7 @@ function Konekcija({ onSpremljeno }: { onSpremljeno: () => void }) {
       if (r?.success) {
         setIshod({ ok: true, tekst: `Uređaj se javio (${r.vrstaOdgovora}).` });
       } else {
-        const detalji = r?.odgovori ? Object.entries(r.odgovori).map(([k, v]) => `${k}: ${v}`).join(', ') : '';
-        setIshod({ ok: false, tekst: `Uređaj se ne javlja: ${r?.error || r?.vrstaOdgovora || 'nepoznata greška'}${detalji ? ` (${detalji})` : ''}` });
+        setIshod({ ok: false, tekst: `Uređaj se ne javlja: ${procitajIshod(r).poruka}` });
       }
     } catch (err: any) {
       setIshod({ ok: false, tekst: `Uređaj se ne javlja: ${err?.message || 'provjerite host i port.'}` });

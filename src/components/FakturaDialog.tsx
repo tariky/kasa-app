@@ -12,7 +12,7 @@ import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
   Building2, Check, Pencil, AlertCircle, AlertTriangle, Trash2, Package, ArrowLeft, Plus,
-  Banknote, CreditCard, Landmark, ReceiptText, FileClock, CalendarDays, type LucideIcon,
+  FileClock, CalendarDays,
 } from 'lucide-react';
 import {
   sumaPriloga,
@@ -28,20 +28,17 @@ import { plusDana } from '@/lib/ponuda';
 import { formatDatumValute } from '@/lib/valuta';
 import { otvoriNezavrseneRacune } from '@/lib/nezavrseniRacuni';
 import { obavijesti } from '@/lib/dijalog';
+import { izvrsiFiskalno } from '@/lib/fiskalniIshod';
+import type { NacinPlacanja } from '@/lib/placanje';
+import { NacinPlacanjaBirac } from '@/components/NacinPlacanjaBirac';
 import { useDokumentPostavke } from '@/components/DokumentPostavkeProvider';
 import { rokUIzbor, zadanoZaFakturu, primijeniRabatKupca, formatRabat } from '@/lib/dokumentPostavke';
 
-type PaymentType = 'Gotovina' | 'Kartica' | 'Virman' | 'Ček';
 type Mode = 'stavke' | 'iznos';
 type Korak = 'firma' | 'faktura';
 
 /** Faktura se najčešće plaća virmanom — zato je prvi i zadani. */
-const PAYMENTS: Array<{ tip: PaymentType; Icon: LucideIcon }> = [
-  { tip: 'Virman', Icon: Landmark },
-  { tip: 'Gotovina', Icon: Banknote },
-  { tip: 'Kartica', Icon: CreditCard },
-  { tip: 'Ček', Icon: ReceiptText },
-];
+const NACINI_FAKTURE: readonly NacinPlacanja[] = ['Virman', 'Gotovina', 'Kartica', 'Ček'];
 
 export interface Firma {
   naziv: string;
@@ -97,7 +94,7 @@ export interface FakturaSkica {
   rucniIznos: number | null;
   opis: string;
   veza: string;
-  nacinPlacanja: PaymentType;
+  nacinPlacanja: NacinPlacanja;
   rok: Rok;
   rokDatum: string;
   napomena: string;
@@ -165,7 +162,7 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
   const [rucniIznos, setRucniIznos] = useState<number | null>(null);
   const [opis, setOpis] = useState(PRILOG_OPIS_DEFAULT);
   const [veza, setVeza] = useState(FAKTURA_VEZA);
-  const [nacinPlacanja, setNacinPlacanja] = useState<PaymentType>('Virman');
+  const [nacinPlacanja, setNacinPlacanja] = useState<NacinPlacanja>('Virman');
   const [rok, setRok] = useState<Rok>(null);
   const [rokDatum, setRokDatum] = useState('');
   const [napomena, setNapomena] = useState('');
@@ -377,7 +374,7 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
 
     setBusy(true);
     try {
-      const res = await window.api.finalizePrilogOrder({
+      const { ishod, res } = await izvrsiFiskalno(() => window.api.finalizePrilogOrder({
         nacinPlacanja,
         ...(mode === 'stavke'
           ? { stavke: stavke.map(s => ({ productId: s.productId, kolicina: s.kolicina, cijena: s.cijena, rabat: s.rabat, pdvStopa: s.pdvStopa })) }
@@ -394,9 +391,9 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
           naziv: firma.naziv.trim(), idBroj: firma.idBroj.trim(), adresa: firma.adresa.trim(),
           grad: firma.grad.trim(), postanskiBroj: firma.postanskiBroj.trim(),
         },
-      });
+      }));
 
-      if (res?.success) {
+      if (ishod.vrsta === 'uspjeh' && res) {
         // Fiskalizovana skica više nije nedovršena.
         if (skicaId != null) {
           window.api.obrisiSkicuFakture(skicaId).catch(() => {}).finally(() => onSkicePromijenjene?.());
@@ -409,24 +406,22 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
           upozorenje: res.upozorenje ?? null,
         });
         onOpenChange(false);
-      } else if (res?.ishodNepoznat) {
+      } else if (ishod.vrsta === 'nepoznat') {
         // Faktura je možda fiskalizovana — dijalog se zatvara da je operater ne
         // pošalje ponovo, a ishod rješava u nezavršenim računima. Skica ostaje
         // (za slučaj da nije odštampana); rješenje "odštampan" je briše.
         onOpenChange(false);
         otvoriNezavrseneRacune();
         onSkicePromijenjene?.();
-      } else if (res?.vecEvidentiran) {
+        await obavijesti(ishod.poruka);
+      } else if (ishod.vrsta === 'vecEvidentiran') {
         // Odštampana i već upisana iz dijaloga nezavršenih računa — završeno.
         onOpenChange(false);
         onSkicePromijenjene?.();
-        await obavijesti(res.error || 'Faktura je već evidentirana.');
+        await obavijesti(ishod.poruka);
       } else {
-        const details = res?.odgovori ? Object.entries(res.odgovori).map(([k, v]) => `${k}: ${v}`).join(', ') : '';
-        setError(`${res?.error || 'Štampa nije uspjela'}${details ? ` (${details})` : ''}`);
+        setError(ishod.poruka);
       }
-    } catch (err: any) {
-      setError(porukaGreske(err));
     } finally {
       setBusy(false);
     }
@@ -750,41 +745,7 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
                 {/* Način plaćanja */}
                 <div className="pb-5 pt-5">
                   <p className="text-[12px] font-medium text-slate-600">Način plaćanja</p>
-                  <div
-                    className="mt-2 grid grid-cols-4 gap-1 rounded-xl border border-slate-200 bg-white p-1"
-                    role="radiogroup"
-                    aria-label="Način plaćanja"
-                    onKeyDown={e => {
-                      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-                      e.preventDefault();
-                      const i = PAYMENTS.findIndex(p => p.tip === nacinPlacanja);
-                      const next = e.key === 'ArrowRight' ? (i + 1) % PAYMENTS.length : (i - 1 + PAYMENTS.length) % PAYMENTS.length;
-                      setNacinPlacanja(PAYMENTS[next].tip);
-                      (e.currentTarget.children[next] as HTMLElement | undefined)?.focus();
-                    }}
-                  >
-                    {PAYMENTS.map(({ tip, Icon }) => {
-                      const aktivan = nacinPlacanja === tip;
-                      return (
-                        <button
-                          key={tip}
-                          type="button"
-                          role="radio"
-                          aria-checked={aktivan}
-                          tabIndex={aktivan ? 0 : -1}
-                          onClick={() => setNacinPlacanja(tip)}
-                          className={cn(
-                            'flex flex-col items-center gap-1 rounded-lg py-2 text-[11.5px] transition-colors',
-                            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50',
-                            aktivan ? 'bg-slate-900 font-medium text-white' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700',
-                          )}
-                        >
-                          <Icon className={cn('h-4 w-4', aktivan ? 'text-white' : 'text-slate-400')} />
-                          {tip}
-                        </button>
-                      );
-                    })}
-                  </div>
+                  <NacinPlacanjaBirac className="mt-2" redoslijed={NACINI_FAKTURE} value={nacinPlacanja} onChange={setNacinPlacanja} />
                 </div>
 
                 {/* Rok plaćanja — datum valute na fakturi */}
@@ -1077,7 +1038,7 @@ function Isjecak({ firma, onPromijeniFirmu, opis, setOpis, veza, setVeza, broj, 
   veza: string; setVeza: (v: string) => void;
   broj: number | null;
   iznos: number;
-  nacinPlacanja: PaymentType;
+  nacinPlacanja: NacinPlacanja;
   /** null = iznos ukucan ručno. */
   brojStavki: number | null;
 }) {

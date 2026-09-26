@@ -12,17 +12,15 @@ import { formatKM, parseDecimal } from '@/lib/utils';
 import { round2 } from '@/lib/novac';
 import { generirajRacune, GeneratedRacun, GenerateResult } from '@/lib/batchRacuni';
 import { otvoriNezavrseneRacune } from '@/lib/nezavrseniRacuni';
+import { izvrsiFiskalno } from '@/lib/fiskalniIshod';
 
 const DELAY_SECONDS = 5;
 
 /**
- * `nepoznat`: uređaj nije potvrdio račun ili je poziv odbijen — rješava se u
+ * `nepoznat`: ishod štampe nije poznat (lib/fiskalniIshod.ts) — rješava se u
  * nezavršenim računima, ne štampa ponovo.
  */
 type RacunStatus = 'pending' | 'done' | 'failed' | 'nepoznat';
-
-/** Odgovor order:finalize; `odbijen` = poziv je bacio grešku. */
-type Ishod = { success: boolean; error?: string; ishodNepoznat?: boolean; vecEvidentiran?: boolean; odbijen?: boolean };
 
 export default function GeneratorScreen() {
   const [products, setProducts] = useState<Product[]>([]);
@@ -81,14 +79,12 @@ export default function GeneratorScreen() {
       }, 1000);
     });
 
-  const finalizeOne = async (r: GeneratedRacun) => {
-    return window.api.finalizeOrder({
-      ukupno: r.ukupno,
-      pdvIznos: r.pdvIznos,
-      nacinPlacanja: 'Gotovina',
-      stavke: r.stavke,
-    });
-  };
+  const finalizeOne = (r: GeneratedRacun) => izvrsiFiskalno(() => window.api.finalizeOrder({
+    ukupno: r.ukupno,
+    pdvIznos: r.pdvIznos,
+    nacinPlacanja: 'Gotovina',
+    stavke: r.stavke,
+  }));
 
   const processAll = async () => {
     if (!result || running) return;
@@ -106,50 +102,46 @@ export default function GeneratorScreen() {
       setPhase('print');
 
       // Print, with a single retry after the recovery delay (retry-then-stop).
-      // Ponavlja se samo siguran neuspjeh uređaja. Nepoznat ishod, već
-      // evidentiran račun i odbijen poziv (greška može doći i poslije štampe)
-      // zaustavljaju seriju bez ponavljanja — inače prijeti dupli račun.
-      let res: Ishod = await finalizeOne(r).catch((e: any) => ({ success: false, error: e?.message, odbijen: true }));
-      const bezPonavljanja = (x: Ishod) => x.success || x.ishodNepoznat || x.vecEvidentiran || x.odbijen;
-      if (!bezPonavljanja(res)) {
+      // Ponavlja se samo siguran neuspjeh uređaja (vraćen odgovor). Nepoznat
+      // ishod, već evidentiran račun i odbijen poziv zaustavljaju seriju bez
+      // ponavljanja — inače prijeti dupli račun.
+      let { ishod, res } = await finalizeOne(r);
+      if (ishod.vrsta === 'greska' && res) {
         setPhase('wait');
         await sleepWithCountdown(DELAY_SECONDS);
         setPhase('print');
-        res = await finalizeOne(r).catch((e: any) => ({ success: false, error: e?.message, odbijen: true }));
+        ({ ishod, res } = await finalizeOne(r));
       }
 
-      if (res.vecEvidentiran) {
+      if (ishod.vrsta === 'vecEvidentiran') {
         setStatuses(prev => ({ ...prev, [r.id]: 'done' }));
         setRunning(false);
         runningRef.current = false;
         setActiveId(null);
-        setMessage({ type: 'error', text: `Zaustavljeno na računu ${printed + 1}/${queue.length}: ${res.error}` });
+        setMessage({ type: 'error', text: `Zaustavljeno na računu ${printed + 1}/${queue.length}: ${ishod.poruka}` });
         await loadProducts();
         return;
       }
 
-      if (res.ishodNepoznat || res.odbijen) {
+      if (ishod.vrsta === 'nepoznat') {
         setStatuses(prev => ({ ...prev, [r.id]: 'nepoznat' }));
         setRunning(false);
         runningRef.current = false;
         setActiveId(null);
-        setMessage({
-          type: 'error',
-          text: `Zaustavljeno na računu ${printed + 1}/${queue.length}: ${res.error || 'ishod štampe nije poznat'}`,
-        });
+        setMessage({ type: 'error', text: `Zaustavljeno na računu ${printed + 1}/${queue.length}: ${ishod.poruka}` });
         otvoriNezavrseneRacune();
         await loadProducts();
         return;
       }
 
-      if (!res || !res.success) {
+      if (ishod.vrsta === 'greska') {
         setStatuses(prev => ({ ...prev, [r.id]: 'failed' }));
         setRunning(false);
         runningRef.current = false;
         setActiveId(null);
         setMessage({
           type: 'error',
-          text: `Zaustavljeno na računu ${printed + 1}/${queue.length}: ${res?.error || 'Greška pri štampanju'}. Odštampano ${printed}, preostalo ${queue.length - printed}.`,
+          text: `Zaustavljeno na računu ${printed + 1}/${queue.length}: ${ishod.poruka}. Odštampano ${printed}, preostalo ${queue.length - printed}.`,
         });
         await loadProducts();
         return;
