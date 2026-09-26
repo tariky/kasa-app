@@ -38,7 +38,9 @@ export interface Fiskalizacija<S extends { korisnikId: number }, T> {
   snapshot: S;
   /**
    * Štampa na uređaju (račun, ili reklamacija s unosom novca i ponovnim
-   * pokušajem). Izuzetak znači da ništa nije odštampano.
+   * pokušajem). Invarijanta: izuzetak iz `stampaj` mora značiti da ništa nije
+   * odštampano — sve što može pasti nakon uspješne štampe ide poslije
+   * povratka iz `stampaj`, ne u nju.
    */
   stampaj: () => Promise<IshodUredjaja>;
   /**

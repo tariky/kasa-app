@@ -247,7 +247,9 @@ pub struct Fiskalizacija<'a, T> {
     /// red pripada `snapshot.korisnikId`.
     pub snapshot: &'a Value,
     /// Štampa na uređaju (račun, ili reklamacija s unosom novca i ponovnim
-    /// pokušajem). Greška znači da ništa nije odštampano.
+    /// pokušajem). Invarijanta: `Err` iz `stampaj` mora značiti da ništa nije
+    /// odštampano — sve što može pasti nakon uspješne štampe ide poslije
+    /// povratka iz `stampaj`, ne u nju.
     pub stampaj: Box<dyn FnOnce() -> R<Odgovor> + 'a>,
     /// Upis nakon uspješne štampe, u istoj transakciji u kojoj se preuzima
     /// write-ahead red (s vezama: ponuda konvertovana, nalog fakturisan…).
