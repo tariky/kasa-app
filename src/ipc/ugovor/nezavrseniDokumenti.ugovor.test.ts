@@ -36,7 +36,7 @@ function dodajPending(snapshot: object): number {
 }
 
 async function pendingId(): Promise<number> {
-  const [row] = await b.call('pending:list');
+  const [row] = await b.pozovi('pending:list');
   return row.id;
 }
 
@@ -47,7 +47,7 @@ async function pendingId(): Promise<number> {
 async function rijesiTokomStampe(stampa: { stigao: Promise<void>; pusti: () => void }, broj: string): Promise<{ id: number }> {
   try {
     await stampa.stigao;
-    return await b.call('pending:resolve', { id: await pendingId(), brojFiskalnogRacuna: broj, createdAt: DATUM });
+    return await b.pozovi('pending:resolve', { id: await pendingId(), brojFiskalnogRacuna: broj, createdAt: DATUM });
   } finally {
     stampa.pusti();
   }
@@ -72,19 +72,19 @@ function ispravanUredjaj(): void {
 async function prihvacenaPonuda(): Promise<{ id: number; broj: number; godina: number; p: number }> {
   const kupacId = dodajKupca();
   const p = baza.artikal({ sifra: `P${Math.random().toString(36).slice(2, 8)}`, cijena: 10, stanje: 10 });
-  const r = await b.call('ponuda:create', { kupacId, korisnikId: ADMIN, stavke: [{ productId: p, kolicina: 2, cijena: 10, rabat: 0, pdvStopa: 'E' }] });
+  const r = await b.pozovi('ponuda:create', { kupacId, stavke: [{ productId: p, kolicina: 2, cijena: 10, rabat: 0, pdvStopa: 'E' }] });
   await b.call('ponuda:setStatus', r.id, 'prihvacena');
   return { id: r.id, broj: r.broj, godina: r.godina, p };
 }
 
-const konvertuj = (id: number) => b.call('ponuda:konvertuj', { id, nacinPlacanja: 'Gotovina' });
+const konvertuj = (id: number) => b.pozovi('ponuda:konvertuj', { id, nacinPlacanja: 'Gotovina' });
 const ponuda = (id: number) => baza.red('SELECT status, racunId FROM ponude WHERE id = ?', id);
 
 /** Završen samostalni nalog po narudžbi s dogovorenom cijenom. */
 async function zavrsenNalog(dogovorenaCijena = 234): Promise<number> {
   const kupacId = dodajKupca();
   const mat = baza.artikal({ sifra: `M${Math.random().toString(36).slice(2, 7)}`, cijena: 1, tip: 'materijal', stanje: 10 });
-  const { id } = await b.call('nalog:create', { vrsta: 'narudzba', kupacId, opis: 'Kuhinja', dogovorenaCijena });
+  const { id } = await b.pozovi('nalog:create', { vrsta: 'narudzba', kupacId, opis: 'Kuhinja', dogovorenaCijena });
   await b.call('nalog:replaceStavke', id, [{ materijalId: mat, kolicina: 2 }]);
   await b.call('nalog:setStatus', { id, status: 'zavrsen' });
   return id;
@@ -93,27 +93,27 @@ async function zavrsenNalog(dogovorenaCijena = 234): Promise<number> {
 /** Završen nalog iz prihvaćene ponude. */
 async function zavrsenNalogIzPonude(): Promise<{ nalogId: number; ponudaId: number; p: number }> {
   const pon = await prihvacenaPonuda();
-  const { id } = await b.call('nalog:createIzPonude', pon.id);
+  const { id } = await b.pozovi('nalog:createIzPonude', pon.id);
   const mat = baza.artikal({ sifra: `M${Math.random().toString(36).slice(2, 7)}`, cijena: 1, tip: 'materijal', stanje: 10 });
   await b.call('nalog:replaceStavke', id, [{ materijalId: mat, kolicina: 1 }]);
   await b.call('nalog:setStatus', { id, status: 'zavrsen' });
   return { nalogId: id, ponudaId: pon.id, p: pon.p };
 }
 
-const izdajNalog = (id: number) => b.call('nalog:izdajRacun', { id, nacinPlacanja: 'Virman' });
+const izdajNalog = (id: number) => b.pozovi('nalog:izdajRacun', { id, nacinPlacanja: 'Virman' });
 const nalog = (id: number) => baza.red('SELECT status, racunId FROM radni_nalozi WHERE id = ?', id);
 
 /** Gotovinski račun od danas (ladica pokriva storno bez pologa). */
 async function racunZaStorno(): Promise<{ id: number; p: number }> {
   const p = baza.artikal({ sifra: `S${Math.random().toString(36).slice(2, 7)}`, cijena: 3, stanje: 10 });
-  const { id } = await b.call('order:createManual', {
+  const { id } = await b.pozovi('order:createManual', {
     ukupno: 6, pdvIznos: 0.87, nacinPlacanja: 'Gotovina', brojFiskalnogRacuna: '55', createdAt: sada(),
     stavke: [{ productId: p, kolicina: 2, cijena: 3, rabat: 0, pdvStopa: 'E' }],
   });
   return { id, p };
 }
 
-const storniraj = (id: number) => b.call('order:refundAndPrint', { id });
+const storniraj = (id: number) => b.pozovi('order:refundAndPrint', { id });
 
 function stornoTragovi(): Array<{ korisnikId: number | null; detalji: any }> {
   return baza.redovi("SELECT korisnikId, detalji FROM audit_log WHERE akcija = 'storno' ORDER BY id")
@@ -175,7 +175,7 @@ describe('ponuda:konvertuj — write-ahead', () => {
     await konvertuj(pon.id);
     const id = await pendingId();
 
-    const r = await b.call('pending:resolve', { id, brojFiskalnogRacuna: ' 700 ', createdAt: DATUM });
+    const r = await b.pozovi('pending:resolve', { id, brojFiskalnogRacuna: ' 700 ', createdAt: DATUM });
 
     expect(baza.red('SELECT brojFiskalnogRacuna, createdAt, isManual, ukupno, nacinPlacanja, kupacNaziv, status FROM orders WHERE id = ?', r.id))
       .toEqual({ brojFiskalnogRacuna: '700', createdAt: DATUM, isManual: 1, ukupno: 20, nacinPlacanja: 'Gotovina', kupacNaziv: 'Firma d.o.o.', status: 'completed' });
@@ -210,7 +210,7 @@ describe('ponuda:konvertuj — write-ahead', () => {
     await uredjajBezPotvrde();
     await konvertuj(pon.id);
 
-    expect(await b.call('pending:discard', await pendingId())).toEqual({ success: true });
+    expect(await b.pozovi('pending:discard', await pendingId())).toEqual({ success: true });
 
     expect(brojRacuna()).toBe(0);
     expect(baza.stanje(pon.p)).toBe(10);
@@ -255,10 +255,10 @@ describe('ponuda:konvertuj — write-ahead', () => {
 
     // Druga ponuda nije blokirana; odbačen red (nije odštampan) otključava ponudu.
     const druga = await prihvacenaPonuda();
-    expect(await b.call('ponuda:setStatus', druga.id, 'odbijena')).toEqual({ success: true });
+    expect(await b.pozovi('ponuda:setStatus', druga.id, 'odbijena')).toEqual({ success: true });
     await b.call('pending:discard', await pendingId());
-    expect(await b.call('ponuda:setStatus', pon.id, 'odbijena')).toEqual({ success: true });
-    expect(await b.call('ponuda:delete', pon.id)).toEqual({ changes: 1 });
+    expect(await b.pozovi('ponuda:setStatus', pon.id, 'odbijena')).toEqual({ success: true });
+    expect(await b.pozovi('ponuda:delete', pon.id)).toEqual({ changes: 1 });
   });
 
   test('stara faktura iz ponude (snapshot bez vrste, s ponudaId) takođe blokira konverziju', async () => {
@@ -324,7 +324,7 @@ describe('nalog:izdajRacun — write-ahead (samostalni nalog)', () => {
     await uredjajBezPotvrde();
     await izdajNalog(id);
 
-    const r = await b.call('pending:resolve', { id: await pendingId(), brojFiskalnogRacuna: '701', createdAt: DATUM });
+    const r = await b.pozovi('pending:resolve', { id: await pendingId(), brojFiskalnogRacuna: '701', createdAt: DATUM });
 
     const usluga = baza.red("SELECT id, tip FROM products WHERE sifra = 'NAMJ'");
     expect(usluga.tip).toBe('usluga');
@@ -377,7 +377,7 @@ describe('nalog:izdajRacun — write-ahead (samostalni nalog)', () => {
 
     // Odbačen red (nije odštampan) otključava nalog.
     await b.call('pending:discard', await pendingId());
-    expect(await b.call('nalog:setStatus', { id, status: 'vrati' })).toEqual({ success: true });
+    expect(await b.pozovi('nalog:setStatus', { id, status: 'vrati' })).toEqual({ success: true });
     expect(nalog(id).status).toBe('u_izradi');
   });
 
@@ -421,7 +421,7 @@ describe('nalog:izdajRacun — write-ahead (nalog iz ponude)', () => {
     await uredjajBezPotvrde();
     await izdajNalog(nalogId);
 
-    const r = await b.call('pending:resolve', { id: await pendingId(), brojFiskalnogRacuna: '702', createdAt: DATUM });
+    const r = await b.pozovi('pending:resolve', { id: await pendingId(), brojFiskalnogRacuna: '702', createdAt: DATUM });
 
     expect(ponuda(ponudaId)).toEqual({ status: 'konvertovana', racunId: r.id });
     expect(nalog(nalogId)).toEqual({ status: 'fakturisan', racunId: r.id });
@@ -446,7 +446,7 @@ describe('nalog:izdajRacun — write-ahead (nalog iz ponude)', () => {
 
     // Nalog u izradi (ponuda fakturisana prije završetka) se takođe ne briše.
     await b.call('pending:discard', await pendingId());
-    expect(await b.call('nalog:setStatus', { id: nalogId, status: 'vrati' })).toEqual({ success: true });
+    expect(await b.pozovi('nalog:setStatus', { id: nalogId, status: 'vrati' })).toEqual({ success: true });
     await konvertuj(ponudaId);
     await expect(b.call('nalog:delete', nalogId)).rejects.toThrow(`${ceka} prije brisanja naloga`);
     expect(nalog(nalogId)).toEqual({ status: 'u_izradi', racunId: null });
@@ -502,7 +502,7 @@ describe('order:refundAndPrint — write-ahead', () => {
     const pid = await pendingId();
 
     // Broj reklamacije je drugi niz — isti broj kao neki račun nije prepreka.
-    const r = await b.call('pending:resolve', { id: pid, brojFiskalnogRacuna: ' 55 ', createdAt: DATUM });
+    const r = await b.pozovi('pending:resolve', { id: pid, brojFiskalnogRacuna: ' 55 ', createdAt: DATUM });
 
     expect(r).toEqual({ id });
     expect(order(id)).toEqual({ status: 'refunded', brojReklamacije: '55', refundedAt: DATUM });
@@ -581,7 +581,7 @@ describe('order:refundAndPrint — write-ahead', () => {
     await b.call('user:login', '1357');
     await uredjajBezPotvrde();
 
-    const r = await b.call('order:refundAndPrint', { id, adminPin: ADMIN_PIN });
+    const r = await b.pozovi('order:refundAndPrint', { id, adminPin: ADMIN_PIN });
 
     expect(r.ishodNepoznat).toBe(true);
     expect(pending()[0]).toMatchObject({ vrsta: 'storno', korisnikId: kasir, odobrioAdminId: ADMIN, pologIznos: 0 });
@@ -632,7 +632,7 @@ describe('snapshot bez vrste', () => {
     const { id } = await racunZaStorno();
     expect(await storniraj(id)).toMatchObject({ success: true });
 
-    const r = await b.call('pending:resolve', { id: pid, brojFiskalnogRacuna: '300', createdAt: DATUM });
+    const r = await b.pozovi('pending:resolve', { id: pid, brojFiskalnogRacuna: '300', createdAt: DATUM });
     expect(baza.red('SELECT brojFiskalnogRacuna, isManual, ukupno, status FROM orders WHERE id = ?', r.id))
       .toEqual({ brojFiskalnogRacuna: '300', isManual: 1, ukupno: 12, status: 'completed' });
     expect(baza.stanje(p)).toBe(8);
@@ -645,7 +645,7 @@ describe('snapshot bez vrste', () => {
     const p = baza.artikal({ sifra: 'L1', cijena: 6, stanje: 10 });
     const pid = dodajPending({ vrsta: null, korisnikId: ADMIN, ukupno: 12, pdvIznos: 1.74, nacinPlacanja: 'Gotovina', stavke: [{ productId: p, kolicina: 2, cijena: 6, rabat: 0, pdvStopa: 'E' }] });
 
-    const r = await b.call('pending:resolve', { id: pid, brojFiskalnogRacuna: '301', createdAt: DATUM });
+    const r = await b.pozovi('pending:resolve', { id: pid, brojFiskalnogRacuna: '301', createdAt: DATUM });
     expect(baza.red('SELECT brojFiskalnogRacuna, isManual, ukupno, status FROM orders WHERE id = ?', r.id))
       .toEqual({ brojFiskalnogRacuna: '301', isManual: 1, ukupno: 12, status: 'completed' });
     expect(baza.stanje(p)).toBe(8);

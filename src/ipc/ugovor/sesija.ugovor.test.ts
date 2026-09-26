@@ -105,11 +105,11 @@ describe('bez prijave', () => {
   });
 
   test('LoginScreen: firma i postavke modula/skale se čitaju bez prijave, ostale postavke ne', async () => {
-    expect((await b.call('settings:getFirma')).naziv).toBe('');
+    expect((await b.pozovi('settings:getFirma')).naziv).toBe('');
     baza.postavka('proizvodnja.enabled', 'true');
-    expect(await b.call('settings:get', 'proizvodnja.enabled')).toBe('true');
-    expect(await b.call('settings:get', 'ui.showGenerator')).toBeNull();
-    expect(await b.call('settings:get', 'ui.skala')).toBeNull();
+    expect(await b.pozovi('settings:get', 'proizvodnja.enabled')).toBe('true');
+    expect(await b.pozovi('settings:get', 'ui.showGenerator')).toBeNull();
+    expect(await b.pozovi('settings:get', 'ui.skala')).toBeNull();
     for (const k of ['tring.host', 'kasa.requirePinRefund', 'tring.operatorPassword', 'fiscal.dismissedGaps']) {
       await expect(b.call('settings:get', k)).rejects.toThrow(NISTE_PRIJAVLJENI);
     }
@@ -117,7 +117,7 @@ describe('bez prijave', () => {
   });
 
   test('odjava bez prijave je tih uspjeh', async () => {
-    expect(await b.call('user:logout')).toEqual({ success: true });
+    expect(await b.pozovi('user:logout')).toEqual({ success: true });
   });
 });
 
@@ -133,19 +133,19 @@ describe('sesija sa zadanim PIN-om 0000', () => {
     expect(b.tring.zahtjevi).toEqual([]);
     expect(b.otvoreniDijalozi).toEqual([]);
     // Pred-prijavna čitanja rade kao i bez prijave; ostale postavke ne.
-    expect((await b.call('settings:getFirma')).naziv).toBe('');
-    expect(await b.call('settings:get', 'ui.skala')).toBeNull();
+    expect((await b.pozovi('settings:getFirma')).naziv).toBe('');
+    expect(await b.pozovi('settings:get', 'ui.skala')).toBeNull();
     await expect(b.call('settings:get', 'tring.host')).rejects.toThrow(ZADANI_PIN);
   });
 
   test('nakon promjene PIN-a sesija radi normalno; odjava gasi ograničenu sesiju', async () => {
     await prijavi(b, '0000');
-    expect(await b.call('user:promijeniSvojPin', '0000', '2468')).toEqual({ success: true });
-    expect(await b.call('product:getAll')).toEqual([]);
+    expect(await b.pozovi('user:promijeniSvojPin', '0000', '2468')).toEqual({ success: true });
+    expect(await b.pozovi('product:getAll')).toEqual([]);
 
     b.db.prepare('UPDATE users SET pin = ? WHERE id = ?').run(hesirajPin('0000'), ADMIN);
     await prijavi(b, '0000');
-    expect(await b.call('user:logout')).toEqual({ success: true });
+    expect(await b.pozovi('user:logout')).toEqual({ success: true });
     await expect(b.call('product:getAll')).rejects.toThrow(NISTE_PRIJAVLJENI);
   });
 
@@ -169,14 +169,14 @@ describe('sesija', () => {
 
   test('prijava otvara sesiju, odjava je zatvara', async () => {
     expect(await prijavi(b, ADMIN_PIN)).toEqual({ id: ADMIN, ime: 'Admin', uloga: 'admin', zadaniPin: false });
-    expect(await b.call('product:getAll')).toEqual([]);
-    expect(await b.call('user:logout')).toEqual({ success: true });
+    expect(await b.pozovi('product:getAll')).toEqual([]);
+    expect(await b.pozovi('user:logout')).toEqual({ success: true });
     await expect(b.call('product:getAll')).rejects.toThrow(NISTE_PRIJAVLJENI);
   });
 
   test('neuspjela prijava zatvara i dotadašnju sesiju', async () => {
     await prijavi(b, ADMIN_PIN);
-    expect(await b.call('user:login', '9999')).toBeNull();
+    expect(await b.pozovi('user:login', '9999')).toBeNull();
     await expect(b.call('product:getAll')).rejects.toThrow(NISTE_PRIJAVLJENI);
   });
 
@@ -185,7 +185,7 @@ describe('sesija', () => {
     await prijavi(b, ADMIN_PIN);
     await prijavi(b, '1234');
     const p = baza.artikal({ sifra: 'A1', cijena: 5 });
-    const { id } = await b.call('order:createManual', {
+    const { id } = await b.pozovi('order:createManual', {
       ukupno: 5, pdvIznos: 0.73, nacinPlacanja: 'Gotovina', brojFiskalnogRacuna: '1', createdAt: sada(),
       stavke: [{ productId: p, kolicina: 1, cijena: 5, rabat: 0, pdvStopa: 'E' }],
     });
@@ -216,7 +216,7 @@ describe('PIN heš, seed i migracija', () => {
     b.db.prepare('DELETE FROM users WHERE id = ?').run(ADMIN);
     await b.ponovoPokreni();
     expect(b.db.prepare('SELECT ime FROM users').all()).toEqual([{ ime: 'Berina' }]);
-    expect(await b.call('user:login', '0000')).toBeNull();
+    expect(await b.pozovi('user:login', '0000')).toBeNull();
 
     // Ni izmijenjen PIN admina ne vraća drugog Admin/0000.
     b.db.prepare("UPDATE users SET ime = 'Admin', pin = ? WHERE ime = 'Berina'").run(hesirajPin('4444'));
@@ -234,7 +234,7 @@ describe('PIN heš, seed i migracija', () => {
     const hesAdmina = baza.red('SELECT pin FROM users WHERE id = ?', ADMIN).pin;
     const stari = baza.upisi('users', { ime: 'Stari', pin: '4321', uloga: 'kasir' });
     // Prije migracije se čist tekst ne prihvata kao PIN.
-    expect(await b.call('user:login', '4321')).toBeNull();
+    expect(await b.pozovi('user:login', '4321')).toBeNull();
 
     await b.ponovoPokreni();
     const pin = baza.red('SELECT pin FROM users WHERE id = ?', stari).pin;
@@ -260,7 +260,7 @@ describe('PIN heš, seed i migracija', () => {
     test('bez računa i pologa se briše', async () => {
       const zadani = staraBaza();
       await b.ponovoPokreni();
-      expect(await b.call('user:login', '0000')).toBeNull();
+      expect(await b.pozovi('user:login', '0000')).toBeNull();
       expect(baza.broj('SELECT COUNT(*) AS n FROM users WHERE id = ?', zadani)).toBe(0);
       expect(zadaniUklonjen()).toEqual([{ korisnikId: null, detalji: { id: zadani, ime: 'Admin', obrisan: true } }]);
       expect(await prijavi(b, '1234')).toMatchObject({ id: ADMIN, uloga: 'admin', zadaniPin: false });
@@ -270,7 +270,7 @@ describe('PIN heš, seed i migracija', () => {
       const zadani = staraBaza();
       baza.upisi('cash_movements', { tip: 'polog', iznos: 10, korisnikId: zadani, tringStatus: 'ok' });
       await b.ponovoPokreni();
-      expect(await b.call('user:login', '0000')).toBeNull();
+      expect(await b.pozovi('user:login', '0000')).toBeNull();
       const pin = baza.red('SELECT pin FROM users WHERE id = ?', zadani).pin;
       expect(pin).toMatch(/^pbkdf2\$100000\$/);
       expect(provjeriPin('0000', pin)).toBe(false);
@@ -300,8 +300,8 @@ describe('PIN heš, seed i migracija', () => {
     const slab = `pbkdf2$1000$${so.toString('hex')}$${pbkdf2Sync('5555', so, 1000, 32, 'sha256').toString('hex')}`;
     baza.upisi('users', { ime: 'Slab', pin: slab, uloga: 'admin' });
     baza.upisi('users', { ime: 'Los', pin: 'pbkdf2$100000$zz$zz', uloga: 'admin' });
-    expect(await b.call('user:login', '5555')).toBeNull();
-    expect(await b.call('user:login', 'pbkdf2$100000$zz$zz')).toBeNull();
+    expect(await b.pozovi('user:login', '5555')).toBeNull();
+    expect(await b.pozovi('user:login', 'pbkdf2$100000$zz$zz')).toBeNull();
   });
 
   test('heš s poznatom soli: format je pbkdf2$100000$<so>$<PBKDF2-SHA256(pin, so, 100000, 32)>', async () => {
@@ -324,9 +324,9 @@ describe('PIN heš, seed i migracija', () => {
   test('nijedan kanal ne vraća PIN', async () => {
     adminPin();
     const k = baza.korisnik('Ana', '1234');
-    const odgovori = [await b.call('user:login', '1234'), await b.call('user:getAll')];
+    const odgovori = [await b.pozovi('user:login', '1234'), await b.pozovi('user:getAll')];
     await prijavi(b, ADMIN_PIN);
-    odgovori.push(await b.call('user:getAll'));
+    odgovori.push(await b.pozovi('user:getAll'));
     const json = JSON.stringify(odgovori);
     expect(json).not.toContain('pbkdf2');
     expect(json).not.toContain('"pin"');
@@ -369,20 +369,20 @@ describe('uloge', () => {
   });
 
   test('kasir čita što treba za kasu i štampa, i radi Z izvještaj', async () => {
-    expect(await b.call('user:getAll')).toHaveLength(2);
-    expect(await b.call('settings:getTring')).toMatchObject({ host: 'localhost', imaLozinku: true });
-    expect(await b.call('fiscal:getNumeracija')).toMatchObject({ predvidjeni: null });
-    expect(await b.call('pending:list')).toEqual([]);
-    expect(await b.call('order:getFiscalGaps')).toEqual([]);
-    expect((await b.call('tring:zReport')).success).toBe(true);
-    expect((await b.call('tring:xReport')).success).toBe(true);
+    expect(await b.pozovi('user:getAll')).toHaveLength(2);
+    expect(await b.pozovi('settings:getTring')).toMatchObject({ host: 'localhost', imaLozinku: true });
+    expect(await b.pozovi('fiscal:getNumeracija')).toMatchObject({ predvidjeni: null });
+    expect(await b.pozovi('pending:list')).toEqual([]);
+    expect(await b.pozovi('order:getFiscalGaps')).toEqual([]);
+    expect((await b.pozovi('tring:zReport')).success).toBe(true);
+    expect((await b.pozovi('tring:xReport')).success).toBe(true);
   });
 
   test('admin zove administratorske kanale', async () => {
     await prijavi(b, ADMIN_PIN);
-    expect(await b.call('fiscal:setZadnjiBroj', 100)).toMatchObject({ success: true, predvidjeni: 101 });
-    expect(await b.call('order:dismissFiscalGap', 7)).toEqual({ success: true });
-    expect(Array.isArray(await b.call('tring:getLogs'))).toBe(true);
+    expect(await b.pozovi('fiscal:setZadnjiBroj', 100)).toMatchObject({ success: true, predvidjeni: 101 });
+    expect(await b.pozovi('order:dismissFiscalGap', 7)).toEqual({ success: true });
+    expect(Array.isArray(await b.pozovi('tring:getLogs'))).toBe(true);
   });
 
   test('nalog: kasir radi sve osim vraćanja u izradu', async () => {
@@ -393,7 +393,7 @@ describe('uloge', () => {
     await expect(b.call('nalog:setStatus', { id, status: 'vrati', korisnikId: ADMIN }))
       .rejects.toThrow('Vraćanje naloga u izradu može samo administrator');
     await prijavi(b, ADMIN_PIN);
-    expect(await b.call('nalog:setStatus', { id, status: 'vrati' })).toEqual({ success: true });
+    expect(await b.pozovi('nalog:setStatus', { id, status: 'vrati' })).toEqual({ success: true });
   });
 });
 
@@ -408,7 +408,7 @@ describe('settings:set', () => {
   test('kasir smije samo kasa.scanMode', async () => {
     baza.korisnik('Kasir', '1234');
     await prijavi(b, '1234');
-    expect(await b.call('settings:set', 'kasa.scanMode', 'true')).toEqual({ success: true });
+    expect(await b.pozovi('settings:set', 'kasa.scanMode', 'true')).toEqual({ success: true });
     for (const k of ['kasa.requirePinRefund', 'kasa.allowZeroStock', 'racun.napomena', 'dev.logging', 'ui.skala', 'ui.showGenerator', 'cijene.unosBezPdv']) {
       await expect(b.call('settings:set', k, 'false')).rejects.toThrow(SAMO_ADMIN);
     }
@@ -421,20 +421,20 @@ describe('settings:set', () => {
       'kasa.pologPrompt', 'kasa.allowZeroStock', 'kasa.kusurKalkulacija', 'kasa.requirePinRefund', 'kasa.showDailyTotal',
       'kasa.scanMode', 'cijene.unosBezPdv', 'racun.napomena', 'dev.logging', 'ui.skala', 'ui.showGenerator',
     ];
-    for (const k of kljucevi) expect(await b.call('settings:set', k, 'true')).toEqual({ success: true });
+    for (const k of kljucevi) expect(await b.pozovi('settings:set', k, 'true')).toEqual({ success: true });
     expect(baza.broj("SELECT COUNT(*) AS n FROM settings WHERE value = 'true'")).toBe(kljucevi.length);
   });
 
   test('postavke dokumenata: admin ih mijenja, kasir samo čita', async () => {
     baza.korisnik('Kasir', '1234');
     await prijavi(b, ADMIN_PIN);
-    for (const k of KLJUCEVI_DOKUMENATA) expect(await b.call('settings:set', k, 'x')).toEqual({ success: true });
+    for (const k of KLJUCEVI_DOKUMENATA) expect(await b.pozovi('settings:set', k, 'x')).toEqual({ success: true });
     expect(baza.broj("SELECT COUNT(*) AS n FROM settings WHERE key LIKE 'dokumenti.%' AND value = 'x'")).toBe(KLJUCEVI_DOKUMENATA.length);
 
     await prijavi(b, '1234');
     for (const k of KLJUCEVI_DOKUMENATA) {
       await expect(b.call('settings:set', k, 'y')).rejects.toThrow(SAMO_ADMIN);
-      expect(await b.call('settings:get', k)).toBe('x');
+      expect(await b.pozovi('settings:get', k)).toBe('x');
     }
   });
 
@@ -467,7 +467,7 @@ describe('ograničenje pokušaja', () => {
   });
 
   async function pogresno(n: number) {
-    for (let i = 0; i < n; i++) expect(await b.call('user:login', '9999')).toBeNull();
+    for (let i = 0; i < n; i++) expect(await b.pozovi('user:login', '9999')).toBeNull();
   }
 
   test('nakon 5 grešaka blokada 30 s — i za tačan PIN', async () => {
@@ -480,7 +480,7 @@ describe('ograničenje pokušaja', () => {
     // Blokirana prijava ne otvara sesiju.
     await expect(b.call('product:getAll')).rejects.toThrow(NISTE_PRIJAVLJENI);
     setSystemTime(t0 + 30_000);
-    expect(await b.call('user:login', ADMIN_PIN)).toMatchObject({ id: ADMIN });
+    expect(await b.pozovi('user:login', ADMIN_PIN)).toMatchObject({ id: ADMIN });
   });
 
   test('svaki sljedeći neuspjeh udvostručuje blokadu do 15 min, i kad stari neuspjesi isteknu iz prozora', async () => {
@@ -498,7 +498,7 @@ describe('ograničenje pokušaja', () => {
     // Uporan napad: jedan pokušaj po isteku blokade, a svaki donese novih 15 min.
     t += blokada * 1000;
     setSystemTime(t);
-    expect(await b.call('user:login', ADMIN_PIN)).toMatchObject({ id: ADMIN });
+    expect(await b.pozovi('user:login', ADMIN_PIN)).toMatchObject({ id: ADMIN });
   });
 
   test('eskalacija se poništi tek nakon 60 min bez ijednog neuspjeha', async () => {
@@ -512,7 +512,7 @@ describe('ograničenje pokušaja', () => {
     // 60 min od zadnjeg neuspjeha: kreće se ispočetka (4 bez blokade, peti 30 s).
     setSystemTime(t0 + 119 * 60_000);
     await pogresno(4);
-    expect(await b.call('user:login', ADMIN_PIN)).toMatchObject({ id: ADMIN });
+    expect(await b.pozovi('user:login', ADMIN_PIN)).toMatchObject({ id: ADMIN });
     await pogresno(1);
     await expect(b.call('user:login', ADMIN_PIN)).rejects.toThrow(`${BLOKADA} 30 s.`);
   });
@@ -548,7 +548,7 @@ describe('ograničenje pokušaja', () => {
     await pogresno(4);
     setSystemTime(t0 + 15 * 60_000);
     await pogresno(4);
-    expect(await b.call('user:login', ADMIN_PIN)).toMatchObject({ id: ADMIN });
+    expect(await b.pozovi('user:login', ADMIN_PIN)).toMatchObject({ id: ADMIN });
   });
 
   test('brojač je zajednički za prijavu, admin PIN u stornu i PIN pri promjeni svog PIN-a', async () => {
@@ -580,7 +580,7 @@ describe('ograničenje pokušaja', () => {
     await pogresno(2);
     await prijavi(b, ADMIN_PIN);
     expect(baza.red("SELECT value FROM settings WHERE key = 'sigurnost.pinBlokada'")).toBeTruthy();
-    expect(await b.call('settings:get', 'sigurnost.pinBlokada')).toBeNull();
+    expect(await b.pozovi('settings:get', 'sigurnost.pinBlokada')).toBeNull();
     await expect(b.call('settings:set', 'sigurnost.pinBlokada', '{}'))
       .rejects.toThrow('Postavka "sigurnost.pinBlokada" se ne može mijenjati');
     await b.call('user:logout');
@@ -595,11 +595,11 @@ describe('user:promijeniSvojPin', () => {
 
   test('zadani admin mijenja PIN; stari 0000 više ne vrijedi', async () => {
     expect((await prijavi(b, '0000')).zadaniPin).toBe(true);
-    expect(await b.call('user:promijeniSvojPin', '0000', '2468')).toEqual({ success: true });
+    expect(await b.pozovi('user:promijeniSvojPin', '0000', '2468')).toEqual({ success: true });
     expect(provjeriPin('2468', baza.red('SELECT pin FROM users WHERE id = ?', ADMIN).pin)).toBe(true);
     // Sesija ostaje otvorena.
-    expect(await b.call('product:getAll')).toEqual([]);
-    expect(await b.call('user:login', '0000')).toBeNull();
+    expect(await b.pozovi('product:getAll')).toEqual([]);
+    expect(await b.pozovi('user:login', '0000')).toBeNull();
     expect(await prijavi(b, '2468')).toEqual({ id: ADMIN, ime: 'Admin', uloga: 'admin', zadaniPin: false });
   });
 
@@ -609,7 +609,7 @@ describe('user:promijeniSvojPin', () => {
     await prijavi(b, '1234');
     // Tuđi PIN (admina) nije "trenutni PIN" kasira.
     await expect(b.call('user:promijeniSvojPin', '0000', '2468')).rejects.toThrow('Trenutni PIN nije tačan');
-    expect(await b.call('user:promijeniSvojPin', '1234', '2468')).toEqual({ success: true });
+    expect(await b.pozovi('user:promijeniSvojPin', '1234', '2468')).toEqual({ success: true });
     expect(provjeriPin('2468', baza.red('SELECT pin FROM users WHERE id = ?', kasir).pin)).toBe(true);
     expect(provjeriPin('0000', baza.red('SELECT pin FROM users WHERE id = ?', ADMIN).pin)).toBe(true);
   });
@@ -652,7 +652,7 @@ describe('user:promijeniSvojPin', () => {
     for (const pin of ['1111', '2222', '3333', '4444']) {
       await expect(b.call('user:promijeniSvojPin', '1234', pin)).rejects.toThrow('Taj PIN je zauzet');
     }
-    expect(await b.call('user:promijeniSvojPin', '1234', '7777')).toEqual({ success: true });
+    expect(await b.pozovi('user:promijeniSvojPin', '1234', '7777')).toEqual({ success: true });
     await expect(b.call('user:promijeniSvojPin', '7777', ADMIN_PIN)).rejects.toThrow('Taj PIN je zauzet');
     await expect(b.call('user:promijeniSvojPin', '7777', '8888')).rejects.toThrow(`${BLOKADA} 30 s.`);
   });
@@ -662,16 +662,16 @@ describe('user:promijeniSvojPin', () => {
     setSystemTime(t0);
     const kasir = baza.korisnik('Kasir', '1234');
     await prijavi(b, '1234');
-    expect(await b.call('user:promijeniSvojPin', '1234', '1235')).toEqual({ success: true });
-    expect(await b.call('user:promijeniSvojPin', '1235', '1236')).toEqual({ success: true });
+    expect(await b.pozovi('user:promijeniSvojPin', '1234', '1235')).toEqual({ success: true });
+    expect(await b.pozovi('user:promijeniSvojPin', '1235', '1236')).toEqual({ success: true });
     await prijavi(b, '1236');
-    expect(await b.call('user:promijeniSvojPin', '1236', '1237')).toEqual({ success: true });
+    expect(await b.pozovi('user:promijeniSvojPin', '1236', '1237')).toEqual({ success: true });
     await expect(b.call('user:promijeniSvojPin', '1237', '1238')).rejects.toThrow('Previše promjena PIN-a. Pokušajte ponovo za 600 s.');
     // Budžet ne troši pokušaje i ne otkriva da li je PIN zauzet.
     await expect(b.call('user:promijeniSvojPin', '1237', ADMIN_PIN)).rejects.toThrow('Previše promjena PIN-a');
     expect(provjeriPin('1237', baza.red('SELECT pin FROM users WHERE id = ?', kasir).pin)).toBe(true);
     setSystemTime(t0 + 10 * 60_000);
-    expect(await b.call('user:promijeniSvojPin', '1237', '1238')).toEqual({ success: true });
+    expect(await b.pozovi('user:promijeniSvojPin', '1237', '1238')).toEqual({ success: true });
   });
 });
 
@@ -686,7 +686,7 @@ describe('order:refundAndPrint uz kasa.requirePinRefund', () => {
     baza.korisnik('Berina', '1111', 'admin');
     await prijavi(b, '1234');
     const p = baza.artikal({ sifra: 'S1', cijena: 3 });
-    racun = (await b.call('order:createManual', {
+    racun = (await b.pozovi('order:createManual', {
       ukupno: 3, pdvIznos: 0.44, nacinPlacanja: 'Gotovina', brojFiskalnogRacuna: '55', createdAt: sada(),
       stavke: [{ productId: p, kolicina: 1, cijena: 3, rabat: 0, pdvStopa: 'E' }],
     })).id;
@@ -706,23 +706,23 @@ describe('order:refundAndPrint uz kasa.requirePinRefund', () => {
 
   test('kasir s PIN-om bilo kojeg admina stornira', async () => {
     baza.postavka('kasa.requirePinRefund', 'true');
-    expect(await b.call('order:refundAndPrint', { id: racun, adminPin: '1111' })).toMatchObject({ success: true });
+    expect(await b.pozovi('order:refundAndPrint', { id: racun, adminPin: '1111' })).toMatchObject({ success: true });
     expect(status()).toBe('refunded');
   });
 
   test('admin ne treba PIN; bez postavke ni kasir', async () => {
     baza.postavka('kasa.requirePinRefund', 'true');
     await prijavi(b, ADMIN_PIN);
-    expect(await b.call('order:refundAndPrint', { id: racun })).toMatchObject({ success: true });
+    expect(await b.pozovi('order:refundAndPrint', { id: racun })).toMatchObject({ success: true });
 
     await prijavi(b, '1234');
     baza.postavka('kasa.requirePinRefund', 'false');
     const p = baza.artikal({ sifra: 'S2', cijena: 3 });
-    const drugi = (await b.call('order:createManual', {
+    const drugi = (await b.pozovi('order:createManual', {
       ukupno: 3, pdvIznos: 0.44, nacinPlacanja: 'Gotovina', brojFiskalnogRacuna: '56', createdAt: sada(),
       stavke: [{ productId: p, kolicina: 1, cijena: 3, rabat: 0, pdvStopa: 'E' }],
     })).id;
-    expect(await b.call('order:refundAndPrint', { id: drugi })).toMatchObject({ success: true });
+    expect(await b.pozovi('order:refundAndPrint', { id: drugi })).toMatchObject({ success: true });
   });
 
   // Dok printer štampa, drugi pozivi rade (odjava, prijava drugog korisnika) —
@@ -732,9 +732,9 @@ describe('order:refundAndPrint uz kasa.requirePinRefund', () => {
 
   test('audit storna nosi korisnika s početka poziva i kad se tokom štampe odjavi', async () => {
     const stampa = b.tring.zadrzi('/srr');
-    const storno = b.call('order:refundAndPrint', { id: racun });
+    const storno = b.pozovi('order:refundAndPrint', { id: racun });
     await stampa.stigao;
-    expect(await b.call('user:logout')).toEqual({ success: true });
+    expect(await b.pozovi('user:logout')).toEqual({ success: true });
     stampa.pusti();
     expect(await storno).toMatchObject({ success: true });
     expect(tragStorna()).toEqual({ korisnikId: kasirId() });
@@ -742,7 +742,7 @@ describe('order:refundAndPrint uz kasa.requirePinRefund', () => {
 
   test('audit storna nosi korisnika s početka poziva i kad se tokom štampe prijavi drugi', async () => {
     const stampa = b.tring.zadrzi('/srr');
-    const storno = b.call('order:refundAndPrint', { id: racun });
+    const storno = b.pozovi('order:refundAndPrint', { id: racun });
     await stampa.stigao;
     const berina = await prijavi(b, '1111');
     stampa.pusti();
@@ -757,8 +757,8 @@ describe('order:refundAndPrint uz kasa.requirePinRefund', () => {
     for (let i = 0; i < 4; i++) {
       await expect(b.call('order:refundAndPrint', { id: racun, adminPin: '9999' })).rejects.toThrow('Neispravan admin PIN');
     }
-    expect(await b.call('order:refundAndPrint', { id: racun, adminPin: '1111' })).toMatchObject({ success: true });
-    expect(await b.call('user:login', '9999')).toBeNull();
+    expect(await b.pozovi('order:refundAndPrint', { id: racun, adminPin: '1111' })).toMatchObject({ success: true });
+    expect(await b.pozovi('user:login', '9999')).toBeNull();
     await expect(b.call('user:login', '1234')).rejects.toThrow(`${BLOKADA} 30 s.`);
   });
 });

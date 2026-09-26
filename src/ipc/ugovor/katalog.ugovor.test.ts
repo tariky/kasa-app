@@ -2,7 +2,7 @@
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
 import { otvoriBackend, pozoviBezTipova, prijavi, ADMIN_PIN, type Backend } from './backend';
 import { sekundiOdSada } from './zona';
-import { scenarij, ADMIN } from './scenarij';
+import { scenarij, ADMIN, postoji } from './scenarij';
 
 let b: Backend;
 const baza = scenarij(() => b);
@@ -35,7 +35,7 @@ const noviArtikal = (extra: Record<string, unknown> = {}) =>
 
 describe('product:create', () => {
   test('upisuje artikal i vraća samo id', async () => {
-    const r = await b.call('product:create', noviArtikal({ plu: 7, barkod: '3871234567890' }));
+    const r = await b.pozovi('product:create', noviArtikal({ plu: 7, barkod: '3871234567890' }));
 
     expect(Object.keys(r)).toEqual(['id']);
     expect(typeof r.id).toBe('number');
@@ -50,9 +50,9 @@ describe('product:create', () => {
   });
 
   test('podrazumijevana jedinica mjere zavisi od tipa, nepoznat tip postaje artikal', async () => {
-    const u = await b.call('product:create', noviArtikal({ sifra: 'U1', tip: 'usluga' }));
-    const m = await b.call('product:create', noviArtikal({ sifra: 'M1', tip: 'materijal', jm: 'm2', plocaSirina: 2800, plocaVisina: 2070 }));
-    const x = await b.call('product:create', noviArtikal({ sifra: 'X1', tip: 'nešto' }));
+    const u = await b.pozovi('product:create', noviArtikal({ sifra: 'U1', tip: 'usluga' }));
+    const m = await b.pozovi('product:create', noviArtikal({ sifra: 'M1', tip: 'materijal', jm: 'm2', plocaSirina: 2800, plocaVisina: 2070 }));
+    const x = await b.pozovi('product:create', noviArtikal({ sifra: 'X1', tip: 'nešto' }));
 
     expect(baza.red('SELECT tip, jm FROM products WHERE id = ?', u.id)).toEqual({ tip: 'usluga', jm: 'usl' });
     expect(baza.red('SELECT tip, jm, plocaSirina, plocaVisina FROM products WHERE id = ?', m.id))
@@ -62,7 +62,7 @@ describe('product:create', () => {
   });
 
   test('cijena nula je dozvoljena', async () => {
-    const r = await b.call('product:create', noviArtikal({ cijena: 0 }));
+    const r = await b.pozovi('product:create', noviArtikal({ cijena: 0 }));
     expect(baza.red('SELECT cijena FROM products WHERE id = ?', r.id).cijena).toBe(0);
   });
 
@@ -89,7 +89,7 @@ describe('product:create', () => {
     expect(baza.broj('SELECT COUNT(*) AS n FROM products')).toBe(0);
 
     const plu = async (sifra: string, v: unknown) =>
-      baza.red('SELECT plu FROM products WHERE id = ?', (await b.call('product:create', noviArtikal({ sifra, plu: v }))).id).plu;
+      baza.red('SELECT plu FROM products WHERE id = ?', (await b.pozovi('product:create', noviArtikal({ sifra, plu: v }))).id).plu;
     expect(await plu('A0', 0)).toBe(0);
     expect(await plu('A1', 999_999)).toBe(999_999);
     expect(await plu('A2', ' 42 ')).toBe(42);
@@ -119,12 +119,12 @@ describe('product:create', () => {
 
   test('prazan barkod ne provjerava duplikate', async () => {
     baza.artikal({ sifra: 'B1', barkod: '' });
-    const r = await b.call('product:create', noviArtikal({ barkod: '' }));
+    const r = await b.pozovi('product:create', noviArtikal({ barkod: '' }));
     expect(typeof r.id).toBe('number');
   });
 
   test('trimuje šifru, naziv i barkod pri upisu, pa ih provjera duplikata vidi', async () => {
-    const r = await b.call('product:create', noviArtikal({ sifra: ' N1 ', naziv: '  Novi artikal ', barkod: ' 555 ' }));
+    const r = await b.pozovi('product:create', noviArtikal({ sifra: ' N1 ', naziv: '  Novi artikal ', barkod: ' 555 ' }));
     expect(baza.red('SELECT sifra, naziv, barkod FROM products WHERE id = ?', r.id))
       .toEqual({ sifra: 'N1', naziv: 'Novi artikal', barkod: '555' });
 
@@ -140,20 +140,20 @@ describe('product:create', () => {
 describe('product:get', () => {
   test('vraća red iz products bez stanja', async () => {
     const id = baza.artikal({ sifra: 'G1', naziv: 'Čokolada', cijena: 3.2, barkod: '999', stanje: 5 });
-    const p = await b.call('product:get', id);
+    const p = await b.pozovi('product:get', id);
 
     expect(p).toMatchObject({
       id, sifra: 'G1', naziv: 'Čokolada', jm: 'kom', cijena: 3.2, pdvStopa: 'E', plu: 1,
       barkod: '999', tip: 'artikal', plocaSirina: null, plocaVisina: null,
     });
-    expect(typeof p.createdAt).toBe('string');
-    expect(typeof p.updatedAt).toBe('string');
-    expect('stanje' in p).toBe(false);
+    expect(typeof postoji(p).createdAt).toBe('string');
+    expect(typeof postoji(p).updatedAt).toBe('string');
+    expect('stanje' in postoji(p)).toBe(false);
   });
 
   test('nepostojeći id ne vraća artikal', async () => {
     // Electron (better-sqlite3) vraća undefined, bun:sqlite null — renderer oboje tretira kao "nema".
-    expect((await b.call('product:get', 999)) ?? null).toBeNull();
+    expect((await b.pozovi('product:get', 999)) ?? null).toBeNull();
   });
 });
 
@@ -167,7 +167,7 @@ describe('product:getAll', () => {
     baza.artikal({ sifra: 'M1', naziv: 'Iverica', tip: 'materijal', stanje: 3 });
     baza.kretanje({ productId: a, tip: 'izlaz', kolicina: 4 });
 
-    const lista = await b.call('product:getAll');
+    const lista = await b.pozovi('product:getAll');
     expect(lista.map((p: any) => [p.naziv, p.stanje])).toEqual([
       ['Bijeli', 0], ['Iverica', 3], ['Montaža', 0], ['Zeleni', 6],
     ]);
@@ -179,16 +179,16 @@ describe('product:getAll', () => {
     baza.artikal({ sifra: 'U1', naziv: 'U', tip: 'usluga' });
     baza.artikal({ sifra: 'M1', naziv: 'M', tip: 'materijal' });
 
-    expect(sifre(await b.call('product:getAll', 'usluga'))).toEqual(['U1']);
-    expect(sifre(await b.call('product:getAll', 'materijal'))).toEqual(['M1']);
-    expect(sifre(await b.call('product:getAll', 'artikal'))).toEqual(['A1']);
-    expect(sifre(await b.call('product:getAll', 'nepoznat'))).toEqual(['A1']);
+    expect(sifre(await b.pozovi('product:getAll', 'usluga'))).toEqual(['U1']);
+    expect(sifre(await b.pozovi('product:getAll', 'materijal'))).toEqual(['M1']);
+    expect(sifre(await b.pozovi('product:getAll', 'artikal'))).toEqual(['A1']);
+    expect(sifre(await b.pozovi('product:getAll', 'nepoznat'))).toEqual(['A1']);
     // Prazan string = bez filtera.
-    expect(sifre(await b.call('product:getAll', ''))).toEqual(['A1', 'M1', 'U1']);
+    expect(sifre(await b.pozovi('product:getAll', ''))).toEqual(['A1', 'M1', 'U1']);
   });
 
   test('prazna baza vraća prazan niz', async () => {
-    expect(await b.call('product:getAll')).toEqual([]);
+    expect(await b.pozovi('product:getAll')).toEqual([]);
   });
 });
 
@@ -199,7 +199,7 @@ describe('product:update', () => {
     const id = baza.artikal({ sifra: 'P1', naziv: 'Staro', cijena: 5, barkod: '123' });
     b.db.prepare("UPDATE products SET updatedAt = '2000-01-01 00:00:00' WHERE id = ?").run(id);
 
-    const r = await b.call('product:update', id, { naziv: 'Novo', cijena: 7.5, pdvStopa: 'K', jm: 'l', plu: 9 });
+    const r = await b.pozovi('product:update', id, { naziv: 'Novo', cijena: 7.5, pdvStopa: 'K', jm: 'l', plu: 9 });
     expect(r).toEqual({ changes: 1 });
     const p = baza.red('SELECT * FROM products WHERE id = ?', id);
     expect(p).toMatchObject({ sifra: 'P1', naziv: 'Novo', cijena: 7.5, pdvStopa: 'K', jm: 'l', plu: 9, barkod: '123', tip: 'artikal' });
@@ -209,12 +209,12 @@ describe('product:update', () => {
   test('prazan objekat ne radi ništa', async () => {
     const id = baza.artikal({ sifra: 'P1' });
     b.db.prepare("UPDATE products SET updatedAt = '2000-01-01 00:00:00' WHERE id = ?").run(id);
-    expect(await b.call('product:update', id, {})).toEqual({ changes: 0 });
+    expect(await b.pozovi('product:update', id, {})).toEqual({ changes: 0 });
     expect(baza.red('SELECT updatedAt FROM products WHERE id = ?', id).updatedAt).toBe('2000-01-01 00:00:00');
   });
 
   test('nepostojeći id vraća changes 0', async () => {
-    expect(await b.call('product:update', 999, { naziv: 'X' })).toEqual({ changes: 0 });
+    expect(await b.pozovi('product:update', 999, { naziv: 'X' })).toEqual({ changes: 0 });
   });
 
   test('barkod se može obrisati sa null, a tip se normalizuje', async () => {
@@ -239,7 +239,7 @@ describe('product:update', () => {
 
     await expect(b.call('product:update', id, { sifra: 'P1' })).rejects.toThrow('Artikal sa šifrom "P1" već postoji');
     await expect(b.call('product:update', id, { barkod: '111' })).rejects.toThrow('Artikal sa barkodom "111" već postoji');
-    expect(await b.call('product:update', id, { sifra: 'P2', barkod: '222' })).toEqual({ changes: 1 });
+    expect(await b.pozovi('product:update', id, { sifra: 'P2', barkod: '222' })).toEqual({ changes: 1 });
     expect(baza.red('SELECT sifra, barkod FROM products WHERE id = ?', id)).toEqual({ sifra: 'P2', barkod: '222' });
   });
 
@@ -271,10 +271,10 @@ describe('product:update', () => {
 
     await expect(b.call('product:update', id, { sifra: ' P1 ' })).rejects.toThrow('Artikal sa šifrom " P1 " već postoji');
     await expect(b.call('product:update', id, { barkod: ' 111 ' })).rejects.toThrow('Artikal sa barkodom " 111 " već postoji');
-    expect(await b.call('product:update', id, { sifra: ' P3 ', naziv: '  Novi naziv ', barkod: ' 222 ' })).toEqual({ changes: 1 });
+    expect(await b.pozovi('product:update', id, { sifra: ' P3 ', naziv: '  Novi naziv ', barkod: ' 222 ' })).toEqual({ changes: 1 });
     expect(baza.red('SELECT sifra, naziv, barkod FROM products WHERE id = ?', id)).toEqual({ sifra: 'P3', naziv: 'Novi naziv', barkod: '222' });
     // Nedirana polja ne smetaju: update samo cijene ne traži šifru ni naziv.
-    expect(await b.call('product:update', id, { cijena: 0 })).toEqual({ changes: 1 });
+    expect(await b.pozovi('product:update', id, { cijena: 0 })).toEqual({ changes: 1 });
   });
 });
 
@@ -283,12 +283,12 @@ describe('product:update', () => {
 describe('product:delete', () => {
   test('briše artikal koji se nigdje ne koristi', async () => {
     const id = baza.artikal({ sifra: 'D1' });
-    expect(await b.call('product:delete', id)).toEqual({ changes: 1 });
+    expect(await b.pozovi('product:delete', id)).toEqual({ changes: 1 });
     expect(baza.red('SELECT id FROM products WHERE id = ?', id)).toBeNull();
   });
 
   test('nepostojeći id vraća changes 0', async () => {
-    expect(await b.call('product:delete', 999)).toEqual({ changes: 0 });
+    expect(await b.pozovi('product:delete', 999)).toEqual({ changes: 0 });
   });
 
   test('ne briše artikal sa računa', async () => {
@@ -364,7 +364,7 @@ describe('product:delete', () => {
 describe('product:adjustStock', () => {
   test('povećanje stanja upisuje ulaz za razliku', async () => {
     const id = baza.artikal({ sifra: 'S1', stanje: 4 });
-    expect(await b.call('product:adjustStock', id, 10)).toEqual({ changes: 1 });
+    expect(await b.pozovi('product:adjustStock', id, 10)).toEqual({ changes: 1 });
     expect(baza.red("SELECT tip, kolicina, referenceType, referenceId FROM stock_movements WHERE referenceType = 'adjustment'"))
       .toEqual({ tip: 'ulaz', kolicina: 6, referenceType: 'adjustment', referenceId: 0 });
     expect(baza.stanje(id)).toBe(10);
@@ -382,7 +382,7 @@ describe('product:adjustStock', () => {
 
   test('korekcija nosi lokalno vrijeme upisa; i usluga se koriguje (pravilo usluge važi samo za prodaju)', async () => {
     const id = baza.artikal({ sifra: 'U1', tip: 'usluga', stanje: 4 });
-    expect(await b.call('product:adjustStock', id, 1)).toEqual({ changes: 1 });
+    expect(await b.pozovi('product:adjustStock', id, 1)).toEqual({ changes: 1 });
     // Kretanje nosi isto vrijeme kao trag korekcije, a to je lokalno vrijeme sada (zona.ts).
     const k = baza.red(`
       SELECT sm.tip, sm.kolicina, sm.createdAt, abs(julianday(sm.createdAt) - julianday(a.createdAt)) * 86400 AS razlika
@@ -398,7 +398,7 @@ describe('product:adjustStock', () => {
 
   test('isto stanje ne upisuje ništa', async () => {
     const id = baza.artikal({ sifra: 'S1', stanje: 4 });
-    expect(await b.call('product:adjustStock', id, 4)).toEqual({ changes: 0 });
+    expect(await b.pozovi('product:adjustStock', id, 4)).toEqual({ changes: 0 });
     expect(baza.broj("SELECT COUNT(*) AS n FROM stock_movements WHERE referenceType = 'adjustment'")).toBe(0);
   });
 
@@ -407,7 +407,7 @@ describe('product:adjustStock', () => {
     baza.kretanje({ productId: id, tip: 'ulaz', kolicina: 0.2 });
     baza.kretanje({ productId: id, tip: 'izlaz', kolicina: 0.3 });
     expect(baza.stanje(id)).not.toBe(0);
-    expect(await b.call('product:adjustStock', id, 0)).toEqual({ changes: 0 });
+    expect(await b.pozovi('product:adjustStock', id, 0)).toEqual({ changes: 0 });
     expect(baza.broj("SELECT COUNT(*) AS n FROM stock_movements WHERE referenceType = 'adjustment'")).toBe(0);
   });
 
@@ -425,7 +425,7 @@ describe('product:slobodan', () => {
     ({ naziv: 'Popravak rajsferšlusa', cijena: 7.5, pdvStopa: 'E', ...extra });
 
   test('pravi skriveni artikal bez zalihe s automatskom šifrom i vraća ga sa stanjem', async () => {
-    const p = await b.call('product:slobodan', slobodna({ naziv: '  Popravak rajsferšlusa ' }));
+    const p = await b.pozovi('product:slobodan', slobodna({ naziv: '  Popravak rajsferšlusa ' }));
 
     expect(p).toMatchObject({
       sifra: 'S000001', naziv: 'Popravak rajsferšlusa', jm: 'kom', cijena: 7.5, pdvStopa: 'E',
@@ -438,8 +438,8 @@ describe('product:slobodan', () => {
   });
 
   test('isti naziv, stopa i JM koriste postojeći artikal — samo se cijena mijenja, bez historije cijena', async () => {
-    const prvi = await b.call('product:slobodan', slobodna());
-    const drugi = await b.call('product:slobodan', slobodna({ naziv: 'popravak RAJSFERŠLUSA', cijena: 9 }));
+    const prvi = await b.pozovi('product:slobodan', slobodna());
+    const drugi = await b.pozovi('product:slobodan', slobodna({ naziv: 'popravak RAJSFERŠLUSA', cijena: 9 }));
 
     expect(drugi.id).toBe(prvi.id);
     // Naziv ostaje kako je prvi put upisan: uređaj ne smije dobiti drugi naziv na istom artiklu.
@@ -449,9 +449,9 @@ describe('product:slobodan', () => {
   });
 
   test('druga stopa ili JM daju novi artikal', async () => {
-    const e = await b.call('product:slobodan', slobodna());
-    const k = await b.call('product:slobodan', slobodna({ pdvStopa: 'K' }));
-    const m = await b.call('product:slobodan', slobodna({ jm: 'm' }));
+    const e = await b.pozovi('product:slobodan', slobodna());
+    const k = await b.pozovi('product:slobodan', slobodna({ pdvStopa: 'K' }));
+    const m = await b.pozovi('product:slobodan', slobodna({ jm: 'm' }));
 
     expect(new Set([e.id, k.id, m.id]).size).toBe(3);
     expect([e.sifra, k.sifra, m.sifra]).toEqual(['S000001', 'S000002', 'S000003']);
@@ -460,16 +460,16 @@ describe('product:slobodan', () => {
 
   test('ne dira obične artikle istog naziva', async () => {
     const obican = baza.artikal({ sifra: 'A1', naziv: 'Popravak rajsferšlusa', tip: 'usluga' });
-    const p = await b.call('product:slobodan', slobodna());
+    const p = await b.pozovi('product:slobodan', slobodna());
     expect(p.id).not.toBe(obican);
     expect(baza.red('SELECT cijena FROM products WHERE id = ?', obican).cijena).toBe(10);
   });
 
   test('preskače šifru koju već ima obični artikal', async () => {
     baza.artikal({ sifra: 'S000001' });
-    const p = await b.call('product:slobodan', slobodna());
+    const p = await b.pozovi('product:slobodan', slobodna());
     expect(p.sifra).toBe('S000002');
-    const q = await b.call('product:slobodan', slobodna({ naziv: 'Drugo' }));
+    const q = await b.pozovi('product:slobodan', slobodna({ naziv: 'Drugo' }));
     expect(q.sifra).toBe('S000003');
   });
 
@@ -485,11 +485,11 @@ describe('product:slobodan', () => {
 
   test('slobodni artikli se ne vide u šifarniku, ali product:get ih vraća', async () => {
     baza.artikal({ sifra: 'U1', naziv: 'Popravak jakne', tip: 'usluga' });
-    const p = await b.call('product:slobodan', slobodna());
+    const p = await b.pozovi('product:slobodan', slobodna());
 
-    expect(sifre(await b.call('product:getAll'))).toEqual(['U1']);
-    expect(sifre(await b.call('product:getAll', 'usluga'))).toEqual(['U1']);
-    expect((await b.call('product:get', p.id)).naziv).toBe('Popravak rajsferšlusa');
+    expect(sifre(await b.pozovi('product:getAll'))).toEqual(['U1']);
+    expect(sifre(await b.pozovi('product:getAll', 'usluga'))).toEqual(['U1']);
+    expect(postoji(await b.pozovi('product:get', p.id)).naziv).toBe('Popravak rajsferšlusa');
   });
 });
 
@@ -513,11 +513,11 @@ describe('product:getDobavljacSifre', () => {
     dodajSifru(a, alfa, null);
     dodajSifru(drugi, alfa, 'A-7');
 
-    expect(await b.call('product:getDobavljacSifre', a)).toEqual([
+    expect(await b.pozovi('product:getDobavljacSifre', a)).toEqual([
       { dobavljacId: alfa, dobavljacNaziv: 'Alfa', sifra: null },
       { dobavljacId: zeta, dobavljacNaziv: 'Zeta', sifra: 'Z-100' },
     ]);
-    expect(await b.call('product:getDobavljacSifre', 999)).toEqual([]);
+    expect(await b.pozovi('product:getDobavljacSifre', 999)).toEqual([]);
   });
 });
 
@@ -529,7 +529,7 @@ describe('product:setDobavljacSifre', () => {
     const gama = dodajDobavljaca('Gama');
     dodajSifru(a, gama, 'STARO');
 
-    expect(await b.call('product:setDobavljacSifre', a, [
+    expect(await b.pozovi('product:setDobavljacSifre', a, [
       { dobavljacId: alfa, sifra: '  A-1 ' },
       { dobavljacId: beta, sifra: '   ' },
     ])).toEqual({ changes: 2 });
@@ -538,7 +538,7 @@ describe('product:setDobavljacSifre', () => {
       { dobavljacId: beta, sifra: null },
     ]);
 
-    expect(await b.call('product:setDobavljacSifre', a, [])).toEqual({ changes: 0 });
+    expect(await b.pozovi('product:setDobavljacSifre', a, [])).toEqual({ changes: 0 });
     expect(sifreArtikla(a)).toEqual([]);
   });
 
@@ -589,10 +589,10 @@ describe('product:findByDobavljacSifra', () => {
     const beta = dodajDobavljaca('Beta');
     dodajSifru(a, alfa, 'K-1');
 
-    expect(await b.call('product:findByDobavljacSifra', alfa, ' K-1 ')).toMatchObject({ id: a, sifra: 'A1', stanje: 4 });
-    expect(await b.call('product:findByDobavljacSifra', beta, 'K-1')).toBeNull();
-    expect(await b.call('product:findByDobavljacSifra', alfa, 'K-')).toBeNull();
-    expect(await b.call('product:findByDobavljacSifra', alfa, '')).toBeNull();
+    expect(await b.pozovi('product:findByDobavljacSifra', alfa, ' K-1 ')).toMatchObject({ id: a, sifra: 'A1', stanje: 4 });
+    expect(await b.pozovi('product:findByDobavljacSifra', beta, 'K-1')).toBeNull();
+    expect(await b.pozovi('product:findByDobavljacSifra', alfa, 'K-')).toBeNull();
+    expect(await b.pozovi('product:findByDobavljacSifra', alfa, '')).toBeNull();
   });
 });
 
@@ -606,8 +606,8 @@ describe('dobavljac:getSifre', () => {
     dodajSifru(c, alfa, null);
     dodajSifru(c, beta, 'B-1');
 
-    expect(await b.call('dobavljac:getSifre', alfa)).toEqual([{ productId: a, sifra: 'K-2' }]);
-    expect(await b.call('dobavljac:getSifre', 999)).toEqual([]);
+    expect(await b.pozovi('dobavljac:getSifre', alfa)).toEqual([{ productId: a, sifra: 'K-2' }]);
+    expect(await b.pozovi('dobavljac:getSifre', 999)).toEqual([]);
   });
 });
 
@@ -620,7 +620,7 @@ describe('šifre dobavljača u šifarniku', () => {
     dodajSifru(a, alfa, 'XK-100');
     dodajSifru(a, beta, null);
 
-    const lista = await b.call('product:getAll');
+    const lista = await b.pozovi('product:getAll');
     expect(lista.map((p: any) => [p.sifra, p.sifreDobavljaca])).toEqual([['A1', 'XK-100'], ['A2', null]]);
   });
 
@@ -628,7 +628,7 @@ describe('šifre dobavljača u šifarniku', () => {
     const a = baza.artikal({ sifra: 'A1' });
     const alfa = dodajDobavljaca('Alfa');
     dodajSifru(a, alfa, 'K-1');
-    expect(await b.call('product:delete', a)).toEqual({ changes: 1 });
+    expect(await b.pozovi('product:delete', a)).toEqual({ changes: 1 });
     expect(baza.broj('SELECT COUNT(*) AS n FROM artikal_dobavljac_sifre')).toBe(0);
   });
 
@@ -645,10 +645,10 @@ describe('šifre dobavljača u šifarniku', () => {
 
 describe('dobavljac:getAll', () => {
   test('vraća sve dobavljače sortirane po nazivu', async () => {
-    expect(await b.call('dobavljac:getAll')).toEqual([]);
+    expect(await b.pozovi('dobavljac:getAll')).toEqual([]);
     dodajDobavljaca('Zeta d.o.o.');
     dodajDobavljaca('Alfa d.o.o.', '4200000000001');
-    const lista = await b.call('dobavljac:getAll');
+    const lista = await b.pozovi('dobavljac:getAll');
     expect(lista.map((d: any) => d.naziv)).toEqual(['Alfa d.o.o.', 'Zeta d.o.o.']);
     expect(lista[0]).toMatchObject({ naziv: 'Alfa d.o.o.', idBroj: '4200000000001', pdvBroj: null, adresa: null, kontakt: null });
     expect(typeof lista[0].id).toBe('number');
@@ -658,7 +658,7 @@ describe('dobavljac:getAll', () => {
 
 describe('dobavljac:create', () => {
   test('upisuje dobavljača, trimuje naziv, ostala polja čuva kako su poslana', async () => {
-    const r = await b.call('dobavljac:create', {
+    const r = await b.pozovi('dobavljac:create', {
       naziv: '  Alfa d.o.o. ', idBroj: '4200000000001', pdvBroj: '200000000001', adresa: 'Titova 1', kontakt: '033 111 222',
     });
     expect(Object.keys(r)).toEqual(['id']);
@@ -669,7 +669,7 @@ describe('dobavljac:create', () => {
   });
 
   test('neobavezna polja postaju null', async () => {
-    const r = await b.call('dobavljac:create', { naziv: 'Beta' });
+    const r = await b.pozovi('dobavljac:create', { naziv: 'Beta' });
     expect(baza.red('SELECT idBroj, pdvBroj, adresa, kontakt FROM dobavljaci WHERE id = ?', r.id))
       .toEqual({ idBroj: null, pdvBroj: null, adresa: null, kontakt: null });
   });
@@ -688,15 +688,15 @@ describe('dobavljac:create', () => {
 describe('dobavljac:update', () => {
   test('mijenja samo poslana polja', async () => {
     const id = dodajDobavljaca('Alfa', '1', '2');
-    expect(await b.call('dobavljac:update', id, { naziv: 'Alfa Plus', kontakt: 'info@alfa.ba' })).toEqual({ changes: 1 });
+    expect(await b.pozovi('dobavljac:update', id, { naziv: 'Alfa Plus', kontakt: 'info@alfa.ba' })).toEqual({ changes: 1 });
     expect(baza.red('SELECT naziv, idBroj, pdvBroj, adresa, kontakt FROM dobavljaci WHERE id = ?', id))
       .toEqual({ naziv: 'Alfa Plus', idBroj: '1', pdvBroj: '2', adresa: null, kontakt: 'info@alfa.ba' });
   });
 
   test('prazan objekat i nepostojeći id vraćaju changes 0', async () => {
     const id = dodajDobavljaca('Alfa');
-    expect(await b.call('dobavljac:update', id, {})).toEqual({ changes: 0 });
-    expect(await b.call('dobavljac:update', 999, { naziv: 'X' })).toEqual({ changes: 0 });
+    expect(await b.pozovi('dobavljac:update', id, {})).toEqual({ changes: 0 });
+    expect(await b.pozovi('dobavljac:update', 999, { naziv: 'X' })).toEqual({ changes: 0 });
   });
 
   test('validira naziv kao create: prazan se odbija, poslani se trimuje', async () => {
@@ -705,7 +705,7 @@ describe('dobavljac:update', () => {
     await expect(b.call('dobavljac:update', id, { naziv: null, kontakt: 'x' })).rejects.toThrow('Naziv dobavljača je obavezan');
     expect(baza.red('SELECT naziv, kontakt FROM dobavljaci WHERE id = ?', id)).toEqual({ naziv: 'Alfa', kontakt: null });
 
-    expect(await b.call('dobavljac:update', id, { naziv: '  Alfa Plus ' })).toEqual({ changes: 1 });
+    expect(await b.pozovi('dobavljac:update', id, { naziv: '  Alfa Plus ' })).toEqual({ changes: 1 });
     expect(baza.red('SELECT naziv, idBroj FROM dobavljaci WHERE id = ?', id)).toEqual({ naziv: 'Alfa Plus', idBroj: '1' });
   });
 });
@@ -716,12 +716,12 @@ describe('dobavljac:delete', () => {
   test('briše dobavljača bez primki', async () => {
     const id = dodajDobavljaca('Alfa', '1');
     dodajPrimku('P-1', 'Neko drugi', '9');
-    expect(await b.call('dobavljac:delete', id)).toEqual({ changes: 1 });
+    expect(await b.pozovi('dobavljac:delete', id)).toEqual({ changes: 1 });
     expect(baza.broj('SELECT COUNT(*) AS n FROM dobavljaci')).toBe(0);
   });
 
   test('nepostojeći id vraća changes 0', async () => {
-    expect(await b.call('dobavljac:delete', 999)).toEqual({ changes: 0 });
+    expect(await b.pozovi('dobavljac:delete', 999)).toEqual({ changes: 0 });
   });
 
   test('ne briše dobavljača čiji naziv, JIB ili PDV broj stoji na primci', async () => {
@@ -750,10 +750,10 @@ describe('dobavljac:delete', () => {
 
 describe('kupac:getAll', () => {
   test('vraća sve kupce sortirane po nazivu', async () => {
-    expect(await b.call('kupac:getAll')).toEqual([]);
+    expect(await b.pozovi('kupac:getAll')).toEqual([]);
     baza.kupac({ naziv: 'Zeta', idBroj: '4200000000002' });
     baza.kupac({ naziv: 'Alfa', idBroj: '4200000000001' });
-    const lista = await b.call('kupac:getAll');
+    const lista = await b.pozovi('kupac:getAll');
     expect(lista.map((k: any) => k.naziv)).toEqual(['Alfa', 'Zeta']);
     expect(lista[0]).toMatchObject({
       naziv: 'Alfa', idBroj: '4200000000001', pdvBroj: null, adresa: null, postanskiBroj: null, grad: null, kontakt: null,
@@ -766,7 +766,7 @@ describe('kupac:getAll', () => {
 
 describe('kupac:create', () => {
   test('upisuje kupca, trimuje naziv i JIB', async () => {
-    const r = await b.call('kupac:create', {
+    const r = await b.pozovi('kupac:create', {
       naziv: ' Firma d.o.o. ', idBroj: ' 4200000000001 ', pdvBroj: '200000000001',
       adresa: 'Titova 1', postanskiBroj: '71000', grad: 'Sarajevo', kontakt: '033 111',
     });
@@ -779,7 +779,7 @@ describe('kupac:create', () => {
   });
 
   test('neobavezna polja postaju null', async () => {
-    const r = await b.call('kupac:create', { naziv: 'K', idBroj: '1' });
+    const r = await b.pozovi('kupac:create', { naziv: 'K', idBroj: '1' });
     expect(baza.red('SELECT pdvBroj, adresa, postanskiBroj, grad, kontakt FROM kupci WHERE id = ?', r.id))
       .toEqual({ pdvBroj: null, adresa: null, postanskiBroj: null, grad: null, kontakt: null });
   });
@@ -806,7 +806,7 @@ describe('kupac:create', () => {
 describe('kupac:update', () => {
   test('mijenja samo poslana polja', async () => {
     const id = baza.kupac({ naziv: 'Alfa', idBroj: '1', kontakt: 'stari' });
-    expect(await b.call('kupac:update', id, { naziv: 'Alfa 2', grad: 'Mostar', postanskiBroj: '88000' })).toEqual({ changes: 1 });
+    expect(await b.pozovi('kupac:update', id, { naziv: 'Alfa 2', grad: 'Mostar', postanskiBroj: '88000' })).toEqual({ changes: 1 });
     expect(baza.red('SELECT naziv, idBroj, grad, postanskiBroj, kontakt, adresa FROM kupci WHERE id = ?', id))
       .toEqual({ naziv: 'Alfa 2', idBroj: '1', grad: 'Mostar', postanskiBroj: '88000', kontakt: 'stari', adresa: null });
   });
@@ -815,14 +815,14 @@ describe('kupac:update', () => {
     baza.kupac({ naziv: 'Alfa', idBroj: '1' });
     const id = baza.kupac({ naziv: 'Beta', idBroj: '2' });
     await expect(b.call('kupac:update', id, { idBroj: '1' })).rejects.toThrow('Kupac sa JIB-om "1" već postoji');
-    expect(await b.call('kupac:update', id, { idBroj: '2', pdvBroj: '22' })).toEqual({ changes: 1 });
+    expect(await b.pozovi('kupac:update', id, { idBroj: '2', pdvBroj: '22' })).toEqual({ changes: 1 });
     expect(baza.red('SELECT idBroj, pdvBroj FROM kupci WHERE id = ?', id)).toEqual({ idBroj: '2', pdvBroj: '22' });
   });
 
   test('prazan objekat i nepostojeći id vraćaju changes 0', async () => {
     const id = baza.kupac({ naziv: 'Alfa', idBroj: '1' });
-    expect(await b.call('kupac:update', id, {})).toEqual({ changes: 0 });
-    expect(await b.call('kupac:update', 999, { naziv: 'X' })).toEqual({ changes: 0 });
+    expect(await b.pozovi('kupac:update', id, {})).toEqual({ changes: 0 });
+    expect(await b.pozovi('kupac:update', 999, { naziv: 'X' })).toEqual({ changes: 0 });
   });
 
   test('validira naziv i JIB kao create: prazni se odbijaju, trimuju se, duplikat JIB-a se traži po trimovanoj vrijednosti', async () => {
@@ -835,7 +835,7 @@ describe('kupac:update', () => {
     await expect(b.call('kupac:update', id, { idBroj: ' 1 ' })).rejects.toThrow('Kupac sa JIB-om " 1 " već postoji');
     expect(baza.red('SELECT naziv, idBroj FROM kupci WHERE id = ?', id)).toEqual({ naziv: 'Beta', idBroj: '2' });
 
-    expect(await b.call('kupac:update', id, { naziv: ' Beta 2 ', idBroj: ' 3 ' })).toEqual({ changes: 1 });
+    expect(await b.pozovi('kupac:update', id, { naziv: ' Beta 2 ', idBroj: ' 3 ' })).toEqual({ changes: 1 });
     expect(baza.red('SELECT naziv, idBroj FROM kupci WHERE id = ?', id)).toEqual({ naziv: 'Beta 2', idBroj: '3' });
   });
 });
@@ -844,23 +844,23 @@ describe('kupac:update', () => {
 
 describe('kupac: zadano za dokumente', () => {
   test('create upisuje rok, način plaćanja i rabat; bez njih su null', async () => {
-    const a = await b.call('kupac:create', { naziv: 'A', idBroj: '1', rokPlacanjaDana: 30, nacinPlacanja: 'Virman', rabat: 5.5 });
+    const a = await b.pozovi('kupac:create', { naziv: 'A', idBroj: '1', rokPlacanjaDana: 30, nacinPlacanja: 'Virman', rabat: 5.5 });
     expect(baza.red('SELECT rokPlacanjaDana, nacinPlacanja, rabat FROM kupci WHERE id = ?', a.id))
       .toEqual({ rokPlacanjaDana: 30, nacinPlacanja: 'Virman', rabat: 5.5 });
-    const bez = await b.call('kupac:create', { naziv: 'B', idBroj: '2' });
+    const bez = await b.pozovi('kupac:create', { naziv: 'B', idBroj: '2' });
     expect(baza.red('SELECT rokPlacanjaDana, nacinPlacanja, rabat FROM kupci WHERE id = ?', bez.id))
       .toEqual({ rokPlacanjaDana: null, nacinPlacanja: null, rabat: null });
   });
 
   test('prazno i null brišu vrijednost na update-u', async () => {
-    const r = await b.call('kupac:create', { naziv: 'A', idBroj: '1', rokPlacanjaDana: 30, nacinPlacanja: 'Virman', rabat: 5 });
-    expect(await b.call('kupac:update', r.id, { rokPlacanjaDana: null, nacinPlacanja: '', rabat: null })).toEqual({ changes: 1 });
+    const r = await b.pozovi('kupac:create', { naziv: 'A', idBroj: '1', rokPlacanjaDana: 30, nacinPlacanja: 'Virman', rabat: 5 });
+    expect(await b.pozovi('kupac:update', r.id, { rokPlacanjaDana: null, nacinPlacanja: '', rabat: null })).toEqual({ changes: 1 });
     expect(baza.red('SELECT rokPlacanjaDana, nacinPlacanja, rabat FROM kupci WHERE id = ?', r.id))
       .toEqual({ rokPlacanjaDana: null, nacinPlacanja: null, rabat: null });
   });
 
   test('update mijenja samo poslana zadana polja', async () => {
-    const r = await b.call('kupac:create', { naziv: 'A', idBroj: '1', rokPlacanjaDana: 30, rabat: 5 });
+    const r = await b.pozovi('kupac:create', { naziv: 'A', idBroj: '1', rokPlacanjaDana: 30, rabat: 5 });
     await b.call('kupac:update', r.id, { rabat: 7.25 });
     expect(baza.red('SELECT rokPlacanjaDana, rabat FROM kupci WHERE id = ?', r.id)).toEqual({ rokPlacanjaDana: 30, rabat: 7.25 });
   });
@@ -884,13 +884,13 @@ describe('kupac: zadano za dokumente', () => {
   });
 
   test('rabat se zaokružuje na 2 decimale', async () => {
-    const r = await b.call('kupac:create', { naziv: 'A', idBroj: '1', rabat: 3.14159 });
+    const r = await b.pozovi('kupac:create', { naziv: 'A', idBroj: '1', rabat: 3.14159 });
     expect(baza.red('SELECT rabat FROM kupci WHERE id = ?', r.id)).toEqual({ rabat: 3.14 });
   });
 
   test('getAll vraća nova polja', async () => {
     await b.call('kupac:create', { naziv: 'A', idBroj: '1', rabat: 5 });
-    const [k] = await b.call('kupac:getAll');
+    const [k] = await b.pozovi('kupac:getAll');
     expect(k.rabat).toBe(5);
     expect(k.rokPlacanjaDana).toBeNull();
     expect(k.nacinPlacanja).toBeNull();
@@ -902,13 +902,13 @@ describe('kupac: zadano za dokumente', () => {
     await b.ponovoPokreni();
     await prijavi(b, ADMIN_PIN);
 
-    const [k] = await b.call('kupac:getAll');
+    const [k] = await b.pozovi('kupac:getAll');
     expect(k).toMatchObject({ id, naziv: 'Stari', idBroj: '1', kontakt: '033 111' });
     expect(k.rokPlacanjaDana).toBeNull();
     expect(k.nacinPlacanja).toBeNull();
     expect(k.rabat).toBeNull();
 
-    expect(await b.call('kupac:update', id, { rokPlacanjaDana: 15, nacinPlacanja: 'Virman', rabat: 2.5 })).toEqual({ changes: 1 });
+    expect(await b.pozovi('kupac:update', id, { rokPlacanjaDana: 15, nacinPlacanja: 'Virman', rabat: 2.5 })).toEqual({ changes: 1 });
     expect(baza.red('SELECT rokPlacanjaDana, nacinPlacanja, rabat FROM kupci WHERE id = ?', id))
       .toEqual({ rokPlacanjaDana: 15, nacinPlacanja: 'Virman', rabat: 2.5 });
   });
@@ -920,12 +920,12 @@ describe('kupac:delete', () => {
   test('briše kupca koji nije na računima', async () => {
     const id = baza.kupac({ naziv: 'Alfa', idBroj: '1' });
     dodajRacun(null, '2');
-    expect(await b.call('kupac:delete', id)).toEqual({ changes: 1 });
+    expect(await b.pozovi('kupac:delete', id)).toEqual({ changes: 1 });
     expect(baza.broj('SELECT COUNT(*) AS n FROM kupci')).toBe(0);
   });
 
   test('nepostojeći id vraća changes 0', async () => {
-    expect(await b.call('kupac:delete', 999)).toEqual({ changes: 0 });
+    expect(await b.pozovi('kupac:delete', 999)).toEqual({ changes: 0 });
   });
 
   test('ne briše kupca čiji JIB stoji na računu', async () => {

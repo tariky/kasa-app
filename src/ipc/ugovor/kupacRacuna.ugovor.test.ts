@@ -8,7 +8,7 @@
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
 import { otvoriBackend, type Backend } from './backend';
 import { pokreniPokvareniTring } from './laziTring';
-import { scenarij, ADMIN } from './scenarij';
+import { scenarij, ADMIN, uspjeh, postoji } from './scenarij';
 import { izracunajTotale } from '../../lib/racun';
 
 let b: Backend;
@@ -59,7 +59,7 @@ function dodajKupca(k: Kupac): number {
   return baza.kupac({ naziv: k.naziv, idBroj: k.idBroj, adresa: k.adresa, grad: k.grad, postanskiBroj: k.postanskiBroj });
 }
 
-function kasaRacun(kupac: Kupac, extra: Record<string, unknown> = {}) {
+function kasaRacun<E extends Record<string, unknown>>(kupac: Kupac, extra: E = {} as E) {
   const stavka = baza.kasaStavka(dodajProizvod('artikal'), 1, 5);
   return { ...izracunajTotale([stavka]), nacinPlacanja: 'Gotovina', stavke: [stavka], kupac, ...extra };
 }
@@ -77,7 +77,7 @@ function prihvacenaPonuda(kupacId: number): number {
 
 /** Završen samostalni nalog po narudžbi za kupca. */
 async function zavrsenNalog(kupacId: number): Promise<number> {
-  const { id } = await b.call('nalog:create', { vrsta: 'narudzba', kupacId, opis: 'Po mjeri', dogovorenaCijena: 100 });
+  const { id } = await b.pozovi('nalog:create', { vrsta: 'narudzba', kupacId, opis: 'Po mjeri', dogovorenaCijena: 100 });
   await b.call('nalog:replaceStavke', id, [{ materijalId: dodajProizvod('materijal'), kolicina: 1 }]);
   await b.call('nalog:setStatus', { id, status: 'zavrsen' });
   return id;
@@ -94,23 +94,23 @@ async function uredjajBezPotvrde(): Promise<void> {
 let fiskalniBroj = 500;
 /** Nezavršeni red (jedini u tabeli) riješen kao odštampan; vraća id računa. */
 async function rijesi(): Promise<number> {
-  const [row] = await b.call('pending:list');
-  const r = await b.call('pending:resolve', { id: row.id, brojFiskalnogRacuna: String(++fiskalniBroj), createdAt: DATUM });
+  const [row] = await b.pozovi('pending:list');
+  const r = await b.pozovi('pending:resolve', { id: row.id, brojFiskalnogRacuna: String(++fiskalniBroj), createdAt: DATUM });
   return r.id;
 }
 
 describe('prazan kupac → NULL na svakom putu upisa računa', () => {
   test('order:finalize', async () => {
     for (const { opis, kupac, ocekivano } of KUPCI) {
-      const r = await b.call('order:finalize', kasaRacun(kupac));
+      const r = await b.pozovi('order:finalize', kasaRacun(kupac));
       expect(r.success, opis).toBe(true);
-      expect(kupacRacuna(r.id), opis).toEqual(ocekivano);
+      expect(kupacRacuna(uspjeh(r).id), opis).toEqual(ocekivano);
     }
   });
 
   test('order:createManual', async () => {
     for (const { opis, kupac, ocekivano } of KUPCI) {
-      const r = await b.call('order:createManual', kasaRacun(kupac, { brojFiskalnogRacuna: String(++fiskalniBroj), createdAt: DATUM }));
+      const r = await b.pozovi('order:createManual', kasaRacun(kupac, { brojFiskalnogRacuna: String(++fiskalniBroj), createdAt: DATUM }));
       expect(kupacRacuna(r.id), opis).toEqual(ocekivano);
     }
   });
@@ -118,33 +118,33 @@ describe('prazan kupac → NULL na svakom putu upisa računa', () => {
   test('order:finalizePrilog', async () => {
     await b.call('fiscal:setZadnjiBroj', 100);
     for (const { opis, kupac, ocekivano } of KUPCI) {
-      const r = await b.call('order:finalizePrilog', { iznos: 10, nacinPlacanja: 'Virman', kupac });
+      const r = await b.pozovi('order:finalizePrilog', { iznos: 10, nacinPlacanja: 'Virman', kupac });
       expect(r.success, opis).toBe(true);
-      expect(kupacRacuna(r.id), opis).toEqual(ocekivano);
+      expect(kupacRacuna(postoji(r.id)), opis).toEqual(ocekivano);
     }
   });
 
   test('ponuda:konvertuj', async () => {
     for (const { opis, kupac, ocekivano } of KUPCI) {
-      const r = await b.call('ponuda:konvertuj', { id: prihvacenaPonuda(dodajKupca(kupac)), nacinPlacanja: 'Gotovina' });
+      const r = await b.pozovi('ponuda:konvertuj', { id: prihvacenaPonuda(dodajKupca(kupac)), nacinPlacanja: 'Gotovina' });
       expect(r.success, opis).toBe(true);
-      expect(kupacRacuna(r.racunId), opis).toEqual(ocekivano);
+      expect(kupacRacuna(postoji(r.racunId)), opis).toEqual(ocekivano);
     }
   });
 
   test('nalog:izdajRacun (samostalni nalog i nalog iz ponude)', async () => {
     for (const { opis, kupac, ocekivano } of KUPCI) {
       const kupacId = dodajKupca(kupac);
-      const samostalni = await b.call('nalog:izdajRacun', { id: await zavrsenNalog(kupacId), nacinPlacanja: 'Virman' });
+      const samostalni = await b.pozovi('nalog:izdajRacun', { id: await zavrsenNalog(kupacId), nacinPlacanja: 'Virman' });
       expect(samostalni.success, opis).toBe(true);
-      expect(kupacRacuna(samostalni.racunId), `${opis} (samostalni)`).toEqual(ocekivano);
+      expect(kupacRacuna(postoji(samostalni.racunId)), `${opis} (samostalni)`).toEqual(ocekivano);
 
-      const { id } = await b.call('nalog:createIzPonude', prihvacenaPonuda(kupacId));
+      const { id } = await b.pozovi('nalog:createIzPonude', prihvacenaPonuda(kupacId));
       await b.call('nalog:replaceStavke', id, [{ materijalId: dodajProizvod('materijal'), kolicina: 1 }]);
       await b.call('nalog:setStatus', { id, status: 'zavrsen' });
-      const izPonude = await b.call('nalog:izdajRacun', { id, nacinPlacanja: 'Virman' });
+      const izPonude = await b.pozovi('nalog:izdajRacun', { id, nacinPlacanja: 'Virman' });
       expect(izPonude.success, opis).toBe(true);
-      expect(kupacRacuna(izPonude.racunId), `${opis} (iz ponude)`).toEqual(ocekivano);
+      expect(kupacRacuna(postoji(izPonude.racunId)), `${opis} (iz ponude)`).toEqual(ocekivano);
     }
   });
 
@@ -152,10 +152,10 @@ describe('prazan kupac → NULL na svakom putu upisa računa', () => {
     await b.call('fiscal:setZadnjiBroj', 100);
     await uredjajBezPotvrde();
     const putevi: Array<[string, (k: Kupac) => Promise<unknown>]> = [
-      ['kasa', k => b.call('order:finalize', kasaRacun(k))],
-      ['faktura', k => b.call('order:finalizePrilog', { iznos: 10, nacinPlacanja: 'Virman', kupac: k })],
-      ['ponuda', k => b.call('ponuda:konvertuj', { id: prihvacenaPonuda(dodajKupca(k)), nacinPlacanja: 'Gotovina' })],
-      ['nalog', async k => b.call('nalog:izdajRacun', { id: await zavrsenNalog(dodajKupca(k)), nacinPlacanja: 'Virman' })],
+      ['kasa', k => b.pozovi('order:finalize', kasaRacun(k))],
+      ['faktura', k => b.pozovi('order:finalizePrilog', { iznos: 10, nacinPlacanja: 'Virman', kupac: k })],
+      ['ponuda', k => b.pozovi('ponuda:konvertuj', { id: prihvacenaPonuda(dodajKupca(k)), nacinPlacanja: 'Gotovina' })],
+      ['nalog', async k => b.pozovi('nalog:izdajRacun', { id: await zavrsenNalog(dodajKupca(k)), nacinPlacanja: 'Virman' })],
     ];
     for (const [put, stampaj] of putevi) {
       for (const { opis, kupac, ocekivano } of KUPCI) {

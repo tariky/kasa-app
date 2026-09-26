@@ -5,7 +5,7 @@ import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import path from 'node:path';
 import { otvoriBackend, prijavi, ADMIN_PIN, type Backend } from './backend';
-import { scenarij, ADMIN } from './scenarij';
+import { scenarij, ADMIN, spremljena, postoji } from './scenarij';
 
 let b: Backend;
 const baza = scenarij(() => b);
@@ -25,7 +25,7 @@ function audit(db: Database = b.db): Zapis[] {
 
 async function rucniRacun(broj: string, cijena = 3): Promise<number> {
   const p = baza.artikal({ sifra: `R${broj}`, cijena: cijena });
-  return (await b.call('order:createManual', {
+  return (await b.pozovi('order:createManual', {
     nacinPlacanja: 'Gotovina', brojFiskalnogRacuna: broj, createdAt: '2026-09-01 10:00:00',
     stavke: [{ productId: p, kolicina: 1, cijena, rabat: 0, pdvStopa: 'E' }],
   })).id;
@@ -63,7 +63,7 @@ describe('audit_log', () => {
     baza.postavka('kasa.requirePinRefund', 'true');
     await prijavi(b, '1234');
     await expect(b.call('order:refundAndPrint', { id, adminPin: '9999' })).rejects.toThrow('Neispravan admin PIN');
-    const r = await b.call('order:refundAndPrint', { id, adminPin: '1111' });
+    const r = await b.pozovi('order:refundAndPrint', { id, adminPin: '1111' });
     expect(r.success).toBe(true);
     expect(audit().slice(1)).toEqual([{
       korisnikId: kasir, akcija: 'storno',
@@ -74,7 +74,7 @@ describe('audit_log', () => {
   test('neuspjela štampa storna ne ostavlja trag', async () => {
     const id = await rucniRacun('56');
     b.tring.greskaNa('/srr', 'Nema papira');
-    expect((await b.call('order:refundAndPrint', { id })).success).toBe(false);
+    expect((await b.pozovi('order:refundAndPrint', { id })).success).toBe(false);
     expect(audit().map(z => z.akcija)).toEqual(['racun:rucni']);
   });
 
@@ -100,7 +100,7 @@ describe('audit_log', () => {
 
   test('slobodna stavka: nova cijena postojećeg artikla → artikal:cijena; novi artikal i ista cijena ne', async () => {
     const stavka = (cijena: number) => ({ naziv: 'Popravak', cijena, pdvStopa: 'E' });
-    const { id } = await b.call('product:slobodan', stavka(5));
+    const { id } = await b.pozovi('product:slobodan', stavka(5));
     await b.call('product:slobodan', stavka(5));
     await b.call('product:slobodan', stavka(7.5));
     expect(audit()).toEqual([{ korisnikId: ADMIN, akcija: 'artikal:cijena', detalji: { productId: id, staraCijena: 5, novaCijena: 7.5, izvor: 'slobodan' } }]);
@@ -116,7 +116,7 @@ describe('audit_log', () => {
     await b.call('primka:pregledUnosa', data);
     expect(audit()).toEqual([]);
 
-    const { id } = await b.call('primka:create', data);
+    const { id } = spremljena(await b.pozovi('primka:create', data));
     await b.call('primka:update', { ...data, id, stavke: [stavka(saZalihom, 14), stavka(bezZalihe, 9)] });
     await b.call('primka:delete', id);
 
@@ -188,7 +188,7 @@ describe('audit_log', () => {
   });
 
   test('user:create/update/delete i promjena svog PIN-a — bez PIN-a i heša u detaljima', async () => {
-    const { id } = await b.call('user:create', { ime: 'Kasir', pin: '4321', uloga: 'kasir' });
+    const { id } = await b.pozovi('user:create', { ime: 'Kasir', pin: '4321', uloga: 'kasir' });
     await b.call('user:update', id, { pin: '5678' });
     await b.call('user:update', id, { ime: 'Kasir 2', uloga: 'admin', pin: '' });
     await b.call('user:update', id, {});
@@ -216,7 +216,7 @@ describe('audit_log', () => {
     await b.call('db:backup');
     b.dijalog.otvori = backup;
     b.dijalog.potvrda = 1;
-    const r = await b.call('db:restore');
+    const r = postoji(await b.pozovi('db:restore'));
     const aktivna = new Database(path.join(path.dirname(b.radniFolder), 'kasa.db'), { readonly: true });
     try {
       expect(audit(aktivna)).toEqual([{ korisnikId: ADMIN, akcija: 'baza:restore', detalji: { izvor: backup, sigurnosnaKopija: r.safetyPath } }]);

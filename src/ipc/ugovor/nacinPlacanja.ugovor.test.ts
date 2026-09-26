@@ -48,8 +48,8 @@ function prihvacenaPonuda(kupacId: number, productId: number): number {
 /** Završen radni nalog (po narudžbi ili iz ponude), spreman za račun. */
 async function zavrsenNalog(kupacId: number, ponudaId: number | null): Promise<number> {
   const { id } = ponudaId === null
-    ? await b.call('nalog:create', { vrsta: 'narudzba', korisnikId: ADMIN, kupacId, opis: 'Po mjeri', dogovorenaCijena: 100 })
-    : await b.call('nalog:createIzPonude', ponudaId, ADMIN);
+    ? await b.pozovi('nalog:create', { vrsta: 'narudzba', kupacId, opis: 'Po mjeri', dogovorenaCijena: 100 })
+    : await b.pozovi('nalog:createIzPonude', ponudaId);
   await b.call('nalog:replaceStavke', id, [{ materijalId: dodajProizvod(`M${id}`, 'materijal', 10), kolicina: 1 }]);
   await b.call('nalog:setStatus', { id, status: 'zavrsen', korisnikId: ADMIN });
   return id;
@@ -148,7 +148,7 @@ test('pending:resolve prima kanonski tekst i JSON raspodjelu koju ladica čita',
       korisnikId: ADMIN, ukupno: 5, pdvIznos: 0.73, nacinPlacanja: nacin,
       stavke: [{ productId: artikal, kolicina: 1, cijena: 5, rabat: 0, pdvStopa: 'E' }],
     });
-    const r = await b.call('pending:resolve', { id, brojFiskalnogRacuna: String(++brojRacuna), createdAt: DATUM });
+    const r = await b.pozovi('pending:resolve', { id, brojFiskalnogRacuna: String(++brojRacuna), createdAt: DATUM });
     expect((b.db.prepare('SELECT nacinPlacanja FROM orders WHERE id = ?').get(r.id) as { nacinPlacanja: string }).nacinPlacanja, nacin)
       .toBe(nacin);
   }

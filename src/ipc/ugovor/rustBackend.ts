@@ -106,7 +106,7 @@ export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
     return odgovor;
   }
 
-  return {
+  const backend: Backend = {
     db,
     tring,
     dijalog,
@@ -127,6 +127,8 @@ export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
       await ugasi(proc);
       proc = await pokreni();
     },
+    // Isti poziv; tipove argumenata i rezultata daje Backend.pozovi.
+    pozovi: (kanal, ...args) => (backend.call as unknown as (kanal: string, ...args: unknown[]) => Promise<never>)(kanal, ...args),
     async call(kanal, ...args) {
       // Date.now() prati setSystemTime iz testa — backend računa "danas" po njemu.
       const o = await zahtjev({ kanal, args, dijalog, sada: Date.now() });
@@ -141,4 +143,5 @@ export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
       rmSync(userData, { recursive: true, force: true });
     },
   };
+  return backend;
 }

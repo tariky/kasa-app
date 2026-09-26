@@ -1,7 +1,7 @@
 // Ugovor za kanal izvoz:knjigovodja — vidi backend.ts.
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
 import { otvoriBackend, pozoviBezTipova, type Backend } from './backend';
-import { scenarij, ADMIN } from './scenarij';
+import { scenarij, ADMIN, spremljena, postoji } from './scenarij';
 
 let b: Backend;
 const baza = scenarij(() => b);
@@ -22,7 +22,7 @@ function primkaStavka(primkaId: number, productId: number, kolicina: number, nab
   });
 }
 
-const izvoz = (od: string, doDatum: string) => b.call('izvoz:knjigovodja', od, doDatum);
+const izvoz = (od: string, doDatum: string) => b.pozovi('izvoz:knjigovodja', od, doDatum);
 
 describe('izvoz:knjigovodja', () => {
   test('računi po datumu prodaje, reklamacije po datumu reklamacije, granice uključive', async () => {
@@ -168,14 +168,14 @@ describe('izvoz:knjigovodja', () => {
   // (nivelacija tog perioda i dalje stoji u izvozu).
   test('brisanje primke kasnije ne mijenja prodajnu cijenu zaliha za raniji period', async () => {
     const a = baza.artikal({ sifra: 'A', cijena: 10 });
-    const { id } = await b.call('primka:create', {
+    const { id } = spremljena(await b.pozovi('primka:create', {
       brojPrimke: 'U-1', datum: '2026-01-20', stavke: [{ productId: a, kolicina: 5, cijena: 15, nabavnaCijena: 5, rabat: 0, pdvStopa: 'E' }],
-    });
+    }));
     b.db.prepare("UPDATE cijena_historija SET createdAt = '2026-01-20 10:00:00'").run();
-    const cijenaA = async (od: string, doDatum: string) => (await izvoz(od, doDatum)).zalihe.find((z: any) => z.sifra === 'A').cijena;
+    const cijenaA = async (od: string, doDatum: string) => postoji((await izvoz(od, doDatum)).zalihe.find(z => z.sifra === 'A')).cijena;
     expect(await cijenaA('2026-01-01', '2026-01-31')).toBe(15);
 
-    expect(await b.call('primka:delete', id)).toBeNull();
+    expect(await b.pozovi('primka:delete', id)).toBeNull();
     expect(await cijenaA('2026-01-01', '2026-01-31')).toBe(15);
     // Vraćena cijena važi od danas.
     expect(await cijenaA('2099-12-01', '2099-12-31')).toBe(10);
@@ -184,11 +184,11 @@ describe('izvoz:knjigovodja', () => {
   test('izmjena cijene na primci koju je poslije promijenilo nešto drugo ne mijenja raniji period', async () => {
     const a = baza.artikal({ sifra: 'A', cijena: 10 });
     const stavke = (cijena: number) => [{ productId: a, kolicina: 5, cijena, nabavnaCijena: 5, rabat: 0, pdvStopa: 'E' }];
-    const { id } = await b.call('primka:create', { brojPrimke: 'U-1', datum: '2026-01-20', stavke: stavke(15) });
+    const { id } = spremljena(await b.pozovi('primka:create', { brojPrimke: 'U-1', datum: '2026-01-20', stavke: stavke(15) }));
     b.db.prepare("UPDATE cijena_historija SET createdAt = '2026-01-20 10:00:00'").run();
     await b.call('product:update', a, { cijena: 20 });
     b.db.prepare("UPDATE cijena_historija SET createdAt = '2026-02-10 10:00:00' WHERE izvor = 'rucno'").run();
-    const cijenaA = async (od: string, doDatum: string) => (await izvoz(od, doDatum)).zalihe.find((z: any) => z.sifra === 'A').cijena;
+    const cijenaA = async (od: string, doDatum: string) => postoji((await izvoz(od, doDatum)).zalihe.find(z => z.sifra === 'A')).cijena;
 
     await b.call('primka:update', { id, brojPrimke: 'U-1', datum: '2026-01-20', stavke: stavke(18) });
     expect(await cijenaA('2026-01-01', '2026-01-31')).toBe(15);

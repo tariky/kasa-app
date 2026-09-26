@@ -28,14 +28,14 @@ function firma(extra: Record<string, unknown> = {}) {
 
 describe('user:login', () => {
   test('vraća korisnika za tačan PIN — bez PIN-a, uz oznaku zadanog PIN-a', async () => {
-    expect(await b.call('user:login', ADMIN_PIN)).toEqual({ id: ADMIN, ime: 'Admin', uloga: 'admin', zadaniPin: false });
+    expect(await b.pozovi('user:login', ADMIN_PIN)).toEqual({ id: ADMIN, ime: 'Admin', uloga: 'admin', zadaniPin: false });
     const k = baza.korisnik('Kasir Ana', '1234');
-    expect(await b.call('user:login', '1234')).toEqual({ id: k, ime: 'Kasir Ana', uloga: 'kasir', zadaniPin: false });
+    expect(await b.pozovi('user:login', '1234')).toEqual({ id: k, ime: 'Kasir Ana', uloga: 'kasir', zadaniPin: false });
   });
 
   test('pogrešan PIN vraća null, bez greške', async () => {
-    expect(await b.call('user:login', '9999')).toBeNull();
-    expect(await b.call('user:login', '')).toBeNull();
+    expect(await b.pozovi('user:login', '9999')).toBeNull();
+    expect(await b.pozovi('user:login', '')).toBeNull();
   });
 });
 
@@ -45,7 +45,7 @@ describe('user:getAll', () => {
   test('vraća id, ime i ulogu (nikad PIN ni heš), sortirano po imenu', async () => {
     baza.korisnik('Zlatan', '2222');
     const berina = baza.korisnik('Berina', '1111', 'admin');
-    const svi = await b.call('user:getAll');
+    const svi = await b.pozovi('user:getAll');
     expect(svi.map((u: any) => u.ime)).toEqual(['Admin', 'Berina', 'Zlatan']);
     expect(svi[0]).toEqual({ id: ADMIN, ime: 'Admin', uloga: 'admin' });
     expect(svi[1]).toEqual({ id: berina, ime: 'Berina', uloga: 'admin' });
@@ -57,7 +57,7 @@ describe('user:getAll', () => {
 
 describe('user:create', () => {
   test('upisuje korisnika s trimovanim imenom i vraća id', async () => {
-    const r = await b.call('user:create', { ime: '  Ana  ', pin: '1234', uloga: 'kasir' });
+    const r = await b.pozovi('user:create', { ime: '  Ana  ', pin: '1234', uloga: 'kasir' });
     expect(Object.keys(r)).toEqual(['id']);
     expect(typeof r.id).toBe('number');
     expect(korisnikSaPinom(r.id, '1234')).toEqual({ ime: 'Ana', uloga: 'kasir', pinOdgovara: true });
@@ -101,32 +101,32 @@ describe('user:create', () => {
 describe('user:update', () => {
   test('mijenja samo proslijeđena polja i vraća broj izmjena', async () => {
     const k = baza.korisnik('Ana', '1234');
-    expect(await b.call('user:update', k, { ime: '  Ana B.  ' })).toEqual({ changes: 1 });
+    expect(await b.pozovi('user:update', k, { ime: '  Ana B.  ' })).toEqual({ changes: 1 });
     expect(korisnikSaPinom(k, '1234')).toEqual({ ime: 'Ana B.', uloga: 'kasir', pinOdgovara: true });
 
-    expect(await b.call('user:update', k, { pin: '5678', uloga: 'admin' })).toEqual({ changes: 1 });
+    expect(await b.pozovi('user:update', k, { pin: '5678', uloga: 'admin' })).toEqual({ changes: 1 });
     expect(korisnikSaPinom(k, '5678')).toEqual({ ime: 'Ana B.', uloga: 'admin', pinOdgovara: true });
   });
 
   test('prazan ili izostavljen PIN ostavlja stari PIN', async () => {
     const k = baza.korisnik('Ana', '1234');
     const hes = baza.red('SELECT pin FROM users WHERE id = ?', k).pin;
-    expect(await b.call('user:update', k, { ime: 'Ana', pin: '', uloga: 'kasir' })).toEqual({ changes: 1 });
-    expect(await b.call('user:update', k, { ime: 'Ana', pin: null })).toEqual({ changes: 1 });
-    expect(await b.call('user:update', k, { pin: '' })).toEqual({ changes: 0 });
+    expect(await b.pozovi('user:update', k, { ime: 'Ana', pin: '', uloga: 'kasir' })).toEqual({ changes: 1 });
+    expect(await b.pozovi('user:update', k, { ime: 'Ana', pin: null })).toEqual({ changes: 1 });
+    expect(await b.pozovi('user:update', k, { pin: '' })).toEqual({ changes: 0 });
     expect(baza.red('SELECT pin FROM users WHERE id = ?', k).pin).toBe(hes);
   });
 
   test('prazan objekat ne dira bazu', async () => {
-    expect(await b.call('user:update', ADMIN, {})).toEqual({ changes: 0 });
+    expect(await b.pozovi('user:update', ADMIN, {})).toEqual({ changes: 0 });
   });
 
   test('nepostojeći korisnik daje changes 0, bez greške', async () => {
-    expect(await b.call('user:update', 999, { ime: 'Niko' })).toEqual({ changes: 0 });
+    expect(await b.pozovi('user:update', 999, { ime: 'Niko' })).toEqual({ changes: 0 });
   });
 
   test('korisnik može zadržati svoj PIN', async () => {
-    expect(await b.call('user:update', ADMIN, { pin: ADMIN_PIN })).toEqual({ changes: 1 });
+    expect(await b.pozovi('user:update', ADMIN, { pin: ADMIN_PIN })).toEqual({ changes: 1 });
   });
 
   test('validira ime, dužinu PIN-a i jedinstvenost PIN-a', async () => {
@@ -153,13 +153,13 @@ describe('user:update', () => {
       .rejects.toThrow('Posljednji administrator ne može postati kasir');
     expect(baza.red('SELECT uloga FROM users WHERE id = ?', ADMIN).uloga).toBe('admin');
     // Admin koji zadržava ulogu (UI uvijek šalje ulogu) prolazi.
-    expect(await b.call('user:update', ADMIN, { ime: 'Admin', uloga: 'admin' })).toEqual({ changes: 1 });
-    expect(await b.call('user:login', ADMIN_PIN)).toMatchObject({ id: ADMIN, uloga: 'admin' });
+    expect(await b.pozovi('user:update', ADMIN, { ime: 'Admin', uloga: 'admin' })).toEqual({ changes: 1 });
+    expect(await b.pozovi('user:login', ADMIN_PIN)).toMatchObject({ id: ADMIN, uloga: 'admin' });
   });
 
   test('admin može postati kasir kad postoji drugi admin', async () => {
     const drugi = baza.korisnik('Berina', '1111', 'admin');
-    expect(await b.call('user:update', ADMIN, { uloga: 'kasir' })).toEqual({ changes: 1 });
+    expect(await b.pozovi('user:update', ADMIN, { uloga: 'kasir' })).toEqual({ changes: 1 });
     // Uloga se čita iz baze pri svakom pozivu: degradirani admin odmah gubi pravo.
     await expect(b.call('user:update', drugi, { uloga: 'kasir' })).rejects.toThrow('Ovu radnju može izvršiti samo administrator');
     await prijavi(b, '1111');
@@ -173,12 +173,12 @@ describe('user:update', () => {
 describe('user:delete', () => {
   test('briše korisnika bez računa', async () => {
     const k = baza.korisnik('Ana', '1234');
-    expect(await b.call('user:delete', k)).toEqual({ changes: 1 });
+    expect(await b.pozovi('user:delete', k)).toEqual({ changes: 1 });
     expect(baza.red('SELECT COUNT(*) AS n FROM users WHERE id = ?', k).n).toBe(0);
   });
 
   test('nepostojeći korisnik daje changes 0', async () => {
-    expect(await b.call('user:delete', 999)).toEqual({ changes: 0 });
+    expect(await b.pozovi('user:delete', 999)).toEqual({ changes: 0 });
   });
 
   test('odbija korisnika koji ima račune', async () => {
@@ -215,7 +215,7 @@ describe('user:delete', () => {
     await expect(b.call('user:delete', ADMIN)).rejects.toThrow('Posljednji administrator ne može biti obrisan');
     expect(baza.red('SELECT COUNT(*) AS n FROM users WHERE id = ?', ADMIN).n).toBe(1);
     const drugi = baza.korisnik('Berina', '1111', 'admin');
-    expect(await b.call('user:delete', ADMIN)).toEqual({ changes: 1 });
+    expect(await b.pozovi('user:delete', ADMIN)).toEqual({ changes: 1 });
     // Obrisani korisnik više nije prijavljen.
     await expect(b.call('user:getAll')).rejects.toThrow('Niste prijavljeni');
     await prijavi(b, '1111');
@@ -227,19 +227,19 @@ describe('user:delete', () => {
 
 describe('settings:getTring', () => {
   test('vraća postavke s brojevima kao brojevima; lozinku ne vraća, samo da li postoji', async () => {
-    const t = await b.call('settings:getTring');
+    const t = await b.pozovi('settings:getTring');
     expect(t).toEqual({ host: 'localhost', port: b.tring.port, operatorId: 0, imaLozinku: true });
   });
 
   test('bez redova u bazi vraća podrazumijevane vrijednosti', async () => {
     b.db.prepare("DELETE FROM settings WHERE key LIKE 'tring.%'").run();
-    expect(await b.call('settings:getTring')).toEqual({ host: 'localhost', port: 8085, operatorId: 0, imaLozinku: false });
+    expect(await b.pozovi('settings:getTring')).toEqual({ host: 'localhost', port: 8085, operatorId: 0, imaLozinku: false });
   });
 });
 
 describe('settings:saveTring', () => {
   test('upisuje sve četiri postavke kao tekst', async () => {
-    const r = await b.call('settings:saveTring', { host: '192.168.1.50', port: 9000, operatorId: 3, operatorPassword: 'tajna' });
+    const r = await b.pozovi('settings:saveTring', { host: '192.168.1.50', port: 9000, operatorId: 3, operatorPassword: 'tajna' });
     expect(r).toEqual({ success: true });
     expect(baza.redovi("SELECT key, value FROM settings WHERE key LIKE 'tring.%' ORDER BY key")).toEqual([
       { key: 'tring.host', value: '192.168.1.50' },
@@ -247,7 +247,7 @@ describe('settings:saveTring', () => {
       { key: 'tring.operatorPassword', value: 'tajna' },
       { key: 'tring.port', value: '9000' },
     ]);
-    expect(await b.call('settings:getTring')).toEqual({ host: '192.168.1.50', port: 9000, operatorId: 3, imaLozinku: true });
+    expect(await b.pozovi('settings:getTring')).toEqual({ host: '192.168.1.50', port: 9000, operatorId: 3, imaLozinku: true });
     expect(b.tring.zahtjevi).toEqual([]);
   });
 
@@ -286,7 +286,7 @@ describe('settings:saveTring', () => {
 
 describe('settings:getFirma', () => {
   test('prazna baza daje prazna polja, logo 100 i bez računa', async () => {
-    expect(await b.call('settings:getFirma')).toEqual({
+    expect(await b.pozovi('settings:getFirma')).toEqual({
       naziv: '', adresa: '', grad: '', idBroj: '', pdvBroj: '', skladiste: '',
       web: '', email: '', logo: '', logoVelicina: 100, ziroRacuniPozicija: 'zaglavlje', bankAccounts: [],
     });
@@ -294,9 +294,9 @@ describe('settings:getFirma', () => {
 
   test('položaj žiro računa: samo "podnozje" mijenja zadano zaglavlje', async () => {
     const set = (v: string) => baza.postavka('firma.ziroRacuniPozicija', v);
-    set('podnozje'); expect((await b.call('settings:getFirma')).ziroRacuniPozicija).toBe('podnozje');
-    set('zaglavlje'); expect((await b.call('settings:getFirma')).ziroRacuniPozicija).toBe('zaglavlje');
-    set('lijevo'); expect((await b.call('settings:getFirma')).ziroRacuniPozicija).toBe('zaglavlje');
+    set('podnozje'); expect((await b.pozovi('settings:getFirma')).ziroRacuniPozicija).toBe('podnozje');
+    set('zaglavlje'); expect((await b.pozovi('settings:getFirma')).ziroRacuniPozicija).toBe('zaglavlje');
+    set('lijevo'); expect((await b.pozovi('settings:getFirma')).ziroRacuniPozicija).toBe('zaglavlje');
   });
 
   test('izostavlja potpuno prazne bankovne račune, zadržava djelimično popunjene', async () => {
@@ -305,7 +305,7 @@ describe('settings:getFirma', () => {
     baza.postavka('firma.bank2.name', '');
     baza.postavka('firma.bank2.number', '1610000000000000');
     baza.postavka('firma.bank3.name', 'Raiffeisen');
-    const f = await b.call('settings:getFirma');
+    const f = await b.pozovi('settings:getFirma');
     expect(f.bankAccounts).toEqual([
       { bankName: '', accountNumber: '1610000000000000' },
       { bankName: 'Raiffeisen', accountNumber: '' },
@@ -314,15 +314,16 @@ describe('settings:getFirma', () => {
 
   test('veličina loga se ograničava na 40–200 i zaokružuje', async () => {
     const set = (v: string) => baza.postavka('firma.logoVelicina', v);
-    set('500'); expect((await b.call('settings:getFirma')).logoVelicina).toBe(200);
-    set('10'); expect((await b.call('settings:getFirma')).logoVelicina).toBe(40);
-    set('77.6'); expect((await b.call('settings:getFirma')).logoVelicina).toBe(78);
-    set('abc'); expect((await b.call('settings:getFirma')).logoVelicina).toBe(100);
+    set('500'); expect((await b.pozovi('settings:getFirma')).logoVelicina).toBe(200);
+    set('10'); expect((await b.pozovi('settings:getFirma')).logoVelicina).toBe(40);
+    set('77.6'); expect((await b.pozovi('settings:getFirma')).logoVelicina).toBe(78);
+    set('abc'); expect((await b.pozovi('settings:getFirma')).logoVelicina).toBe(100);
   });
 });
 
 describe('settings:saveFirma', () => {
   test('upisuje sva polja i uvijek sva tri bankovna računa', async () => {
+    // firma() je djelimičan payload (polja po testu) — netipiziran poziv.
     const r = await b.call('settings:saveFirma', firma({
       web: 'stolarija.ba', email: 'info@stolarija.ba', logoVelicina: 150, ziroRacuniPozicija: 'podnozje',
       bankAccounts: [{ bankName: 'UniCredit', accountNumber: '3380000000000000' }],
@@ -340,7 +341,7 @@ describe('settings:saveFirma', () => {
       'firma.bank2.name': '', 'firma.bank2.number': '',
       'firma.bank3.name': '', 'firma.bank3.number': '',
     });
-    expect(await b.call('settings:getFirma')).toEqual({
+    expect(await b.pozovi('settings:getFirma')).toEqual({
       ...firma(), web: 'stolarija.ba', email: 'info@stolarija.ba', logoVelicina: 150, ziroRacuniPozicija: 'podnozje',
       bankAccounts: [{ bankName: 'UniCredit', accountNumber: '3380000000000000' }],
     });
@@ -367,7 +368,7 @@ describe('settings:saveFirma', () => {
       { bankName: 'A', accountNumber: '1' }, { bankName: 'B', accountNumber: '2' },
     ] }));
     await b.call('settings:saveFirma', firma({ bankAccounts: [{ bankName: 'C', accountNumber: '3' }] }));
-    expect((await b.call('settings:getFirma')).bankAccounts).toEqual([{ bankName: 'C', accountNumber: '3' }]);
+    expect((await b.pozovi('settings:getFirma')).bankAccounts).toEqual([{ bankName: 'C', accountNumber: '3' }]);
     expect(baza.postavka('firma.bank2.name')).toBe('');
   });
 
@@ -376,7 +377,7 @@ describe('settings:saveFirma', () => {
       { bankName: 'A', accountNumber: '1' }, { bankName: 'B', accountNumber: '2' },
       { bankName: 'C', accountNumber: '3' }, { bankName: 'D', accountNumber: '4' },
     ] }));
-    expect((await b.call('settings:getFirma')).bankAccounts.map((x: any) => x.bankName)).toEqual(['A', 'B', 'C']);
+    expect((await b.pozovi('settings:getFirma')).bankAccounts.map((x: any) => x.bankName)).toEqual(['A', 'B', 'C']);
     expect(baza.red("SELECT COUNT(*) AS n FROM settings WHERE key LIKE 'firma.bank4%'").n).toBe(0);
   });
 });
@@ -385,29 +386,29 @@ describe('settings:saveFirma', () => {
 
 describe('settings:get / settings:set', () => {
   test('set upisuje i prepisuje vrijednost, get je čita', async () => {
-    expect(await b.call('settings:set', 'kasa.showDailyTotal', 'true')).toEqual({ success: true });
-    expect(await b.call('settings:get', 'kasa.showDailyTotal')).toBe('true');
+    expect(await b.pozovi('settings:set', 'kasa.showDailyTotal', 'true')).toEqual({ success: true });
+    expect(await b.pozovi('settings:get', 'kasa.showDailyTotal')).toBe('true');
     await b.call('settings:set', 'kasa.showDailyTotal', 'false');
-    expect(await b.call('settings:get', 'kasa.showDailyTotal')).toBe('false');
+    expect(await b.pozovi('settings:get', 'kasa.showDailyTotal')).toBe('false');
     expect(baza.red("SELECT COUNT(*) AS n FROM settings WHERE key = 'kasa.showDailyTotal'").n).toBe(1);
   });
 
   test('get ne vraća lozinku Tring operatera', async () => {
     expect(baza.postavka('tring.operatorPassword')).toBe('0');
-    expect(await b.call('settings:get', 'tring.operatorPassword')).toBeNull();
+    expect(await b.pozovi('settings:get', 'tring.operatorPassword')).toBeNull();
   });
 
   test('nepostojeći ključ daje null', async () => {
-    expect(await b.call('settings:get', 'ne.postoji')).toBeNull();
+    expect(await b.pozovi('settings:get', 'ne.postoji')).toBeNull();
   });
 
   test('get čita i seedovane tring postavke', async () => {
-    expect(await b.call('settings:get', 'tring.host')).toBe('localhost');
+    expect(await b.pozovi('settings:get', 'tring.host')).toBe('localhost');
   });
 
   test('prazan string se čuva kao prazan string, ne null', async () => {
     await b.call('settings:set', 'racun.napomena', '');
-    expect(await b.call('settings:get', 'racun.napomena')).toBe('');
+    expect(await b.pozovi('settings:get', 'racun.napomena')).toBe('');
   });
 });
 
@@ -417,7 +418,7 @@ describe('savedCarts:save', () => {
   test('sprema košaricu kao JSON i vraća goli id', async () => {
     const p = baza.artikal({ sifra: 'A1', cijena: 5 });
     const items = [{ productId: p, kolicina: 2, rabat: 10 }];
-    const id = await b.call('savedCarts:save', 'Sto za Hasu', items, 9);
+    const id = await b.pozovi('savedCarts:save', 'Sto za Hasu', items, 9);
     expect(typeof id).toBe('number');
     const r = baza.red('SELECT naziv, items, ukupno, createdAt FROM saved_carts WHERE id = ?', id);
     expect(r.naziv).toBe('Sto za Hasu');
@@ -433,21 +434,21 @@ describe('savedCarts:save', () => {
   });
 
   test('ne provjerava postojanje artikala ni zalihu', async () => {
-    const id = await b.call('savedCarts:save', 'Stara', [{ productId: 999, kolicina: 50, rabat: 0 }], 0);
+    const id = await b.pozovi('savedCarts:save', 'Stara', [{ productId: 999, kolicina: 50, rabat: 0 }], 0);
     expect(typeof id).toBe('number');
   });
 });
 
 describe('savedCarts:list', () => {
   test('prazna lista bez košarica', async () => {
-    expect(await b.call('savedCarts:list')).toEqual([]);
+    expect(await b.pozovi('savedCarts:list')).toEqual([]);
   });
 
   test('vraća redove najnovije prvo, items kao JSON string', async () => {
     const p = baza.artikal({ sifra: 'A1', cijena: 5 });
-    const prvi = await b.call('savedCarts:save', 'Prva', [{ productId: p, kolicina: 1, rabat: 0 }], 5);
-    const drugi = await b.call('savedCarts:save', 'Druga', [{ productId: p, kolicina: 3, rabat: 0 }], 15);
-    const lista = await b.call('savedCarts:list');
+    const prvi = await b.pozovi('savedCarts:save', 'Prva', [{ productId: p, kolicina: 1, rabat: 0 }], 5);
+    const drugi = await b.pozovi('savedCarts:save', 'Druga', [{ productId: p, kolicina: 3, rabat: 0 }], 15);
+    const lista = await b.pozovi('savedCarts:list');
     expect(lista.map((c: any) => c.id)).toEqual([drugi, prvi]);
     expect(Object.keys(lista[0]).sort()).toEqual(['createdAt', 'id', 'items', 'naziv', 'ukupno']);
     expect(lista[0]).toMatchObject({ naziv: 'Druga', ukupno: 15 });
@@ -459,10 +460,10 @@ describe('savedCarts:list', () => {
 describe('savedCarts:delete', () => {
   test('briše košaricu; nepostojeći id je tih uspjeh', async () => {
     const p = baza.artikal({ sifra: 'A1', cijena: 5 });
-    const id = await b.call('savedCarts:save', 'Prva', [{ productId: p, kolicina: 1, rabat: 0 }], 5);
-    expect(await b.call('savedCarts:delete', id)).toEqual({ success: true });
+    const id = await b.pozovi('savedCarts:save', 'Prva', [{ productId: p, kolicina: 1, rabat: 0 }], 5);
+    expect(await b.pozovi('savedCarts:delete', id)).toEqual({ success: true });
     expect(baza.red('SELECT COUNT(*) AS n FROM saved_carts').n).toBe(0);
-    expect(await b.call('savedCarts:delete', 999)).toEqual({ success: true });
+    expect(await b.pozovi('savedCarts:delete', 999)).toEqual({ success: true });
   });
 });
 
@@ -472,7 +473,7 @@ const SKICA = { firma: { naziv: 'Firma d.o.o.', idBroj: '4200000000001' }, stavk
 
 describe('fakturaSkice:save', () => {
   test('bez id-a sprema novu skicu kao JSON i vraća goli id', async () => {
-    const id = await b.call('fakturaSkice:save', null, 'Firma d.o.o.', SKICA, 10);
+    const id = await b.pozovi('fakturaSkice:save', null, 'Firma d.o.o.', SKICA, 10);
     expect(typeof id).toBe('number');
     const r = baza.red('SELECT naziv, podaci, ukupno, spremljeno FROM faktura_skice WHERE id = ?', id);
     expect(r.naziv).toBe('Firma d.o.o.');
@@ -482,10 +483,10 @@ describe('fakturaSkice:save', () => {
   });
 
   test('sa id-em prepisuje postojeću skicu umjesto nove', async () => {
-    const id = await b.call('fakturaSkice:save', null, 'Prva', SKICA, 10);
+    const id = await b.pozovi('fakturaSkice:save', null, 'Prva', SKICA, 10);
     b.db.prepare("UPDATE faktura_skice SET spremljeno = '2020-01-01 00:00:00' WHERE id = ?").run(id);
     const izmjena = { ...SKICA, napomena: 'hitno' };
-    expect(await b.call('fakturaSkice:save', id, 'Druga', izmjena, 25)).toBe(id);
+    expect(await b.pozovi('fakturaSkice:save', id, 'Druga', izmjena, 25)).toBe(id);
     expect(baza.red('SELECT COUNT(*) AS n FROM faktura_skice').n).toBe(1);
     const r = baza.red('SELECT naziv, podaci, ukupno, spremljeno FROM faktura_skice WHERE id = ?', id);
     expect(r).toMatchObject({ naziv: 'Druga', ukupno: 25 });
@@ -494,7 +495,7 @@ describe('fakturaSkice:save', () => {
   });
 
   test('id obrisane skice sprema novu', async () => {
-    const id = await b.call('fakturaSkice:save', 999, 'Prva', SKICA, 10);
+    const id = await b.pozovi('fakturaSkice:save', 999, 'Prva', SKICA, 10);
     expect(id).not.toBe(999);
     expect(baza.red('SELECT COUNT(*) AS n FROM faktura_skice').n).toBe(1);
   });
@@ -508,14 +509,14 @@ describe('fakturaSkice:save', () => {
 
 describe('fakturaSkice:list', () => {
   test('prazna lista bez skica', async () => {
-    expect(await b.call('fakturaSkice:list')).toEqual([]);
+    expect(await b.pozovi('fakturaSkice:list')).toEqual([]);
   });
 
   test('vraća redove zadnje spremljene prvo, podaci kao JSON string', async () => {
-    const prva = await b.call('fakturaSkice:save', null, 'Prva', SKICA, 5);
-    const druga = await b.call('fakturaSkice:save', null, 'Druga', SKICA, 15);
+    const prva = await b.pozovi('fakturaSkice:save', null, 'Prva', SKICA, 5);
+    const druga = await b.pozovi('fakturaSkice:save', null, 'Druga', SKICA, 15);
     b.db.prepare("UPDATE faktura_skice SET spremljeno = '2020-01-01 00:00:00' WHERE id = ?").run(druga);
-    const lista = await b.call('fakturaSkice:list');
+    const lista = await b.pozovi('fakturaSkice:list');
     expect(lista.map((s: any) => s.id)).toEqual([prva, druga]);
     expect(Object.keys(lista[0]).sort()).toEqual(['id', 'naziv', 'podaci', 'spremljeno', 'ukupno']);
     expect(lista[0]).toMatchObject({ naziv: 'Prva', ukupno: 5 });
@@ -525,10 +526,10 @@ describe('fakturaSkice:list', () => {
 
 describe('fakturaSkice:delete', () => {
   test('briše skicu; nepostojeći id je tih uspjeh', async () => {
-    const id = await b.call('fakturaSkice:save', null, 'Prva', SKICA, 5);
-    expect(await b.call('fakturaSkice:delete', id)).toEqual({ success: true });
+    const id = await b.pozovi('fakturaSkice:save', null, 'Prva', SKICA, 5);
+    expect(await b.pozovi('fakturaSkice:delete', id)).toEqual({ success: true });
     expect(baza.red('SELECT COUNT(*) AS n FROM faktura_skice').n).toBe(0);
-    expect(await b.call('fakturaSkice:delete', 999)).toEqual({ success: true });
+    expect(await b.pozovi('fakturaSkice:delete', 999)).toEqual({ success: true });
   });
 });
 
@@ -536,7 +537,7 @@ describe('fakturaSkice:delete', () => {
 
 describe('proizvodnja:setEnabled', () => {
   test('uključivanje upisuje "true" i kreira prodajnu uslugu NAMJ', async () => {
-    expect(await b.call('proizvodnja:setEnabled', true)).toEqual({ success: true });
+    expect(await b.pozovi('proizvodnja:setEnabled', true)).toEqual({ success: true });
     expect(baza.postavka('proizvodnja.enabled')).toBe('true');
     expect(baza.red("SELECT naziv, jm, cijena, pdvStopa, tip FROM products WHERE sifra = 'NAMJ'")).toEqual({
       naziv: 'Namještaj po mjeri', jm: 'kom', cijena: 0, pdvStopa: 'E', tip: 'usluga',
@@ -557,7 +558,7 @@ describe('proizvodnja:setEnabled', () => {
 
   test('isključivanje upisuje "false" i ne briše uslugu', async () => {
     await b.call('proizvodnja:setEnabled', true);
-    expect(await b.call('proizvodnja:setEnabled', false)).toEqual({ success: true });
+    expect(await b.pozovi('proizvodnja:setEnabled', false)).toEqual({ success: true });
     expect(baza.postavka('proizvodnja.enabled')).toBe('false');
     expect(baza.red("SELECT COUNT(*) AS n FROM products WHERE sifra = 'NAMJ'").n).toBe(1);
   });

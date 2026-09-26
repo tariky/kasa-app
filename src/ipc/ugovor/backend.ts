@@ -8,7 +8,7 @@
 import type { Database } from 'bun:sqlite';
 import './zona';
 import type { LaziTring } from './laziTring';
-import type { Argumenti, Kanal } from '../kanali';
+import type { Argumenti, Kanal, PozoviKanal } from '../kanali';
 import { hesirajPin } from '../../lib/korisnici';
 
 /**
@@ -46,6 +46,13 @@ export interface Backend {
    * Kanal mimo ugovora (uklonjen, iz liste teksta): `pozoviBezTipova`.
    */
   call<K extends Kanal>(kanal: K, ...args: BezTipova<Argumenti<K>>): Promise<any>;
+  /**
+   * Isti poziv, s tipovima iz ugovora: argumenti `Argumenti<K>`, rezultat
+   * `Rezultat<K>` — za testove koji čitaju rezultat, pa ugovorni tip mora
+   * odgovarati onome što backend stvarno vrati. Namjerno neispravni podaci
+   * (provjera validacije) idu kroz `call`.
+   */
+  pozovi: PozoviKanal;
   /** Druga konekcija na istu bazu — za pripremu podataka i provjeru stanja. */
   db: Database;
   tring: LaziTring;

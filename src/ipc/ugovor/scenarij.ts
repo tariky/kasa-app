@@ -192,3 +192,43 @@ export function stavkaPrimke(productId: number, kolicina: number, cijena: number
 export function primka(brojPrimke: string, stavke: ReturnType<typeof stavkaPrimke>[], extra: Record<string, unknown> = {}) {
   return { brojPrimke, datum: '2026-03-10', stavke, ...extra };
 }
+
+// ─── Sužavanje tipiziranog rezultata (Backend.pozovi) ───────
+// Bacaju s cijelim odgovorom kad oblik nije očekivani; nisu tvrdnje (expect),
+// pa ne mijenjaju broj expect() poziva — tvrdnje testa ostaju gdje jesu.
+
+/** Vrijednost koja mora postojati (nije null ni undefined). */
+export function postoji<T>(x: T | null | undefined): T {
+  if (x === null || x === undefined) throw new Error('Očekivana vrijednost, dobijeno: ' + String(x));
+  return x;
+}
+
+/** Uspješan ishod (`success: true`) unije ishoda. */
+export function uspjeh<R extends { success: boolean }>(r: R): Extract<R, { success: true }> {
+  if (!r.success) throw new Error('Očekivan uspjeh: ' + JSON.stringify(r));
+  return r as Extract<R, { success: true }>;
+}
+
+/** Neuspjeh (`success: false`) unije ishoda — i „već evidentiran". */
+export function neuspjeh<R extends { success: boolean }>(r: R): Exclude<R, { success: true }> {
+  if (r.success) throw new Error('Očekivan neuspjeh: ' + JSON.stringify(r));
+  return r as Exclude<R, { success: true }>;
+}
+
+/** Neuspjela štampa (`success: false`, nije „već evidentiran"). */
+export function neuspjehStampe<R extends { success: boolean }>(r: R): Exclude<R, { success: true } | { vecEvidentiran: true }> {
+  if (r.success || 'vecEvidentiran' in r) throw new Error('Očekivan neuspjeh štampe: ' + JSON.stringify(r));
+  return r as Exclude<R, { success: true } | { vecEvidentiran: true }>;
+}
+
+/** Primka je spremljena (backend nije vratio novi pregled). */
+export function spremljena<R extends object>(r: R): Exclude<R, { promijenjeno: true }> {
+  if ('promijenjeno' in r) throw new Error('Očekivano spremanje, dobijen novi pregled: ' + JSON.stringify(r));
+  return r as Exclude<R, { promijenjeno: true }>;
+}
+
+/** Potvrda ne odgovara stanju: backend je vratio novi pregled umjesto spremanja. */
+export function promijenjeno<R extends object | null>(r: R): Extract<R, { promijenjeno: true }> {
+  if (r === null || !('promijenjeno' in r)) throw new Error('Očekivan novi pregled: ' + JSON.stringify(r));
+  return r as Extract<R, { promijenjeno: true }>;
+}

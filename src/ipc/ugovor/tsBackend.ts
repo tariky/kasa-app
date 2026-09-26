@@ -83,7 +83,7 @@ export async function otvoriTsBackend(baza?: string): Promise<Backend> {
   const tring = pokreniLaziTring();
   db.prepare("UPDATE settings SET value = ? WHERE key = 'tring.port'").run(String(tring.port));
 
-  return {
+  const backend: Backend = {
     db,
     tring,
     dijalog,
@@ -100,6 +100,8 @@ export async function otvoriTsBackend(baza?: string): Promise<Backend> {
       handleri.clear();
       registerIpcHandlers();
     },
+    // Isti poziv; tipove argumenata i rezultata daje Backend.pozovi.
+    pozovi: (kanal, ...args) => (backend.call as unknown as (kanal: string, ...args: unknown[]) => Promise<never>)(kanal, ...args),
     async call(kanal, ...args) {
       const fn = handleri.get(kanal);
       if (!fn) throw new Error(`Kanal ne postoji: ${kanal}`);
@@ -121,4 +123,5 @@ export async function otvoriTsBackend(baza?: string): Promise<Backend> {
       rmSync(userData, { recursive: true, force: true });
     },
   };
+  return backend;
 }

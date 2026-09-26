@@ -12,7 +12,7 @@
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
 import { otvoriBackend, type Backend } from './backend';
 import { pokreniPokvareniTring } from './laziTring';
-import { scenarij } from './scenarij';
+import { scenarij, neuspjehStampe } from './scenarij';
 import { izracunajTotale } from '../../lib/racun';
 
 let b: Backend;
@@ -66,7 +66,7 @@ function kasaRacun(p: number, kolicina: number) {
 
 /** Završen samostalni nalog po narudžbi (100 KM). */
 async function zavrsenNalog(): Promise<number> {
-  const { id } = await b.call('nalog:create', { vrsta: 'narudzba', kupacId: baza.kupac(), opis: 'Po mjeri', dogovorenaCijena: 100 });
+  const { id } = await b.pozovi('nalog:create', { vrsta: 'narudzba', kupacId: baza.kupac(), opis: 'Po mjeri', dogovorenaCijena: 100 });
   await b.call('nalog:replaceStavke', id, [{ materijalId: dodajProizvod('materijal'), kolicina: 1 }]);
   await b.call('nalog:setStatus', { id, status: 'zavrsen' });
   return id;
@@ -75,7 +75,7 @@ async function zavrsenNalog(): Promise<number> {
 /** Riješi jedini nezavršeni red s brojem s papira; vraća id računa. */
 async function rijesi(brojSaPapira: string): Promise<number> {
   const [row] = pending();
-  return (await b.call('pending:resolve', { id: row.id, brojFiskalnogRacuna: brojSaPapira, createdAt: DATUM })).id;
+  return (await b.pozovi('pending:resolve', { id: row.id, brojFiskalnogRacuna: brojSaPapira, createdAt: DATUM })).id;
 }
 
 describe('štampa uspjela, upis pao', () => {
@@ -162,7 +162,7 @@ describe('štampa uspjela, upis pao', () => {
 
   test('order:refundAndPrint: „Reklamacija … JE odštampana", račun ostaje nestorniran', async () => {
     const p = dodajProizvod('artikal');
-    const { id } = await b.call('order:createManual', {
+    const { id } = await b.pozovi('order:createManual', {
       ukupno: 5, pdvIznos: 0.73, nacinPlacanja: 'Virman', brojFiskalnogRacuna: '55', createdAt: DATUM,
       stavke: [{ productId: p, kolicina: 1, cijena: 5, rabat: 0, pdvStopa: 'E' }],
     });
@@ -199,18 +199,18 @@ describe('greška prije štampe ne ostavlja nezavršeni red', () => {
     await b.call('fiscal:setZadnjiBroj', 100);
     const pon = prihvacenaPonuda();
     const nalogId = await zavrsenNalog();
-    const { id: orderId } = await b.call('order:createManual', {
+    const { id: orderId } = await b.pozovi('order:createManual', {
       ukupno: 5, pdvIznos: 0.73, nacinPlacanja: 'Virman', brojFiskalnogRacuna: '55', createdAt: DATUM,
       stavke: [{ productId: p, kolicina: 1, cijena: 5, rabat: 0, pdvStopa: 'E' }],
     });
     necitljivePostavkeUredjaja();
 
     const tokovi: Array<[string, () => Promise<unknown>]> = [
-      ['order:finalize', () => b.call('order:finalize', kasaRacun(p, 1))],
-      ['order:finalizePrilog', () => b.call('order:finalizePrilog', { iznos: 10, nacinPlacanja: 'Virman' })],
-      ['ponuda:konvertuj', () => b.call('ponuda:konvertuj', { id: pon.id, nacinPlacanja: 'Gotovina' })],
-      ['nalog:izdajRacun', () => b.call('nalog:izdajRacun', { id: nalogId, nacinPlacanja: 'Virman' })],
-      ['order:refundAndPrint', () => b.call('order:refundAndPrint', { id: orderId })],
+      ['order:finalize', () => b.pozovi('order:finalize', kasaRacun(p, 1))],
+      ['order:finalizePrilog', () => b.pozovi('order:finalizePrilog', { iznos: 10, nacinPlacanja: 'Virman' })],
+      ['ponuda:konvertuj', () => b.pozovi('ponuda:konvertuj', { id: pon.id, nacinPlacanja: 'Gotovina' })],
+      ['nalog:izdajRacun', () => b.pozovi('nalog:izdajRacun', { id: nalogId, nacinPlacanja: 'Virman' })],
+      ['order:refundAndPrint', () => b.pozovi('order:refundAndPrint', { id: orderId })],
     ];
     for (const [tok, pozovi] of tokovi) {
       await expect(pozovi(), tok).rejects.toThrow('malformed JSON');
@@ -257,7 +257,7 @@ describe('pending:resolve razdužuje po današnjem tipu artikla', () => {
     }
     await uredjajBezPotvrde();
 
-    expect((await b.call('ponuda:konvertuj', { id: ponudaId, nacinPlacanja: 'Gotovina' })).ishodNepoznat).toBe(true);
+    expect((await b.pozovi('ponuda:konvertuj', { id: ponudaId, nacinPlacanja: 'Gotovina' })).ishodNepoznat).toBe(true);
     expect(pending()[0].snapshot).toMatchObject({
       vrsta: 'ponuda', stavke: [{ productId: roba, productTip: 'artikal' }, { productId: usluga, productTip: 'usluga' }],
     });
@@ -277,7 +277,7 @@ describe('pending:resolve razdužuje po današnjem tipu artikla', () => {
     const stavke = [roba, usluga].map(p => ({ ...kasaRacun(p, 1).stavke[0] }));
     await uredjajBezPotvrde();
 
-    const r = await b.call('order:finalize', { ...izracunajTotale(stavke), nacinPlacanja: 'Gotovina', stavke });
+    const r = neuspjehStampe(await b.pozovi('order:finalize', { ...izracunajTotale(stavke), nacinPlacanja: 'Gotovina', stavke }));
     expect(r.ishodNepoznat).toBe(true);
     postaniTip(roba, 'usluga');
     postaniTip(usluga, 'artikal');

@@ -2,7 +2,8 @@
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
 import { otvoriBackend, ADMIN_PIN, type Backend } from './backend';
 import { sekundiOdSada } from './zona';
-import { scenarij, ADMIN } from './scenarij';
+import type { NalogStatus } from '../../types';
+import { scenarij, ADMIN, postoji } from './scenarij';
 
 let b: Backend;
 const baza = scenarij(() => b);
@@ -57,12 +58,12 @@ function status(nalogId: number): string {
 }
 
 async function narudzba(kupacId: number, extra: Record<string, unknown> = {}): Promise<number> {
-  const r = await b.call('nalog:create', { vrsta: 'narudzba', korisnikId: ADMIN, kupacId, opis: 'Kuhinja po mjeri', ...extra });
+  const r = await b.pozovi('nalog:create', { vrsta: 'narudzba', kupacId, opis: 'Kuhinja po mjeri', ...extra });
   return r.id;
 }
 
 async function zaliha(productId: number, kolicina: number, extra: Record<string, unknown> = {}): Promise<number> {
-  const r = await b.call('nalog:create', { vrsta: 'zaliha', korisnikId: ADMIN, productId, kolicina, ...extra });
+  const r = await b.pozovi('nalog:create', { vrsta: 'zaliha', productId, kolicina, ...extra });
   return r.id;
 }
 
@@ -84,22 +85,22 @@ async function zavrsenaNarudzba(dogovorenaCijena: number | null, extra: Record<s
 
 describe('nalog:nextBroj', () => {
   test('prvi broj tekuće godine je 1, zatim raste; druga godina ne utiče', async () => {
-    expect(await b.call('nalog:nextBroj')).toEqual({ broj: 1, godina: GODINA });
+    expect(await b.pozovi('nalog:nextBroj')).toEqual({ broj: 1, godina: GODINA });
 
     const kupacId = dodajKupca();
     await narudzba(kupacId);
     await narudzba(kupacId, { datum: `${GODINA - 1}-12-31` });
-    expect(await b.call('nalog:nextBroj')).toEqual({ broj: 2, godina: GODINA });
+    expect(await b.pozovi('nalog:nextBroj')).toEqual({ broj: 2, godina: GODINA });
   });
 
   test('nastavak iz starog programa: sljedeći broj je iza upisanog, create ga upiše', async () => {
     await b.call('settings:set', 'dokumenti.nalog.nastavakBroj', '12');
     await b.call('settings:set', 'dokumenti.nalog.nastavakGodina', String(GODINA));
-    expect(await b.call('nalog:nextBroj')).toEqual({ broj: 13, godina: GODINA });
+    expect(await b.pozovi('nalog:nextBroj')).toEqual({ broj: 13, godina: GODINA });
 
     const id = await narudzba(dodajKupca());
     expect(baza.red('SELECT broj, godina FROM radni_nalozi WHERE id = ?', id)).toEqual({ broj: 13, godina: GODINA });
-    expect(await b.call('nalog:nextBroj')).toEqual({ broj: 14, godina: GODINA });
+    expect(await b.pozovi('nalog:nextBroj')).toEqual({ broj: 14, godina: GODINA });
   });
 
   test('nastavak manji od najvećeg broja u bazi: broji se od najvećeg', async () => {
@@ -109,13 +110,13 @@ describe('nalog:nextBroj', () => {
     await narudzba(kupacId);
     await b.call('settings:set', 'dokumenti.nalog.nastavakBroj', '2');
     await b.call('settings:set', 'dokumenti.nalog.nastavakGodina', String(GODINA));
-    expect(await b.call('nalog:nextBroj')).toEqual({ broj: 4, godina: GODINA });
+    expect(await b.pozovi('nalog:nextBroj')).toEqual({ broj: 4, godina: GODINA });
   });
 
   test('nastavak za drugu godinu ne dira tekuću', async () => {
     await b.call('settings:set', 'dokumenti.nalog.nastavakBroj', '50');
     await b.call('settings:set', 'dokumenti.nalog.nastavakGodina', String(GODINA - 1));
-    expect(await b.call('nalog:nextBroj')).toEqual({ broj: 1, godina: GODINA });
+    expect(await b.pozovi('nalog:nextBroj')).toEqual({ broj: 1, godina: GODINA });
     const kupacId = dodajKupca();
     const id = await narudzba(kupacId);
     expect(baza.red('SELECT broj, godina FROM radni_nalozi WHERE id = ?', id)).toEqual({ broj: 1, godina: GODINA });
@@ -130,8 +131,8 @@ describe('nalog:nextBroj', () => {
 describe('nalog:create', () => {
   test('narudžba: vraća id, broj i godinu; numeracija po godini datuma', async () => {
     const kupacId = dodajKupca();
-    const r = await b.call('nalog:create', {
-      vrsta: 'narudzba', korisnikId: ADMIN, kupacId, opis: '  Ormar  ', datum: '2025-06-01',
+    const r = await b.pozovi('nalog:create', {
+      vrsta: 'narudzba', kupacId, opis: '  Ormar  ', datum: '2025-06-01',
       rok: '2025-06-15', dogovorenaCijena: 1170, trosakRada: 150, napomena: 'hitno',
     });
     expect(Object.keys(r).sort()).toEqual(['broj', 'godina', 'id']);
@@ -145,9 +146,9 @@ describe('nalog:create', () => {
       status: 'otvoren', racunId: null, korisnikId: ADMIN, napomena: 'hitno', zavrsenAt: null,
     });
 
-    const drugi = await b.call('nalog:create', { vrsta: 'narudzba', korisnikId: ADMIN, kupacId, opis: 'X', datum: '2025-07-01' });
+    const drugi = await b.pozovi('nalog:create', { vrsta: 'narudzba', kupacId, opis: 'X', datum: '2025-07-01' });
     expect(drugi.broj).toBe(2);
-    const treci = await b.call('nalog:create', { vrsta: 'narudzba', korisnikId: ADMIN, kupacId, opis: 'Y', datum: '2026-01-02' });
+    const treci = await b.pozovi('nalog:create', { vrsta: 'narudzba', kupacId, opis: 'Y', datum: '2026-01-02' });
     expect({ broj: treci.broj, godina: treci.godina }).toEqual({ broj: 1, godina: 2026 });
   });
 
@@ -222,7 +223,7 @@ describe('nalog:getAll', () => {
     const n1 = await narudzba(kupacId, { datum: '2026-01-05' });
     const n2 = await zaliha(p, 1, { datum: '2026-01-06' });
 
-    const lista: any[] = await b.call('nalog:getAll');
+    const lista: any[] = await b.pozovi('nalog:getAll');
     expect(lista.map(n => n.id)).toEqual([n2, n1, stari]);
     expect(lista[1]).toMatchObject({
       broj: 1, godina: 2026, kupacNaziv: 'Stolarija Kupac', kupacIdBroj: '4200000000009', kupacAdresa: 'Titova 1',
@@ -240,7 +241,8 @@ describe('nalog:getAll', () => {
     const f = await zavrsenaNarudzba(100);
     await b.call('nalog:izdajRacun', { id: f.id, korisnikId: ADMIN, nacinPlacanja: 'Gotovina' });
 
-    const ids = async (filter?: string) => (await b.call('nalog:getAll', ...(filter ? [filter] : []))).map((n: any) => n.id).sort();
+    const ids = async (filter?: NalogStatus | 'aktivni') =>
+      (await (filter ? b.pozovi('nalog:getAll', filter) : b.pozovi('nalog:getAll'))).map(n => n.id).sort();
     expect(await ids()).toEqual([otvoren, uIzradi, f.id].sort());
     expect(await ids('aktivni')).toEqual([otvoren, uIzradi].sort());
     expect(await ids('u_izradi')).toEqual([uIzradi]);
@@ -259,15 +261,15 @@ describe('nalog:get', () => {
       { materijalId: kant, kolicina: 12 },
     ]);
 
-    const n = await b.call('nalog:get', id);
+    const n = await b.pozovi('nalog:get', id);
     expect(n).toMatchObject({ id, vrsta: 'narudzba', status: 'otvoren', opis: 'Kuhinja po mjeri', korisnikIme: 'Admin' });
     expect(n.stavke).toHaveLength(2);
-    expect(n.stavke[0]).toMatchObject({
+    expect(postoji(n.stavke)[0]).toMatchObject({
       radniNalogId: id, materijalId: ploca, kolicina: 1.2346, nabavnaCijena: null, napomena: '600×400 ×2',
       materijalNaziv: 'Proizvod IV18', materijalSifra: 'IV18', materijalJm: 'm²',
       plocaSirina: 2800, plocaVisina: 2070, stanje: 11.592,
     });
-    expect(n.stavke[1]).toMatchObject({ materijalId: kant, kolicina: 12, napomena: null, plocaSirina: null, plocaVisina: null, stanje: 0 });
+    expect(postoji(n.stavke)[1]).toMatchObject({ materijalId: kant, kolicina: 12, napomena: null, plocaSirina: null, plocaVisina: null, stanje: 0 });
   });
 
   test('nepostojeći nalog je greška', async () => {
@@ -287,18 +289,18 @@ describe('nalog:createIzPonude', () => {
       { productId: u, kolicina: 1, cijena: 270 },
     ]);
 
-    const r = await b.call('nalog:createIzPonude', ponudaId, ADMIN);
+    const r = await b.pozovi('nalog:createIzPonude', ponudaId);
     expect(Object.keys(r).sort()).toEqual(['broj', 'godina', 'id']);
     expect(r.broj).toBe(1);
     expect(baza.red('SELECT vrsta, kupacId, ponudaId, opis, dogovorenaCijena, status FROM radni_nalozi WHERE id = ?', r.id))
       .toEqual({ vrsta: 'narudzba', kupacId, ponudaId, opis: 'Proizvod ORM, Proizvod MONT', dogovorenaCijena: 1170, status: 'otvoren' });
-    const n = await b.call('nalog:get', r.id);
+    const n = await b.pozovi('nalog:get', r.id);
     expect(n).toMatchObject({ ponudaBroj: 1, ponudaGodina: 2026 });
   });
 
   test('ponuda bez stavki dobije opis "Ponuda <id>"', async () => {
     const ponudaId = dodajPonudu(dodajKupca(), 'prihvacena', []);
-    const r = await b.call('nalog:createIzPonude', ponudaId, ADMIN);
+    const r = await b.pozovi('nalog:createIzPonude', ponudaId);
     expect(baza.red('SELECT opis FROM radni_nalozi WHERE id = ?', r.id).opis).toBe(`Ponuda ${ponudaId}`);
   });
 
@@ -324,10 +326,10 @@ describe('nalog:zaPonudu', () => {
   test('vraća {id, broj, godina} naloga za ponudu ili null', async () => {
     const kupacId = dodajKupca();
     const ponudaId = dodajPonudu(kupacId, 'prihvacena', [{ productId: dodajProizvod('A', 'artikal'), kolicina: 1, cijena: 10 }]);
-    expect(await b.call('nalog:zaPonudu', ponudaId)).toBeNull();
-    const r = await b.call('nalog:createIzPonude', ponudaId, ADMIN);
-    expect(await b.call('nalog:zaPonudu', ponudaId)).toEqual({ id: r.id, broj: r.broj, godina: r.godina });
-    expect(await b.call('nalog:zaPonudu', 999)).toBeNull();
+    expect(await b.pozovi('nalog:zaPonudu', ponudaId)).toBeNull();
+    const r = await b.pozovi('nalog:createIzPonude', ponudaId);
+    expect(await b.pozovi('nalog:zaPonudu', ponudaId)).toEqual({ id: r.id, broj: r.broj, godina: r.godina });
+    expect(await b.pozovi('nalog:zaPonudu', 999)).toBeNull();
   });
 });
 
@@ -349,12 +351,12 @@ describe('proizvodi naloga iz ponude', () => {
     ]);
     const stavke = baza.redovi('SELECT id FROM ponuda_stavke WHERE ponudaId = ? ORDER BY id', ponudaId).map(r => r.id);
 
-    expect(await b.call('nalog:proizvodiPonude', ponudaId)).toEqual([
+    expect(await b.pozovi('nalog:proizvodiPonude', ponudaId)).toEqual([
       { ponudaStavkaId: stavke[0], productId: ormar, naziv: 'Proizvod ORM', sifra: 'ORM', jm: 'kom', kolicina: 2, stanje: 0, zadano: true },
       { ponudaStavkaId: stavke[2], productId: sudopera, naziv: 'Proizvod SUD', sifra: 'SUD', jm: 'kom', kolicina: 1, stanje: 1, zadano: false },
       { ponudaStavkaId: stavke[4], productId: sudopera, naziv: 'Proizvod SUD', sifra: 'SUD', jm: 'kom', kolicina: 2, stanje: 1, zadano: true },
     ]);
-    expect(await b.call('nalog:proizvodiPonude', 999)).toEqual([]);
+    expect(await b.pozovi('nalog:proizvodiPonude', 999)).toEqual([]);
   });
 
   test('createIzPonude: izričit izbor (količina na 4 decimale), prazan izbor, a bez niza (stari korisnikId) zadani', async () => {
@@ -363,21 +365,22 @@ describe('proizvodi naloga iz ponude', () => {
     const sudopera = dodajProizvod('SUD', 'artikal', { stanje: 5 });
     const stavke = [{ productId: ormar, kolicina: 2, cijena: 400 }, { productId: sudopera, kolicina: 1, cijena: 150 }];
     const proizvodi = async (id: number) =>
-      (await b.call('nalog:get', id)).proizvodi.map((p: any) => [p.productId, p.kolicina, p.productNaziv, p.productSifra, p.productJm]);
+      postoji((await b.pozovi('nalog:get', id)).proizvodi).map(p => [p.productId, p.kolicina, p.productNaziv, p.productSifra, p.productJm]);
 
-    const izricit = await b.call('nalog:createIzPonude', dodajPonudu(kupacId, 'prihvacena', stavke), [
+    const izricit = await b.pozovi('nalog:createIzPonude', dodajPonudu(kupacId, 'prihvacena', stavke), [
       { productId: sudopera, kolicina: 1 }, { productId: ormar, kolicina: 1.00004 },
     ]);
     expect(await proizvodi(izricit.id)).toEqual([[sudopera, 1, 'Proizvod SUD', 'SUD', 'kom'], [ormar, 1, 'Proizvod ORM', 'ORM', 'kom']]);
-    const prazan = await b.call('nalog:createIzPonude', dodajPonudu(kupacId, 'prihvacena', stavke), []);
+    const prazan = await b.pozovi('nalog:createIzPonude', dodajPonudu(kupacId, 'prihvacena', stavke), []);
     expect(await proizvodi(prazan.id)).toEqual([]);
+    // Raniji klijent je kao drugi argument slao korisnikId: važi zadani izbor.
     const zadani = await b.call('nalog:createIzPonude', dodajPonudu(kupacId, 'prihvacena', stavke), ADMIN);
     expect(await proizvodi(zadani.id)).toEqual([[ormar, 2, 'Proizvod ORM', 'ORM', 'kom']]);
-    const bez = await b.call('nalog:createIzPonude', dodajPonudu(kupacId, 'prihvacena', stavke));
+    const bez = await b.pozovi('nalog:createIzPonude', dodajPonudu(kupacId, 'prihvacena', stavke));
     expect(await proizvodi(bez.id)).toEqual([[ormar, 2, 'Proizvod ORM', 'ORM', 'kom']]);
 
     // samostalni nalog nema proizvoda
-    expect((await b.call('nalog:get', await narudzba(kupacId))).proizvodi).toEqual([]);
+    expect((await b.pozovi('nalog:get', await narudzba(kupacId))).proizvodi).toEqual([]);
   });
 
   test('createIzPonude: neispravan izbor odbija cijeli nalog', async () => {
@@ -402,10 +405,10 @@ describe('proizvodi naloga iz ponude', () => {
       { productId: mont, kolicina: 1, cijena: 100 },
       { productId: ploca, kolicina: 3, cijena: 10 },
     ]);
-    const { id } = await b.call('nalog:createIzPonude', ponudaId, []);
+    const { id } = await b.pozovi('nalog:createIzPonude', ponudaId, []);
     const izbor = () => baza.redovi('SELECT productId, kolicina FROM radni_nalog_proizvodi WHERE radniNalogId = ? ORDER BY id', id);
 
-    expect(await b.call('nalog:setProizvodi', id, [{ productId: ormar, kolicina: 1 }, { productId: ormar, kolicina: 1.5 }]))
+    expect(await b.pozovi('nalog:setProizvodi', id, [{ productId: ormar, kolicina: 1 }, { productId: ormar, kolicina: 1.5 }]))
       .toEqual({ success: true });
     expect(izbor()).toEqual([{ productId: ormar, kolicina: 1 }, { productId: ormar, kolicina: 1.5 }]);
 
@@ -432,7 +435,7 @@ describe('proizvodi naloga iz ponude', () => {
     const kupacId = dodajKupca();
     const ormar = dodajProizvod('ORM', 'artikal');
     const ponudaId = dodajPonudu(kupacId, 'prihvacena', [{ productId: ormar, kolicina: 1, cijena: 400 }]);
-    const { id } = await b.call('nalog:createIzPonude', ponudaId, []);
+    const { id } = await b.pozovi('nalog:createIzPonude', ponudaId, []);
     await b.call('nalog:setStatus', { id, status: 'u_izradi', korisnikId: ADMIN });
     await b.call('nalog:setProizvodi', id, [{ productId: ormar, kolicina: 1 }]);
     await b.call('nalog:replaceStavke', id, [{ materijalId: dodajProizvod('M', 'materijal'), kolicina: 1 }]);
@@ -453,7 +456,7 @@ describe('proizvodi naloga iz ponude', () => {
       { productId: ormar, kolicina: 2, cijena: 400 },
       { productId: polica, kolicina: 1, cijena: 50 },
     ]);
-    const { id } = await b.call('nalog:createIzPonude', ponudaId, [{ productId: ormar, kolicina: 2 }, { productId: polica, kolicina: 1 }]);
+    const { id } = await b.pozovi('nalog:createIzPonude', ponudaId, [{ productId: ormar, kolicina: 2 }, { productId: polica, kolicina: 1 }]);
     const m = dodajProizvod('M', 'materijal', { stanje: 10 });
     await b.call('nalog:replaceStavke', id, [{ materijalId: m, kolicina: 1 }]);
     const kretanja = () => baza.red("SELECT COUNT(*) AS n FROM stock_movements WHERE referenceType = 'radni_nalog'").n;
@@ -498,7 +501,7 @@ describe('nalog:update', () => {
     const drugi = dodajKupca('Drugi');
     const id = await narudzba(kupacId, { rok: '2026-05-01', napomena: 'x', trosakRada: 10 });
 
-    expect(await b.call('nalog:update', id, {
+    expect(await b.pozovi('nalog:update', id, {
       opis: '  Novi opis ', kupacId: drugi, rok: '', napomena: '', dogovorenaCijena: 500, trosakRada: 40, datum: '2026-02-02',
     })).toEqual({ success: true });
     expect(baza.red('SELECT opis, kupacId, rok, napomena, dogovorenaCijena, trosakRada, datum FROM radni_nalozi WHERE id = ?', id))
@@ -583,7 +586,7 @@ describe('nalog:replaceStavke', () => {
     const m2 = dodajProizvod('M2', 'materijal');
     const id = await narudzba(dodajKupca());
 
-    expect(await b.call('nalog:replaceStavke', id, [{ materijalId: m1, kolicina: 1 }])).toEqual({ success: true });
+    expect(await b.pozovi('nalog:replaceStavke', id, [{ materijalId: m1, kolicina: 1 }])).toEqual({ success: true });
     await b.call('nalog:replaceStavke', id, [
       { materijalId: m2, kolicina: 0.123456, napomena: 'rez' },
       { materijalId: m2, kolicina: 3 },
@@ -631,7 +634,7 @@ describe('nalog:replaceStavke', () => {
 describe('nalog:setStatus', () => {
   test('otvoren → u_izradi; ponovo u_izradi nije dozvoljeno', async () => {
     const id = await narudzba(dodajKupca());
-    expect(await b.call('nalog:setStatus', { id, status: 'u_izradi', korisnikId: ADMIN })).toEqual({ success: true });
+    expect(await b.pozovi('nalog:setStatus', { id, status: 'u_izradi' })).toEqual({ success: true });
     expect(status(id)).toBe('u_izradi');
     await expect(b.call('nalog:setStatus', { id, status: 'u_izradi', korisnikId: ADMIN }))
       .rejects.toThrow('Prelaz u_izradi → u_izradi nije dozvoljen');
@@ -719,7 +722,7 @@ describe('nalog:setStatus', () => {
     const id = await zaliha(stol, 2);
     await zavrsi(id);
 
-    expect(await b.call('nalog:setStatus', { id, status: 'vrati', korisnikId: ADMIN })).toEqual({ success: true });
+    expect(await b.pozovi('nalog:setStatus', { id, status: 'vrati' })).toEqual({ success: true });
     expect(baza.red('SELECT status, zavrsenAt FROM radni_nalozi WHERE id = ?', id)).toEqual({ status: 'u_izradi', zavrsenAt: null });
     expect(baza.red("SELECT COUNT(*) AS n FROM stock_movements WHERE referenceType = 'radni_nalog'").n).toBe(0);
     expect(baza.stanje(m)).toBe(10);
@@ -770,7 +773,7 @@ describe('nalog:setStatus', () => {
       { productId: polica, kolicina: 1.5, cijena: 20 },
       { productId: sudopera, kolicina: 1, cijena: 150 },
     ]);
-    const { id } = await b.call('nalog:createIzPonude', ponudaId, [
+    const { id } = await b.pozovi('nalog:createIzPonude', ponudaId, [
       { productId: ormar, kolicina: 2 }, { productId: polica, kolicina: 1.5 },
     ]);
     const m = dodajProizvod('M', 'materijal', { stanje: 10 });
@@ -789,7 +792,7 @@ describe('nalog:setStatus', () => {
     expect([baza.stanje(ormar), baza.stanje(polica), baza.stanje(m)]).toEqual([0, 0, 10]);
 
     await zavrsi(id);
-    const r = await b.call('nalog:izdajRacun', { id, korisnikId: ADMIN, nacinPlacanja: 'Gotovina' });
+    const r = await b.pozovi('nalog:izdajRacun', { id, nacinPlacanja: 'Gotovina' });
     expect(r.success).toBe(true);
     expect([baza.stanje(ormar), baza.stanje(polica), baza.stanje(sudopera), baza.stanje(ploca), baza.stanje(mont), baza.stanje(m)]).toEqual([0, 0, 4, 7, 0, 6]);
   });
@@ -798,7 +801,7 @@ describe('nalog:setStatus', () => {
     const kupacId = dodajKupca();
     const ormar = dodajProizvod('ORM', 'artikal');
     const ponudaId = dodajPonudu(kupacId, 'prihvacena', [{ productId: ormar, kolicina: 2, cijena: 400 }]);
-    const { id } = await b.call('nalog:createIzPonude', ponudaId, ADMIN);
+    const { id } = await b.pozovi('nalog:createIzPonude', ponudaId);
     await b.call('nalog:replaceStavke', id, [{ materijalId: dodajProizvod('M', 'materijal'), kolicina: 1 }]);
 
     await b.call('ponuda:konvertuj', { id: ponudaId, korisnikId: ADMIN, nacinPlacanja: 'Gotovina' });
@@ -834,7 +837,7 @@ describe('nalog:setStatus', () => {
     const kupacId = dodajKupca();
     const ormar = dodajProizvod('ORM', 'artikal');
     const ponudaId = dodajPonudu(kupacId, 'prihvacena', [{ productId: ormar, kolicina: 2, cijena: 400 }]);
-    const { id } = await b.call('nalog:createIzPonude', ponudaId, ADMIN);
+    const { id } = await b.pozovi('nalog:createIzPonude', ponudaId);
     await b.call('nalog:replaceStavke', id, [{ materijalId: dodajProizvod('M', 'materijal'), kolicina: 1 }]);
     await zavrsi(id);
     baza.kretanje({ productId: ormar, tip: 'izlaz', kolicina: 1, referenceType: 'order', referenceId: 1 });
@@ -849,8 +852,8 @@ describe('nalog:setStatus', () => {
     const ormar = dodajProizvod('ORM', 'artikal');
     const p1 = dodajPonudu(kupacId, 'prihvacena', [{ productId: ormar, kolicina: 1, cijena: 100 }]);
     const p2 = dodajPonudu(kupacId, 'prihvacena', [{ productId: ormar, kolicina: 1, cijena: 100 }]);
-    const zavrsen = (await b.call('nalog:createIzPonude', p1, ADMIN)).id;
-    const otvoren = (await b.call('nalog:createIzPonude', p2, ADMIN)).id;
+    const zavrsen = (await b.pozovi('nalog:createIzPonude', p1)).id;
+    const otvoren = (await b.pozovi('nalog:createIzPonude', p2)).id;
     const m = dodajProizvod('M', 'materijal', { stanje: 10 });
     await b.call('nalog:replaceStavke', zavrsen, [{ materijalId: m, kolicina: 1 }]);
     await b.call('nalog:replaceStavke', otvoren, [{ materijalId: m, kolicina: 1 }]);
@@ -883,14 +886,14 @@ describe('nalog:delete', () => {
     const kupacId = dodajKupca();
     const m = dodajProizvod('M', 'materijal');
     const ponudaId = dodajPonudu(kupacId, 'prihvacena', [{ productId: dodajProizvod('A', 'artikal'), kolicina: 1, cijena: 10 }]);
-    const { id } = await b.call('nalog:createIzPonude', ponudaId, ADMIN);
+    const { id } = await b.pozovi('nalog:createIzPonude', ponudaId);
     await b.call('nalog:setStatus', { id, status: 'u_izradi', korisnikId: ADMIN });
     await b.call('nalog:replaceStavke', id, [{ materijalId: m, kolicina: 1 }]);
 
-    expect(await b.call('nalog:delete', id)).toEqual({ success: true });
+    expect(await b.pozovi('nalog:delete', id)).toEqual({ success: true });
     expect(baza.red('SELECT COUNT(*) AS n FROM radni_nalozi').n).toBe(0);
     expect(baza.red('SELECT COUNT(*) AS n FROM radni_nalog_stavke').n).toBe(0);
-    expect(await b.call('nalog:zaPonudu', ponudaId)).toBeNull();
+    expect(await b.pozovi('nalog:zaPonudu', ponudaId)).toBeNull();
   });
 
   test('završen i fakturisan nalog se ne briše; knjiženja ostaju', async () => {
@@ -917,7 +920,7 @@ describe('nalog:kalkulacija', () => {
     const id = await narudzba(dodajKupca(), { dogovorenaCijena: 117, trosakRada: 20 });
     await b.call('nalog:replaceStavke', id, [{ materijalId: m, kolicina: 5 }]);
 
-    expect(await b.call('nalog:kalkulacija', id)).toEqual({
+    expect(await b.pozovi('nalog:kalkulacija', id)).toEqual({
       stavke: [{ materijalId: m, naziv: 'Proizvod IV', jm: 'm²', kolicina: 5, cijena: 4.8, iznos: 24, stanje: 20, zamrznuto: false }],
       materijal: 24, rad: 20, ukupno: 44, upozorenja: [],
       neto: 100, marza: 56, marzaPct: 56,
@@ -929,7 +932,7 @@ describe('nalog:kalkulacija', () => {
     primka(m, 1, 10);
     const id = await narudzba(dodajKupca(), { trosakRada: 5 });
     await b.call('nalog:replaceStavke', id, [{ materijalId: m, kolicina: 1 }]);
-    const k = await b.call('nalog:kalkulacija', id);
+    const k = await b.pozovi('nalog:kalkulacija', id);
     expect(k).toMatchObject({ materijal: 10, rad: 5, ukupno: 15, neto: 0, marza: -15, marzaPct: 0 });
   });
 
@@ -938,7 +941,7 @@ describe('nalog:kalkulacija', () => {
     const id = await narudzba(dodajKupca(), { dogovorenaCijena: 50 });
     await b.call('nalog:replaceStavke', id, [{ materijalId: m, kolicina: 5 }]);
 
-    const k = await b.call('nalog:kalkulacija', id);
+    const k = await b.pozovi('nalog:kalkulacija', id);
     expect(k.stavke[0]).toEqual({ materijalId: m, naziv: 'Proizvod LJ', jm: 'l', kolicina: 5, cijena: 0, iznos: 0, stanje: 2, zamrznuto: false });
     expect(k.upozorenja).toEqual([
       'Proizvod LJ: nema nabavne cijene (nema primke)',
@@ -957,7 +960,7 @@ describe('nalog:kalkulacija', () => {
       { materijalId: m, kolicina: 3, napomena: '800×400' },
     ]);
 
-    const k = await b.call('nalog:kalkulacija', id);
+    const k = await b.pozovi('nalog:kalkulacija', id);
     expect(k.stavke.map((s: any) => [s.materijalId, s.kolicina])).toEqual([[m, 3], [k2, 2], [m, 3]]);
     expect(k.upozorenja).toEqual([
       'Proizvod IV: nema nabavne cijene (nema primke)',
@@ -967,7 +970,7 @@ describe('nalog:kalkulacija', () => {
     await b.call('nalog:replaceStavke', id, [{ materijalId: m, kolicina: 0.1 }, { materijalId: m, kolicina: 0.2 }]);
     b.db.prepare("DELETE FROM stock_movements WHERE productId = ?").run(m);
     baza.kretanje({ productId: m, tip: 'ulaz', kolicina: 0.3 });
-    expect((await b.call('nalog:kalkulacija', id)).upozorenja).toEqual(['Proizvod IV: nema nabavne cijene (nema primke)']);
+    expect((await b.pozovi('nalog:kalkulacija', id)).upozorenja).toEqual(['Proizvod IV: nema nabavne cijene (nema primke)']);
   });
 
   test('zaliha: trošak po komadu; nakon završetka cijena je zamrznuta i ne prati nove primke', async () => {
@@ -977,7 +980,7 @@ describe('nalog:kalkulacija', () => {
     await b.call('normativ:save', stol, [{ materijalId: m, kolicina: 2 }]);
     const id = await zaliha(stol, 3, { trosakRada: 12 });
 
-    const prije = await b.call('nalog:kalkulacija', id);
+    const prije = await b.pozovi('nalog:kalkulacija', id);
     expect(prije).toEqual({
       stavke: [{ materijalId: m, naziv: 'Proizvod M', jm: 'kom', kolicina: 6, cijena: 3, iznos: 18, stanje: 10, zamrznuto: false }],
       materijal: 18, rad: 12, ukupno: 30, poKomadu: 10, upozorenja: [],
@@ -985,7 +988,7 @@ describe('nalog:kalkulacija', () => {
 
     await zavrsi(id);
     primka(m, 10, 9); // nova prosječna bi bila 6
-    const poslije = await b.call('nalog:kalkulacija', id);
+    const poslije = await b.pozovi('nalog:kalkulacija', id);
     expect(poslije.stavke[0]).toMatchObject({ cijena: 3, iznos: 18, stanje: 14, zamrznuto: true });
     expect(poslije).toMatchObject({ materijal: 18, ukupno: 30, poKomadu: 10, upozorenja: [] });
   });
@@ -996,14 +999,14 @@ describe('nalog:kalkulacija', () => {
     const id = await narudzba(dodajKupca(), { dogovorenaCijena: 10 });
     await b.call('nalog:replaceStavke', id, [{ materijalId: m, kolicina: 3 }]);
     await zavrsi(id);
-    const k = await b.call('nalog:kalkulacija', id);
+    const k = await b.pozovi('nalog:kalkulacija', id);
     expect(k.stavke[0]).toMatchObject({ stanje: -2, zamrznuto: true, cijena: 2, iznos: 6 });
     expect(k.upozorenja).toEqual([]);
   });
 
   test('nalog bez stavki i nepostojeći nalog', async () => {
     const id = await narudzba(dodajKupca(), { trosakRada: 7.555 });
-    expect(await b.call('nalog:kalkulacija', id)).toEqual({
+    expect(await b.pozovi('nalog:kalkulacija', id)).toEqual({
       stavke: [], materijal: 0, rad: 7.56, ukupno: 7.56, neto: 0, marza: -7.56, marzaPct: 0, upozorenja: [],
     });
     await expect(b.call('nalog:kalkulacija', 999)).rejects.toThrow('Radni nalog ne postoji');
@@ -1016,7 +1019,7 @@ describe('nalog:izdajRacun', () => {
   test('samostalni nalog: jedna stavka usluge NAMJ po dogovorenoj cijeni, nalog fakturisan', async () => {
     const { id, kupacId } = await zavrsenaNarudzba(234);
 
-    const r = await b.call('nalog:izdajRacun', { id, korisnikId: ADMIN, nacinPlacanja: 'Virman' });
+    const r = await b.pozovi('nalog:izdajRacun', { id, nacinPlacanja: 'Virman' });
     expect(typeof r.racunId).toBe('number');
     expect(r).toMatchObject({ success: true, brojFiskalnogRacuna: '101', odgovori: { BrojFiskalnogRacuna: '101' } });
 
@@ -1026,21 +1029,21 @@ describe('nalog:izdajRacun', () => {
 
     const usluga = baza.red("SELECT id, naziv, tip, pdvStopa, cijena FROM products WHERE sifra = 'NAMJ'");
     expect(usluga).toMatchObject({ naziv: 'Namještaj po mjeri', tip: 'usluga', pdvStopa: 'E', cijena: 0 });
-    expect(baza.red('SELECT korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, status, kupacNaziv, kupacIdBroj, kupacGrad FROM orders WHERE id = ?', r.racunId))
+    expect(baza.red('SELECT korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, status, kupacNaziv, kupacIdBroj, kupacGrad FROM orders WHERE id = ?', postoji(r.racunId)))
       .toEqual({ korisnikId: ADMIN, ukupno: 234, pdvIznos: 34, nacinPlacanja: 'Virman', brojFiskalnogRacuna: '101', status: 'completed', kupacNaziv: 'Kupac d.o.o.', kupacIdBroj: '4200000000009', kupacGrad: 'Sarajevo' });
-    expect(baza.redovi('SELECT productId, kolicina, cijena, rabat, pdvStopa FROM order_items WHERE orderId = ?', r.racunId))
+    expect(baza.redovi('SELECT productId, kolicina, cijena, rabat, pdvStopa FROM order_items WHERE orderId = ?', postoji(r.racunId)))
       .toEqual([{ productId: usluga.id, kolicina: 1, cijena: 234, rabat: 0, pdvStopa: 'E' }]);
     expect(baza.red('SELECT COUNT(*) AS n FROM stock_movements WHERE productId = ?', usluga.id).n).toBe(0);
 
     expect(baza.red('SELECT status, racunId, kupacId FROM radni_nalozi WHERE id = ?', id)).toEqual({ status: 'fakturisan', racunId: r.racunId, kupacId });
-    expect(await b.call('nalog:get', id)).toMatchObject({ racunBroj: '101', racunStatus: 'completed' });
+    expect(await b.pozovi('nalog:get', id)).toMatchObject({ racunBroj: '101', racunStatus: 'completed' });
   });
 
   test('postojeća usluga NAMJ se ponovo koristi', async () => {
     const postojeca = dodajProizvod('NAMJ', 'usluga');
     const { id } = await zavrsenaNarudzba(50);
-    const r = await b.call('nalog:izdajRacun', { id, korisnikId: ADMIN, nacinPlacanja: 'Gotovina' });
-    expect(baza.red('SELECT productId FROM order_items WHERE orderId = ?', r.racunId).productId).toBe(postojeca);
+    const r = await b.pozovi('nalog:izdajRacun', { id, nacinPlacanja: 'Gotovina' });
+    expect(baza.red('SELECT productId FROM order_items WHERE orderId = ?', postoji(r.racunId)).productId).toBe(postojeca);
     expect(baza.red("SELECT COUNT(*) AS n FROM products WHERE sifra = 'NAMJ'").n).toBe(1);
   });
 
@@ -1052,22 +1055,22 @@ describe('nalog:izdajRacun', () => {
       { productId: ormar, kolicina: 2, cijena: 400 },
       { productId: mont, kolicina: 1, cijena: 100 },
     ]);
-    const { id } = await b.call('nalog:createIzPonude', ponudaId, ADMIN);
+    const { id } = await b.pozovi('nalog:createIzPonude', ponudaId);
     const m = dodajProizvod('M', 'materijal');
     await b.call('nalog:replaceStavke', id, [{ materijalId: m, kolicina: 1 }]);
     await zavrsi(id);
     expect(baza.stanje(ormar)).toBe(2);
 
-    const r = await b.call('nalog:izdajRacun', { id, korisnikId: ADMIN, nacinPlacanja: 'Gotovina' });
+    const r = await b.pozovi('nalog:izdajRacun', { id, nacinPlacanja: 'Gotovina' });
     expect(typeof r.racunId).toBe('number');
     expect(r).toMatchObject({ success: true, brojFiskalnogRacuna: '101' });
     expect(b.tring.zahtjevi.map(z => z.putanja)).toEqual(['/sfr']);
     expect(b.tring.zahtjevi[0].tijelo).toContain('Proizvod ORM');
     expect(b.tring.zahtjevi[0].tijelo).not.toContain('Namještaj po mjeri');
 
-    expect(baza.red('SELECT ukupno, brojFiskalnogRacuna, kupacNaziv FROM orders WHERE id = ?', r.racunId))
+    expect(baza.red('SELECT ukupno, brojFiskalnogRacuna, kupacNaziv FROM orders WHERE id = ?', postoji(r.racunId)))
       .toEqual({ ukupno: 900, brojFiskalnogRacuna: '101', kupacNaziv: 'Kupac d.o.o.' });
-    expect(baza.redovi('SELECT productId, kolicina, cijena FROM order_items WHERE orderId = ? ORDER BY id', r.racunId))
+    expect(baza.redovi('SELECT productId, kolicina, cijena FROM order_items WHERE orderId = ? ORDER BY id', postoji(r.racunId)))
       .toEqual([{ productId: ormar, kolicina: 2, cijena: 400 }, { productId: mont, kolicina: 1, cijena: 100 }]);
     expect(baza.stanje(ormar)).toBe(0);
     expect(baza.stanje(mont)).toBe(0);
@@ -1079,7 +1082,7 @@ describe('nalog:izdajRacun', () => {
     const kupacId = dodajKupca();
     const a = dodajProizvod('A', 'artikal');
     const ponudaId = dodajPonudu(kupacId, 'prihvacena', [{ productId: a, kolicina: 1, cijena: 100 }]);
-    const { id } = await b.call('nalog:createIzPonude', ponudaId, ADMIN);
+    const { id } = await b.pozovi('nalog:createIzPonude', ponudaId);
     await b.call('nalog:replaceStavke', id, [{ materijalId: dodajProizvod('M', 'materijal'), kolicina: 1 }]);
     await zavrsi(id);
     const orderId = baza.racun({
@@ -1088,7 +1091,7 @@ describe('nalog:izdajRacun', () => {
     });
     b.db.prepare("UPDATE ponude SET status = 'konvertovana', racunId = ? WHERE id = ?").run(orderId, ponudaId);
 
-    const r = await b.call('nalog:izdajRacun', { id, korisnikId: ADMIN, nacinPlacanja: 'Gotovina' });
+    const r = await b.pozovi('nalog:izdajRacun', { id, nacinPlacanja: 'Gotovina' });
     expect(r).toEqual({ success: true, racunId: orderId, brojFiskalnogRacuna: '55', odgovori: {} });
     expect(b.tring.zahtjevi).toEqual([]);
     expect(baza.red('SELECT COUNT(*) AS n FROM orders').n).toBe(1);
@@ -1099,7 +1102,7 @@ describe('nalog:izdajRacun', () => {
     const { id } = await zavrsenaNarudzba(100);
     b.tring.greskaNa('/sfr', 'Nema papira');
 
-    const r = await b.call('nalog:izdajRacun', { id, korisnikId: ADMIN, nacinPlacanja: 'Gotovina' });
+    const r = await b.pozovi('nalog:izdajRacun', { id, nacinPlacanja: 'Gotovina' });
     expect(r.success).toBe(false);
     expect(r.error).toBeTruthy();
     expect(r.racunId).toBeUndefined();
@@ -1107,19 +1110,19 @@ describe('nalog:izdajRacun', () => {
     expect(baza.red('SELECT status, racunId FROM radni_nalozi WHERE id = ?', id)).toEqual({ status: 'zavrsen', racunId: null });
 
     // nakon greške može ponovo
-    const r2 = await b.call('nalog:izdajRacun', { id, korisnikId: ADMIN, nacinPlacanja: 'Gotovina' });
+    const r2 = await b.pozovi('nalog:izdajRacun', { id, nacinPlacanja: 'Gotovina' });
     expect(r2).toMatchObject({ success: true, brojFiskalnogRacuna: '101' });
   });
 
   test('greška printera za nalog iz ponude: ponuda ostaje prihvaćena', async () => {
     const kupacId = dodajKupca();
     const ponudaId = dodajPonudu(kupacId, 'prihvacena', [{ productId: dodajProizvod('A', 'artikal'), kolicina: 1, cijena: 10 }]);
-    const { id } = await b.call('nalog:createIzPonude', ponudaId, ADMIN);
+    const { id } = await b.pozovi('nalog:createIzPonude', ponudaId);
     await b.call('nalog:replaceStavke', id, [{ materijalId: dodajProizvod('M', 'materijal'), kolicina: 1 }]);
     await zavrsi(id);
     b.tring.greskaNa('/sfr', 'Nema papira');
 
-    const r = await b.call('nalog:izdajRacun', { id, korisnikId: ADMIN, nacinPlacanja: 'Gotovina' });
+    const r = await b.pozovi('nalog:izdajRacun', { id, nacinPlacanja: 'Gotovina' });
     expect(r.success).toBe(false);
     expect(baza.red('SELECT status, racunId FROM ponude WHERE id = ?', ponudaId)).toEqual({ status: 'prihvacena', racunId: null });
     expect(status(id)).toBe('zavrsen');
@@ -1132,7 +1135,7 @@ describe('nalog:izdajRacun', () => {
     const otvoren = await narudzba(dodajKupca(), { dogovorenaCijena: 100 });
     const bezCijene = await zavrsenaNarudzba(null);
     const nula = await zavrsenaNarudzba(0);
-    const izdaj = (id: number) => b.call('nalog:izdajRacun', { id, korisnikId: ADMIN, nacinPlacanja: 'Gotovina' });
+    const izdaj = (id: number) => b.pozovi('nalog:izdajRacun', { id, nacinPlacanja: 'Gotovina' });
 
     await expect(izdaj(z)).rejects.toThrow('Račun se izdaje samo za nalog po narudžbi');
     await expect(izdaj(otvoren)).rejects.toThrow('Nalog mora biti završen prije izdavanja računa');
@@ -1162,7 +1165,7 @@ describe('nalog:izdajRacun', () => {
   test('greška printera ne ostavlja novu uslugu NAMJ; kreira se tek uz uspješan upis', async () => {
     const { id } = await zavrsenaNarudzba(100);
     b.tring.greskaNa('/sfr', 'Nema papira');
-    expect((await b.call('nalog:izdajRacun', { id, korisnikId: ADMIN, nacinPlacanja: 'Gotovina' })).success).toBe(false);
+    expect((await b.pozovi('nalog:izdajRacun', { id, nacinPlacanja: 'Gotovina' })).success).toBe(false);
     expect(baza.red("SELECT COUNT(*) AS n FROM products WHERE sifra = 'NAMJ'").n).toBe(0);
   });
 
@@ -1170,7 +1173,7 @@ describe('nalog:izdajRacun', () => {
     const { id } = await zavrsenaNarudzba(100);
     const kupacId = dodajKupca();
     const ponudaId = dodajPonudu(kupacId, 'prihvacena', [{ productId: dodajProizvod('A', 'artikal'), kolicina: 1, cijena: 10 }]);
-    const izPonude = (await b.call('nalog:createIzPonude', ponudaId, ADMIN)).id;
+    const izPonude = (await b.pozovi('nalog:createIzPonude', ponudaId)).id;
     await b.call('nalog:replaceStavke', izPonude, [{ materijalId: dodajProizvod('M', 'materijal'), kolicina: 1 }]);
     await zavrsi(izPonude);
 
@@ -1189,9 +1192,9 @@ describe('nalog:izdajRacun', () => {
 
   test('bez načina plaćanja račun ide kao Gotovina (štampa i baza se slažu)', async () => {
     const { id } = await zavrsenaNarudzba(100);
-    const r = await b.call('nalog:izdajRacun', { id, korisnikId: ADMIN, nacinPlacanja: '' });
+    const r = await b.pozovi('nalog:izdajRacun', { id, nacinPlacanja: '' });
     expect(r.success).toBe(true);
-    expect(baza.red('SELECT nacinPlacanja FROM orders WHERE id = ?', r.racunId).nacinPlacanja).toBe('Gotovina');
+    expect(baza.red('SELECT nacinPlacanja FROM orders WHERE id = ?', postoji(r.racunId)).nacinPlacanja).toBe('Gotovina');
   });
 
   test('nepoznat način plaćanja se odbija prije štampe', async () => {
@@ -1223,14 +1226,14 @@ describe('normativ:save i normativ:get', () => {
     const vj = dodajProizvod('VJ', 'materijal');
     const kt = dodajProizvod('KT', 'materijal', { jm: 'm' });
 
-    expect(await b.call('normativ:get', stol)).toEqual([]);
-    expect(await b.call('normativ:save', stol, [{ materijalId: kt, kolicina: 4 }])).toEqual({ success: true });
+    expect(await b.pozovi('normativ:get', stol)).toEqual([]);
+    expect(await b.pozovi('normativ:save', stol, [{ materijalId: kt, kolicina: 4 }])).toEqual({ success: true });
     await b.call('normativ:save', stol, [
       { materijalId: iv, kolicina: 0.123456, napomena: '600×400 ×2' },
       { materijalId: vj, kolicina: 8 },
     ]);
 
-    const n: any[] = await b.call('normativ:get', stol);
+    const n: any[] = await b.pozovi('normativ:get', stol);
     expect(n).toHaveLength(2);
     expect(n[0]).toMatchObject({
       productId: stol, materijalId: iv, kolicina: 0.1235, napomena: '600×400 ×2',
@@ -1241,7 +1244,7 @@ describe('normativ:save i normativ:get', () => {
     expect(baza.red('SELECT COUNT(*) AS n FROM normativi WHERE materijalId = ?', kt).n).toBe(0);
 
     await b.call('normativ:save', stol, []);
-    expect(await b.call('normativ:get', stol)).toEqual([]);
+    expect(await b.pozovi('normativ:get', stol)).toEqual([]);
   });
 
   test('normativ ne mijenja postojeće naloge', async () => {
@@ -1277,6 +1280,6 @@ describe('normativ:save i normativ:get', () => {
   });
 
   test('get za nepostojeći proizvod vraća prazno', async () => {
-    expect(await b.call('normativ:get', 999)).toEqual([]);
+    expect(await b.pozovi('normativ:get', 999)).toEqual([]);
   });
 });
