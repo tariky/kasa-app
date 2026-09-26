@@ -164,8 +164,6 @@ export function scenarij(backend: Backend | (() => Backend)) {
   return { upisi, red, redovi, broj, stanje, postavka, kretanje, artikal, kupac, korisnik, racun, kasaStavka };
 }
 
-export type Scenarij = ReturnType<typeof scenarij>;
-
 const dvije = (n: number) => String(n).padStart(2, '0');
 
 /** Datum kao lokalni "YYYY-MM-DD" — tako ga upisuje backend. */
@@ -225,10 +223,4 @@ export function neuspjehStampe<R extends { success: boolean }>(r: R): Exclude<R,
 export function spremljena<R extends object>(r: R): Exclude<R, { promijenjeno: true }> {
   if ('promijenjeno' in r) throw new Error('Očekivano spremanje, dobijen novi pregled: ' + JSON.stringify(r));
   return r as Exclude<R, { promijenjeno: true }>;
-}
-
-/** Potvrda ne odgovara stanju: backend je vratio novi pregled umjesto spremanja. */
-export function promijenjeno<R extends object | null>(r: R): Extract<R, { promijenjeno: true }> {
-  if (r === null || !('promijenjeno' in r)) throw new Error('Očekivan novi pregled: ' + JSON.stringify(r));
-  return r as Extract<R, { promijenjeno: true }>;
 }

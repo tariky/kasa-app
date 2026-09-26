@@ -1,7 +1,7 @@
 // Ugovor za kanale primka:*, nivelacija:* i report:getData — vidi backend.ts.
 import { test, expect, describe, beforeEach, afterEach, setSystemTime } from 'bun:test';
 import { otvoriBackend, prijavi, ADMIN_PIN, type Backend } from './backend';
-import { scenarij, danas, primka, stavkaPrimke, spremljena, promijenjeno, postoji } from './scenarij';
+import { scenarij, danas, primka, stavkaPrimke, spremljena, postoji } from './scenarij';
 import { rucPrimke, sumePrimke } from '../../lib/izvjestaji';
 
 let b: Backend;
