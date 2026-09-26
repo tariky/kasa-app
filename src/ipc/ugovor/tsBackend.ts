@@ -45,7 +45,13 @@ mock.module('electron', () => ({
     showMessageBox: async (o: Record<string, unknown>) => (zabiljezi('potvrda', o), { response: dijalog.potvrda }),
   },
   BrowserWindow: {
-    getAllWindows: () => [{ webContents: { send: (ime: string, podaci: unknown) => { dogadjaji.push({ ime, podaci: JSON.parse(JSON.stringify(podaci ?? null)) }); } } }],
+    // Prije pravog prozora: jedan zatvoren i jedan čiji send baca — događaji
+    // moraju ipak stići (src/ipc/backup.ts preskače/hvata po prozoru).
+    getAllWindows: () => [
+      { isDestroyed: () => true, webContents: { send: () => { throw new Error('Object has been destroyed'); } } },
+      { isDestroyed: () => false, webContents: { send: () => { throw new Error('Render frame was disposed'); } } },
+      { isDestroyed: () => false, webContents: { send: (ime: string, podaci: unknown) => { dogadjaji.push({ ime, podaci: JSON.parse(JSON.stringify(podaci ?? null)) }); } } },
+    ],
   },
 }));
 mock.module(path.join(__dirname, '../licenca.ts'), () => ({

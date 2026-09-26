@@ -37,7 +37,13 @@ export function registrujBackup(): void {
       }
     },
     posalji: (r2, kljuc, tijelo, napredak) => r2Posalji(r2, kljuc, tijelo, napredak),
-    javi: d => { for (const w of BrowserWindow.getAllWindows()) w.webContents.send('backup:stanje', d); },
+    // Svaki prozor zasebno: zatvoren ili pokvaren ne smije uskratiti ostale.
+    javi: d => {
+      for (const w of BrowserWindow.getAllWindows()) {
+        if (w.isDestroyed()) continue;
+        try { w.webContents.send('backup:stanje', d); } catch { /* prozor se upravo zatvara */ }
+      }
+    },
     uredjaj: uredjajId,
     sada: () => new Date(),
     endpoint: process.env.PAZAR_BACKUP_ENDPOINT,
