@@ -73,13 +73,18 @@ export interface OpcijeBackenda {
    * `null` = baza ostaje netaknuta (Admin/0000) i niko nije prijavljen.
    */
   prijava?: string | null;
+  /**
+   * Fajl baze (npr. backup iz starije verzije programa) koji backend otvori
+   * umjesto nove prazne baze — kopira se, original ostaje netaknut.
+   */
+  baza?: string;
 }
 
 export async function otvoriBackend(opcije: OpcijeBackenda = {}): Promise<Backend> {
   const vrsta = process.env.KASA_BACKEND ?? 'ts';
   let b: Backend;
-  if (vrsta === 'ts') b = await (await import('./tsBackend')).otvoriTsBackend();
-  else if (vrsta === 'rust') b = await (await import('./rustBackend')).otvoriRustBackend();
+  if (vrsta === 'ts') b = await (await import('./tsBackend')).otvoriTsBackend(opcije.baza);
+  else if (vrsta === 'rust') b = await (await import('./rustBackend')).otvoriRustBackend(opcije.baza);
   else throw new Error(`Nepoznat KASA_BACKEND: ${vrsta}`);
   if (opcije.prijava === undefined) {
     b.db.prepare('UPDATE users SET pin = ? WHERE id = 1').run(hesirajPin(ADMIN_PIN));
