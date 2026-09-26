@@ -14,14 +14,15 @@ import { DatePicker } from '@/components/ui/date-picker';
 import { ActionRow, Eyebrow, FilterSelect, Key, LedgerHead, SegmentedFilter } from '@/components/ui/ledger';
 import {
   RefreshCw, FileText, AlertTriangle, Printer, Download, Plus, Trash2, Pencil,
-  Receipt, X, Banknote, CreditCard, Building, FileCheck, Hammer,
+  Receipt, X, Hammer,
   Send, Check, Ban, Search, Paperclip,
 } from 'lucide-react';
 import { pdf } from '@react-pdf/renderer';
 import { PonudaPdf } from '@/components/PonudaPdf';
 import { filtriraj, type PoljaPretrage } from '@/lib/pretraga';
 import { formatBrojPonude, efektivniStatus, plusDana, danaIzmedju } from '@/lib/ponuda';
-import { otvoriNezavrseneRacune } from '@/lib/nezavrseniRacuni';
+import type { NacinPlacanja } from '@/lib/placanje';
+import FiskalnaNaplataDialog from '@/components/FiskalnaNaplataDialog';
 import { izracunajTotale, pdvStavke } from '@/lib/racun';
 import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { localDateStr } from '@/lib/novac';
@@ -94,15 +95,6 @@ const FILTERS: { id: Filter; label: string }[] = [
   { id: 'konvertovana', label: 'Račun izdat' },
 ];
 
-type PaymentType = 'Gotovina' | 'Kartica' | 'Virman' | 'Ček';
-
-const PAYMENTS: { type: PaymentType; icon: React.ReactNode }[] = [
-  { type: 'Gotovina', icon: <Banknote size={14} /> },
-  { type: 'Kartica', icon: <CreditCard size={14} /> },
-  { type: 'Virman', icon: <Building size={14} /> },
-  { type: 'Ček', icon: <FileCheck size={14} /> },
-];
-
 /**
  * Status kao tačka + tekst — isti jezik kao stanje zalihe na listi artikala.
  * `compact` ostavlja samo tačku (uska lista pored panela); labela ide u title.
@@ -167,9 +159,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
 
   // Konverzija — iste opcije plaćanja kao na kasi
   const [konvertujOpen, setKonvertujOpen] = useState(false);
-  const [paymentType, setPaymentType] = useState<PaymentType>('Gotovina');
-  const [converting, setConverting] = useState(false);
-  const [konvertujMsg, setKonvertujMsg] = useState<string | null>(null);
+  const [konvertujNacin, setKonvertujNacin] = useState<NacinPlacanja>('Gotovina');
 
   // Faktura po ponudi — isti dijalog kao na kasi, s popunjenom firmom i stavkama
   const [faktura, setFaktura] = useState<FakturaPocetno | null>(null);
@@ -309,8 +299,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
   /** Konverzija u račun kreće od načina plaćanja kupca ponude, pa od postavke ponuda. */
   const otvoriKonverziju = useCallback(() => {
     const kupac = selected ? kupci.find(k => k.id === selected.kupacId) : undefined;
-    setKonvertujMsg(null);
-    setPaymentType(zadanoZaKupca(kupac, postavke, 'ponuda').nacinPlacanja);
+    setKonvertujNacin(zadanoZaKupca(kupac, postavke, 'ponuda').nacinPlacanja);
     setKonvertujOpen(true);
   }, [selected, kupci, postavke]);
 
@@ -393,40 +382,14 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
     }
   };
 
-  const konvertuj = async () => {
-    if (!selected || converting) return;
-    setConverting(true);
-    setKonvertujMsg(null);
-    try {
-      // Štampa i upis idu kroz jedan poziv — kao refundAndPrint — da ne
-      // ostane odštampan račun bez zapisa u bazi.
-      const result = await window.api.konvertujPonudu({
-        id: selected.id, nacinPlacanja: paymentType,
-      });
-      // Nepoznat ishod (račun je možda odštampan) ili račun već upisan iz
-      // dijaloga nezavršenih: dijalog se zatvara da se ponuda ne pošalje ponovo.
-      if (result && !result.success && (result.ishodNepoznat || result.vecEvidentiran)) {
-        setKonvertujOpen(false);
-        setMsg({ type: 'error', text: result.error || 'Ishod štampe nije poznat.' });
-        if (result.ishodNepoznat) otvoriNezavrseneRacune();
-        await loadPonude();
-        setSelected(await window.api.getPonuda(selected.id));
-        return;
-      }
-      if (!result || !result.success) {
-        const details = result?.odgovori ? Object.entries(result.odgovori).map(([k, v]) => `${k}: ${v}`).join(', ') : '';
-        setKonvertujMsg(`Greška: ${result?.error || 'Nepoznata greška'}${details ? ` (${details})` : ''}`);
-        return;
-      }
-      setKonvertujOpen(false);
-      setMsg({ type: 'success', text: `Račun #${result.brojFiskalnogRacuna ?? ''} izdat po ponudi ${formatBrojPonude(selected, postavke.ponuda.broj)}` });
-      await loadPonude();
-      setSelected(await window.api.getPonuda(selected.id));
-    } catch (err: any) {
-      setKonvertujMsg(`Greška: ${err?.message || 'Nepoznata greška'}`);
-    } finally {
-      setConverting(false);
-    }
+  /**
+   * Poslije izdavanja (ili nepoznatog ishoda) lista i izabrana ponuda se čitaju
+   * svježe — ponuda je možda konvertovana ili čeka u nezavršenim računima.
+   */
+  const poslijeKonverzije = async (ponudaId: number, poruka: { type: 'success' | 'error'; text: string }) => {
+    setMsg(poruka);
+    await loadPonude();
+    setSelected(await window.api.getPonuda(ponudaId));
   };
 
   /** Ponuda se čita svježa — firma i stavke idu u dijalog fakture kakve su sada u bazi. */
@@ -1187,98 +1150,24 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
       />
 
       {/* ── Konvertuj u račun ── */}
-      <Dialog open={konvertujOpen} onOpenChange={setKonvertujOpen}>
-        <DialogContent
-          className="sm:max-w-[440px] p-0 gap-0 overflow-hidden"
-          onKeyDown={e => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); konvertuj(); return; }
-            const i = Number(e.key);
-            if (i >= 1 && i <= PAYMENTS.length) { e.preventDefault(); setPaymentType(PAYMENTS[i - 1].type); }
-          }}
-        >
-          <div className="px-6 pt-6 pb-4">
-            <DialogHeader>
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-violet-50 flex items-center justify-center">
-                  <Receipt className="h-5 w-5 text-violet-500" />
-                </div>
-                <div>
-                  <DialogTitle className="text-lg">
-                    Konvertuj ponudu {selected ? formatBrojPonude(selected, postavke.ponuda.broj) : ''}
-                  </DialogTitle>
-                  <DialogDescription className="text-xs mt-0.5">
-                    Izdaje fiskalni račun po cijenama sa ponude
-                  </DialogDescription>
-                </div>
-              </div>
-            </DialogHeader>
-          </div>
-          <Separator />
-
-          <div className="px-6 py-5 space-y-4">
-            <div className="flex items-start gap-3 bg-amber-50/60 border border-amber-100 rounded-xl px-4 py-3">
-              <AlertTriangle size={16} className="text-amber-500 mt-0.5 flex-shrink-0" />
-              <div>
-                <p className="text-[12px] font-semibold text-amber-700">Fiskalni račun će biti odštampan</p>
-                <p className="text-[11px] text-amber-600/70 mt-0.5">
-                  Račun se štampa na Tring fiskalnom printeru i razdužuje skladište.
-                  Cijene idu sa ponude, ne iz cjenovnika. Provjerite da je printer uključen.
-                </p>
-              </div>
-            </div>
-
-            <div className="space-y-1.5">
-              <Eyebrow className="block">Način plaćanja</Eyebrow>
-              <div className="grid grid-cols-2 gap-2">
-                {PAYMENTS.map((p, i) => (
-                  <button
-                    key={p.type}
-                    onClick={() => setPaymentType(p.type)}
-                    aria-pressed={paymentType === p.type}
-                    className={cn(
-                      'h-10 flex items-center gap-2 rounded-lg border px-3 text-[12px] font-medium transition-colors',
-                      'focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50',
-                      paymentType === p.type
-                        ? 'bg-[#0f1629] text-white border-[#0f1629]'
-                        : 'text-slate-600 border-slate-200 hover:bg-slate-50',
-                    )}
-                  >
-                    {p.icon}
-                    {p.type}
-                    <Key tone={paymentType === p.type ? 'dark' : 'light'}>{i + 1}</Key>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {selected && (
-              <div className="flex items-center justify-between rounded-xl bg-slate-50 border border-slate-100 px-4 py-3">
-                <span className="text-[12px] text-slate-500">Za naplatu</span>
-                <span className="text-[18px] font-bold font-mono tabular-nums text-slate-900">{formatKM(selected.ukupno)}</span>
-              </div>
-            )}
-
-            {konvertujMsg && (
-              <div className="flex items-center gap-2 rounded-lg bg-rose-50 border border-rose-100 px-3 py-2 text-[12px] font-medium text-rose-600">
-                <AlertTriangle size={13} />
-                {konvertujMsg}
-              </div>
-            )}
-          </div>
-
-          <div className="border-t bg-slate-50/50 px-6 py-4 flex items-center justify-between gap-3">
-            <span className="flex items-center gap-1.5 text-[10.5px] text-slate-400">
-              <Key className="ml-0">⌘↵</Key> izdaj
-            </span>
-            <div className="flex items-center gap-3">
-              <Button variant="ghost" onClick={() => setKonvertujOpen(false)}>Otkaži</Button>
-              <Button onClick={konvertuj} disabled={converting} className="min-w-[160px]">
-                {converting ? 'Štampam…' : 'Izdaj fiskalni račun'}
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {/* Štampa i upis idu kroz jedan poziv — kao refundAndPrint — da ne ostane odštampan račun bez zapisa u bazi. */}
+      {selected && (
+        <FiskalnaNaplataDialog
+          open={konvertujOpen}
+          onOpenChange={setKonvertujOpen}
+          naslov={`Konvertuj ponudu ${formatBrojPonude(selected, postavke.ponuda.broj)}`}
+          opis="Izdaje fiskalni račun po cijenama sa ponude"
+          napomena="Račun se štampa na Tring fiskalnom printeru i razdužuje skladište. Cijene idu sa ponude, ne iz cjenovnika. Provjerite da je printer uključen."
+          iznos={selected.ukupno}
+          zadaniNacin={konvertujNacin}
+          onIzdaj={nacin => window.api.konvertujPonudu({ id: selected.id, nacinPlacanja: nacin })}
+          onUspjeh={res => poslijeKonverzije(selected.id, {
+            type: 'success',
+            text: `Račun #${res.brojFiskalnogRacuna ?? ''} izdat po ponudi ${formatBrojPonude(selected, postavke.ponuda.broj)}`,
+          })}
+          onNezavrseno={poruka => poslijeKonverzije(selected.id, { type: 'error', text: poruka })}
+        />
+      )}
 
       {/* ── Obriši ponudu ── */}
       <Dialog open={nalogIzbor != null} onOpenChange={v => { if (!v) setNalogIzbor(null); }}>
