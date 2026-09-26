@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::{json, Value};
 
-use crate::greska::{self, Greska, R};
+use crate::greska::R;
 use crate::js;
 use crate::p;
 use crate::sql::Db;
@@ -1113,23 +1113,14 @@ fn s_pregledom(
     zadrzi: impl FnOnce(&Value) -> bool,
     primka_id: Option<&Value>,
 ) -> R<(Value, Option<Value>)> {
-    let mut ishod = None;
-    let r = db.tx(|| {
+    db.tx_s_odlukom(|| {
         let pocetak = pocetak_pregleda(db, primka_id)?;
         let ostaje = cijena_ostaje()?;
         let rezultat = operacija()?;
         let pregled = rezultat_pregleda(db, &pocetak, ostaje)?;
-        if zadrzi(&pregled) {
-            ishod = Some((pregled, Some(rezultat)));
-            return Ok(());
-        }
-        ishod = Some((pregled, None));
-        Err(Greska(greska::PONISTI.into()))
-    });
-    match r {
-        Err(e) if e.0 != greska::PONISTI => Err(e),
-        _ => Ok(ishod.expect("pregled je postavljen prije potvrde ili poništenja")),
-    }
+        let potvrdi = zadrzi(&pregled);
+        Ok(((pregled, potvrdi.then_some(rezultat)), potvrdi))
+    })
 }
 
 /// Spremanje/brisanje ulaza. Ekran šalje pregled koji je korisnik potvrdio;

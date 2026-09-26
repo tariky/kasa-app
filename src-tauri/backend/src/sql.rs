@@ -223,6 +223,13 @@ impl Db {
     /// `db.transaction(fn)()`: BEGIN (ili SAVEPOINT kad je već u transakciji),
     /// COMMIT na uspjeh, ROLLBACK na grešku koja ide dalje.
     pub fn tx<T>(&self, f: impl FnOnce() -> R<T>) -> R<T> {
+        self.tx_s_odlukom(|| f().map(|v| (v, true)))
+    }
+
+    /// Kao [`Db::tx`], ali `f` uz rezultat odluči da li transakcija ostaje
+    /// (`true`) ili se poništava (`false`) — pregled operacije koji ništa ne
+    /// upisuje. Rezultat se vraća i kad je transakcija poništena.
+    pub fn tx_s_odlukom<T>(&self, f: impl FnOnce() -> R<(T, bool)>) -> R<T> {
         let brojac = &self.petlja.transakcije;
         let d = brojac.load(Ordering::SeqCst);
         let ugnijezdena = d > 0 || self.u_transakciji()?;
@@ -248,9 +255,12 @@ impl Db {
         }
         let mut cuvar = Cuvar { db: self, d, ime: ime.clone(), ugnijezdena, gotovo: false };
         brojac.store(d + 1, Ordering::SeqCst);
-        let v = f()?;
-        self.exec(&if ugnijezdena { format!("RELEASE {ime}") } else { "COMMIT".into() })?;
-        cuvar.gotovo = true;
+        let (v, potvrdi) = f()?;
+        if potvrdi {
+            self.exec(&if ugnijezdena { format!("RELEASE {ime}") } else { "COMMIT".into() })?;
+            cuvar.gotovo = true;
+        }
+        // Bez potvrde čuvar pri izlasku poništi transakciju.
         Ok(v)
     }
 }
@@ -284,6 +294,35 @@ mod tests {
 
         db.tx(|| db.run("INSERT INTO saved_carts (naziv, items, ukupno) VALUES ('c', '[]', 1)", &[])).unwrap();
         assert_eq!(broj(&db), serde_json::json!(1));
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Pregled: operacija se izvrši, a `f` odluči da li ostaje — rezultat se
+    /// vraća i kad se poništi, i u ugniježdenoj transakciji.
+    #[test]
+    fn tx_s_odlukom_potvrdi_ili_ponisti() {
+        let dir = std::env::temp_dir().join(format!("kasa-sql-odluka-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = Db::aktivna(&dir.join("kasa.db"), Arc::new(Petlja::nova())).unwrap();
+        let broj = |db: &Db| db.val("SELECT COUNT(*) FROM saved_carts", &[]).unwrap();
+        let upisi = |naziv: &str| db.run("INSERT INTO saved_carts (naziv, items, ukupno) VALUES (?, '[]', 1)", &[naziv.into()]);
+
+        let id = db.tx_s_odlukom(|| Ok((upisi("a")?.last_insert_rowid, false))).unwrap();
+        assert_eq!(id, 1);
+        assert_eq!(broj(&db), serde_json::json!(0));
+        assert!(!db.u_transakciji().unwrap());
+
+        db.tx_s_odlukom(|| Ok((upisi("b")?, true))).unwrap();
+        assert_eq!(broj(&db), serde_json::json!(1));
+
+        db.tx(|| {
+            db.tx_s_odlukom(|| Ok((upisi("c")?, false)))?;
+            upisi("d")
+        })
+        .unwrap();
+        assert_eq!(db.all("SELECT naziv FROM saved_carts ORDER BY id", &[]).unwrap(), vec![serde_json::json!({ "naziv": "b" }), serde_json::json!({ "naziv": "d" })]);
+        assert_eq!(db.petlja.transakcije.load(Ordering::SeqCst), 0);
         drop(db);
         let _ = std::fs::remove_dir_all(&dir);
     }
