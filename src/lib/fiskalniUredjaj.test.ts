@@ -79,29 +79,46 @@ describe('procitajTringPostavke', () => {
 });
 
 describe('uredjajIzPostavki', () => {
-  test('postavke se čitaju pri svakom pozivu: nova adresa važi odmah', async () => {
+  test('postavke se čitaju kad se uređaj napravi: novi uređaj vidi novu adresu', async () => {
     const prvi = laziUredjaj();
     const drugi = laziUredjaj();
-    const uredjaj = uredjajIzPostavki(db);
 
     postavka('tring.port', String(prvi.port));
-    expect(await uredjaj.stampajRacun(racun)).toMatchObject({ ok: true, bf: '101' });
+    const uredjaj = uredjajIzPostavki(db);
     postavka('tring.port', String(drugi.port));
-    expect(await uredjaj.unosNovca(10)).toMatchObject({ ok: true });
+    expect(await uredjaj.stampajRacun(racun)).toMatchObject({ ok: true, bf: '101' });
+    expect(await uredjajIzPostavki(db).unosNovca(10)).toMatchObject({ ok: true });
 
     expect(prvi.zahtjevi.map(z => z.putanja)).toEqual(['/sfr']);
     expect(drugi.zahtjevi.map(z => z.putanja)).toEqual(['/unosnovca']);
+  });
+
+  test('nečitljive postavke bacaju odmah, prije ikakve komande', () => {
+    db.exec('DROP TABLE settings');
+    expect(() => uredjajIzPostavki(db)).toThrow('no such table: settings');
+  });
+
+  test('klijent se podesi prije svake komande (drugi uređaj ga je u međuvremenu prepodesio)', async () => {
+    const prvi = laziUredjaj();
+    const drugi = laziUredjaj();
+    postavka('tring.port', String(prvi.port));
+    const uredjaj = uredjajIzPostavki(db);
+    postavka('tring.port', String(drugi.port));
+    await uredjajIzPostavki(db).presjekStanja();
+    await uredjaj.dnevniIzvjestaj();
+
+    expect(prvi.zahtjevi.map(z => z.putanja)).toEqual(['/sdi']);
+    expect(drugi.zahtjevi.map(z => z.putanja)).toEqual(['/sps']);
   });
 
   test('prijava operatera šalje operatora i lozinku iz postavki (bez lozinke: "0")', async () => {
     const u = laziUredjaj();
     postavka('tring.port', String(u.port));
     postavka('tring.operatorId', '7');
-    const uredjaj = uredjajIzPostavki(db);
 
-    expect(await uredjaj.inicijalizacija()).toMatchObject({ success: true, vrstaOdgovora: 'OK' });
+    expect(await uredjajIzPostavki(db).inicijalizacija()).toMatchObject({ success: true, vrstaOdgovora: 'OK' });
     postavka('tring.operatorPassword', 'tajna');
-    await uredjaj.inicijalizacija();
+    await uredjajIzPostavki(db).inicijalizacija();
 
     const lozinke = u.zahtjevi.map(z => /<Lozinka>(.*)<\/Lozinka>/.exec(z.tijelo)?.[1]);
     expect(lozinke).toEqual(['0', 'tajna']);
@@ -126,17 +143,16 @@ describe('uredjajIzPostavki', () => {
   test('dnevnik (dev.logging) vodi klijent: zapis i ispis u konzolu samo kad je uključen', async () => {
     const u = laziUredjaj();
     postavka('tring.port', String(u.port));
-    const uredjaj = uredjajIzPostavki(db);
     const ispis: unknown[][] = [];
     const log = console.log;
     console.log = (...a: unknown[]) => { ispis.push(a); };
     try {
-      await uredjaj.stampajRacun(racun);
+      await uredjajIzPostavki(db).stampajRacun(racun);
       expect(Tring.getLogs()).toEqual([]);
       expect(ispis).toEqual([]);
 
       postavka('dev.logging', 'true');
-      await uredjaj.stampajRacun(racun);
+      await uredjajIzPostavki(db).stampajRacun(racun);
     } finally {
       console.log = log;
     }

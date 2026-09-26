@@ -7,11 +7,8 @@ import { izracunajTotale, upisiRacun } from './racun';
 import { provjeriNacinPlacanja } from './placanje';
 import { buildTringRacun } from './tringRacun';
 import { konvertujPonudu, type KonverzijaDeps, type KonverzijaResult } from './ponuda';
-import type { IshodUredjaja } from './fiskalniUredjaj';
-import {
-  baciAkoCekaNezavrsen, neuspjelaStampa, preuzmiPendingRed, snapshotKupca, vecEvidentiran, zapisiPending,
-  type SnapshotNaloga,
-} from './pendingRacun';
+import { fiskalizuj, uToku } from './fiskalizacija';
+import { baciAkoCekaNezavrsen, snapshotKupca, type SnapshotNaloga } from './pendingRacun';
 import { formatBroja, nastavakNumeracije, ZADANE_DOKUMENT_POSTAVKE, type FormatBroja } from './dokumentPostavke';
 import type {
   NalogStatus, NalogVrsta, NormativStavka, ProizvodPonude, RadniNalog, RadniNalogProizvod, RadniNalogStavka,
@@ -670,8 +667,6 @@ export function osigurajProdajnuUslugu(db: SqlDb): number {
   return Number(r.lastInsertRowid);
 }
 
-const izdavanjaUToku = new Set<number>();
-
 /**
  * Upiše fakturisanje naloga (status → fakturisan, racunId) u transakciji.
  * Račun u tom trenutku već postoji (ponuda konvertovana sa ekrana Ponude) —
@@ -729,16 +724,15 @@ export async function izdajRacunZaNalog(
   const nalog = getNalog(db, data.id);
   if (nalog.vrsta !== 'narudzba') throw new Error('Račun se izdaje samo za nalog po narudžbi');
   if (nalog.status !== 'zavrsen') throw new Error('Nalog mora biti završen prije izdavanja računa');
-  if (izdavanjaUToku.has(nalog.id)) throw new Error('Izdavanje računa za ovaj nalog je već u toku');
-  // Sve što bi upis nakon štampe odbio (FK na korisnika) provjerava se prije štampe.
-  const korisnik = data.korisnikId ? db.prepare('SELECT id FROM users WHERE id = ?').get(data.korisnikId) : undefined;
-  if (!korisnik) throw new Error('Korisnik nije prijavljen');
-  // Štampa bez oznake plaćanja ide kao Gotovina — i u bazu se tako upisuje.
-  const nacinPlacanja = provjeriNacinPlacanja(data.nacinPlacanja || 'Gotovina');
-  baciAkoCekaNezavrsen(db, 'nalogId', nalog.id, 'Račun za ovaj nalog');
 
-  izdavanjaUToku.add(nalog.id);
-  try {
+  return uToku(`nalog:${nalog.id}`, 'Izdavanje računa za ovaj nalog je već u toku', async () => {
+    // Sve što bi upis nakon štampe odbio (FK na korisnika) provjerava se prije štampe.
+    const korisnik = data.korisnikId ? db.prepare('SELECT id FROM users WHERE id = ?').get(data.korisnikId) : undefined;
+    if (!korisnik) throw new Error('Korisnik nije prijavljen');
+    // Štampa bez oznake plaćanja ide kao Gotovina — i u bazu se tako upisuje.
+    const nacinPlacanja = provjeriNacinPlacanja(data.nacinPlacanja || 'Gotovina');
+    baciAkoCekaNezavrsen(db, 'nalogId', nalog.id, 'Račun za ovaj nalog');
+
     if (nalog.ponudaId) {
       const ponuda = db.prepare('SELECT status, racunId FROM ponude WHERE id = ?').get(nalog.ponudaId) as
         { status: string; racunId: number | null } | undefined;
@@ -751,7 +745,7 @@ export async function izdajRacunZaNalog(
         return { success: true, racunId: ponuda.racunId, brojFiskalnogRacuna, odgovori: {} };
       }
 
-      return await konvertujPonudu(
+      return konvertujPonudu(
         deps, { id: nalog.ponudaId, korisnikId: data.korisnikId, nacinPlacanja }, { nalogId: nalog.id },
       );
     }
@@ -785,37 +779,13 @@ export async function izdajRacunZaNalog(
         rabat: 0, pdvStopa: 'E', productTip: 'usluga',
       }],
     };
-    const pendingId = zapisiPending(db, data.korisnikId, snapshot);
 
-    let ishod: IshodUredjaja;
-    try {
-      ishod = await uredjaj.stampajRacun(racun);
-    } catch (err) {
-      // Izuzetak iz štampe — ništa nije odštampano, počisti write-ahead red.
-      db.prepare('DELETE FROM pending_receipts WHERE id = ?').run(pendingId);
-      throw err;
-    }
-    // Siguran neuspjeh briše pending red; nepoznat ishod ga ostavlja.
-    if (!ishod.ok) return neuspjelaStampa(db, pendingId, ishod);
-    const brojFiskalnogRacuna = ishod.bf;
-
-    let racunId: number | null;
-    try {
-      racunId = transaction(() => {
-        // Red riješen iz dijaloga dok je štampa trajala → bez drugog zapisa.
-        if (!preuzmiPendingRed(db, pendingId)) return null;
-        return upisiRacunNaloga(db, snapshot, { brojFiskalnogRacuna });
-      })();
-    } catch (err: any) {
-      // Račun je već na papiru; pending red ostaje (rollback) za dijalog.
-      throw new Error(
-        `Račun ${brojFiskalnogRacuna ?? '?'} JE odštampan, ali nije zabilježen u bazi: ` +
-        `${err?.message || 'nepoznata greška'}. Riješite ga kroz nezavršene račune.`
-      );
-    }
-    if (racunId === null) return vecEvidentiran(brojFiskalnogRacuna);
-    return { success: true, racunId, brojFiskalnogRacuna, odgovori: ishod.odgovori };
-  } finally {
-    izdavanjaUToku.delete(nalog.id);
-  }
+    const r = await fiskalizuj(deps, {
+      snapshot,
+      stampaj: () => uredjaj.stampajRacun(racun),
+      upisi: bf => upisiRacunNaloga(db, snapshot, { brojFiskalnogRacuna: bf }),
+    });
+    if (!r.success) return r;
+    return { success: true, racunId: r.id, brojFiskalnogRacuna: r.brojFiskalnogRacuna, odgovori: r.odgovori };
+  });
 }

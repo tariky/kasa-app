@@ -93,7 +93,7 @@ export interface SnapshotStavka {
   cijena: number;
   rabat: number;
   pdvStopa: string;
-  /** 'usluga' ne razdužuje skladište (upisiRacun). */
+  /** Tip artikla u trenutku štampe; upisiRacun razdužuje po tipu iz baze (usluga ne razdužuje). */
   productTip?: string | null;
 }
 

@@ -1,15 +1,13 @@
 import type { SqlDb } from './sqldb';
-import type { FiskalniUredjaj, IshodUredjaja } from './fiskalniUredjaj';
+import type { FiskalniUredjaj } from './fiskalniUredjaj';
+import { fiskalizuj, uToku } from './fiskalizacija';
 import { izracunajTotale, upisiRacun } from './racun';
 import { localDateStr } from './novac';
 import { buildTringRacun } from './tringRacun';
 import { provjeriStavke } from './provjeraRacuna';
 import { provjeriNacinPlacanja } from './placanje';
 import { formatBroja, nastavakNumeracije, ZADANE_DOKUMENT_POSTAVKE, type FormatBroja } from './dokumentPostavke';
-import {
-  baciAkoCekaNezavrsen, neuspjelaStampa, preuzmiPendingRed, snapshotKupca, vecEvidentiran, zapisiPending,
-  type SnapshotPonude,
-} from './pendingRacun';
+import { baciAkoCekaNezavrsen, snapshotKupca, type SnapshotPonude } from './pendingRacun';
 
 export interface PonudaStavka {
   productId: number;
@@ -224,9 +222,6 @@ export interface KonverzijaResult {
 
 export { NACINI_PLACANJA } from './placanje';
 
-/** Ponude kojima se konverzija trenutno štampa — zaštita od dvoklika. */
-const konverzijeInFlight = new Set<number>();
-
 /**
  * Upis računa po ponudi iz write-ahead snapshota: račun + razduženje skladišta,
  * ponuda → konvertovana, a nalog iz kojeg je račun izdat → fakturisan. Isti
@@ -274,44 +269,41 @@ export async function konvertujPonudu(
   data: { id: number; korisnikId: number; nacinPlacanja: string },
   opts: { nalogId?: number } = {},
 ): Promise<KonverzijaResult> {
-  const { db, uredjaj, transaction } = deps;
+  const { db, uredjaj } = deps;
   const id = data.id;
 
-  if (konverzijeInFlight.has(id)) throw new Error('Konverzija ove ponude je već u toku');
+  return uToku(`ponuda:${id}`, 'Konverzija ove ponude je već u toku', async () => {
+    const korisnik = data.korisnikId
+      ? db.prepare('SELECT id FROM users WHERE id = ?').get(data.korisnikId)
+      : undefined;
+    if (!korisnik) throw new Error('Korisnik nije prijavljen');
 
-  const korisnik = data.korisnikId
-    ? db.prepare('SELECT id FROM users WHERE id = ?').get(data.korisnikId)
-    : undefined;
-  if (!korisnik) throw new Error('Korisnik nije prijavljen');
+    const nacinPlacanja = provjeriNacinPlacanja(data.nacinPlacanja);
 
-  const nacinPlacanja = provjeriNacinPlacanja(data.nacinPlacanja);
+    const ponuda = db.prepare('SELECT * FROM ponude WHERE id = ?').get(id) as any;
+    if (!ponuda) throw new Error('Ponuda ne postoji');
+    if (ponuda.status === 'konvertovana') throw new Error('Ponuda je već konvertovana u račun');
+    if (ponuda.status === 'odbijena') {
+      throw new Error('Odbijena ponuda se ne može pretvoriti u račun — ako kupac ipak prihvata, prvo promijenite status');
+    }
+    baciAkoCekaNezavrsen(db, 'ponudaId', ponuda.id, 'Račun po ovoj ponudi');
 
-  const ponuda = db.prepare('SELECT * FROM ponude WHERE id = ?').get(id) as any;
-  if (!ponuda) throw new Error('Ponuda ne postoji');
-  if (ponuda.status === 'konvertovana') throw new Error('Ponuda je već konvertovana u račun');
-  if (ponuda.status === 'odbijena') {
-    throw new Error('Odbijena ponuda se ne može pretvoriti u račun — ako kupac ipak prihvata, prvo promijenite status');
-  }
-  baciAkoCekaNezavrsen(db, 'ponudaId', ponuda.id, 'Račun po ovoj ponudi');
+    const stavke = db.prepare(`
+      SELECT ps.*, p.naziv AS productNaziv, p.jm AS productJm, p.sifra AS productSifra,
+             p.plu AS productPlu, p.tip AS productTip
+      FROM ponuda_stavke ps
+      LEFT JOIN products p ON p.id = ps.productId
+      WHERE ps.ponudaId = ?
+    `).all(id) as any[];
+    if (stavke.length === 0) throw new Error('Ponuda nema stavki');
+    // LEFT JOIN: artikal koji je nestao daje NULL naziv — upis stavke bi pao na
+    // stranom ključu tek nakon štampe.
+    if (stavke.some(s => s.productNaziv == null)) {
+      throw new Error('Artikal na stavci ponude više ne postoji — izmijenite ponudu prije izdavanja računa');
+    }
 
-  const stavke = db.prepare(`
-    SELECT ps.*, p.naziv AS productNaziv, p.jm AS productJm, p.sifra AS productSifra,
-           p.plu AS productPlu, p.tip AS productTip
-    FROM ponuda_stavke ps
-    LEFT JOIN products p ON p.id = ps.productId
-    WHERE ps.ponudaId = ?
-  `).all(id) as any[];
-  if (stavke.length === 0) throw new Error('Ponuda nema stavki');
-  // LEFT JOIN: artikal koji je nestao daje NULL naziv — upis stavke bi pao na
-  // stranom ključu tek nakon štampe.
-  if (stavke.some(s => s.productNaziv == null)) {
-    throw new Error('Artikal na stavci ponude više ne postoji — izmijenite ponudu prije izdavanja računa');
-  }
+    const kupac = db.prepare('SELECT * FROM kupci WHERE id = ?').get(ponuda.kupacId) as any;
 
-  const kupac = db.prepare('SELECT * FROM kupci WHERE id = ?').get(ponuda.kupacId) as any;
-
-  konverzijeInFlight.add(id);
-  try {
     const racun = buildTringRacun({
       stavke,
       ukupno: ponuda.ukupno,
@@ -332,40 +324,13 @@ export async function konvertujPonudu(
         rabat: s.rabat, pdvStopa: s.pdvStopa, productTip: s.productTip,
       })),
     };
-    const pendingId = zapisiPending(db, data.korisnikId, snapshot);
 
-    let ishod: IshodUredjaja;
-    try {
-      ishod = await uredjaj.stampajRacun(racun);
-    } catch (err) {
-      // Izuzetak iz štampe — ništa nije odštampano, počisti write-ahead red.
-      db.prepare('DELETE FROM pending_receipts WHERE id = ?').run(pendingId);
-      throw err;
-    }
-
-    // Siguran neuspjeh briše pending red; nepoznat ishod ga ostavlja.
-    if (!ishod.ok) return neuspjelaStampa(db, pendingId, ishod);
-
-    const brojFiskalnogRacuna = ishod.bf;
-
-    let racunId: number | null;
-    try {
-      racunId = transaction(() => {
-        // Red riješen iz dijaloga dok je štampa trajala → bez drugog zapisa.
-        if (!preuzmiPendingRed(db, pendingId)) return null;
-        return upisiKonverzijuPonude(db, snapshot, { brojFiskalnogRacuna });
-      })();
-    } catch (err: any) {
-      // Račun je već na papiru; pending red ostaje (rollback) za dijalog.
-      throw new Error(
-        `Račun ${brojFiskalnogRacuna ?? '?'} JE odštampan, ali nije zabilježen u bazi: ` +
-        `${err?.message || 'nepoznata greška'}. Riješite ga kroz nezavršene račune.`
-      );
-    }
-    if (racunId === null) return vecEvidentiran(brojFiskalnogRacuna);
-
-    return { success: true, racunId, brojFiskalnogRacuna, odgovori: ishod.odgovori };
-  } finally {
-    konverzijeInFlight.delete(id);
-  }
+    const r = await fiskalizuj(deps, {
+      snapshot,
+      stampaj: () => uredjaj.stampajRacun(racun),
+      upisi: bf => upisiKonverzijuPonude(db, snapshot, { brojFiskalnogRacuna: bf }),
+    });
+    if (!r.success) return r;
+    return { success: true, racunId: r.id, brojFiskalnogRacuna: r.brojFiskalnogRacuna, odgovori: r.odgovori };
+  });
 }

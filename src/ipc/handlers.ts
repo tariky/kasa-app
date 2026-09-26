@@ -19,7 +19,7 @@ import {
   izdajRacunZaNalog, upisiRacunNaloga, getNormativ, saveNormativ, osigurajProdajnuUslugu,
 } from '../lib/proizvodnja';
 import { refundAndPrint, refundOrderInTransaction } from '../lib/refund';
-import { neuspjelaStampa, preuzmiPendingRed, vecEvidentiran, type VrstaNezavrsenog } from '../lib/pendingRacun';
+import type { VrstaNezavrsenog } from '../lib/pendingRacun';
 import { postaviDatumValute } from '../lib/valuta';
 import {
   savePrilogStavkeInTransaction, finalizePrilogAndPrint, oznaciPonuduFakturisanom,
@@ -38,6 +38,7 @@ import {
 } from '../lib/ponuda';
 import { buildTringRacun } from '../lib/tringRacun';
 import { upisiRacun } from '../lib/racun';
+import { fiskalizuj } from '../lib/fiskalizacija';
 import { pripremiRacun, PDV_STOPE } from '../lib/provjeraRacuna';
 import { zapisiAudit, promjenePostavki } from '../lib/audit';
 import { addCashMovement, retryCashMovement, getTodayMovements, getDrawerState, getLastPologIznos } from '../lib/cash';
@@ -822,8 +823,11 @@ export function registerIpcHandlers(): void {
     return niv;
   });
 
-  // Fiskalni uređaj: postavke se čitaju pri svakom pozivu, dnevnik vodi services/tring.
-  const uredjaj = uredjajIzPostavki(db);
+  // Fiskalni uređaj s postavkama iz baze — pravi se na početku svakog poziva, prije
+  // write-ahead reda (nečitljive postavke tada ne ostavljaju nezavršen račun).
+  // Dnevnik zahtjeva vodi services/tring.
+  const uredjaj = () => uredjajIzPostavki(db);
+  const transakcija = <T>(fn: () => T) => db.transaction(fn);
 
   // ─── Orders ──────────────────────────────────────────────
 
@@ -914,30 +918,14 @@ export function registerIpcHandlers(): void {
       })),
     };
 
-    // 1. Write-ahead: persist the snapshot BEFORE printing (committed immediately).
-    const pending = db
-      .prepare('INSERT INTO pending_receipts (korisnikId, snapshot) VALUES (?, ?)')
-      .run(data.korisnikId, JSON.stringify(data));
-    const pendingId = pending.lastInsertRowid as number;
-
-    // 2. Print.
-    const ishod = await uredjaj.stampajRacun(buildTringRacun({ ...data, items: data.stavke }));
-
-    // 3b. Print failed → surely not printed: drop the pending row; unknown
-    // outcome (timeout, dropped connection): keep it for the pending dialog.
-    if (!ishod.ok) return neuspjelaStampa(db, pendingId, ishod);
-
-    // 3a. Print succeeded → delete pending row + create order atomically. A
-    // row already resolved from the dialog meanwhile means no second order.
-    const brojFiskalnogRacuna = ishod.bf;
-    const finalizeTx = db.transaction(() => {
-      if (!preuzmiPendingRed(db, pendingId)) return null;
-      return upisiRacun(db, { ...data, brojFiskalnogRacuna, isManual: 0 });
+    // Postavke uređaja i račun za uređaj prije write-ahead reda (lib/fiskalizacija.ts).
+    const u = uredjaj();
+    const racun = buildTringRacun({ ...data, items: data.stavke });
+    return fiskalizuj({ db, transaction: transakcija }, {
+      snapshot: data,
+      stampaj: () => u.stampajRacun(racun),
+      upisi: bf => upisiRacun(db, { ...data, brojFiskalnogRacuna: bf, isManual: 0 }),
     });
-    const orderId = finalizeTx();
-    if (orderId === null) return vecEvidentiran(brojFiskalnogRacuna);
-
-    return { success: true, id: orderId, brojFiskalnogRacuna, odgovori: ishod.odgovori };
   });
 
   // Račun po prilogu: jedna zbirna stavka na fiskalnom računu, stvarne stavke
@@ -951,7 +939,7 @@ export function registerIpcHandlers(): void {
     skicaId?: number | null;
   }) => {
     const data = { ...unos, korisnikId: korisnik().id };
-    return finalizePrilogAndPrint({ db, uredjaj, transaction: (fn) => db.transaction(fn) }, data);
+    return finalizePrilogAndPrint({ db, uredjaj: uredjaj(), transaction: transakcija }, data);
   });
 
   // Fiskalni niz: račun po prilogu mora znati broj isječka prije nego ga odštampa.
@@ -1005,15 +993,16 @@ export function registerIpcHandlers(): void {
     }
     const original = db.prepare('SELECT brojFiskalnogRacuna, ukupno FROM orders WHERE id = ?').get(data?.id) as
       { brojFiskalnogRacuna: string | null; ukupno: number } | undefined;
+    const u = uredjaj();
     const rezultat = await refundAndPrint({
       db,
-      uredjaj,
-      transaction: (fn) => db.transaction(fn),
+      uredjaj: u,
+      transaction: transakcija,
       drawerState: () => getDrawerState(db),
       // Override iz UI-ja: manjak se evidentira kao pravi polog (Tring
       // UnosNovca + cash_movements) da uređaj dozvoli gotovinski storno.
       depositCash: async (iznos, napomena) => {
-        const res = await addCashMovement({ db, uredjaj }, {
+        const res = await addCashMovement({ db, uredjaj: u }, {
           tip: 'polog', iznos, korisnikId: k.id, napomena,
         });
         if (res.tringStatus === 'error') {
@@ -1022,7 +1011,7 @@ export function registerIpcHandlers(): void {
       },
       // Pokriće koje fizički ne ulazi u ladicu — samo brojač uređaja.
       deviceCashIn: async (iznos) => {
-        const res = await uredjaj.unosNovca(iznos);
+        const res = await u.unosNovca(iznos);
         if (!res.ok) throw new Error(`Unos novca od ${iznos} KM nije prihvaćen na printeru: ${res.greska}`);
       },
     }, { ...data, korisnikId: k.id, odobrioAdminId });
@@ -1236,7 +1225,7 @@ export function registerIpcHandlers(): void {
   // testabilna nad mock fiskalnim serverom, bez Electron ovisnosti.
   handle('ponuda:konvertuj', async (unos: { id: number; nacinPlacanja: string }) => {
     const data = { ...unos, korisnikId: korisnik().id };
-    return konvertujPonudu({ db, uredjaj, transaction: (fn) => db.transaction(fn) }, data);
+    return konvertujPonudu({ db, uredjaj: uredjaj(), transaction: transakcija }, data);
   });
 
   // ─── Proizvodnja ─────────────────────────────────────────
@@ -1302,7 +1291,7 @@ export function registerIpcHandlers(): void {
 
   handle('nalog:izdajRacun', async (unos: { id: number; nacinPlacanja: string }) => {
     const data = { ...unos, korisnikId: korisnik().id };
-    return izdajRacunZaNalog({ db, uredjaj, transaction: (fn) => db.transaction(fn) }, data);
+    return izdajRacunZaNalog({ db, uredjaj: uredjaj(), transaction: transakcija }, data);
   });
 
   handle('normativ:get', (productId: number) => getNormativ(db, productId));
@@ -1521,20 +1510,20 @@ export function registerIpcHandlers(): void {
 
   // ─── Tring ──────────────────────────────────────────────
 
-  handle('tring:init', () => uredjaj.inicijalizacija());
+  handle('tring:init', () => uredjaj().inicijalizacija());
 
-  handle('tring:xReport', () => uredjaj.presjekStanja());
+  handle('tring:xReport', () => uredjaj().presjekStanja());
 
-  handle('tring:zReport', () => uredjaj.dnevniIzvjestaj());
+  handle('tring:zReport', () => uredjaj().dnevniIzvjestaj());
 
-  handle('tring:periodicReport', (from: string, to: string) => uredjaj.periodicniIzvjestaj(from, to));
+  handle('tring:periodicReport', (from: string, to: string) => uredjaj().periodicniIzvjestaj(from, to));
 
   // Službeni unos/iznos gotovine (polog). Logika i upis žive u lib/cash.ts da
   // budu testabilni bez Electrona.
   handle('cash:add', (data: { tip: 'polog' | 'povrat'; iznos: number; napomena?: string }) =>
-    addCashMovement({ db, uredjaj }, { ...data, korisnikId: korisnik().id }));
+    addCashMovement({ db, uredjaj: uredjaj() }, { ...data, korisnikId: korisnik().id }));
 
-  handle('cash:retry', (id: number) => retryCashMovement({ db, uredjaj }, id));
+  handle('cash:retry', (id: number) => retryCashMovement({ db, uredjaj: uredjaj() }, id));
 
   handle('cash:getToday', () => getTodayMovements(db));
 

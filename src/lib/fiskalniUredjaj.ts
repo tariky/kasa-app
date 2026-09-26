@@ -111,27 +111,25 @@ export function procitajTringPostavke(db: SqlDb): TringPostavke {
 }
 
 /**
- * Pravi uređaj: prije svake komande pročita postavke iz baze i podesi
- * klijent (host, port, dnevnik) — izmjena u Postavkama važi odmah.
+ * Pravi uređaj s postavkama iz baze. Postavke se čitaju odmah — handler
+ * napravi uređaj na početku svakog poziva, pa izmjena u Postavkama važi za
+ * sljedeći poziv, a nečitljive postavke bacaju prije write-ahead reda. Prije
+ * svake komande klijent se podesi (host, port, dnevnik).
  */
 export function uredjajIzPostavki(db: SqlDb): FiskalniUredjaj {
-  const pripremi = (): TringPostavke => {
-    const p = procitajTringPostavke(db);
+  const p = procitajTringPostavke(db);
+  const podesi = (): void => {
     Tring.configure({ host: p.host, port: p.port });
     Tring.setLoggingEnabled(p.logovanje);
-    return p;
   };
   return uredjajIzFunkcija({
-    stampatiFiskalniRacun: r => { pripremi(); return Tring.stampatiFiskalniRacun(r); },
-    stampatiReklamiraniRacun: r => { pripremi(); return Tring.stampatiReklamiraniRacun(r); },
-    unosNovca: iznos => { pripremi(); return Tring.unosNovca(iznos); },
-    povratNovca: iznos => { pripremi(); return Tring.povratNovca(iznos); },
-    inicijalizacija: () => {
-      const p = pripremi();
-      return Tring.inicijalizacija(p.operatorId, p.operatorPassword ?? '0');
-    },
-    stampatiPresjekStanja: () => { pripremi(); return Tring.stampatiPresjekStanja(); },
-    stampatiDnevniIzvjestaj: () => { pripremi(); return Tring.stampatiDnevniIzvjestaj(); },
-    stampatiPeriodicniIzvjestaj: (od, do_) => { pripremi(); return Tring.stampatiPeriodicniIzvjestaj(od, do_); },
+    stampatiFiskalniRacun: r => { podesi(); return Tring.stampatiFiskalniRacun(r); },
+    stampatiReklamiraniRacun: r => { podesi(); return Tring.stampatiReklamiraniRacun(r); },
+    unosNovca: iznos => { podesi(); return Tring.unosNovca(iznos); },
+    povratNovca: iznos => { podesi(); return Tring.povratNovca(iznos); },
+    inicijalizacija: () => { podesi(); return Tring.inicijalizacija(p.operatorId, p.operatorPassword ?? '0'); },
+    stampatiPresjekStanja: () => { podesi(); return Tring.stampatiPresjekStanja(); },
+    stampatiDnevniIzvjestaj: () => { podesi(); return Tring.stampatiDnevniIzvjestaj(); },
+    stampatiPeriodicniIzvjestaj: (od, do_) => { podesi(); return Tring.stampatiPeriodicniIzvjestaj(od, do_); },
   });
 }
