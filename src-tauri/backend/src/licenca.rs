@@ -189,11 +189,7 @@ const UPIT_NAJNOVIJI_DATUM: &str = "
       WHERE createdAt GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*'
   )";
 
-/// `najnovijiDatumIzBaze`: `YYYY-MM-DD` ili `None` (nedostupna baza nije greška).
-pub fn najnoviji_datum_iz_baze(db: &Db) -> Option<String> {
-    procitaj_datum(db).ok().flatten()
-}
-
+/// Najnoviji datum iz baze (`najnovijiDatumIzBaze`): `YYYY-MM-DD` ili `None`.
 fn procitaj_datum(db: &Db) -> R<Option<String>> {
     Ok(db.val(UPIT_NAJNOVIJI_DATUM, &[])?.as_str().filter(|d| js::iso_datum(d)).map(str::to_string))
 }
@@ -526,7 +522,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("kasa-licenca-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let db = Db::aktivna(&dir.join("kasa.db"), std::sync::Arc::new(crate::petlja::Petlja::nova())).unwrap();
-        assert_eq!(najnoviji_datum_iz_baze(&db), None);
+        assert_eq!(procitaj_datum(&db).unwrap(), None);
         let racun = |manual: i64, kad: &str| {
             db.run(
                 "INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, status, isManual, createdAt) VALUES (1, 1, 0, 'Gotovina', 'completed', ?, ?)",
@@ -537,14 +533,14 @@ mod tests {
         racun(0, "2026-11-02 08:00:00");
         racun(0, "2026-11-20 23:59:59");
         racun(0, "2026-11-03 10:00:00");
-        assert_eq!(najnoviji_datum_iz_baze(&db).as_deref(), Some("2026-11-20"));
+        assert_eq!(procitaj_datum(&db).unwrap().as_deref(), Some("2026-11-20"));
         db.run("INSERT INTO cash_movements (tip, iznos, korisnikId, tringStatus, createdAt) VALUES ('polog', 1, 1, 'ok', '2026-11-21 07:00:00')", &[]).unwrap();
-        assert_eq!(najnoviji_datum_iz_baze(&db).as_deref(), Some("2026-11-21"));
+        assert_eq!(procitaj_datum(&db).unwrap().as_deref(), Some("2026-11-21"));
         // Ručni račun: datum je ukucao korisnik — ne broji se.
         racun(1, "2099-01-01 00:00:00");
-        assert_eq!(najnoviji_datum_iz_baze(&db).as_deref(), Some("2026-11-21"));
+        assert_eq!(procitaj_datum(&db).unwrap().as_deref(), Some("2026-11-21"));
         db.run("INSERT INTO cash_movements (tip, iznos, korisnikId, tringStatus, createdAt) VALUES ('polog', 1, 1, 'ok', 'smeće')", &[]).unwrap();
-        assert_eq!(najnoviji_datum_iz_baze(&db).as_deref(), Some("2026-11-21"));
+        assert_eq!(procitaj_datum(&db).unwrap().as_deref(), Some("2026-11-21"));
         drop(db);
         let _ = std::fs::remove_dir_all(&dir);
     }

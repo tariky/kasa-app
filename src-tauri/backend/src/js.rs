@@ -5,7 +5,7 @@
 //! `parseInt`, `JSON.stringify`... Ovdje su te operacije na jednom mjestu, da
 //! domenski kod čita kao original.
 
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::greska::{Greska, R};
 
@@ -35,11 +35,6 @@ pub fn or<'a>(a: &'a Value, b: &'a Value) -> &'a Value {
 /// `a ?? b` — `undefined` i `null` su u JSON-u isto (`Null`).
 pub fn nn<'a>(a: &'a Value, b: &'a Value) -> &'a Value {
     if a.is_null() { b } else { a }
-}
-
-/// Broj iz vrijednosti bez konverzije tipa (`typeof v === 'number'`).
-pub fn num(v: &Value) -> Option<f64> {
-    v.as_f64()
 }
 
 /// JS `Number(v)` — NaN kad se ne da pretvoriti.
@@ -199,20 +194,6 @@ pub fn parse_int_value(v: &Value) -> Value {
     match parse_int(&to_string(v)) { Some(n) => Value::from(n), None => Value::Null }
 }
 
-/// `parseFloat(s)`; NaN kad nema broja na početku.
-pub fn parse_float(s: &str) -> f64 {
-    let t = s.trim_start();
-    let re = regex::Regex::new(r"^[+-]?(Infinity|[0-9]+\.?[0-9]*(?:[eE][+-]?[0-9]+)?|\.[0-9]+(?:[eE][+-]?[0-9]+)?)").unwrap();
-    match re.find(t) {
-        Some(m) => {
-            let x = m.as_str();
-            if x.ends_with("Infinity") { return if x.starts_with('-') { f64::NEG_INFINITY } else { f64::INFINITY }; }
-            x.parse().unwrap_or(f64::NAN)
-        }
-        None => f64::NAN,
-    }
-}
-
 /// `String(n).padStart(len, '0')`
 pub fn pad(n: i64, len: usize) -> String {
     format!("{:0>width$}", n, width = len)
@@ -256,11 +237,6 @@ fn write_json(v: &Value, out: &mut String) {
 /// `JSON.parse` — greška s porukom kao u JS-u (tekst poruke nije ugovor).
 pub fn parse(s: &str) -> Result<Value, String> {
     serde_json::from_str(s).map_err(|e| format!("JSON Parse error: {e}"))
-}
-
-/// Prazan objekat za `json!`-olike konstrukcije.
-pub fn obj() -> Map<String, Value> {
-    Map::new()
 }
 
 /// `s?.trim()` — `None` kad vrijednost nije string.
@@ -367,7 +343,6 @@ mod tests {
         assert_eq!(stringify(&json!({"a": 5.0, "b": [1.5, null, "x"]})), r#"{"a":5,"b":[1.5,null,"x"]}"#);
         assert_eq!(parse_int("8085abc"), Some(8085));
         assert_eq!(parse_int(""), None);
-        assert_eq!(parse_float(" 12.50kn"), 12.5);
         assert_eq!(to_number(&json!("")), 0.0);
         assert!(to_number(&json!("abc")).is_nan());
         assert_eq!(to_fixed(0.125, 2), "0.13");

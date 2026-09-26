@@ -33,10 +33,6 @@ pub fn next_broj_naloga(db: &Db, godina: &Value) -> R<i64> {
     Ok(max.as_i64().unwrap_or(0).max(crate::ponude::nastavak_numeracije(db, "nalog", godina)?) + 1)
 }
 
-pub fn format_broj_naloga(n: &Value) -> String {
-    format!("RN-{}/{}", js::to_string(&n["broj"]), js::to_string(&n["godina"]))
-}
-
 // ── validacija ───────────────────────────────────────────
 
 fn product_tip(db: &Db, id: &Value) -> R<Option<Value>> {

@@ -38,16 +38,6 @@ pub fn plus_dana(datum: &str, dana: i64) -> String {
     }
 }
 
-/// Broj punih dana od `od` do `do_`. Računa se preko UTC ponoći da ljetno
-/// računanje vremena ne pojede/doda sat i obori rezultat za jedan dan.
-pub fn dana_izmedju(od: &str, do_: &str) -> i64 {
-    let dan = |s: &str| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok();
-    match (dan(od), dan(do_)) {
-        (Some(a), Some(b)) => (b - a).num_days(),
-        _ => 0,
-    }
-}
-
 /// Najveći broj iz starog programa za godinu, ili 0 — par `nastavakNumeracije` u dokumentPostavke.ts.
 /// Važi samo kad su i broj (1–999999) i godina (2000–2999) ispravni cijeli brojevi.
 pub fn nastavak_numeracije(db: &Db, dok: &str, godina: &Value) -> R<i64> {
@@ -70,11 +60,6 @@ pub fn nastavak_numeracije(db: &Db, dok: &str, godina: &Value) -> R<i64> {
 pub fn next_broj_ponude(db: &Db, godina: &Value) -> R<i64> {
     let max = db.val("SELECT MAX(broj) AS maxBroj FROM ponude WHERE godina = ?", &[godina.clone()])?;
     Ok(max.as_i64().unwrap_or(0).max(nastavak_numeracije(db, "ponuda", godina)?) + 1)
-}
-
-/// Prikazni oblik broja ponude, npr. "3/2026".
-pub fn format_broj_ponude(p: &Value) -> String {
-    format!("{}/{}", js::to_string(&p["broj"]), js::to_string(&p["godina"]))
 }
 
 fn upisi_stavke(db: &Db, id: &Value, stavke: &[Value]) -> R<()> {
