@@ -1,7 +1,7 @@
 import React from 'react';
 import { Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
 import { Primka, PrimkaStavka } from '@/types';
-import { kalkulacijaStavke } from '@/lib/kalkulacija';
+import { kalkulacijaStavke, kalkulacijaPrimke } from '@/lib/kalkulacija';
 import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
 import { POTPIS_AUTORA } from '@/lib/brend';
@@ -251,15 +251,8 @@ export function UlazPdf({ primka, firma }: UlazPdfProps) {
   const stavke = primka.stavke ?? [];
   const rows = stavke.map(st => ({ st, c: calcRow(st) }));
 
-  /* ── Column totals ── */
-  const totFakVr = rows.reduce((a, r) => a + r.c.fakturnaVrijednost, 0);
-  const totZav = rows.reduce((a, r) => a + r.c.zavisni, 0);
-  const totNabVr = rows.reduce((a, r) => a + r.c.nabavnaVrijednost, 0);
-  const totIzRuc = rows.reduce((a, r) => a + r.c.rucIznos, 0);
-  const totPrVr = rows.reduce((a, r) => a + r.c.prodajnaVrijednostBezPdv, 0);
-  const totIzPdv = rows.reduce((a, r) => a + r.c.pdvIznos, 0);
-  const totMpVr = rows.reduce((a, r) => a + r.c.mpVrijednost, 0);
-  const totRabat = rows.reduce((a, r) => a + r.c.rabatIznos, 0);
+  /* ── Column totals: iste sume kao dijalog ulaza ── */
+  const k = kalkulacijaPrimke(stavke);
   // Materijal se ne prodaje — bez artikala nema RUC-a, PDV-a ni MP dijela kalkulacije.
   const imaArtikala = rows.some(r => r.c.prodajnaSaPdv > 0);
 
@@ -375,17 +368,17 @@ export function UlazPdf({ primka, firma }: UlazPdfProps) {
             <Text style={[s.tTotalCell, s.cJm]} />
             <Text style={[s.tTotalCell, s.cKol]} />
             <Text style={[s.tTotalCell, s.cFakCij]} />
-            <Text style={[s.tTotalCell, s.cFakVr]}>{fmt(totFakVr)}</Text>
+            <Text style={[s.tTotalCell, s.cFakVr]}>{fmt(k.fakturna)}</Text>
             <Text style={[s.tTotalCell, s.cRab]} />
-            <Text style={[s.tTotalCell, s.cZav]}>{totZav > 0 ? fmt(totZav) : ''}</Text>
+            <Text style={[s.tTotalCell, s.cZav]}>{k.zavisni > 0 ? fmt(k.zavisni) : ''}</Text>
             <Text style={[s.tTotalCell, s.cNabCij]} />
-            <Text style={[s.tTotalCell, s.cNabVr]}>{fmt(totNabVr)}</Text>
+            <Text style={[s.tTotalCell, s.cNabVr]}>{fmt(k.nabavna)}</Text>
             <Text style={[s.tTotalCell, s.cStRuc]} />
-            <Text style={[s.tTotalCell, s.cIzRuc]}>{imaArtikala ? fmt(totIzRuc) : ''}</Text>
-            <Text style={[s.tTotalCell, s.cPrVr]}>{imaArtikala ? fmt(totPrVr) : ''}</Text>
+            <Text style={[s.tTotalCell, s.cIzRuc]}>{imaArtikala ? fmt(k.ruc) : ''}</Text>
+            <Text style={[s.tTotalCell, s.cPrVr]}>{imaArtikala ? fmt(k.prodajnaBezPdv) : ''}</Text>
             <Text style={[s.tTotalCell, s.cStPdv]} />
-            <Text style={[s.tTotalCell, s.cIzPdv]}>{imaArtikala ? fmt(totIzPdv) : ''}</Text>
-            <Text style={[s.tTotalCell, s.cMpVr]}>{imaArtikala ? fmt(totMpVr) : ''}</Text>
+            <Text style={[s.tTotalCell, s.cIzPdv]}>{imaArtikala ? fmt(k.pdv) : ''}</Text>
+            <Text style={[s.tTotalCell, s.cMpVr]}>{imaArtikala ? fmt(k.prodajna) : ''}</Text>
             <Text style={[s.tTotalCell, s.cMpCij, { borderRight: 'none' }]} />
           </View>
         </View>
@@ -402,15 +395,15 @@ export function UlazPdf({ primka, firma }: UlazPdfProps) {
             </View>
             <View style={s.pdvDataRow}>
               <Text style={s.pdvDataCell}>PDV</Text>
-              <Text style={s.pdvDataCell}>{fmt(totPrVr)}</Text>
-              <Text style={s.pdvDataCell}>{fmt(totIzPdv)}</Text>
-              <Text style={s.pdvDataCell}>{`${PDV_STOPA_E_PCT},00   `}{fmt(totMpVr)}</Text>
+              <Text style={s.pdvDataCell}>{fmt(k.prodajnaBezPdv)}</Text>
+              <Text style={s.pdvDataCell}>{fmt(k.pdv)}</Text>
+              <Text style={s.pdvDataCell}>{`${PDV_STOPA_E_PCT},00   `}{fmt(k.prodajna)}</Text>
             </View>
             <View style={s.pdvSumRow}>
               <Text style={[s.pdvDataCell, { fontFamily: FB, fontWeight: 700 }]} />
-              <Text style={[s.pdvDataCell, { fontFamily: FB, fontWeight: 700 }]}>{fmt(totPrVr)}</Text>
-              <Text style={[s.pdvDataCell, { fontFamily: FB, fontWeight: 700 }]}>{fmt(totIzPdv)}</Text>
-              <Text style={[s.pdvDataCell, { fontFamily: FB, fontWeight: 700 }]}>          {fmt(totMpVr)}</Text>
+              <Text style={[s.pdvDataCell, { fontFamily: FB, fontWeight: 700 }]}>{fmt(k.prodajnaBezPdv)}</Text>
+              <Text style={[s.pdvDataCell, { fontFamily: FB, fontWeight: 700 }]}>{fmt(k.pdv)}</Text>
+              <Text style={[s.pdvDataCell, { fontFamily: FB, fontWeight: 700 }]}>          {fmt(k.prodajna)}</Text>
             </View>
           </View> : <View style={s.pdvTable} />}
 
@@ -418,33 +411,33 @@ export function UlazPdf({ primka, firma }: UlazPdfProps) {
           <View style={s.summaryTable}>
             <View style={s.summaryRow}>
               <Text style={s.summaryLabel}>Fak. vrijednost</Text>
-              <Text style={s.summaryValue}>{fmt(totFakVr)}</Text>
+              <Text style={s.summaryValue}>{fmt(k.fakturna)}</Text>
             </View>
             <View style={s.summaryRow}>
               <Text style={s.summaryLabel}>Rabat</Text>
-              <Text style={s.summaryValue}>{fmt(totRabat)}</Text>
+              <Text style={s.summaryValue}>{fmt(k.rabat)}</Text>
             </View>
             <View style={s.summaryRow}>
               <Text style={s.summaryLabel}>Zavisni</Text>
-              <Text style={s.summaryValue}>{fmt(totZav)}</Text>
+              <Text style={s.summaryValue}>{fmt(k.zavisni)}</Text>
             </View>
             <View style={imaArtikala ? s.summaryRow : s.summaryRowBold}>
               <Text style={[s.summaryLabel, imaArtikala ? {} : { fontFamily: FB, fontWeight: 700 }]}>Nab. vrijednost</Text>
-              <Text style={s.summaryValue}>{fmt(totNabVr)}</Text>
+              <Text style={s.summaryValue}>{fmt(k.nabavna)}</Text>
             </View>
             {imaArtikala ? (
               <>
                 <View style={s.summaryRow}>
                   <Text style={s.summaryLabel}>RUC</Text>
-                  <Text style={s.summaryValue}>{fmt(totIzRuc)}</Text>
+                  <Text style={s.summaryValue}>{fmt(k.ruc)}</Text>
                 </View>
                 <View style={s.summaryRow}>
                   <Text style={s.summaryLabel}>Iznos PDV</Text>
-                  <Text style={s.summaryValue}>{fmt(totIzPdv)}</Text>
+                  <Text style={s.summaryValue}>{fmt(k.pdv)}</Text>
                 </View>
                 <View style={s.summaryRowBold}>
                   <Text style={[s.summaryLabel, { fontFamily: FB, fontWeight: 700 }]}>Vrijed. sa PDV</Text>
-                  <Text style={s.summaryValue}>{fmt(totMpVr)}</Text>
+                  <Text style={s.summaryValue}>{fmt(k.prodajna)}</Text>
                 </View>
               </>
             ) : null}
