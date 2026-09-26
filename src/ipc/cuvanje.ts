@@ -1,5 +1,5 @@
 // Pravila dijaloga za spremanje (dialog:saveFile, db:backup, fs:writeFile) —
-// ista kao u Tauri ljusci (src-tauri/src/lib.rs, ime_za_cuvanje): renderer
+// ista kao u Rust backendu (cuvanje.rs, koji koristi i Tauri ljuska): renderer
 // predlaže samo ime fajla u folderu koji bira korisnik, i samo vrste fajlova
 // koje program zaista pravi.
 import path from 'node:path';
