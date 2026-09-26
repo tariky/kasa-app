@@ -5,22 +5,13 @@ use serde_json::{json, Value};
 
 use crate::greska::R;
 use crate::js::{self, or, round2, to_number, truthy};
-use crate::pending_racun::{baci_ako_ceka_nezavrsen, preuzmi_pending_red, vec_evidentiran_storno, zapisi_pending};
+use crate::pending_racun::{baci_ako_ceka_nezavrsen, vec_evidentiran_storno};
 use crate::prilog::{prilog_naziv, PRILOG_SIFRA};
 use crate::sql::Db;
-use crate::stampa::{self, Odstampan, UToku, Uredjaj};
+use crate::stampa::{self, Fiskalizacija, Rod, UToku, Uredjaj};
 use crate::tring::{self, Odgovor};
 use crate::zaliha::{self, Dokument, Smjer};
 use crate::{baci, cash, fiskalni, p, tring_racun, Backend};
-
-/// JS `Math.max(a, b)` / `Math.min(a, b)` — NaN se širi (Rustov `max` ga preskače).
-fn js_max(a: f64, b: f64) -> f64 {
-    if a.is_nan() || b.is_nan() { f64::NAN } else { a.max(b) }
-}
-
-fn js_min(a: f64, b: f64) -> f64 {
-    if a.is_nan() || b.is_nan() { f64::NAN } else { a.min(b) }
-}
 
 // ─── lib/refund.ts ──────────────────────────────────────────
 
@@ -70,7 +61,7 @@ fn je_nedovoljno_sredstava(r: &Odgovor) -> bool {
     let tekst = |v: &Value| if v.is_null() { String::new() } else { js::to_string(v) };
     let mut dijelovi = vec![tekst(&r["error"]), tekst(&r["vrstaOdgovora"])];
     if let Some(o) = r["odgovori"].as_object() {
-        dijelovi.extend(o.values().map(|v| js::to_string(v)));
+        dijelovi.extend(o.values().map(js::to_string));
     }
     NEDOVOLJNO_RE.with(|re| re.is_match(&dijelovi.join(" ")))
 }
@@ -80,13 +71,13 @@ fn je_nedovoljno_sredstava(r: &Odgovor) -> bool {
 /// odvojena IPC poziva iz renderera, pa je pad ili dvoklik između njih ostavljao
 /// odštampan fiskalni storno bez ikakvog traga u bazi.
 ///
-/// Write-ahead kao order:finalize (pending_racun.rs): snapshot `vrsta:
-/// 'storno'` prije unosa novca i štampe; nepoznat ishod ostavlja red (račun
-/// ostaje 'completed' dok ga dijalog nezavršenih ne riješi).
+/// Tok kao order:finalize (`stampa::fiskalizuj`): snapshot `vrsta: 'storno'`
+/// prije unosa novca i štampe; nepoznat ishod ostavlja red (račun ostaje
+/// 'completed' dok ga dijalog nezavršenih ne riješi).
 /// `odobrio_admin_id` (admin koji je odobrio storno kasira PIN-om) ide u
 /// snapshot — trag 'storno' se upisuje i kad se storno riješi iz dijaloga.
 pub fn refund_and_print(b: &Backend, data: &Value, korisnik_id: i64, odobrio_admin_id: &Value) -> R<Value> {
-    let db = b.baza()?;
+    let db = b.db();
     let id = &data["id"];
 
     let _u_toku = UToku::zauzmi(b, "storno", id, "Storniranje ovog računa je već u toku")?;
@@ -157,8 +148,8 @@ pub fn refund_and_print(b: &Backend, data: &Value, korisnik_id: i64, odobrio_adm
     // Stanje ladice je informativno — ne smije oboriti storno.
     if let Ok(stanje) = cash::drawer_state(db) {
         let stanje_ladice = to_number(&stanje["ocekivanoStanje"]);
-        manjak_uredjaj = js_max(0.0, round2(potrebno_uredjaj - stanje_ladice));
-        manjak_ladica = js_max(0.0, round2(js_min(potrebno_ladica, potrebno_uredjaj) - stanje_ladice));
+        manjak_uredjaj = js::max(0.0, round2(potrebno_uredjaj - stanje_ladice));
+        manjak_ladica = js::max(0.0, round2(js::min(potrebno_ladica, potrebno_uredjaj) - stanje_ladice));
     }
 
     let dozvoli_polog = truthy(&data["dozvoliPolog"]);
@@ -177,16 +168,21 @@ pub fn refund_and_print(b: &Backend, data: &Value, korisnik_id: i64, odobrio_adm
         }).collect::<Vec<_>>(),
     });
     let uredjaj = Uredjaj::iz_postavki(b)?;
-    let pending_id = zapisi_pending(db, &json!(korisnik_id), &snapshot)?;
 
+    // Broj reklamacije: ručno unesen, inače onaj sa uređaja.
+    let unesen_broj = data["brojReklamacije"].as_str().map(str::trim).unwrap_or("");
+    let broj_reklamacije = |bf: &Value| if !unesen_broj.is_empty() { json!(unesen_broj) } else { bf.clone() };
     let mut uneseno = 0.0;
     let mut polog_iznos = 0.0;
+    // Zadnji odgovor uređaja: iz njega se vidi da li uređaju i dalje fali novca.
+    let mut zadnji: Option<Odgovor> = None;
 
-    let pokusaj = (|| -> R<Odgovor> {
+    // Unos novca ili štampa koji ne uspiju — storno nije odštampan (fiskalizuj briše red).
+    let stampaj = || -> R<Odgovor> {
         // Nenovčani dio pokrića ide automatski — nema odluke za operatera jer
         // nikakav stvaran novac ne mijenja vlasnika (virmanski račun se ovdje
         // pokriva u cijelosti, pa storno prolazi bez ijednog dodatnog klika).
-        let samo_uredjaj = js_max(0.0, round2(manjak_uredjaj - manjak_ladica));
+        let samo_uredjaj = js::max(0.0, round2(manjak_uredjaj - manjak_ladica));
         if samo_uredjaj > 0.0 {
             cash::device_cash_in(b, samo_uredjaj)?;
             uneseno = samo_uredjaj;
@@ -219,56 +215,42 @@ pub fn refund_and_print(b: &Backend, data: &Value, korisnik_id: i64, odobrio_adm
                 result = uredjaj.reklamacija("refundAndPrint", &racun);
             }
         }
+        zadnji = Some(result.clone());
         Ok(result)
-    })();
-    let result = match pokusaj {
-        Ok(r) => r,
-        Err(e) => {
-            // Unos novca nije prihvaćen — storno nije odštampan.
-            db.run("DELETE FROM pending_receipts WHERE id = ?", p![pending_id])?;
-            return Err(e);
+    };
+
+    let r = stampa::fiskalizuj(
+        db,
+        Fiskalizacija {
+            snapshot: &snapshot,
+            stampaj: Box::new(stampaj),
+            upisi: Box::new(|bf| refund_order_in_transaction(db, id, &broj_reklamacije(bf), &Value::Null)),
+            dokument: Box::new(|bf| format!("Reklamacija #{}", stampa::prikaz_broja(&broj_reklamacije(bf)))),
+            rod: Rod::Zenski,
+            vec_evidentiran: Box::new(|bf| vec_evidentiran_storno(&broj_reklamacije(bf))),
+        },
+    )?;
+    let u = match r {
+        Ok(u) => u,
+        // Siguran neuspjeh je već obrisao red; nepoznat ishod ga ostavlja (bez
+        // ponude pologa — storno se ne smije slati ponovo dok se ne riješi).
+        Err(odgovor) if truthy(&odgovor["vecEvidentiran"]) || truthy(&odgovor["ishodNepoznat"]) => return Ok(odgovor),
+        Err(mut neuspjeh) => {
+            // Override se nudi samo ako može pomoći: kad fali stvarna gotovina, ili
+            // kad uređaj i dalje traži novac a nismo ga dopunili do punog iznosa.
+            let nedovoljno = !dozvoli_polog
+                && (manjak_ladica > 0.0 || (zadnji.as_ref().is_some_and(je_nedovoljno_sredstava) && uneseno < potrebno_uredjaj));
+            let manjak = if manjak_ladica > 0.0 { manjak_ladica } else { round2(potrebno_uredjaj - uneseno) };
+            neuspjeh["nedovoljnoSredstava"] = json!(nedovoljno);
+            neuspjeh["manjak"] = js::f(manjak);
+            return Ok(neuspjeh);
         }
     };
 
-    if !tring::uspjeh(&result) {
-        // Siguran neuspjeh briše pending red; nepoznat ishod ga ostavlja (bez
-        // ponude pologa — storno se ne smije slati ponovo dok se ne riješi).
-        let mut neuspjeh = stampa::neuspjeh(db, pending_id, &result)?;
-        if truthy(&neuspjeh["ishodNepoznat"]) {
-            return Ok(neuspjeh);
-        }
-        // Override se nudi samo ako može pomoći: kad fali stvarna gotovina, ili
-        // kad uređaj i dalje traži novac a nismo ga dopunili do punog iznosa.
-        let nedovoljno = !dozvoli_polog
-            && (manjak_ladica > 0.0 || (je_nedovoljno_sredstava(&result) && uneseno < potrebno_uredjaj));
-        let manjak = if manjak_ladica > 0.0 { manjak_ladica } else { round2(potrebno_uredjaj - uneseno) };
-        neuspjeh["nedovoljnoSredstava"] = json!(nedovoljno);
-        neuspjeh["manjak"] = js::f(manjak);
-        return Ok(neuspjeh);
-    }
-
-    let unesen_broj = data["brojReklamacije"].as_str().map(str::trim).unwrap_or("");
-    let broj_reklamacije = if !unesen_broj.is_empty() { json!(unesen_broj) } else { stampa::broj_sa_uredjaja(&result) };
-
-    let upis = db.tx(|| {
-        // Red riješen iz dijaloga dok je štampa trajala → bez drugog storna.
-        if !preuzmi_pending_red(db, pending_id)? {
-            return Ok(false);
-        }
-        refund_order_in_transaction(db, id, &broj_reklamacije, &Value::Null)?;
-        Ok(true)
-    });
-    match upis {
-        Ok(true) => {}
-        Ok(false) => return Ok(vec_evidentiran_storno(&broj_reklamacije)),
-        // Storno je već na papiru; pending red ostaje (rollback) za dijalog.
-        Err(e) => return Err(stampa::nije_zabiljezen(Odstampan::Reklamacija(&broj_reklamacije), &e)),
-    }
-
     Ok(json!({
         "success": true,
-        "brojReklamacije": broj_reklamacije,
-        "odgovori": result["odgovori"],
+        "brojReklamacije": broj_reklamacije(&u.bf),
+        "odgovori": u.odgovori,
         "pologIznos": js::f(polog_iznos),
     }))
 }

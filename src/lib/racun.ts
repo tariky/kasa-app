@@ -68,7 +68,7 @@ export interface UpisRacunaInput {
   napomena?: string | null;
 }
 
-/** Kupac kolona u `orders`: prazan tekst (i samo razmaci) je NULL — odluka 3. */
+/** Kupac kolona u `orders`: bez vrijednosti ili prazan tekst (i samo razmaci) je NULL. */
 function kolonaKupca(v: string | null | undefined): string | null {
   return v == null || (typeof v === 'string' && v.trim() === '') ? null : v;
 }

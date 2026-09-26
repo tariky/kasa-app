@@ -11,7 +11,8 @@ use crate::js::{self, round2, to_number};
 use crate::sql::Db;
 use crate::stampa::Uredjaj;
 use crate::tring::{self, Odgovor};
-use crate::{baci, p, provjera_racuna, sesija, Args, Backend};
+use crate::kanali::Kanal;
+use crate::{baci, p, provjera_racuna, sesija, Backend};
 
 // ─── lib/drawer.ts ──────────────────────────────────────────
 
@@ -20,7 +21,7 @@ use crate::{baci, p, provjera_racuna, sesija, Args, Backend};
 /// iznos ili ništa — ili JSON `{gotovina, kartica, ...}` s razbijenim iznosima.
 /// Nepoznat oblik ne nosi gotovinu (izvoz ga označi kao nepoznat).
 pub fn gotovinski_iznos(nacin_placanja: &Value, ukupno: f64) -> f64 {
-    provjera_racuna::raspodjela_placanja(&js::to_string(nacin_placanja), ukupno).map_or(0.0, |iznosi| iznosi[0])
+    provjera_racuna::raspodjela_placanja(&js::to_string(nacin_placanja), ukupno).map_or(0.0, |p| p.gotovina)
 }
 
 /// `prodaje` su računi prodani u periodu (bez obzira na kasniji storno —
@@ -90,7 +91,7 @@ fn rezultat(id: Value, tring_status: &str, result: &Odgovor) -> Value {
 /// provjera.
 pub fn add_cash_movement(b: &Backend, data: &Value) -> R<Value> {
     let uredjaj = Uredjaj::iz_postavki(b)?;
-    let db = b.baza()?;
+    let db = b.db();
     // Sve provjere prije slanja: uređaj je fizički primio/izdao novac čim
     // odgovori, pa upis nakon toga ne smije pasti na CHECK ili FOREIGN KEY.
     let tip = match data["tip"].as_str() {
@@ -118,7 +119,7 @@ pub fn add_cash_movement(b: &Backend, data: &Value) -> R<Value> {
 
 pub fn retry_cash_movement(b: &Backend, id: &Value) -> R<Value> {
     let uredjaj = Uredjaj::iz_postavki(b)?;
-    let db = b.baza()?;
+    let db = b.db();
     let Some(row) = db.get("SELECT * FROM cash_movements WHERE id = ?", p![id])? else {
         baci!("Zapis ne postoji");
     };
@@ -211,27 +212,16 @@ pub fn device_cash_in(b: &Backend, iznos: f64) -> R<()> {
     Ok(())
 }
 
-pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
-    if !matches!(kanal, "cash:add" | "cash:retry" | "cash:getToday" | "cash:lastPolog" | "cash:drawerState") {
-        return None;
-    }
-    if let Err(e) = b.otvori_db() {
-        return Some(Err(e));
-    }
-    let b: &Backend = b;
-    let db = match b.baza() {
-        Ok(db) => db,
-        Err(e) => return Some(Err(e)),
-    };
-    Some(match kanal {
-        "cash:add" => sesija::korisnik(b).and_then(|k| add_cash_movement(b, &sesija::sa_korisnikom(&a[0], k.id))),
-        "cash:retry" => retry_cash_movement(b, &a[0]),
-        "cash:getToday" => get_today_movements(db),
-        "cash:lastPolog" => get_last_polog_iznos(db),
-        "cash:drawerState" => drawer_state(db),
-        _ => return None,
-    })
-}
+pub const KANALI: &[Kanal] = &[
+    Kanal {
+        ime: "cash:add",
+        h: |b, a| sesija::korisnik(b).and_then(|k| add_cash_movement(b, &sesija::sa_korisnikom(&a[0], k.id))),
+    },
+    Kanal { ime: "cash:retry", h: |b, a| retry_cash_movement(b, &a[0]) },
+    Kanal { ime: "cash:getToday", h: |b, _| get_today_movements(b.db()) },
+    Kanal { ime: "cash:lastPolog", h: |b, _| get_last_polog_iznos(b.db()) },
+    Kanal { ime: "cash:drawerState", h: |b, _| drawer_state(b.db()) },
+];
 
 #[cfg(test)]
 mod tests {

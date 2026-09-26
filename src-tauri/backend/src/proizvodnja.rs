@@ -2,20 +2,19 @@
 
 use std::collections::{HashMap, HashSet};
 
-use regex::Regex;
 use serde_json::{json, Map, Value};
 
 use crate::greska::R;
-use crate::pending_racun::{baci_ako_ceka_nezavrsen, preuzmi_pending_red, snapshot_kupca, vec_evidentiran, zapisi_pending};
+use crate::pending_racun::{baci_ako_ceka_nezavrsen, snapshot_kupca};
 use crate::js::{self, has, round2, to_number, truthy};
 use crate::ponude;
 use crate::racun::{izracunaj_totale, upisi_racun};
 use crate::zaliha::{self, Dokument, Smjer, TOLERANCIJA_ZALIHE};
 use crate::sql::Db;
-use crate::stampa::{self, Odstampan, UToku, Uredjaj};
-use crate::tring::uspjeh;
+use crate::stampa::{self, Fiskalizacija, UToku, Uredjaj};
 use crate::tring_racun::build_tring_racun;
-use crate::{baci, p, provjera_racuna, sesija, Args, Backend};
+use crate::kanali::Kanal;
+use crate::{baci, p, provjera_racuna, sesija, Backend};
 
 /// Usluga preko koje se prodaje rad po mjeri — kreira se pri uključivanju modula.
 pub const PRODAJNA_USLUGA_SIFRA: &str = "NAMJ";
@@ -25,30 +24,12 @@ fn round4(n: f64) -> f64 {
     js::js_round(n * 10000.0) / 10000.0
 }
 
-/// `Number(datum.slice(0, 4))` kao JSON broj (NaN → null, kako ga SQLite veže).
-fn godina_iz_datuma(datum: &str) -> Value {
-    let s: String = datum.chars().take(4).collect();
-    js::f(to_number(&Value::String(s)))
-}
-
-/// `for (const s of stavke)` — sve osim niza nije iterabilno.
-fn niz<'a>(v: &'a Value, ime: &str) -> R<&'a [Value]> {
-    match v.as_array() {
-        Some(a) => Ok(a),
-        None => baci!("{ime} is not iterable"),
-    }
-}
-
 // ── numeracija ───────────────────────────────────────────
 
 /// Sljedeći redni broj naloga u godini — od 1, ili iza posljednjeg broja iz starog programa.
 pub fn next_broj_naloga(db: &Db, godina: &Value) -> R<i64> {
-    let max = db.val("SELECT MAX(broj) AS maxBroj FROM radni_nalozi WHERE godina = ?", &[godina.clone()])?;
+    let max = db.val("SELECT MAX(broj) AS maxBroj FROM radni_nalozi WHERE godina = ?", std::slice::from_ref(godina))?;
     Ok(max.as_i64().unwrap_or(0).max(crate::ponude::nastavak_numeracije(db, "nalog", godina)?) + 1)
-}
-
-pub fn format_broj_naloga(n: &Value) -> String {
-    format!("RN-{}/{}", js::to_string(&n["broj"]), js::to_string(&n["godina"]))
 }
 
 // ── validacija ───────────────────────────────────────────
@@ -130,7 +111,7 @@ fn upisi_stavke(db: &Db, nalog_id: &Value, stavke: &[Value]) -> R<()> {
 pub fn replace_stavke(db: &Db, id: &Value, stavke: &Value) -> R<()> {
     let n = ucitaj_nalog_ili_baci(db, id)?;
     baci_ako_zakljucan(&n["status"])?;
-    let stavke = niz(stavke, "stavke")?;
+    let stavke = js::iter_ili_baci(stavke, "stavke")?;
     validiraj_stavke(db, stavke)?;
     db.run("DELETE FROM radni_nalog_stavke WHERE radniNalogId = ?", p![id])?;
     upisi_stavke(db, id, stavke)
@@ -153,7 +134,7 @@ pub fn create_nalog(db: &Db, input: &Value, danas: &str) -> R<Value> {
         baci!("Korisnik nije prijavljen");
     }
     let datum = if truthy(&input["datum"]) { js::to_string(&input["datum"]) } else { danas.to_string() };
-    let godina = godina_iz_datuma(&datum);
+    let godina = js::godina_iz_datuma(&datum);
     let mut opis = trim_ili_prazno(&input["opis"], "opis")?;
     let mut kolicina = 1.0;
     let vrsta = &input["vrsta"];
@@ -348,7 +329,7 @@ pub fn set_proizvodi_naloga(db: &Db, id: &Value, proizvodi: &Value) -> R<()> {
     if !truthy(&n["ponudaId"]) {
         baci!("Proizvodi se biraju samo za nalog iz ponude");
     }
-    let proizvodi = niz(proizvodi, "proizvodi")?;
+    let proizvodi = js::iter_ili_baci(proizvodi, "proizvodi")?;
     upisi_proizvode(db, id, &n["ponudaId"], proizvodi)
 }
 
@@ -410,13 +391,13 @@ pub fn update_nalog(db: &Db, id: &Value, patch: &Value) -> R<()> {
         set("kolicina", js::f(kolicina));
     }
     if has(patch, "datum") {
-        thread_local!(static DATUM: Regex = Regex::new(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}").unwrap());
-        let Some(datum) = patch["datum"].as_str().filter(|d| DATUM.with(|r| r.is_match(d))) else {
+        // `/^\d{4}-\d{2}-\d{2}/` — datum na početku (i s vremenom iza).
+        let Some(datum) = patch["datum"].as_str().filter(|d| d.get(..10).is_some_and(js::iso_datum)) else {
             baci!("Datum naloga nije ispravan");
         };
         set("datum", json!(datum));
         // Numeracija ide po godini: prelazak u drugu godinu daje sljedeći slobodan broj te godine.
-        let godina = godina_iz_datuma(datum);
+        let godina = js::godina_iz_datuma(datum);
         let trenutna = db.val("SELECT godina FROM radni_nalozi WHERE id = ?", p![id])?;
         if trenutna.as_f64() != godina.as_f64() {
             let broj = next_broj_naloga(db, &godina)?;
@@ -576,7 +557,7 @@ pub fn save_normativ(db: &Db, product_id: &Value, stavke: &Value) -> R<()> {
     if !product_tip(db, product_id)?.is_some_and(|p| p["tip"] == "artikal") {
         baci!("Normativ se vodi samo za artikal");
     }
-    let stavke = niz(stavke, "stavke")?;
+    let stavke = js::iter_ili_baci(stavke, "stavke")?;
     validiraj_stavke(db, stavke)?;
     baci_ako_dupli_materijal(db, stavke)?;
     db.run("DELETE FROM normativi WHERE productId = ?", p![product_id])?;
@@ -857,13 +838,9 @@ pub fn osiguraj_prodajnu_uslugu(db: &Db) -> R<i64> {
 fn knjizi_fakturisanje_naloga(db: &Db, nalog_id: &Value, racun_id: &Value, broj_fiskalnog_racuna: &Value) -> R<()> {
     if let Err(e) = db.tx(|| fakturisi_nalog(db, nalog_id, racun_id)) {
         baci!(
-            "{}",
-            stampa::poruka_nakon_stampe(
-                broj_fiskalnog_racuna,
-                "nalog nije zabilježen kao fakturisan u bazi",
-                e.poruka(),
-                "Evidentirajte nalog ručno."
-            )
+            "{} JE odštampan, ali nalog nije zabilježen kao fakturisan u bazi: {}. Evidentirajte nalog ručno.",
+            stampa::racun_s_brojem(broj_fiskalnog_racuna),
+            stampa::prikaz_greske(e.poruka())
         );
     }
     Ok(())
@@ -908,7 +885,7 @@ pub fn upisi_racun_naloga(db: &Db, snap: &Value, broj_fiskalnog_racuna: &Value, 
 /// konvertovana direktno (npr. sa ekrana Ponude), nalog se samo poveže sa
 /// postojećim računom — bez ponovne štampe.
 pub fn izdaj_racun_za_nalog(b: &Backend, kanal: &str, data: &Value) -> R<Value> {
-    let db = b.baza()?;
+    let db = b.db();
     let nalog = get_nalog(db, &data["id"])?;
     if nalog["vrsta"] != "narudzba" {
         baci!("Račun se izdaje samo za nalog po narudžbi");
@@ -975,41 +952,29 @@ pub fn izdaj_racun_za_nalog(b: &Backend, kanal: &str, data: &Value) -> R<Value> 
         }],
     });
     let uredjaj = Uredjaj::iz_postavki(b)?;
-    let pending_id = zapisi_pending(db, &data["korisnikId"], &snapshot)?;
-
-    let result = uredjaj.fiskalni(kanal, &racun);
-    // Siguran neuspjeh briše pending red; nepoznat ishod ga ostavlja.
-    if !uspjeh(&result) {
-        return stampa::neuspjeh(db, pending_id, &result);
-    }
-    let broj_fiskalnog_racuna = stampa::broj_sa_uredjaja(&result);
-
-    let upis = db.tx(|| {
-        // Red riješen iz dijaloga dok je štampa trajala → bez drugog zapisa.
-        if !preuzmi_pending_red(db, pending_id)? {
-            return Ok(None);
-        }
-        upisi_racun_naloga(db, &snapshot, &broj_fiskalnog_racuna, &Value::Null, 0).map(Some)
-    });
-    match upis {
-        Ok(Some(racun_id)) => Ok(ponude::uspjesna_stampa(&json!(racun_id), &broj_fiskalnog_racuna, &result["odgovori"])),
-        Ok(None) => Ok(vec_evidentiran(&broj_fiskalnog_racuna)),
-        // Račun je već na papiru; pending red ostaje (rollback) za dijalog.
-        Err(e) => Err(stampa::nije_zabiljezen(Odstampan::Racun(&broj_fiskalnog_racuna), &e)),
-    }
+    let r = stampa::fiskalizuj(
+        db,
+        Fiskalizacija::racun(
+            &snapshot,
+            || Ok(uredjaj.fiskalni(kanal, &racun)),
+            |bf| upisi_racun_naloga(db, &snapshot, bf, &Value::Null, 0),
+        ),
+    )?;
+    Ok(match r {
+        Ok(u) => ponude::uspjesna_stampa(&json!(u.id), &u.bf, &u.odgovori),
+        Err(odgovor) => odgovor,
+    })
 }
 
 fn set_status(b: &Backend, data: &Value) -> R<Value> {
-    let db = b.db()?;
+    let db = b.db();
     let status = &data["status"];
     if status == "u_izradi" {
         set_status_naloga(db, &data["id"], "u_izradi")?;
     } else if status == "zavrsen" {
         db.tx(|| zavrsi_nalog(db, &data["id"]))?;
     } else if status == "vrati" {
-        if !sesija::korisnik(b)?.je_admin() {
-            baci!("Vraćanje naloga u izradu može samo administrator");
-        }
+        // 'vrati' smije samo admin — provjereno u sesija.rs, prije handlera.
         db.tx(|| vrati_u_izradu(db, &data["id"]))?;
     } else {
         baci!("Nepoznat status");
@@ -1017,48 +982,53 @@ fn set_status(b: &Backend, data: &Value) -> R<Value> {
     Ok(json!({ "success": true }))
 }
 
-pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
-    if let Err(e) = b.db() {
-        return Some(Err(e));
-    }
-    let b: &Backend = b;
-    let db = match b.baza() {
-        Ok(db) => db,
-        Err(e) => return Some(Err(e)),
-    };
-    let ok = |r: R<()>| r.map(|_| json!({ "success": true }));
-    Some(match kanal {
-        "nalog:getAll" => list_nalozi(db, &a[0]),
-        "nalog:get" => get_nalog(db, &a[0]),
-        "nalog:nextBroj" => {
-            let godina = b.sat.godina();
-            next_broj_naloga(db, &json!(godina)).map(|broj| json!({ "broj": broj, "godina": godina }))
-        }
-        "nalog:create" => sesija::korisnik(b).and_then(|k| {
-            let data = sesija::sa_korisnikom(&a[0], k.id);
-            let danas = b.sat.danas();
-            db.tx(|| create_nalog(db, &data, &danas))
-        }),
-        // Drugi argument je izbor proizvoda (niz); raniji pozivi su tu slali
-        // korisnikId — to se ignoriše i važi zadani izbor.
-        "nalog:createIzPonude" => sesija::korisnik(b).and_then(|k| {
-            let danas = b.sat.danas();
-            db.tx(|| create_nalog_iz_ponude(db, &a[0], &json!(k.id), &a[1], &danas))
-        }),
-        "nalog:zaPonudu" => nalog_za_ponudu(db, &a[0]),
-        "nalog:proizvodiPonude" => proizvodi_ponude(db, &a[0]).map(Value::from),
-        "nalog:setProizvodi" => ok(db.tx(|| set_proizvodi_naloga(db, &a[0], &a[1]))),
-        "nalog:update" => ok(update_nalog(db, &a[0], &a[1])),
-        "nalog:replaceStavke" => ok(db.tx(|| replace_stavke(db, &a[0], &a[1]))),
-        "nalog:setStatus" => set_status(b, &a[0]),
-        "nalog:delete" => ok(db.tx(|| delete_nalog(db, &a[0]))),
-        "nalog:kalkulacija" => kalkulacija_naloga(db, &a[0]),
-        "nalog:izdajRacun" => sesija::korisnik(b).and_then(|k| {
-            let data = sesija::sa_korisnikom(&a[0], k.id);
-            izdaj_racun_za_nalog(b, kanal, &data)
-        }),
-        "normativ:get" => get_normativ(db, &a[0]).map(Value::from),
-        "normativ:save" => ok(db.tx(|| save_normativ(db, &a[0], &a[1]))),
-        _ => return None,
-    })
+fn next_broj(b: &Backend) -> R<Value> {
+    let godina = b.sat.godina();
+    next_broj_naloga(b.db(), &json!(godina)).map(|broj| json!({ "broj": broj, "godina": godina }))
 }
+
+/// `{ success: true }` kad je radnja prošla.
+fn uspjesno(r: R<()>) -> R<Value> {
+    r.map(|_| json!({ "success": true }))
+}
+
+pub const KANALI: &[Kanal] = &[
+    Kanal { ime: "nalog:getAll", h: |b, a| list_nalozi(b.db(), &a[0]) },
+    Kanal { ime: "nalog:get", h: |b, a| get_nalog(b.db(), &a[0]) },
+    Kanal { ime: "nalog:nextBroj", h: |b, _| next_broj(b) },
+    Kanal {
+        ime: "nalog:create",
+        h: |b, a| {
+            sesija::korisnik(b).and_then(|k| {
+                let data = sesija::sa_korisnikom(&a[0], k.id);
+                let danas = b.sat.danas();
+                b.db().tx(|| create_nalog(b.db(), &data, &danas))
+            })
+        },
+    },
+    // Drugi argument je izbor proizvoda (niz); raniji pozivi su tu slali
+    // korisnikId — to se ignoriše i važi zadani izbor.
+    Kanal {
+        ime: "nalog:createIzPonude",
+        h: |b, a| {
+            sesija::korisnik(b).and_then(|k| {
+                let danas = b.sat.danas();
+                b.db().tx(|| create_nalog_iz_ponude(b.db(), &a[0], &json!(k.id), &a[1], &danas))
+            })
+        },
+    },
+    Kanal { ime: "nalog:zaPonudu", h: |b, a| nalog_za_ponudu(b.db(), &a[0]) },
+    Kanal { ime: "nalog:update", h: |b, a| uspjesno(update_nalog(b.db(), &a[0], &a[1])) },
+    Kanal { ime: "nalog:proizvodiPonude", h: |b, a| proizvodi_ponude(b.db(), &a[0]).map(Value::from) },
+    Kanal { ime: "nalog:setProizvodi", h: |b, a| uspjesno(b.db().tx(|| set_proizvodi_naloga(b.db(), &a[0], &a[1]))) },
+    Kanal { ime: "nalog:replaceStavke", h: |b, a| uspjesno(b.db().tx(|| replace_stavke(b.db(), &a[0], &a[1]))) },
+    Kanal { ime: "nalog:setStatus", h: |b, a| set_status(b, &a[0]) },
+    Kanal { ime: "nalog:delete", h: |b, a| uspjesno(b.db().tx(|| delete_nalog(b.db(), &a[0]))) },
+    Kanal { ime: "nalog:kalkulacija", h: |b, a| kalkulacija_naloga(b.db(), &a[0]) },
+    Kanal {
+        ime: "nalog:izdajRacun",
+        h: |b, a| sesija::korisnik(b).and_then(|k| izdaj_racun_za_nalog(b, "nalog:izdajRacun", &sesija::sa_korisnikom(&a[0], k.id))),
+    },
+    Kanal { ime: "normativ:get", h: |b, a| get_normativ(b.db(), &a[0]).map(Value::from) },
+    Kanal { ime: "normativ:save", h: |b, a| uspjesno(b.db().tx(|| save_normativ(b.db(), &a[0], &a[1]))) },
+];

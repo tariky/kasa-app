@@ -7,9 +7,6 @@ pub struct Greska(pub String);
 
 pub type R<T> = Result<T, Greska>;
 
-/// Interni znak za poništavanje transakcije pregleda (vidi `Db::tx`).
-pub const PONISTI: &str = "\u{0}pregled: poništi";
-
 impl Greska {
     pub fn nova(poruka: impl Into<String>) -> Self {
         Greska(poruka.into())

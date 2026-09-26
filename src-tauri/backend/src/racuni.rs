@@ -3,32 +3,20 @@
 
 use std::collections::HashSet;
 
-use regex::Regex;
 use serde_json::{json, Map, Value};
 
 use crate::greska::R;
 use crate::js::{self, truthy};
 use crate::sql::Db;
-use crate::stampa::{self, Odstampan, Uredjaj};
-use crate::tring;
-use crate::sesija::{self, Korisnik};
-use crate::pending_racun::{self, preuzmi_pending_red, vec_evidentiran};
+use crate::stampa::{self, Fiskalizacija, Uredjaj};
+use crate::sesija;
+use crate::pending_racun;
 use crate::prilog::{
     finalize_prilog_and_print, oznaci_ponudu_fakturisanom, prilog_naziv, save_prilog_stavke_in_transaction, PRILOG_SIFRA,
 };
 use crate::storno::{refund_and_print, refund_order_in_transaction};
-use crate::{audit, baci, fiskalni, korisnici, p, ponude, proizvodnja, provjera_racuna, racun, tring_racun, Args, Backend};
-
-// ─── Pomoćne ────────────────────────────────────────────────
-
-/// `{ ...base, k: v, ... }` — ključevi koji već postoje ostaju na svom mjestu.
-pub(crate) fn spoji(base: &Value, dodaci: Vec<(&str, Value)>) -> Value {
-    let mut m = base.as_object().cloned().unwrap_or_default();
-    for (k, v) in dodaci {
-        m.insert(k.to_string(), v);
-    }
-    Value::Object(m)
-}
+use crate::kanali::Kanal;
+use crate::{audit, baci, fiskalni, p, ponude, postavke, proizvodnja, provjera_racuna, racun, tring_racun, Backend};
 
 // ─── lib/valuta.ts ──────────────────────────────────────────
 
@@ -40,8 +28,7 @@ pub(crate) fn spoji(base: &Value, dodaci: Vec<(&str, Value)>) -> Value {
 /// Prihvata samo `YYYY-MM-DD` koji zaista postoji u kalendaru (ne 2026-02-30).
 pub fn validan_datum_valute(datum: &str) -> bool {
     // ISO datum bez vremena, onako kako ga vraća `DatePicker`.
-    thread_local!(static ISO_DATUM: Regex = Regex::new(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$").unwrap());
-    if !ISO_DATUM.with(|r| r.is_match(datum)) {
+    if !js::iso_datum(datum) {
         return false;
     }
     let broj = |od: usize, do_: usize| datum[od..do_].parse::<u32>().unwrap_or(0);
@@ -126,7 +113,7 @@ fn get(db: &Db, id: &Value) -> R<Value> {
 // stopa i cijena stavke smiju odstupati od današnjeg artikla — prepisuje se
 // stari isječak.
 fn create_manual(b: &Backend, unos: &Value) -> R<Value> {
-    let db = b.baza()?;
+    let db = b.db();
     let korisnik_id = sesija::korisnik(b)?.id;
     let r = provjera_racuna::pripremi_racun(db, unos, false)?;
     let broj = unos["brojFiskalnogRacuna"].as_str().map(str::trim).unwrap_or("").to_string();
@@ -162,7 +149,7 @@ fn create_manual(b: &Backend, unos: &Value) -> R<Value> {
 }
 
 fn finalize(b: &Backend, unos: &Value) -> R<Value> {
-    let db = b.baza()?;
+    let db = b.db();
     // Račun izdaje prijavljeni korisnik — korisnikId iz payload-a se ne čita.
     let korisnik_id = sesija::korisnik(b)?.id;
     // Sve provjere prije write-ahead zapisa i štampe; iznosi se računaju iz stavki.
@@ -195,61 +182,29 @@ fn finalize(b: &Backend, unos: &Value) -> R<Value> {
         .collect();
     m.insert("stavke".into(), Value::from(stavke));
     let data = Value::Object(m);
-    // Sve što može pasti prije štampe (postavke uređaja, račun za uređaj) ide
-    // prije write-ahead reda — greška ovdje ne ostavlja nezavršen račun.
+    // Postavke uređaja i račun za uređaj prije write-ahead reda (stampa::fiskalizuj).
     let uredjaj = Uredjaj::iz_postavki(b)?;
-    let racun = tring_racun::build_tring_racun(&spoji(&data, vec![("items", data["stavke"].clone())]));
-
-    // 1. Write-ahead: persist the snapshot BEFORE printing (committed immediately).
-    let pending_id = db
-        .run("INSERT INTO pending_receipts (korisnikId, snapshot) VALUES (?, ?)", p![data["korisnikId"], js::stringify(&data)])?
-        .last_insert_rowid;
-
-    // 2. Print.
-    let result = uredjaj.fiskalni("finalize", &racun);
-
-    // 3b. Print failed → surely not printed: drop the pending row; unknown
-    // outcome (timeout, dropped connection): keep it for the pending dialog.
-    if !tring::uspjeh(&result) {
-        return stampa::neuspjeh(db, pending_id, &result);
-    }
-
-    // 3a. Print succeeded → delete pending row + create order atomically. A
-    // row already resolved from the dialog meanwhile means no second order.
-    let broj_fiskalnog_racuna = stampa::broj_sa_uredjaja(&result);
-    let upis = db.tx(|| {
-        if !preuzmi_pending_red(db, pending_id)? {
-            return Ok(None);
-        }
-        racun::upisi_racun(
-            db,
-            &spoji(&data, vec![("brojFiskalnogRacuna", broj_fiskalnog_racuna.clone()), ("isManual", json!(0))]),
-        )
-        .map(Some)
-    });
-    let order_id = match upis {
-        Ok(Some(id)) => id,
-        Ok(None) => return Ok(vec_evidentiran(&broj_fiskalnog_racuna)),
-        // Račun je već na papiru; pending red ostaje (rollback) za dijalog.
-        Err(e) => return Err(stampa::nije_zabiljezen(Odstampan::Racun(&broj_fiskalnog_racuna), &e)),
-    };
-
-    Ok(json!({ "success": true, "id": order_id, "brojFiskalnogRacuna": broj_fiskalnog_racuna, "odgovori": result["odgovori"] }))
+    let racun = tring_racun::build_tring_racun(&js::spoji(&data, vec![("items", data["stavke"].clone())]));
+    let r = stampa::fiskalizuj(
+        db,
+        Fiskalizacija::racun(
+            &data,
+            || Ok(uredjaj.fiskalni("finalize", &racun)),
+            |bf| racun::upisi_racun(db, &js::spoji(&data, vec![("brojFiskalnogRacuna", bf.clone()), ("isManual", json!(0))])),
+        ),
+    )?;
+    Ok(match r {
+        Ok(u) => json!({ "success": true, "id": u.id, "brojFiskalnogRacuna": u.bf, "odgovori": u.odgovori }),
+        Err(odgovor) => odgovor,
+    })
 }
 
-/// `order:refundAndPrint`. Kasir uz uključen "PIN za reklamaciju" šalje admin
-/// PIN u istom pozivu; provjera je ovdje, prije štampe — odvojen korak
-/// provjere renderer bi mogao preskočiti.
-fn storno(b: &Backend, data: &Value) -> R<Value> {
-    let db = b.baza()?;
-    let k: Korisnik = sesija::korisnik(b)?;
-    let mut odobrio_admin_id = Value::Null;
-    if db.val("SELECT value FROM settings WHERE key = ?", p!["kasa.requirePinRefund"])? == "true" && !k.je_admin() {
-        if !truthy(&data["adminPin"]) {
-            baci!("Reklamacija traži PIN administratora");
-        }
-        odobrio_admin_id = json!(korisnici::provjeri_admin_pin(b, &data["adminPin"])?.id);
-    }
+/// `order:refundAndPrint`. Admin PIN (`kasa.requirePinRefund`) je provjeren
+/// prije handlera, u sesiji (`sesija::odobri_storno`): `odobrio_admin_id`.
+fn storno(b: &Backend, data: &Value, odobrio_admin_id: Option<i64>) -> R<Value> {
+    let db = b.db();
+    let k = sesija::korisnik(b)?;
+    let odobrio_admin_id = json!(odobrio_admin_id);
     let original = db.get("SELECT brojFiskalnogRacuna, ukupno FROM orders WHERE id = ?", p![data["id"]])?;
     let rezultat = refund_and_print(b, data, k.id, &odobrio_admin_id)?;
     if truthy(&rezultat["success"]) {
@@ -287,7 +242,7 @@ fn pending_list(db: &Db) -> R<Value> {
 }
 
 fn pending_resolve(b: &Backend, data: &Value) -> R<Value> {
-    let db = b.db()?;
+    let db = b.db();
     if js::blank(&data["brojFiskalnogRacuna"]) {
         baci!("Fiskalni broj je obavezan");
     }
@@ -349,7 +304,7 @@ fn pending_resolve(b: &Backend, data: &Value) -> R<Value> {
             };
             let order_id = racun::upisi_racun(
                 db,
-                &spoji(
+                &js::spoji(
                     &snap,
                     vec![
                         ("brojFiskalnogRacuna", broj.clone()),
@@ -389,13 +344,13 @@ fn pending_resolve(b: &Backend, data: &Value) -> R<Value> {
 
 /// Odbačene praznine iz postavki (`fiscal.dismissedGaps`), kao JSON niz.
 fn odbacene_praznine(db: &Db) -> R<Vec<Value>> {
-    let row = db.get("SELECT value FROM settings WHERE key = 'fiscal.dismissedGaps'", p![])?;
-    Ok(match row {
-        Some(r) => match js::parse(&js::to_string(&r["value"]))? {
-            Value::Array(a) => a,
-            _ => Vec::new(),
-        },
-        None => Vec::new(),
+    let v = postavke::procitaj(db, "fiscal.dismissedGaps")?;
+    if v.is_null() {
+        return Ok(Vec::new());
+    }
+    Ok(match js::parse(&js::to_string(&v))? {
+        Value::Array(a) => a,
+        _ => Vec::new(),
     })
 }
 
@@ -411,29 +366,22 @@ fn get_fiscal_gaps(db: &Db) -> R<Value> {
 }
 
 fn dismiss_fiscal_gap(b: &Backend, broj: &Value) -> R<Value> {
-    let db = b.baza()?;
+    let db = b.db();
     let mut dismissed = odbacene_praznine(db)?;
     // `includes` poredi brojeve po vrijednosti (5 i 5.0 su isti).
-    let isti = |v: &Value| match (v.as_f64(), broj.as_f64()) {
-        (Some(x), Some(y)) => x == y,
-        _ => v == broj,
-    };
-    if dismissed.iter().any(isti) {
+    if dismissed.iter().any(|v| js::jednako(v, broj)) {
         return Ok(json!({ "success": true }));
     }
     dismissed.push(broj.clone());
     db.tx(|| {
-        db.run(
-            "INSERT INTO settings (key, value) VALUES ('fiscal.dismissedGaps', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            p![js::stringify(&Value::from(dismissed))],
-        )?;
+        postavke::upisi(db, "fiscal.dismissedGaps", js::stringify(&Value::from(dismissed)))?;
         audit::zabiljezi(b, "fiskalni:odbaciPrazninu", json!({ "broj": broj }))
     })?;
     Ok(json!({ "success": true }))
 }
 
 fn pending_discard(b: &Backend, id: &Value) -> R<Value> {
-    let db = b.baza()?;
+    let db = b.db();
     db.tx(|| {
         let row = db.get("SELECT snapshot FROM pending_receipts WHERE id = ?", p![id])?;
         let r = db.run("DELETE FROM pending_receipts WHERE id = ?", p![id])?;
@@ -448,7 +396,7 @@ fn pending_discard(b: &Backend, id: &Value) -> R<Value> {
 }
 
 fn set_zadnji_broj(b: &Backend, broj: &Value) -> R<Value> {
-    let db = b.baza()?;
+    let db = b.db();
     db.tx(|| {
         let stari_broj = fiskalni::zadnji_upisani_fiskalni_broj(db)?;
         fiskalni::postavi_zadnji_fiskalni_broj(db, broj)?;
@@ -457,82 +405,64 @@ fn set_zadnji_broj(b: &Backend, broj: &Value) -> R<Value> {
     Ok(json!({ "success": true, "predvidjeni": fiskalni::predvidjeni_fiskalni_broj(db)? }))
 }
 
-const KANALI: [&str; 16] = [
-    "order:getAll", "order:get", "order:createManual", "order:finalize", "order:finalizePrilog",
-    "order:setDatumValute", "order:refundAndPrint",
-    "order:getFiscalGaps", "order:dismissFiscalGap",
-    "pending:list", "pending:resolve", "pending:discard",
-    "prilog:getStavke", "prilog:saveStavke",
-    "fiscal:getNumeracija", "fiscal:setZadnjiBroj",
-];
+/// Fiskalni niz: račun po prilogu mora znati broj isječka prije nego ga odštampa.
+fn numeracija(db: &Db) -> R<Value> {
+    Ok(json!({
+        "zadnjiUBazi": fiskalni::zadnji_fiskalni_broj(db)?,
+        "zadnjiUpisani": fiskalni::zadnji_upisani_fiskalni_broj(db)?,
+        "predvidjeni": fiskalni::predvidjeni_fiskalni_broj(db)?,
+    }))
+}
 
-pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
-    if !KANALI.contains(&kanal) {
-        return None;
-    }
-    if let Err(e) = b.otvori_db() {
-        return Some(Err(e));
-    }
-    // `&Backend` da baza i Tring klijent idu zajedno.
-    let b: &Backend = b;
-    let db = match b.baza() {
-        Ok(db) => db,
-        Err(e) => return Some(Err(e)),
-    };
-    Some(match kanal {
-        "order:getAll" => get_all(db),
-        "order:get" => get(db, &a[0]),
-        "order:createManual" => create_manual(b, &a[0]),
-        "order:finalize" => finalize(b, &a[0]),
-        // Račun po prilogu: jedna zbirna stavka na fiskalnom računu, stvarne stavke
-        // se dodjeljuju naknadno.
-        "order:finalizePrilog" => sesija::korisnik(b).and_then(|k| {
-            let data = sesija::sa_korisnikom(&a[0], k.id);
-            finalize_prilog_and_print(b, &data)
-        }),
-        // Fiskalni niz: račun po prilogu mora znati broj isječka prije nego ga odštampa.
-        "fiscal:getNumeracija" => (|| {
-            Ok(json!({
-                "zadnjiUBazi": fiskalni::zadnji_fiskalni_broj(db)?,
-                "zadnjiUpisani": fiskalni::zadnji_upisani_fiskalni_broj(db)?,
-                "predvidjeni": fiskalni::predvidjeni_fiskalni_broj(db)?,
-            }))
-        })(),
-        "fiscal:setZadnjiBroj" => set_zadnji_broj(b, &a[0]),
-        "prilog:getStavke" => db
-            .all(
-                "
+fn prilog_stavke(db: &Db, order_id: &Value) -> R<Value> {
+    db.all(
+        "
       SELECT ps.*, p.naziv AS productNaziv, p.jm AS productJm, p.sifra AS productSifra, p.tip AS productTip
       FROM prilog_stavke ps
       LEFT JOIN products p ON p.id = ps.productId
       WHERE ps.orderId = ?
       ORDER BY ps.id
     ",
-                p![a[0]],
-            )
-            .map(Value::from),
-        "prilog:saveStavke" => db
-            .tx(|| save_prilog_stavke_in_transaction(db, &a[0], &a[1]))
-            .map(|_| json!({ "success": true })),
-        "order:setDatumValute" => postavi_datum_valute(db, &a[0], &a[1]).map(|d| json!({ "datumValute": d })),
-        // Orkestracija (štampa → atomični upis) je u `refund_and_print`.
-        "order:refundAndPrint" => storno(b, &a[0]),
-        "pending:list" => pending_list(db),
-        "pending:resolve" => pending_resolve(b, &a[0]),
-        "pending:discard" => pending_discard(b, &a[0]),
-        "order:getFiscalGaps" => get_fiscal_gaps(db),
-        "order:dismissFiscalGap" => dismiss_fiscal_gap(b, &a[0]),
-        _ => return None,
-    })
+        p![order_id],
+    )
+    .map(Value::from)
 }
+
+pub const KANALI: &[Kanal] = &[
+    Kanal { ime: "order:getAll", h: |b, _| get_all(b.db()) },
+    Kanal { ime: "order:get", h: |b, a| get(b.db(), &a[0]) },
+    Kanal { ime: "order:createManual", h: |b, a| create_manual(b, &a[0]) },
+    Kanal { ime: "order:finalize", h: |b, a| finalize(b, &a[0]) },
+    // Račun po prilogu: jedna zbirna stavka na fiskalnom računu, stvarne stavke
+    // se dodjeljuju naknadno.
+    Kanal {
+        ime: "order:finalizePrilog",
+        h: |b, a| sesija::korisnik(b).and_then(|k| finalize_prilog_and_print(b, &sesija::sa_korisnikom(&a[0], k.id))),
+    },
+    Kanal { ime: "fiscal:getNumeracija", h: |b, _| numeracija(b.db()) },
+    Kanal { ime: "fiscal:setZadnjiBroj", h: |b, a| set_zadnji_broj(b, &a[0]) },
+    Kanal { ime: "prilog:getStavke", h: |b, a| prilog_stavke(b.db(), &a[0]) },
+    Kanal {
+        ime: "prilog:saveStavke",
+        h: |b, a| b.db().tx(|| save_prilog_stavke_in_transaction(b.db(), &a[0], &a[1])).map(|_| json!({ "success": true })),
+    },
+    Kanal { ime: "order:setDatumValute", h: |b, a| postavi_datum_valute(b.db(), &a[0], &a[1]).map(|d| json!({ "datumValute": d })) },
+    // Orkestracija (štampa → atomični upis) je u `refund_and_print`.
+    Kanal { ime: "order:refundAndPrint", h: |b, a| storno(b, &a[0], a.odobrio_admin_id) },
+    Kanal { ime: "pending:list", h: |b, _| pending_list(b.db()) },
+    Kanal { ime: "pending:resolve", h: |b, a| pending_resolve(b, &a[0]) },
+    Kanal { ime: "pending:discard", h: |b, a| pending_discard(b, &a[0]) },
+    Kanal { ime: "order:getFiscalGaps", h: |b, _| get_fiscal_gaps(b.db()) },
+    Kanal { ime: "order:dismissFiscalGap", h: |b, a| dismiss_fiscal_gap(b, &a[0]) },
+];
 
 #[cfg(test)]
 mod tests {
     use serde_json::{json, Value};
 
-    use crate::racun::tests::proba;
+    use crate::proba::proba;
 
-    /// Ruling 8: pending:resolve prije ikakvog upisa provjerava način plaćanja
+    /// pending:resolve prije ikakvog upisa provjerava način plaćanja
     /// iz snapshota — kanonski tekst s liste ili JSON raspodjela koju
     /// `raspodjela_placanja` prepoznaje. Inače greška, ništa upisano, red ostaje.
     #[test]
@@ -566,7 +496,7 @@ mod tests {
             (None, Some(json!(r#"{"gotovina":5,"zlato":1}"#)), r#"{"gotovina":5,"zlato":1}"#),
             (None, Some(json!(r#"{"gotovina":0}"#)), r#"{"gotovina":0}"#),
             (None, Some(json!("")), ""),
-            // Ruling 15: kao TS `String(nacin ?? '')` — null i nedostajući ključ su "".
+            // Kao TS `String(nacin ?? '')` — null i nedostajući ključ su "".
             (None, Some(Value::Null), ""),
             (None, None, ""),
             (None, Some(json!(5)), "5"),

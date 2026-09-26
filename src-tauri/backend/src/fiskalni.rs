@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use crate::greska::R;
 use crate::js;
-use crate::p;
+use crate::{p, postavke};
 use crate::sql::Db;
 
 /// Broj fiskalnog računa; `None` za reklamacije (R-...), prazno ili nenumeričko.
@@ -76,7 +76,7 @@ pub fn zadnji_fiskalni_broj(db: &Db) -> R<Option<i64>> {
 
 /// Ručno upisan posljednji broj iz postavki.
 pub fn zadnji_upisani_fiskalni_broj(db: &Db) -> R<Option<i64>> {
-    let v = db.val("SELECT value FROM settings WHERE key = ?", p![ZADNJI_FISKALNI_KEY])?;
+    let v = postavke::procitaj(db, ZADNJI_FISKALNI_KEY)?;
     if v.is_null() {
         return Ok(None);
     }
@@ -84,7 +84,7 @@ pub fn zadnji_upisani_fiskalni_broj(db: &Db) -> R<Option<i64>> {
 }
 
 fn zadnji_upis_at(db: &Db) -> R<Option<String>> {
-    let v = db.val("SELECT value FROM settings WHERE key = ?", p![ZADNJI_FISKALNI_AT_KEY])?;
+    let v = postavke::procitaj(db, ZADNJI_FISKALNI_AT_KEY)?;
     Ok(if v.is_null() { None } else { Some(js::to_string(&v)) })
 }
 
@@ -93,10 +93,9 @@ pub fn postavi_zadnji_fiskalni_broj(db: &Db, broj: &Value) -> R<i64> {
         crate::baci!("Posljednji fiskalni broj mora biti cijeli broj 0 ili veći");
     }
     let broj = broj.as_f64().unwrap() as i64;
-    let upsert = "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value";
-    db.run(upsert, p![ZADNJI_FISKALNI_KEY, broj.to_string()])?;
+    postavke::upisi(db, ZADNJI_FISKALNI_KEY, broj.to_string())?;
     let sada = db.val("SELECT datetime('now','localtime') AS sada", p![])?;
-    db.run(upsert, p![ZADNJI_FISKALNI_AT_KEY, sada])?;
+    postavke::upisi(db, ZADNJI_FISKALNI_AT_KEY, sada)?;
     Ok(broj)
 }
 

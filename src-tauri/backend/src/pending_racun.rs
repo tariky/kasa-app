@@ -73,7 +73,7 @@ pub fn snapshot_kupca(k: &Option<Value>) -> Value {
     }
 }
 
-/// Način plaćanja iz snapshota, prije upisa računa iz dijaloga (Ruling 8):
+/// Način plaćanja iz snapshota, prije upisa računa iz dijaloga:
 /// kanonski tekst s liste `NACINI_PLACANJA` ili JSON raspodjela koju
 /// `raspodjela_placanja` prepoznaje. Sve drugo ("gotovina", " Gotovina ",
 /// nepoznata vrsta) bi u `orders` upisalo način koji ladica ne zna. Poruka kao

@@ -1,20 +1,19 @@
 //! Kanali `ponuda:*` (handlers.ts) i logika iz `lib/ponuda.ts`.
 
 use chrono::{Datelike, Duration, NaiveDate};
-use regex::Regex;
 use serde_json::{json, Map, Value};
 
 use crate::greska::R;
-use crate::pending_racun::{baci_ako_ceka_nezavrsen, preuzmi_pending_red, snapshot_kupca, vec_evidentiran, zapisi_pending};
+use crate::pending_racun::{baci_ako_ceka_nezavrsen, snapshot_kupca};
 use crate::js::{self, or, truthy};
-use crate::postavke::postavka;
+use crate::postavke;
 use crate::racun::{izracunaj_totale, upisi_racun};
 use crate::sql::Db;
-use crate::stampa::{self, Odstampan, UToku, Uredjaj};
-use crate::tring::uspjeh;
+use crate::stampa::{self, Fiskalizacija, UToku, Uredjaj};
 use crate::tring_racun::build_tring_racun;
 use crate::sesija;
-use crate::{baci, p, provjera_racuna, Args, Backend};
+use crate::kanali::Kanal;
+use crate::{baci, p, provjera_racuna, Backend};
 
 /// Default rok važenja ponude (uobičajena "opcija 8 dana").
 pub const DEFAULT_ROK_DANA: i64 = 8;
@@ -25,10 +24,8 @@ pub const DEFAULT_ROK_DANA: i64 = 8;
 /// mjesecu do 31 se (kao u V8) prelije u sljedeći mjesec, a neispravan datum
 /// daje "NaN-NaN-NaN".
 pub fn plus_dana(datum: &str, dana: i64) -> String {
-    thread_local!(static ISO: Regex = Regex::new(r"^([0-9]{4})-([0-9]{2})-([0-9]{2})$").unwrap());
-    let d = ISO.with(|re| {
-        let c = re.captures(datum)?;
-        let (g, m, d): (i32, u32, i64) = (c[1].parse().ok()?, c[2].parse().ok()?, c[3].parse().ok()?);
+    let d = js::iso_datum(datum).then_some(datum).and_then(|s| {
+        let (g, m, d): (i32, u32, i64) = (s[0..4].parse().ok()?, s[5..7].parse().ok()?, s[8..10].parse().ok()?);
         if !(1..=31).contains(&d) {
             return None;
         }
@@ -37,16 +34,6 @@ pub fn plus_dana(datum: &str, dana: i64) -> String {
     match d {
         Some(d) => format!("{}-{}-{}", d.year(), js::pad(d.month() as i64, 2), js::pad(d.day() as i64, 2)),
         None => "NaN-NaN-NaN".into(),
-    }
-}
-
-/// Broj punih dana od `od` do `do_`. Računa se preko UTC ponoći da ljetno
-/// računanje vremena ne pojede/doda sat i obori rezultat za jedan dan.
-pub fn dana_izmedju(od: &str, do_: &str) -> i64 {
-    let dan = |s: &str| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok();
-    match (dan(od), dan(do_)) {
-        (Some(a), Some(b)) => (b - a).num_days(),
-        _ => 0,
     }
 }
 
@@ -60,8 +47,8 @@ pub fn nastavak_numeracije(db: &Db, dok: &str, godina: &Value) -> R<i64> {
         }
         t.parse::<i64>().ok().filter(|n| (min..=max).contains(n))
     };
-    let broj = cijeli(postavka(db, &format!("dokumenti.{dok}.nastavakBroj"))?, 1, 999_999);
-    let god = cijeli(postavka(db, &format!("dokumenti.{dok}.nastavakGodina"))?, 2000, 2999);
+    let broj = cijeli(postavke::procitaj(db, format!("dokumenti.{dok}.nastavakBroj"))?, 1, 999_999);
+    let god = cijeli(postavke::procitaj(db, format!("dokumenti.{dok}.nastavakGodina"))?, 2000, 2999);
     Ok(match (broj, god) {
         (Some(b), Some(g)) if Some(g) == godina.as_i64() => b,
         _ => 0,
@@ -70,19 +57,8 @@ pub fn nastavak_numeracije(db: &Db, dok: &str, godina: &Value) -> R<i64> {
 
 /// Sljedeći redni broj ponude u godini — od 1, ili iza posljednjeg broja iz starog programa.
 pub fn next_broj_ponude(db: &Db, godina: &Value) -> R<i64> {
-    let max = db.val("SELECT MAX(broj) AS maxBroj FROM ponude WHERE godina = ?", &[godina.clone()])?;
+    let max = db.val("SELECT MAX(broj) AS maxBroj FROM ponude WHERE godina = ?", std::slice::from_ref(godina))?;
     Ok(max.as_i64().unwrap_or(0).max(nastavak_numeracije(db, "ponuda", godina)?) + 1)
-}
-
-/// Prikazni oblik broja ponude, npr. "3/2026".
-pub fn format_broj_ponude(p: &Value) -> String {
-    format!("{}/{}", js::to_string(&p["broj"]), js::to_string(&p["godina"]))
-}
-
-/// `Number(datum.slice(0, 4))` kao JSON broj (NaN → null, kako ga SQLite veže).
-fn godina_iz_datuma(datum: &str) -> Value {
-    let s: String = datum.chars().take(4).collect();
-    js::f(js::to_number(&Value::String(s)))
 }
 
 fn upisi_stavke(db: &Db, id: &Value, stavke: &[Value]) -> R<()> {
@@ -118,7 +94,7 @@ pub fn create_ponuda(db: &Db, data: &Value, danas: &str) -> R<Value> {
     let stavke = &provjerene_stavke(db, &data["stavke"])?;
 
     let datum = if truthy(&data["datum"]) { js::to_string(&data["datum"]) } else { danas.to_string() };
-    let godina = godina_iz_datuma(&datum);
+    let godina = js::godina_iz_datuma(&datum);
     let broj = next_broj_ponude(db, &godina)?;
     let vazi_do = if truthy(&data["vaziDo"]) { js::to_string(&data["vaziDo"]) } else { plus_dana(&datum, DEFAULT_ROK_DANA) };
     let (ukupno, pdv_iznos) = izracunaj_totale(stavke);
@@ -299,14 +275,14 @@ pub fn upisi_konverziju_ponude(db: &Db, snap: &Value, broj_fiskalnog_racuna: &Va
 ///
 /// Sve što bi upis u bazu moglo oboriti (korisnik, način plaćanja, artikli)
 /// provjerava se PRIJE štampe — odštampan fiskalni račun se ne može povući.
-/// Write-ahead kao order:finalize (pending_racun.rs): snapshot `vrsta:
-/// 'ponuda'` prije štampe; nepoznat ishod ga ostavlja za dijalog nezavršenih.
+/// Tok kao order:finalize (`stampa::fiskalizuj`): snapshot `vrsta: 'ponuda'`
+/// prije štampe; nepoznat ishod ga ostavlja za dijalog nezavršenih.
 ///
 /// `kanal` je samo oznaka za dnevnik štampe (ponuda:konvertuj / nalog:izdajRacun).
 /// `nalog_id` (samo iz `izdaj_racun_za_nalog`, ne iz IPC payload-a): nalog iz
 /// kojeg se račun izdaje — fakturiše se u istoj transakciji.
 pub fn konvertuj_ponudu(b: &Backend, kanal: &str, data: &Value, nalog_id: Option<&Value>) -> R<Value> {
-    let db = b.baza()?;
+    let db = b.db();
     let id = &data["id"];
 
     let _u_toku = UToku::zauzmi(b, "ponuda", id, "Konverzija ove ponude je već u toku")?;
@@ -374,32 +350,18 @@ pub fn konvertuj_ponudu(b: &Backend, kanal: &str, data: &Value, nalog_id: Option
         snapshot["nalogId"] = n.clone();
     }
     let uredjaj = Uredjaj::iz_postavki(b)?;
-    let pending_id = zapisi_pending(db, &data["korisnikId"], &snapshot)?;
-
-    // Štampa u Rustu ne baca — greška veze stiže kao neuspješan odgovor.
-    let result = uredjaj.fiskalni(kanal, &racun);
-
-    // Siguran neuspjeh briše pending red; nepoznat ishod ga ostavlja.
-    if !uspjeh(&result) {
-        return stampa::neuspjeh(db, pending_id, &result);
-    }
-
-    let broj_fiskalnog_racuna = stampa::broj_sa_uredjaja(&result);
-
-    let upis = db.tx(|| {
-        // Red riješen iz dijaloga dok je štampa trajala → bez drugog zapisa.
-        if !preuzmi_pending_red(db, pending_id)? {
-            return Ok(None);
-        }
-        upisi_konverziju_ponude(db, &snapshot, &broj_fiskalnog_racuna, &Value::Null, 0).map(Some)
-    });
-
-    match upis {
-        Ok(Some(racun_id)) => Ok(uspjesna_stampa(&json!(racun_id), &broj_fiskalnog_racuna, &result["odgovori"])),
-        Ok(None) => Ok(vec_evidentiran(&broj_fiskalnog_racuna)),
-        // Račun je već na papiru; pending red ostaje (rollback) za dijalog.
-        Err(e) => Err(stampa::nije_zabiljezen(Odstampan::Racun(&broj_fiskalnog_racuna), &e)),
-    }
+    let r = stampa::fiskalizuj(
+        db,
+        Fiskalizacija::racun(
+            &snapshot,
+            || Ok(uredjaj.fiskalni(kanal, &racun)),
+            |bf| upisi_konverziju_ponude(db, &snapshot, bf, &Value::Null, 0),
+        ),
+    )?;
+    Ok(match r {
+        Ok(u) => uspjesna_stampa(&json!(u.id), &u.bf, &u.odgovori),
+        Err(odgovor) => odgovor,
+    })
 }
 
 fn get_all(db: &Db) -> R<Value> {
@@ -455,32 +417,26 @@ fn create(db: &Db, data: &Value, danas: &str) -> R<Value> {
     db.tx(|| create_ponuda(db, data, danas))
 }
 
-pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
-    if let Err(e) = b.db() {
-        return Some(Err(e));
-    }
-    let b: &Backend = b;
-    let db = match b.baza() {
-        Ok(db) => db,
-        Err(e) => return Some(Err(e)),
-    };
-    Some(match kanal {
-        "ponuda:getAll" => get_all(db),
-        "ponuda:get" => get(db, &a[0]),
-        "ponuda:nextBroj" => {
-            let godina = b.sat.godina();
-            next_broj_ponude(db, &json!(godina)).map(|broj| json!({ "broj": broj, "godina": godina }))
-        }
-        "ponuda:create" => sesija::korisnik(b).and_then(|k| create(db, &sesija::sa_korisnikom(&a[0], k.id), &b.sat.danas())),
-        "ponuda:update" => db.tx(|| update_ponuda(db, &a[0], &a[1])).map(|_| json!({ "success": true })),
-        "ponuda:setStatus" => set_status_ponude(db, &a[0], &a[1]).map(|_| json!({ "success": true })),
-        "ponuda:delete" => db.tx(|| delete_ponuda(db, &a[0])),
-        // Orkestracija (štampa → atomični upis) je u `konvertuj_ponudu`, isto
-        // kao što je u TS-u živjela u lib/ponuda.ts.
-        "ponuda:konvertuj" => sesija::korisnik(b).and_then(|k| {
-            let data = sesija::sa_korisnikom(&a[0], k.id);
-            konvertuj_ponudu(b, kanal, &data, None)
-        }),
-        _ => return None,
-    })
+fn next_broj(b: &Backend) -> R<Value> {
+    let godina = b.sat.godina();
+    next_broj_ponude(b.db(), &json!(godina)).map(|broj| json!({ "broj": broj, "godina": godina }))
 }
+
+pub const KANALI: &[Kanal] = &[
+    Kanal { ime: "ponuda:getAll", h: |b, _| get_all(b.db()) },
+    Kanal { ime: "ponuda:get", h: |b, a| get(b.db(), &a[0]) },
+    Kanal { ime: "ponuda:nextBroj", h: |b, _| next_broj(b) },
+    Kanal {
+        ime: "ponuda:create",
+        h: |b, a| sesija::korisnik(b).and_then(|k| create(b.db(), &sesija::sa_korisnikom(&a[0], k.id), &b.sat.danas())),
+    },
+    Kanal { ime: "ponuda:update", h: |b, a| b.db().tx(|| update_ponuda(b.db(), &a[0], &a[1])).map(|_| json!({ "success": true })) },
+    Kanal { ime: "ponuda:setStatus", h: |b, a| set_status_ponude(b.db(), &a[0], &a[1]).map(|_| json!({ "success": true })) },
+    Kanal { ime: "ponuda:delete", h: |b, a| b.db().tx(|| delete_ponuda(b.db(), &a[0])) },
+    // Orkestracija (štampa → atomični upis) je u `konvertuj_ponudu`, isto
+    // kao što je u TS-u živjela u lib/ponuda.ts.
+    Kanal {
+        ime: "ponuda:konvertuj",
+        h: |b, a| sesija::korisnik(b).and_then(|k| konvertuj_ponudu(b, "ponuda:konvertuj", &sesija::sa_korisnikom(&a[0], k.id), None)),
+    },
+];

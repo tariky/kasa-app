@@ -5,13 +5,13 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::{json, Value};
 
-use crate::greska::{self, Greska, R};
+use crate::greska::R;
 use crate::js;
 use crate::p;
 use crate::sql::Db;
-use crate::katalog::razlicito;
 use crate::zaliha::{self, Dokument, Smjer, TOLERANCIJA_ZALIHE};
-use crate::{audit, baci, Args, Backend};
+use crate::kanali::Kanal;
+use crate::{audit, baci, Backend};
 
 /// Tolerancija pri poređenju cijena (fening).
 const EPS: f64 = 0.001;
@@ -39,11 +39,6 @@ fn ili_null(v: Option<&Value>) -> Value {
 /// `String(obj.k)` — nepostojeće polje je "undefined".
 fn tekst(v: Option<&Value>) -> String {
     v.map(js::to_string).unwrap_or_else(|| "undefined".into())
-}
-
-/// Niz iz vrijednosti (`data.stavke`); nije niz → prazan.
-fn niz(v: &Value) -> &[Value] {
-    v.as_array().map(|a| a.as_slice()).unwrap_or(&[])
 }
 
 /// Promjena prodajne cijene artikla (`PriceChange`).
@@ -347,7 +342,7 @@ fn audit_cijena_primke(db: &Db, korisnik: Option<i64>, prije: &Cijene, izvor: &s
     let sada = cijene_artikala(db, &ids)?;
     for (product_id, stara_cijena) in &prije.red {
         let nova = sada.red.iter().find(|(id, _)| kljuc(id) == kljuc(product_id)).map(|(_, c)| c);
-        if let Some(nova_cijena) = nova.filter(|n| razlicito(n, stara_cijena)) {
+        if let Some(nova_cijena) = nova.filter(|n| !js::jednako(n, stara_cijena)) {
             audit::zapisi(
                 db,
                 korisnik,
@@ -784,9 +779,8 @@ fn cijene_koje_ostaju(db: &Db, primka_id: &Value, nove_stavke: &[Value]) -> R<Ve
 /// ponoć — deterministično (izmjena primke ne pomjera vrijeme) i unutar dana
 /// pri poređenju stringova (`BETWEEN 'D 00:00:00' AND 'D 23:59:59'`, `LIKE 'D%'`).
 fn datum_kretanja_primke(datum: &Value) -> Value {
-    thread_local!(static DATUM: regex::Regex = regex::Regex::new(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$").unwrap());
     let s = js::to_string(datum);
-    if DATUM.with(|r| r.is_match(&s)) { Value::String(format!("{s} 00:00:00")) } else { datum.clone() }
+    if js::iso_datum(&s) { Value::String(format!("{s} 00:00:00")) } else { datum.clone() }
 }
 
 /// Zajednička validacija za primka:create i primka:update. Baca grešku sa
@@ -809,7 +803,7 @@ fn validiraj_primku(db: &Db, data: &Value, primka_id: &Value) -> R<String> {
     // Stavka: artikal koji ide na zalihu (ne usluga ni slobodna stavka s kase),
     // količina konačan broj > 0, prodajna i nabavna konačne i ≥ 0.
     let konacan = |k: &str, s: &Value| polje(s, k).and_then(Value::as_f64).filter(|x| x.is_finite());
-    for s in niz(stavke) {
+    for s in js::niz_ili_prazno(stavke) {
         let Some(a) = db.get("SELECT naziv, tip, slobodan FROM products WHERE id = ?", p![ili_null(polje(s, "productId"))])? else {
             baci!("Artikal (ID {}) ne postoji", tekst(polje(s, "productId")));
         };
@@ -955,7 +949,7 @@ fn zaglavlje(data: &Value) -> [Value; 5] {
 // logika, pa najava na ekranu ne može odstupiti od onoga što spremanje uradi.
 fn unesi_primku(db: &Db, dan: &Dan, data: &Value) -> R<Value> {
     let broj_primke = validiraj_primku(db, data, &Value::Null)?;
-    let cijene_prije = cijene_artikala(db, &niz(&data["stavke"]).iter().map(|s| ili_null(polje(s, "productId"))).collect::<Vec<_>>())?;
+    let cijene_prije = cijene_artikala(db, &js::niz_ili_prazno(&data["stavke"]).iter().map(|s| ili_null(polje(s, "productId"))).collect::<Vec<_>>())?;
     let danas = Value::from(dan.danas.clone());
     let datum = js::or(&data["datum"], &danas).clone();
     let [dn, di, da, na, bf] = zaglavlje(data);
@@ -964,7 +958,7 @@ fn unesi_primku(db: &Db, dan: &Dan, data: &Value) -> R<Value> {
         p![broj_primke, datum, dn, di, da, na, bf],
     )?;
     let primka_id = Value::from(result.last_insert_rowid);
-    let stavke = niz(&data["stavke"]);
+    let stavke = js::niz_ili_prazno(&data["stavke"]);
 
     // Collect price diffs BEFORE inserting stock (so stock reflects pre-delivery state)
     let (nivelacija, bez_zaliha) = collect_price_changes(db, stavke)?;
@@ -993,7 +987,7 @@ fn izmijeni_primku(db: &Db, dan: &Dan, data: &Value) -> R<Value> {
     let broj_primke = validiraj_primku(db, data, &id)?;
     let danas = Value::from(dan.danas.clone());
     let datum = js::or(&data["datum"], &danas).clone();
-    let stavke = niz(&data["stavke"]);
+    let stavke = js::niz_ili_prazno(&data["stavke"]);
 
     let [dn, di, da, na, bf] = zaglavlje(data);
     db.run(
@@ -1119,23 +1113,14 @@ fn s_pregledom(
     zadrzi: impl FnOnce(&Value) -> bool,
     primka_id: Option<&Value>,
 ) -> R<(Value, Option<Value>)> {
-    let mut ishod = None;
-    let r = db.tx(|| {
+    db.tx_s_odlukom(|| {
         let pocetak = pocetak_pregleda(db, primka_id)?;
         let ostaje = cijena_ostaje()?;
         let rezultat = operacija()?;
         let pregled = rezultat_pregleda(db, &pocetak, ostaje)?;
-        if zadrzi(&pregled) {
-            ishod = Some((pregled, Some(rezultat)));
-            return Ok(());
-        }
-        ishod = Some((pregled, None));
-        Err(Greska(greska::PONISTI.into()))
-    });
-    match r {
-        Err(e) if e.0 != greska::PONISTI => Err(e),
-        _ => Ok(ishod.expect("pregled je postavljen prije potvrde ili poništenja")),
-    }
+        let potvrdi = zadrzi(&pregled);
+        Ok(((pregled, potvrdi.then_some(rezultat)), potvrdi))
+    })
 }
 
 /// Spremanje/brisanje ulaza. Ekran šalje pregled koji je korisnik potvrdio;
@@ -1166,7 +1151,7 @@ fn bez_cijena_koje_ostaju() -> R<Vec<Value>> {
 
 /// `cijeneKojeOstaju(db, data.id, data.stavke ?? [])`
 fn ostaju_pri_izmjeni(db: &Db, data: &Value) -> R<Vec<Value>> {
-    cijene_koje_ostaju(db, &ili_null(polje(data, "id")), niz(&data["stavke"]))
+    cijene_koje_ostaju(db, &ili_null(polje(data, "id")), js::niz_ili_prazno(&data["stavke"]))
 }
 
 /// Pregled promjena cijena prije spremanja/brisanja — ista operacija, uvijek
@@ -1259,36 +1244,52 @@ fn report_get_data(db: &Db, tip: &Value, from: &Value, to: &Value) -> R<Value> {
     baci!("Nepoznat tip izvještaja: {}", js::to_string(tip))
 }
 
-pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
-    let dan = Dan { danas: b.sat.danas(), godina: b.sat.godina(), korisnik: b.sesija.id() };
-    let db = match b.db() {
-        Ok(db) => db,
-        Err(e) => return Some(Err(e)),
-    };
-    let dan = &dan;
-    Some(match kanal {
-        "primka:getAll" => db.all("SELECT * FROM primke ORDER BY datum DESC", p![]).map(Value::from),
-        "primka:get" => get(db, &a[0]),
-        "primka:nextBroj" => next_broj(db, dan),
-        "primka:create" => spremi_potvrdjeno(db, || unesi_primku(db, dan, &a[0]), bez_cijena_koje_ostaju, &a[1], None),
-        "primka:update" => {
-            let id = ili_null(polje(&a[0], "id"));
-            spremi_potvrdjeno(db, || izmijeni_primku(db, dan, &a[0]), || ostaju_pri_izmjeni(db, &a[0]), &a[1], Some(&id))
-        }
-        // Uspjeh bez povratne vrijednosti (kao i prije); samo odbijanje nosi pregled.
-        "primka:delete" => spremi_potvrdjeno(db, || obrisi_primku(db, dan, &a[0]), bez_cijena_koje_ostaju, &a[1], Some(&a[0])),
-        "primka:pregledUnosa" => bez_upisa(db, || unesi_primku(db, dan, &a[0]), bez_cijena_koje_ostaju, None),
-        "primka:pregledIzmjene" => {
-            let id = ili_null(polje(&a[0], "id"));
-            bez_upisa(db, || izmijeni_primku(db, dan, &a[0]), || ostaju_pri_izmjeni(db, &a[0]), Some(&id))
-        }
-        "primka:pregledBrisanja" => bez_upisa(db, || obrisi_primku(db, dan, &a[0]), bez_cijena_koje_ostaju, Some(&a[0])),
-        "nivelacija:getAll" => nivelacija_get_all(db, &a[0], &a[1]),
-        "nivelacija:get" => nivelacija_get(db, &a[0]),
-        "report:getData" => report_get_data(db, &a[0], &a[1], &a[2]),
-        _ => return None,
-    })
+/// "Danas" i prijavljeni korisnik ovog poziva.
+fn dan(b: &Backend) -> Dan {
+    Dan { danas: b.sat.danas(), godina: b.sat.godina(), korisnik: b.sesija.id() }
 }
+
+/// `data.id ?? null` primke koja se mijenja.
+fn id_primke(data: &Value) -> Value {
+    ili_null(polje(data, "id"))
+}
+
+pub const KANALI: &[Kanal] = &[
+    Kanal { ime: "primka:getAll", h: |b, _| b.db().all("SELECT * FROM primke ORDER BY datum DESC", p![]).map(Value::from) },
+    Kanal { ime: "primka:get", h: |b, a| get(b.db(), &a[0]) },
+    Kanal { ime: "primka:nextBroj", h: |b, _| next_broj(b.db(), &dan(b)) },
+    Kanal {
+        ime: "primka:create",
+        h: |b, a| spremi_potvrdjeno(b.db(), || unesi_primku(b.db(), &dan(b), &a[0]), bez_cijena_koje_ostaju, &a[1], None),
+    },
+    Kanal {
+        ime: "primka:update",
+        h: |b, a| {
+            let (db, id) = (b.db(), id_primke(&a[0]));
+            spremi_potvrdjeno(db, || izmijeni_primku(db, &dan(b), &a[0]), || ostaju_pri_izmjeni(db, &a[0]), &a[1], Some(&id))
+        },
+    },
+    // Uspjeh bez povratne vrijednosti (kao i prije); samo odbijanje nosi pregled.
+    Kanal {
+        ime: "primka:delete",
+        h: |b, a| spremi_potvrdjeno(b.db(), || obrisi_primku(b.db(), &dan(b), &a[0]), bez_cijena_koje_ostaju, &a[1], Some(&a[0])),
+    },
+    Kanal { ime: "primka:pregledUnosa", h: |b, a| bez_upisa(b.db(), || unesi_primku(b.db(), &dan(b), &a[0]), bez_cijena_koje_ostaju, None) },
+    Kanal {
+        ime: "primka:pregledIzmjene",
+        h: |b, a| {
+            let (db, id) = (b.db(), id_primke(&a[0]));
+            bez_upisa(db, || izmijeni_primku(db, &dan(b), &a[0]), || ostaju_pri_izmjeni(db, &a[0]), Some(&id))
+        },
+    },
+    Kanal {
+        ime: "primka:pregledBrisanja",
+        h: |b, a| bez_upisa(b.db(), || obrisi_primku(b.db(), &dan(b), &a[0]), bez_cijena_koje_ostaju, Some(&a[0])),
+    },
+    Kanal { ime: "nivelacija:getAll", h: |b, a| nivelacija_get_all(b.db(), &a[0], &a[1]) },
+    Kanal { ime: "nivelacija:get", h: |b, a| nivelacija_get(b.db(), &a[0]) },
+    Kanal { ime: "report:getData", h: |b, a| report_get_data(b.db(), &a[0], &a[1], &a[2]) },
+];
 
 #[cfg(test)]
 mod tests {

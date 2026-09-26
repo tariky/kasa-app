@@ -6,7 +6,7 @@ use crate::greska::R;
 use crate::js::{self, round2, to_number};
 use crate::sql::Db;
 use crate::zaliha::{self, Dokument, Smjer};
-use crate::{baci, p};
+use crate::p;
 
 /// Iznos stavke zaokružen na fene (uređaj zaokružuje po stavci).
 pub fn iznos_stavke(s: &Value) -> f64 {
@@ -29,15 +29,7 @@ pub fn izracunaj_totale(stavke: &[Value]) -> (f64, f64) {
     (ukupno, pdv)
 }
 
-/// `for (const s of stavke)` — ono što nije niz u JS-u baca TypeError.
-pub(crate) fn niz<'a>(v: &'a Value, ime: &str) -> R<&'a Vec<Value>> {
-    match v.as_array() {
-        Some(a) => Ok(a),
-        None => baci!("{ime} is not iterable"),
-    }
-}
-
-/// Kupac kolona u `orders` (odluka 3): bez vrijednosti ili tekst prazan nakon
+/// Kupac kolona u `orders`: bez vrijednosti ili tekst prazan nakon
 /// trim-a je NULL; ostalo se upisuje kako je uneseno.
 fn kupac_kolona(kupac: &Value, polje: &str) -> Value {
     match &kupac[polje] {
@@ -71,7 +63,7 @@ pub fn upisi_racun(db: &Db, input: &Value) -> R<i64> {
         ],
     )?;
     let order_id = r.last_insert_rowid;
-    let stavke = niz(&input["stavke"], "data.stavke")?;
+    let stavke = js::iter_ili_baci(&input["stavke"], "data.stavke")?;
     for s in stavke {
         db.run(
             "INSERT INTO order_items (orderId, productId, kolicina, cijena, rabat, pdvStopa) VALUES (?, ?, ?, ?, ?, ?)",
@@ -89,142 +81,14 @@ pub fn upisi_racun(db: &Db, input: &Value) -> R<i64> {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
-    use std::path::PathBuf;
-    use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
-    use std::sync::Arc;
-
+mod tests {
     use serde_json::{json, Value};
 
-    use crate::sat::Sat;
-    use crate::{Backend, Platforma};
-
-    struct BezDijaloga;
-    impl Platforma for BezDijaloga {
-        fn dijalog_sacuvaj(&self, _: Value) -> Option<String> { None }
-        fn dijalog_otvori(&self, _: Value) -> Option<String> { None }
-        fn dijalog_potvrda(&self, _: Value) -> i64 { 0 }
-        fn restartuj_za(&self, _: u64) {}
-    }
-
-    /// Lažni fiskalni uređaj: svaki zahtjev dobije OK s BF brojem od 101 naviše.
-    /// Vraća port i brojač primljenih zahtjeva.
-    fn lazi_tring() -> (u16, Arc<AtomicUsize>) {
-        let server = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = server.local_addr().unwrap().port();
-        let zahtjevi = Arc::new(AtomicUsize::new(0));
-        let brojac = zahtjevi.clone();
-        std::thread::spawn(move || {
-            let mut bf = 100;
-            for veza in server.incoming() {
-                let Ok(mut veza) = veza else { continue };
-                // Zaglavlja pa tijelo (Content-Length) — odgovor tek kad stigne cijeli zahtjev.
-                let mut procitano = Vec::new();
-                let mut dio = [0u8; 4096];
-                loop {
-                    let n = veza.read(&mut dio).unwrap_or(0);
-                    if n == 0 {
-                        break;
-                    }
-                    procitano.extend_from_slice(&dio[..n]);
-                    let Some(kraj) = procitano.windows(4).position(|w| w == b"\r\n\r\n") else { continue };
-                    let zaglavlja = String::from_utf8_lossy(&procitano[..kraj]).to_lowercase();
-                    let duzina = zaglavlja
-                        .lines()
-                        .find_map(|l| l.strip_prefix("content-length:"))
-                        .and_then(|v| v.trim().parse::<usize>().ok())
-                        .unwrap_or(0);
-                    if procitano.len() >= kraj + 4 + duzina {
-                        break;
-                    }
-                }
-                brojac.fetch_add(1, Ordering::SeqCst);
-                bf += 1;
-                let xml = format!(
-                    "<RacunOdgovor><VrstaOdgovora>OK</VrstaOdgovora><Odgovor><Naziv>BrojFiskalnogRacuna</Naziv><Vrijednost>{bf}</Vrijednost></Odgovor></RacunOdgovor>"
-                );
-                let _ = write!(
-                    veza,
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/xml\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{xml}",
-                    xml.len()
-                );
-            }
-        });
-        (port, zahtjevi)
-    }
-
-    /// Backend nad novom bazom u privremenom folderu: prijavljen zadani admin
-    /// (id 1), Tring na lažnom uređaju. Folder se briše na kraju testa.
-    pub(crate) struct Proba {
-        pub b: Option<Backend>,
-        dir: PathBuf,
-        zahtjevi: Arc<AtomicUsize>,
-    }
-
-    impl Proba {
-        /// Koliko je zahtjeva stiglo lažnom uređaju.
-        pub fn zahtjevi(&self) -> usize {
-            self.zahtjevi.load(Ordering::SeqCst)
-        }
-
-        pub fn b(&self) -> &Backend {
-            self.b.as_ref().unwrap()
-        }
-
-        pub fn run(&self, sql: &str, params: &[Value]) -> i64 {
-            self.b().db().unwrap().run(sql, params).unwrap().last_insert_rowid
-        }
-
-        pub fn all(&self, sql: &str) -> Vec<Value> {
-            self.b().db().unwrap().all(sql, &[]).unwrap()
-        }
-
-        pub fn call(&self, kanal: &str, args: Vec<Value>) -> Result<Value, String> {
-            self.b().call(kanal, args)
-        }
-
-        pub fn artikal(&self, sifra: &str, tip: &str) -> i64 {
-            self.run(
-                "INSERT INTO products (sifra, naziv, jm, cijena, pdvStopa, plu, tip) VALUES (?, ?, 'kom', 5, 'E', 1, ?)",
-                &[json!(sifra), json!(format!("Artikal {sifra}")), json!(tip)],
-            )
-        }
-
-        /// Write-ahead red kakav ostavi nepoznat ishod štampe.
-        pub fn pending(&self, snapshot: Value) -> i64 {
-            self.run("INSERT INTO pending_receipts (korisnikId, snapshot) VALUES (1, ?)", &[json!(snapshot.to_string())])
-        }
-    }
-
-    impl Drop for Proba {
-        fn drop(&mut self) {
-            drop(self.b.take());
-            let _ = std::fs::remove_dir_all(&self.dir);
-        }
-    }
-
-    pub(crate) fn proba(ime: &str) -> Proba {
-        static BROJ: AtomicU32 = AtomicU32::new(0);
-        let dir = std::env::temp_dir().join(format!(
-            "kasa-{ime}-test-{}-{}",
-            std::process::id(),
-            BROJ.fetch_add(1, Ordering::SeqCst)
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        let b = Backend::novi(&dir, Box::new(BezDijaloga), Sat::sistemski(), false).unwrap();
-        let db = b.db().unwrap();
-        db.run("UPDATE settings SET value = '127.0.0.1' WHERE key = 'tring.host'", &[]).unwrap();
-        let (port, zahtjevi) = lazi_tring();
-        db.run("UPDATE settings SET value = ? WHERE key = 'tring.port'", &[json!(port.to_string())]).unwrap();
-        b.sesija.postavi(Some(1), false);
-        Proba { b: Some(b), dir, zahtjevi }
-    }
+    use crate::proba::proba;
 
     const KOLONE_KUPCA: &str = "kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj";
 
-    /// Odluka 3: prazan kupac (null, nema ga, ili tekst prazan nakon trim-a)
+    /// Prazan kupac (null, nema ga, ili tekst prazan nakon trim-a)
     /// je NULL na svakom putu upisa računa; neprazan tekst ide kako je unesen.
     #[test]
     fn prazan_kupac_je_null_na_svim_putevima() {

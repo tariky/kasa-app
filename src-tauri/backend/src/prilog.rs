@@ -5,19 +5,12 @@ use serde_json::{json, Map, Value};
 
 use crate::greska::R;
 use crate::js::{self, round2, to_number, truthy};
-use crate::pending_racun::{baci_ako_ceka_nezavrsen, preuzmi_pending_red, vec_evidentiran};
-use crate::racun::niz;
-use crate::racuni::{spoji, validan_datum_valute};
+use crate::pending_racun::baci_ako_ceka_nezavrsen;
+use crate::racuni::validan_datum_valute;
 use crate::sql::Db;
-use crate::stampa::{self, Odstampan, Uredjaj};
+use crate::stampa::{self, Fiskalizacija, Uredjaj};
 use crate::zaliha::{self, Dokument, Smjer};
-use crate::{baci, fiskalni, p, provjera_racuna, racun, tring, tring_racun, Backend};
-
-/// `s.slice(0, n)` — JS broji UTF-16 jedinice.
-fn slice_utf16(s: &str, n: usize) -> String {
-    let jedinice: Vec<u16> = s.encode_utf16().take(n).collect();
-    String::from_utf16_lossy(&jedinice)
-}
+use crate::{baci, fiskalni, p, provjera_racuna, racun, tring_racun, Backend};
 
 // ─── lib/prilog.ts ──────────────────────────────────────────
 
@@ -44,7 +37,7 @@ pub const PRILOG_VEZA_MAX: usize = 14;
 pub fn prilog_naziv(broj: &Value, opis: &Value, veza: &Value) -> String {
     let dio = |v: &Value, max: usize, zadano: &str| {
         let s = if v.is_null() { String::new() } else { js::to_string(v) };
-        let s = slice_utf16(s.trim(), max);
+        let s = js::slice_utf16(s.trim(), max);
         if s.is_empty() { zadano.to_string() } else { s }
     };
     let o = dio(opis, PRILOG_OPIS_MAX, PRILOG_OPIS_DEFAULT);
@@ -54,7 +47,7 @@ pub fn prilog_naziv(broj: &Value, opis: &Value, veza: &Value) -> String {
 
 /// Zbir stavki priloga — zaokruživanje po stavci kao na fiskalnom uređaju.
 pub fn suma_priloga(stavke: &[Value]) -> f64 {
-    round2(stavke.iter().fold(0.0, |sum, s| sum + racun::iznos_stavke(&spoji(s, vec![("rabat", js::nn(&s["rabat"], &json!(0)).clone())]))))
+    round2(stavke.iter().fold(0.0, |sum, s| sum + racun::iznos_stavke(&js::spoji(s, vec![("rabat", js::nn(&s["rabat"], &json!(0)).clone())]))))
 }
 
 /// Provjeri stavke priloga (proizvod mora postojati). Odvojeno od upisa da se
@@ -103,7 +96,7 @@ pub fn save_prilog_stavke_in_transaction(db: &Db, order_id: &Value, stavke: &Val
         baci!("Faktura je završena — stavke se ne mogu mijenjati");
     }
 
-    let stavke = niz(stavke, "stavke")?;
+    let stavke = js::iter_ili_baci(stavke, "stavke")?;
     validiraj_prilog_stavke(db, stavke)?;
 
     let dokument = Dokument { vrsta: "prilog", id: order_id };
@@ -183,10 +176,10 @@ pub fn oznaci_ponudu_fakturisanom(db: &Db, ponuda_id: &Value, order_id: &Value) 
 /// istine za iznos i upisuju se u istoj transakciji kao i račun, pa nema
 /// stanja u kojem je račun fiskalizovan a stavke izgubljene.
 ///
-/// Isti write-ahead obrazac kao order:finalize — snapshot u pending_receipts
-/// prije štampe, pa atomični upis ordera + brisanje pending reda.
+/// Isti tok kao order:finalize (`stampa::fiskalizuj`) — snapshot u
+/// pending_receipts prije štampe, pa atomični upis ordera + brisanje pending reda.
 pub fn finalize_prilog_and_print(b: &Backend, data: &Value) -> R<Value> {
-    let db = b.baza()?;
+    let db = b.db();
     if !truthy(&data["korisnikId"]) {
         baci!("Korisnik nije prijavljen");
     }
@@ -253,9 +246,8 @@ pub fn finalize_prilog_and_print(b: &Backend, data: &Value) -> R<Value> {
     if let Some(id) = skica_id {
         snapshot.insert("skicaId".into(), json!(id));
     }
-    // Štampa u Rustu ne baca — greška veze stiže kao neuspješan odgovor, pa
-    // grana "izuzetak iz štampe → počisti write-ahead red" pada u granu ispod.
-    // Postavke uređaja i račun za uređaj idu prije write-ahead reda.
+    let snapshot = Value::Object(snapshot);
+    // Postavke uređaja i račun za uređaj prije write-ahead reda (stampa::fiskalizuj).
     let uredjaj = Uredjaj::iz_postavki(b)?;
     let racun = tring_racun::build_tring_racun(&json!({
         "ukupno": js::f(ukupno),
@@ -263,43 +255,19 @@ pub fn finalize_prilog_and_print(b: &Backend, data: &Value) -> R<Value> {
         "kupac": kupac_v,
         "items": [stavka],
     }));
-    let pending_id = db
-        .run(
-            "INSERT INTO pending_receipts (korisnikId, snapshot) VALUES (?, ?)",
-            p![data["korisnikId"], js::stringify(&Value::Object(snapshot))],
-        )?
-        .last_insert_rowid;
-
-    let result = uredjaj.fiskalni("finalizePrilog", &racun);
-
-    // Siguran neuspjeh briše pending red; nepoznat ishod ga ostavlja.
-    if !tring::uspjeh(&result) {
-        return stampa::neuspjeh(db, pending_id, &result);
-    }
-
-    let broj_fiskalnog_racuna = stampa::broj_sa_uredjaja(&result);
     // Faktura nosi isti broj kao fiskalni isječak uz koji ide. Kad uređaj vrati
     // broj različit od predviđenog, papir već nosi pogrešan broj u nazivu stavke —
     // faktura ide po stvarnom, a operater to mora saznati odmah.
-    let prilog_broj = fiskalni::parse_fiskalni_broj(&broj_fiskalnog_racuna).unwrap_or(predvidjeni_broj);
-    let upozorenje = (prilog_broj != predvidjeni_broj).then(|| {
-        format!(
-            "Na isječku je odštampan br. {predvidjeni_broj}, a uređaj je vratio BF {}. Faktura nosi br. {prilog_broj} — provjerite isječak.",
-            js::to_string(&broj_fiskalnog_racuna)
-        )
-    });
-    let upis = db.tx(|| {
-        // Red riješen iz dijaloga dok je štampa trajala → bez drugog zapisa.
-        if !preuzmi_pending_red(db, pending_id)? {
-            return Ok(None);
-        }
+    let prilog_broj_iz = |bf: &Value| fiskalni::parse_fiskalni_broj(bf).unwrap_or(predvidjeni_broj);
+
+    let upisi = |bf: &Value| {
         // Prilog račun nema order_items: fiskalizovana je samo zbirna stavka.
         let order_id = racun::upisi_racun(
             db,
             &json!({
                 "korisnikId": data["korisnikId"], "ukupno": js::f(ukupno), "pdvIznos": js::f(pdv_iznos),
-                "nacinPlacanja": nacin_placanja, "brojFiskalnogRacuna": broj_fiskalnog_racuna, "kupac": kupac_v,
-                "stavke": [], "isManual": 0, "prilogBroj": prilog_broj, "prilogNaziv": naziv,
+                "nacinPlacanja": nacin_placanja, "brojFiskalnogRacuna": bf, "kupac": kupac_v,
+                "stavke": [], "isManual": 0, "prilogBroj": prilog_broj_iz(bf), "prilogNaziv": naziv,
                 "datumValute": datum_valute, "napomena": napomena,
             }),
         )?;
@@ -312,24 +280,33 @@ pub fn finalize_prilog_and_print(b: &Backend, data: &Value) -> R<Value> {
         if let Some(id) = skica_id {
             db.run("DELETE FROM faktura_skice WHERE id = ?", p![id])?;
         }
-        Ok(Some(order_id))
-    });
-    let order_id = match upis {
-        Ok(Some(id)) => id,
-        Ok(None) => return Ok(vec_evidentiran(&broj_fiskalnog_racuna)),
-        // Račun je već na papiru; pending red namjerno ostaje da se može riješiti
-        // kroz pending:resolve, ali operater to mora znati odmah.
-        Err(e) => return Err(stampa::nije_zabiljezen(Odstampan::Prilog(prilog_broj, &broj_fiskalnog_racuna), &e)),
+        Ok(order_id)
+    };
+    let r = stampa::fiskalizuj(
+        db,
+        Fiskalizacija {
+            dokument: Box::new(|bf| format!("Fiskalni račun po prilogu br. {} (BF {})", prilog_broj_iz(bf), stampa::prikaz_broja(bf))),
+            ..Fiskalizacija::racun(&snapshot, || Ok(uredjaj.fiskalni("finalizePrilog", &racun)), upisi)
+        },
+    )?;
+    let u = match r {
+        Ok(u) => u,
+        Err(odgovor) => return Ok(odgovor),
     };
 
+    let prilog_broj = prilog_broj_iz(&u.bf);
     let mut out = Map::new();
     out.insert("success".into(), json!(true));
-    out.insert("id".into(), json!(order_id));
+    out.insert("id".into(), json!(u.id));
     out.insert("prilogBroj".into(), json!(prilog_broj));
-    out.insert("brojFiskalnogRacuna".into(), broj_fiskalnog_racuna);
-    if let Some(u) = upozorenje {
-        out.insert("upozorenje".into(), json!(u));
+    out.insert("brojFiskalnogRacuna".into(), u.bf.clone());
+    if prilog_broj != predvidjeni_broj {
+        let upozorenje = format!(
+            "Na isječku je odštampan br. {predvidjeni_broj}, a uređaj je vratio BF {}. Faktura nosi br. {prilog_broj} — provjerite isječak.",
+            js::to_string(&u.bf)
+        );
+        out.insert("upozorenje".into(), json!(upozorenje));
     }
-    out.insert("odgovori".into(), result["odgovori"].clone());
+    out.insert("odgovori".into(), u.odgovori);
     Ok(Value::Object(out))
 }
