@@ -37,6 +37,7 @@ import { zadanoZaKupca, primijeniRabatKupca, formatRabat, type FormatBroja } fro
 import { useDokumentPostavke } from '@/components/DokumentPostavkeProvider';
 import { ucitajZaStampu } from '@/lib/stampa';
 import { PretragaProizvoda } from '@/components/PretragaProizvoda';
+import { useKupci } from '@/components/PretragaKupaca';
 import type { Product, ProizvodPonude } from '@/types';
 import FakturaDialog, { type FakturaPocetno } from '@/components/FakturaDialog';
 import { otvoriFakturuZaStampu } from '@/components/stampaFakture';
@@ -137,7 +138,9 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
   // Forma (nova / uredi)
   const [formOpen, setFormOpen] = useState(false);
   const [editId, setEditId] = useState<number | null>(null);
-  const [kupci, setKupci] = useState<any[]>([]);
+  // Konverzija treba način plaćanja kupca i prije nego što se forma otvori.
+  const sifarnikKupaca = useKupci();
+  const kupci = sifarnikKupaca ?? [];
   const [kupacId, setKupacId] = useState<string>('');
   const [datum, setDatum] = useState('');
   const [vaziDo, setVaziDo] = useState('');
@@ -177,8 +180,6 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
   const danas = localDateStr();
 
   useEffect(() => { loadPonude(); }, []);
-  // Konverzija treba način plaćanja kupca i prije nego što se forma otvori.
-  useEffect(() => { window.api.getKupci().then(setKupci).catch(() => { /* bez liste: globalni način */ }); }, []);
 
   useEffect(() => {
     setNalogZaPonudu(null);
@@ -234,7 +235,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
     setVaziDo(plusDana(novi, rokDana));
   };
 
-  const openNova = useCallback(async () => {
+  const openNova = useCallback(() => {
     setEditId(null);
     setKupacId('');
     const danasnji = localDateStr();
@@ -245,7 +246,6 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
     setFormError('');
     setFormInfo('');
     setRabatKupca(0);
-    setKupci(await window.api.getKupci());
     setFormOpen(true);
   }, [postavke.ponuda.vaziDana]);
 
@@ -261,7 +261,6 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
     // Spremljena ponuda se ne preračunava dok korisnik ne promijeni kupca.
     setFormInfo('');
     setRabatKupca(0);
-    setKupci(await window.api.getKupci());
     setFormOpen(true);
   }, []);
 
@@ -961,7 +960,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
                     ))}
                   </SelectContent>
                 </Select>
-                {kupci.length === 0 && (
+                {sifarnikKupaca?.length === 0 && (
                   <p className="text-[11px] text-amber-600">
                     Nema kupaca u šifarniku — dodajte kupca u Postavkama.
                   </p>

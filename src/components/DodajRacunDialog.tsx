@@ -21,7 +21,9 @@ import { NACINI_PLACANJA, type NacinPlacanja } from '@/lib/placanje';
 import { IKONA_PLACANJA } from '@/components/NacinPlacanjaBirac';
 import { Eyebrow } from '@/components/ui/ledger';
 import { PretragaProizvoda } from '@/components/PretragaProizvoda';
-import { PretragaStavki } from '@/components/ui/pretraga-stavki';
+import { PretragaKupaca } from '@/components/PretragaKupaca';
+import { KupacRacunaPolja } from '@/components/KupacRacunaPolja';
+import { PRAZAN_KUPAC, izKupca, zaSlanje, type KupacRacuna } from '@/lib/kupacRacuna';
 
 /** Kolone reda stavke — isti raster za zaglavlje i za redove. */
 const GRID = 'grid grid-cols-[minmax(0,1fr)_74px_96px_74px_100px_30px] gap-2 items-center';
@@ -39,8 +41,6 @@ function nowLocalInput(): string {
   return `${localDateStr(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-const poljaKupca = (k: Kupac) => ({ naziv: k.naziv, sifra: k.idBroj, dodatno: [k.adresa, k.grad].filter(Boolean).join(' ') });
-
 export default function DodajRacunDialog({ open, onOpenChange, onSaved, prefillBroj }: Props) {
   const [brojFiskalnog, setBrojFiskalnog] = useState('');
   const [datum, setDatum] = useState(nowLocalInput());
@@ -49,13 +49,8 @@ export default function DodajRacunDialog({ open, onOpenChange, onSaved, prefillB
     stavke, postavi: setStavke, dodaj: addProduct, izmijeni: updateStavka, ukloni: removeStavka, totali: { ukupno, pdvIznos },
   } = useStavkeDokumenta();
   const [kupacOpen, setKupacOpen] = useState(false);
-  const [allKupci, setAllKupci] = useState<Kupac[] | null>(null);
   const [kupacIzSifarnika, setKupacIzSifarnika] = useState(false);
-  const [kupacNaziv, setKupacNaziv] = useState('');
-  const [kupacIdBroj, setKupacIdBroj] = useState('');
-  const [kupacAdresa, setKupacAdresa] = useState('');
-  const [kupacGrad, setKupacGrad] = useState('');
-  const [kupacPostanskiBroj, setKupacPostanskiBroj] = useState('');
+  const [kupac, setKupac] = useState<KupacRacuna>(PRAZAN_KUPAC);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -63,24 +58,13 @@ export default function DodajRacunDialog({ open, onOpenChange, onSaved, prefillB
     if (open && prefillBroj) setBrojFiskalnog(prefillBroj);
   }, [open, prefillBroj]);
 
-  // Šifarnik kupaca se učitava tek kad se sekcija otvori — većina ručnih računa je bez kupca.
-  useEffect(() => {
-    if (!kupacOpen) return;
-    window.api.getKupci().then(setAllKupci).catch(() => setAllKupci([]));
-  }, [kupacOpen]);
-
   const pickKupac = (k: Kupac) => {
-    setKupacIdBroj(k.idBroj || '');
-    setKupacNaziv(k.naziv || '');
-    setKupacAdresa(k.adresa || '');
-    setKupacGrad(k.grad || '');
-    setKupacPostanskiBroj(k.postanskiBroj || '');
+    setKupac(izKupca(k));
     setKupacIzSifarnika(true);
   };
 
   const clearKupac = () => {
-    setKupacIdBroj(''); setKupacNaziv(''); setKupacAdresa('');
-    setKupacGrad(''); setKupacPostanskiBroj('');
+    setKupac(PRAZAN_KUPAC);
     setKupacIzSifarnika(false);
   };
 
@@ -89,7 +73,7 @@ export default function DodajRacunDialog({ open, onOpenChange, onSaved, prefillB
     setStavke([]);
     setKupacOpen(false);
     setKupacIzSifarnika(false);
-    setKupacNaziv(''); setKupacIdBroj(''); setKupacAdresa(''); setKupacGrad(''); setKupacPostanskiBroj('');
+    setKupac(PRAZAN_KUPAC);
     setError('');
   };
 
@@ -100,15 +84,12 @@ export default function DodajRacunDialog({ open, onOpenChange, onSaved, prefillB
     if (!datum) { setError('Unesi datum i vrijeme računa'); return; }
 
     const createdAt = datum.replace('T', ' ') + ':00';
-    const kupac = kupacIdBroj.trim()
-      ? { idBroj: kupacIdBroj.trim(), naziv: kupacNaziv.trim(), adresa: kupacAdresa.trim(), grad: kupacGrad.trim(), postanskiBroj: kupacPostanskiBroj.trim() }
-      : undefined;
 
     setLoading(true);
     try {
       await window.api.createManualOrder({
         ukupno, pdvIznos, nacinPlacanja,
-        brojFiskalnogRacuna: brojFiskalnog.trim(), createdAt, kupac,
+        brojFiskalnogRacuna: brojFiskalnog.trim(), createdAt, kupac: zaSlanje(kupac),
         stavke: uPayload(stavke),
       });
       reset();
@@ -121,7 +102,7 @@ export default function DodajRacunDialog({ open, onOpenChange, onSaved, prefillB
     }
   };
 
-  const kupacPopunjen = Boolean(kupacIdBroj.trim() || kupacNaziv.trim());
+  const kupacPopunjen = Boolean(kupac.idBroj.trim() || kupac.naziv.trim());
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) reset(); onOpenChange(v); }}>
@@ -290,28 +271,18 @@ export default function DodajRacunDialog({ open, onOpenChange, onSaved, prefillB
                 <span className="text-[11px] text-slate-400">opciono</span>
                 {!kupacOpen && kupacPopunjen && (
                   <span className="ml-auto text-[11.5px] text-slate-500 truncate max-w-[45%]">
-                    {kupacNaziv || '—'}
-                    {kupacIdBroj && <span className="ml-1.5 font-mono text-[10px] text-slate-400">{kupacIdBroj}</span>}
+                    {kupac.naziv || '—'}
+                    {kupac.idBroj && <span className="ml-1.5 font-mono text-[10px] text-slate-400">{kupac.idBroj}</span>}
                   </span>
                 )}
               </button>
               {kupacOpen && (
                 <div className="border-t border-slate-100 px-3 py-3">
                   <Eyebrow className="mb-2 block">Iz šifarnika</Eyebrow>
-                  <PretragaStavki<Kupac>
-                    stavke={allKupci}
-                    polja={poljaKupca}
-                    kljuc={k => k.id}
+                  <PretragaKupaca
                     onIzaberi={pickKupac}
-                    sifre={false}
-                    kolicine={false}
                     nedavnoKljuc="kupci-rucni-racun"
-                    naslovSvih="Svi kupci"
-                    oznaka={k => (k.adresa || k.grad) ? [k.adresa, k.grad].filter(Boolean).join(', ') : null}
-                    meta={k => <span className="font-mono text-[11px] tabular-nums text-slate-400">{k.idBroj}</span>}
                     placeholder="Pretraži kupca po nazivu, JIB-u ili gradu…"
-                    ariaLabel="Pretraga kupaca"
-                    akcija="odaberi"
                     velicina="sm"
                   />
 
@@ -331,24 +302,7 @@ export default function DodajRacunDialog({ open, onOpenChange, onSaved, prefillB
                     </div>
                   )}
 
-                  <div className="grid grid-cols-2 gap-3 mt-3 pt-3 border-t border-slate-100">
-                    {([
-                      ['ID broj', kupacIdBroj, setKupacIdBroj, true],
-                      ['Naziv', kupacNaziv, setKupacNaziv, false],
-                      ['Adresa', kupacAdresa, setKupacAdresa, false],
-                      ['Grad', kupacGrad, setKupacGrad, false],
-                      ['Poštanski broj', kupacPostanskiBroj, setKupacPostanskiBroj, true],
-                    ] as [string, string, (v: string) => void, boolean][]).map(([label, value, setter, mono]) => (
-                      <div key={label} className="space-y-1">
-                        <Eyebrow>{label}</Eyebrow>
-                        <Input
-                          value={value}
-                          onChange={e => setter(e.target.value)}
-                          className={cn('h-9 text-[12.5px]', mono && 'font-mono tabular-nums')}
-                        />
-                      </div>
-                    ))}
-                  </div>
+                  <KupacRacunaPolja className="mt-3 pt-3 border-t border-slate-100" value={kupac} onChange={setKupac} />
                 </div>
               )}
               {kupacOpen && (
