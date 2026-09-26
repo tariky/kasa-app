@@ -16,7 +16,7 @@ use serde_json::{json, Map, Value};
 use crate::greska::{Greska, R};
 use crate::js;
 use crate::sql::Db;
-use crate::{p, Backend};
+use crate::{p, postavke, Backend};
 
 pub const PORUKA_NISTE_PRIJAVLJENI: &str = "Niste prijavljeni";
 pub const PORUKA_SAMO_ADMIN: &str = "Ovu radnju može izvršiti samo administrator";
@@ -224,8 +224,6 @@ pub const SMIRENJE_MS: f64 = 60.0 * 60_000.0;
 /// Postavka u kojoj živi stanje blokade (JSON, vidi StanjeBlokade).
 pub const KLJUC_BLOKADE: &str = "sigurnost.pinBlokada";
 
-const UPSERT: &str = "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value";
-
 pub fn poruka_blokade(preostalo_ms: f64) -> String {
     format!("Previše pogrešnih pokušaja. Pokušajte ponovo za {} s.", js::num_str((preostalo_ms / 1000.0).ceil()))
 }
@@ -288,13 +286,12 @@ impl<'a> Pokusaji<'a> {
     }
 
     fn ucitaj(&self) -> R<Option<String>> {
-        let v = self.db.val("SELECT value FROM settings WHERE key = ?", p![KLJUC_BLOKADE])?;
+        let v = postavke::procitaj(self.db, KLJUC_BLOKADE)?;
         Ok(if v.is_null() { None } else { Some(js::to_string(&v)) })
     }
 
     fn spremi(&self, s: &StanjeBlokade) -> R<()> {
-        self.db.run(UPSERT, p![KLJUC_BLOKADE, s.json()])?;
-        Ok(())
+        postavke::upisi(self.db, KLJUC_BLOKADE, s.json())
     }
 
     /// Baca grešku dok traje blokada — tada se PIN ni ne provjerava.

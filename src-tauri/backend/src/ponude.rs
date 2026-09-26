@@ -6,7 +6,7 @@ use serde_json::{json, Map, Value};
 use crate::greska::R;
 use crate::pending_racun::{baci_ako_ceka_nezavrsen, preuzmi_pending_red, snapshot_kupca, vec_evidentiran, zapisi_pending};
 use crate::js::{self, or, truthy};
-use crate::postavke::postavka;
+use crate::postavke;
 use crate::racun::{izracunaj_totale, upisi_racun};
 use crate::sql::Db;
 use crate::stampa::{self, Odstampan, UToku, Uredjaj};
@@ -58,8 +58,8 @@ pub fn nastavak_numeracije(db: &Db, dok: &str, godina: &Value) -> R<i64> {
         }
         t.parse::<i64>().ok().filter(|n| (min..=max).contains(n))
     };
-    let broj = cijeli(postavka(db, &format!("dokumenti.{dok}.nastavakBroj"))?, 1, 999_999);
-    let god = cijeli(postavka(db, &format!("dokumenti.{dok}.nastavakGodina"))?, 2000, 2999);
+    let broj = cijeli(postavke::procitaj(db, format!("dokumenti.{dok}.nastavakBroj"))?, 1, 999_999);
+    let god = cijeli(postavke::procitaj(db, format!("dokumenti.{dok}.nastavakGodina"))?, 2000, 2999);
     Ok(match (broj, god) {
         (Some(b), Some(g)) if Some(g) == godina.as_i64() => b,
         _ => 0,

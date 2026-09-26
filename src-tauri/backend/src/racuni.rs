@@ -17,7 +17,7 @@ use crate::prilog::{
 };
 use crate::storno::{refund_and_print, refund_order_in_transaction};
 use crate::kanali::Kanal;
-use crate::{audit, baci, fiskalni, korisnici, p, ponude, proizvodnja, provjera_racuna, racun, tring_racun, Backend};
+use crate::{audit, baci, fiskalni, korisnici, p, ponude, postavke, proizvodnja, provjera_racuna, racun, tring_racun, Backend};
 
 // ─── lib/valuta.ts ──────────────────────────────────────────
 
@@ -232,7 +232,7 @@ fn storno(b: &Backend, data: &Value) -> R<Value> {
     let db = b.db();
     let k: Korisnik = sesija::korisnik(b)?;
     let mut odobrio_admin_id = Value::Null;
-    if db.val("SELECT value FROM settings WHERE key = ?", p!["kasa.requirePinRefund"])? == "true" && !k.je_admin() {
+    if postavke::procitaj(db, "kasa.requirePinRefund")? == "true" && !k.je_admin() {
         if !truthy(&data["adminPin"]) {
             baci!("Reklamacija traži PIN administratora");
         }
@@ -377,13 +377,13 @@ fn pending_resolve(b: &Backend, data: &Value) -> R<Value> {
 
 /// Odbačene praznine iz postavki (`fiscal.dismissedGaps`), kao JSON niz.
 fn odbacene_praznine(db: &Db) -> R<Vec<Value>> {
-    let row = db.get("SELECT value FROM settings WHERE key = 'fiscal.dismissedGaps'", p![])?;
-    Ok(match row {
-        Some(r) => match js::parse(&js::to_string(&r["value"]))? {
-            Value::Array(a) => a,
-            _ => Vec::new(),
-        },
-        None => Vec::new(),
+    let v = postavke::procitaj(db, "fiscal.dismissedGaps")?;
+    if v.is_null() {
+        return Ok(Vec::new());
+    }
+    Ok(match js::parse(&js::to_string(&v))? {
+        Value::Array(a) => a,
+        _ => Vec::new(),
     })
 }
 
@@ -407,10 +407,7 @@ fn dismiss_fiscal_gap(b: &Backend, broj: &Value) -> R<Value> {
     }
     dismissed.push(broj.clone());
     db.tx(|| {
-        db.run(
-            "INSERT INTO settings (key, value) VALUES ('fiscal.dismissedGaps', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            p![js::stringify(&Value::from(dismissed))],
-        )?;
+        postavke::upisi(db, "fiscal.dismissedGaps", js::stringify(&Value::from(dismissed)))?;
         audit::zabiljezi(b, "fiskalni:odbaciPrazninu", json!({ "broj": broj }))
     })?;
     Ok(json!({ "success": true }))

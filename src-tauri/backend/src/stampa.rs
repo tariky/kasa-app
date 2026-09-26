@@ -17,7 +17,7 @@ use crate::greska::{Greska, R};
 use crate::js::{self, or, or_null};
 use crate::sql::Db;
 use crate::tring::{self, Odgovor};
-use crate::{p, Backend};
+use crate::{p, postavke, Backend};
 
 // ─── Uređaj ─────────────────────────────────────────────────
 
@@ -29,30 +29,15 @@ pub struct Uredjaj<'a> {
 }
 
 impl<'a> Uredjaj<'a> {
-    /// Tring postavke iz baze → klijent (`loadTringConfig`): host, port i
+    /// Tring postavke iz baze (`postavke::tring`) → klijent: host, port i
     /// dnevnik (`dev.logging`), a operator i lozinka za inicijalizaciju.
     pub fn iz_postavki(b: &'a Backend) -> R<Uredjaj<'a>> {
-        let db = b.db();
-        let rows = db.all("SELECT key, value FROM settings WHERE key LIKE 'tring.%'", p![])?;
-        let mut map = serde_json::Map::new();
-        for r in rows {
-            let k = r["key"].as_str().unwrap_or("").replacen("tring.", "", 1);
-            map.insert(k, r["value"].clone());
-        }
-        let g = |k: &str, zadano: &str| -> Value {
-            match map.get(k) {
-                Some(v) if !v.is_null() => v.clone(),
-                _ => Value::String(zadano.into()),
-            }
-        };
-        let host = js::to_string(&g("host", "localhost"));
-        let port = js::parse_int(&js::to_string(&g("port", "8085")));
-        b.tring.configure(&host, port);
-
-        let dev = db.val("SELECT value FROM settings WHERE key = 'dev.logging'", p![])?;
-        b.tring.set_logging_enabled(dev == "true");
-
-        Ok(Uredjaj { b, operator_id: js::parse_int_value(&g("operatorId", "0")), operator_password: g("operatorPassword", "0") })
+        let t = postavke::tring(b.db())?;
+        b.tring.configure(&js::to_string(&t.host), t.port.as_i64());
+        b.tring.set_logging_enabled(t.logovanje);
+        // `operatorPassword ?? '0'`
+        let operator_password = js::nn(&t.operator_password, &json!("0")).clone();
+        Ok(Uredjaj { b, operator_id: t.operator_id, operator_password })
     }
 
     /// `if (Tring.isLoggingEnabled()) console.log(...)`. Ide na stderr: stdout

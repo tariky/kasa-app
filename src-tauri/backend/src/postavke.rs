@@ -1,5 +1,8 @@
-//! Kanali `settings:*`, `savedCarts:*`, `fakturaSkice:*` i `proizvodnja:setEnabled`
-//! (handlers.ts, `lib/savedCarts.ts`, `lib/fakturaSkice.ts`, `lib/firma.ts`).
+//! Tabela `settings` (`lib/postavke.ts`): čitanje i upis ključa i Tring
+//! postavke — jedino mjesto s njenim SQL-om. Ko smije čitati i mijenjati koji
+//! ključ odlučuje sesija.rs (pristup.json). I kanali `settings:*`,
+//! `savedCarts:*`, `fakturaSkice:*` i `proizvodnja:setEnabled` (handlers.ts,
+//! `lib/savedCarts.ts`, `lib/fakturaSkice.ts`, `lib/firma.ts`).
 
 use serde_json::{json, Map, Value};
 
@@ -11,7 +14,46 @@ use crate::sesija::pristup;
 use crate::kanali::Kanal;
 use crate::{baci, p, proizvodnja, Backend};
 
-const UPSERT: &str = "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value";
+/// Vrijednost ključa; null kad ključa nema (ili je NULL). TS: `procitajPostavku`.
+pub fn procitaj(db: &Db, kljuc: impl Into<Value>) -> R<Value> {
+    db.val("SELECT value FROM settings WHERE key = ?", &[kljuc.into()])
+}
+
+/// Upiše ključ (INSERT ili prepiše vrijednost). Transakciju otvara pozivalac.
+pub fn upisi(db: &Db, kljuc: &str, vrijednost: impl Into<Value>) -> R<()> {
+    db.run(
+        "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        &[json!(kljuc), vrijednost.into()],
+    )?;
+    Ok(())
+}
+
+/// Postavke fiskalnog uređaja sa zadanim vrijednostima. TS: `procitajTringPostavke`.
+pub struct TringPostavke {
+    /// Zadano "localhost".
+    pub host: Value,
+    /// `parseInt(port ?? '8085')`; NaN je null.
+    pub port: Value,
+    /// `parseInt(operatorId ?? '0')`; NaN je null.
+    pub operator_id: Value,
+    /// Null kad lozinka nije upisana.
+    pub operator_password: Value,
+    /// Dnevnik zahtjeva uređaju (`dev.logging`).
+    pub logovanje: bool,
+}
+
+/// Tring postavke iz baze — za uređaj (stampa.rs) i za ekran Postavki.
+pub fn tring(db: &Db) -> R<TringPostavke> {
+    let s = grupa(db, "tring.")?;
+    let g = |k: &str, zadano: &str| s.get(k).filter(|v| !v.is_null()).cloned().unwrap_or_else(|| json!(zadano));
+    Ok(TringPostavke {
+        host: g("host", "localhost"),
+        port: js::parse_int_value(&g("port", "8085")),
+        operator_id: js::parse_int_value(&g("operatorId", "0")),
+        operator_password: s.get("operatorPassword").cloned().unwrap_or(Value::Null),
+        logovanje: procitaj(db, "dev.logging")? == "true",
+    })
+}
 
 /// Stranica loga u PDF tačkama (`LOGO_VELICINA` iz lib/firma.ts).
 const LOGO_MIN: f64 = 40.0;
@@ -30,8 +72,8 @@ pub fn ziro_racuni_pozicija(v: &Value) -> &'static str {
     if v.as_str() == Some("podnozje") { "podnozje" } else { "zaglavlje" }
 }
 
-/// Postavke s prefiksom, bez prefiksa u ključu.
-fn sa_prefiksom(db: &Db, prefiks: &str) -> R<Map<String, Value>> {
+/// Postavke s prefiksom, bez prefiksa u ključu. TS: `procitajGrupu`.
+fn grupa(db: &Db, prefiks: &str) -> R<Map<String, Value>> {
     let mut m = Map::new();
     for r in db.all(&format!("SELECT key, value FROM settings WHERE key LIKE '{prefiks}%'"), p![])? {
         let k = r["key"].as_str().unwrap_or("").replacen(prefiks, "", 1);
@@ -41,20 +83,14 @@ fn sa_prefiksom(db: &Db, prefiks: &str) -> R<Map<String, Value>> {
 }
 
 fn get_tring(db: &Db) -> R<Value> {
-    let s = sa_prefiksom(db, "tring.")?;
-    let g = |k: &str, zadano: &str| s.get(k).filter(|v| !v.is_null()).cloned().unwrap_or_else(|| json!(zadano));
+    let t = tring(db)?;
     Ok(json!({
-        "host": g("host", "localhost"),
-        "port": js::parse_int_value(&g("port", "8085")),
-        "operatorId": js::parse_int_value(&g("operatorId", "0")),
+        "host": t.host,
+        "port": t.port,
+        "operatorId": t.operator_id,
         // Lozinka operatera ne izlazi iz backenda — UI zna samo da li je upisana.
-        "imaLozinku": s.get("operatorPassword").is_some_and(|v| !v.is_null() && v != ""),
+        "imaLozinku": !t.operator_password.is_null() && t.operator_password != "",
     }))
-}
-
-/// `postavka(key)` — vrijednost ili null.
-pub(crate) fn postavka(db: &Db, kljuc: &str) -> R<Value> {
-    db.val("SELECT value FROM settings WHERE key = ?", p![kljuc])
 }
 
 fn save_tring(b: &Backend, data: &Value) -> R<Value> {
@@ -80,9 +116,9 @@ fn save_tring(b: &Backend, data: &Value) -> R<Value> {
     }
     db.tx(|| {
         // Audit: lozinka samo kao "promijenjena", nikad vrijednost.
-        let promjene = audit::promjene_postavki(|k| postavka(db, k), &nove, &["tring.operatorPassword"])?;
+        let promjene = audit::promjene_postavki(|k| procitaj(db, k), &nove, &["tring.operatorPassword"])?;
         for (k, v) in &nove {
-            db.run(UPSERT, p![k, v])?;
+            upisi(db, k, v.clone())?;
         }
         if !promjene.is_empty() {
             audit::zabiljezi(b, "postavke:tring", json!({ "promjene": promjene }))?;
@@ -93,7 +129,7 @@ fn save_tring(b: &Backend, data: &Value) -> R<Value> {
 }
 
 fn get_firma(db: &Db) -> R<Value> {
-    let s = sa_prefiksom(db, "firma.")?;
+    let s = grupa(db, "firma.")?;
     let g = |k: &str| s.get(k).filter(|v| !v.is_null()).cloned().unwrap_or_else(|| json!(""));
     let bank_accounts: Vec<Value> = (1..=3)
         .map(|i| json!({ "bankName": g(&format!("bank{i}.name")), "accountNumber": g(&format!("bank{i}.number")) }))
@@ -138,9 +174,9 @@ fn save_firma(b: &Backend, data: &Value) -> R<Value> {
     }
     db.tx(|| {
         // Audit: stara i nova vrijednost promijenjenih ključeva; logo (slika) samo kao "promijenjen".
-        let promjene = audit::promjene_postavki(|k| postavka(db, k), &nove, &["firma.logo"])?;
+        let promjene = audit::promjene_postavki(|k| procitaj(db, k), &nove, &["firma.logo"])?;
         for (k, v) in &nove {
-            db.run(UPSERT, p![k, v.clone().unwrap_or(Value::Null)])?;
+            upisi(db, k, v.clone())?;
         }
         if !promjene.is_empty() {
             audit::zabiljezi(b, "postavke:firma", json!({ "promjene": promjene }))?;
@@ -160,8 +196,8 @@ fn set(b: &Backend, kljuc: &Value, vrijednost: &Value) -> R<Value> {
     };
     let k = to_string(kljuc);
     db.tx(|| {
-        let stara = postavka(db, &k)?;
-        db.run(UPSERT, p![kljuc, nova])?;
+        let stara = procitaj(db, k.as_str())?;
+        upisi(db, &k, nova)?;
         if k != "kasa.scanMode" && stara != nova {
             audit::zabiljezi(b, "postavke:set", json!({ "kljuc": k, "staraVrijednost": stara, "novaVrijednost": nova }))?;
         }
@@ -174,8 +210,8 @@ fn set_enabled(b: &Backend, enabled: &Value) -> R<Value> {
     let db = b.db();
     let nova = to_string(enabled);
     db.tx(|| {
-        let stara = postavka(db, "proizvodnja.enabled")?;
-        db.run(UPSERT, p!["proizvodnja.enabled", nova])?;
+        let stara = procitaj(db, "proizvodnja.enabled")?;
+        upisi(db, "proizvodnja.enabled", nova.as_str())?;
         if stara != nova.as_str() {
             audit::zabiljezi(
                 b,
@@ -222,7 +258,7 @@ fn spremi_skicu_fakture(db: &Db, id: &Value, naziv: &Value, podaci: &Value, ukup
 fn get(db: &Db, kljuc: &Value) -> R<Value> {
     match kljuc.as_str() {
         Some(k) if pristup().tajne_postavke.contains(k) => Ok(Value::Null),
-        _ => db.val("SELECT value FROM settings WHERE key = ?", p![kljuc]),
+        _ => procitaj(db, kljuc.clone()),
     }
 }
 
