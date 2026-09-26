@@ -7,9 +7,13 @@ use regex::Regex;
 use serde_json::{json, Map, Value};
 
 use crate::greska::R;
+use crate::pending_racun::{
+    baci_ako_ceka_nezavrsen, neuspjela_stampa, preuzmi_pending_red, snapshot_kupca, vec_evidentiran, zapisi_pending,
+};
 use crate::js::{self, has, round2, to_number, truthy};
 use crate::ponude::{self, UToku};
 use crate::racun::{izracunaj_totale, upisi_racun};
+use crate::skladiste::TOLERANCIJA_ZALIHE;
 use crate::sql::Db;
 use crate::tring::uspjeh;
 use crate::tring_racun::build_tring_racun;
@@ -22,9 +26,6 @@ pub const PRODAJNA_USLUGA_NAZIV: &str = "Namještaj po mjeri";
 fn round4(n: f64) -> f64 {
     js::js_round(n * 10000.0) / 10000.0
 }
-
-/// Tolerancija pri poređenju količina (SUM kretanja nosi grešku zaokruživanja).
-const TOLERANCIJA_KOLICINE: f64 = 1e-9;
 
 /// `Number(datum.slice(0, 4))` kao JSON broj (NaN → null, kako ga SQLite veže).
 fn godina_iz_datuma(datum: &str) -> Value {
@@ -284,7 +285,7 @@ pub fn proizvodi_ponude(db: &Db, ponuda_id: &Value) -> R<Vec<Value>> {
     )?;
     for r in &mut redovi {
         let stanje = stanje_artikla(db, &r["productId"])?;
-        let zadano = to_number(&stanje) < to_number(&r["kolicina"]) - TOLERANCIJA_KOLICINE;
+        let zadano = to_number(&stanje) < to_number(&r["kolicina"]) - TOLERANCIJA_ZALIHE;
         r["stanje"] = stanje;
         r["zadano"] = json!(zadano);
     }
@@ -329,7 +330,7 @@ fn validiraj_proizvode(db: &Db, ponuda_id: &Value, proizvodi: &[Value]) -> R<Vec
         let kljuc = js::stringify(&pr["productId"]);
         let ukupno = round4(zbir.get(&kljuc).copied().unwrap_or(0.0) + kolicina);
         let na_ponudi = to_number(&s["kolicina"]);
-        if ukupno > na_ponudi + TOLERANCIJA_KOLICINE {
+        if ukupno > na_ponudi + TOLERANCIJA_ZALIHE {
             baci!(
                 "Proizvod \"{naziv}\": nalog izrađuje {}, a na ponudi je {}",
                 js::num_str(ukupno),
@@ -462,6 +463,11 @@ pub fn update_nalog(db: &Db, id: &Value, patch: &Value) -> R<()> {
 /// Briše nalog i stavke. Samo nezavršen nalog čija ponuda nije fakturisana. U transakciji.
 pub fn delete_nalog(db: &Db, id: &Value) -> R<()> {
     let n = ucitaj_nalog_ili_baci(db, id)?;
+    // Odštampan račun bez naloga mogao bi se samo odbaciti.
+    baci_ako_ceka_nezavrsen(db, "nalogId", id, "Račun za ovaj nalog", "prije brisanja naloga")?;
+    if !n["ponudaId"].is_null() {
+        baci_ako_ceka_nezavrsen(db, "ponudaId", &n["ponudaId"], "Račun po ponudi ovog naloga", "prije brisanja naloga")?;
+    }
     baci_ako_zakljucan(&n["status"])?;
     baci_ako_ponuda_fakturisana(db, &n["ponudaId"], "obrisati")?;
     db.run("DELETE FROM radni_nalog_stavke WHERE radniNalogId = ?", p![id])?;
@@ -659,7 +665,7 @@ pub fn kalkulacija(nalog: &Value, stavke: &[Value]) -> Value {
                 if to_number(cijena) <= 0.0 {
                     upozorenja.push(json!(format!("{naziv}: nema nabavne cijene (nema primke)")));
                 }
-                if otvoren && utrosak > to_number(stanje) + TOLERANCIJA_KOLICINE {
+                if otvoren && utrosak > to_number(stanje) + TOLERANCIJA_ZALIHE {
                     upozorenja.push(json!(format!(
                         "{naziv}: utrošak {} prelazi stanje {}",
                         js::num_str(utrosak),
@@ -786,6 +792,18 @@ pub fn vrati_u_izradu(db: &Db, id: &Value) -> R<()> {
     if n["status"] != "zavrsen" {
         baci!("Samo završen nalog se vraća u izradu");
     }
+    // Račun koji čeka u nezavršenim fakturiše završen nalog kad se riješi.
+    baci_ako_ceka_nezavrsen(db, "nalogId", id, "Račun za ovaj nalog", "prije vraćanja naloga u izradu")?;
+    // I račun po ponudi naloga izdat sa ekrana Ponude: kad se riješi, ponuda je fakturisana.
+    if !n["ponudaId"].is_null() {
+        baci_ako_ceka_nezavrsen(
+            db,
+            "ponudaId",
+            &n["ponudaId"],
+            "Račun po ponudi ovog naloga",
+            "prije vraćanja naloga u izradu",
+        )?;
+    }
     baci_ako_ponuda_fakturisana(db, &n["ponudaId"], "vratiti u izradu")?;
 
     let ulazi = db.all(
@@ -800,7 +818,7 @@ pub fn vrati_u_izradu(db: &Db, id: &Value) -> R<()> {
     for u in &ulazi {
         let stanje = to_number(&stanje_artikla(db, &u["productId"])?);
         let kolicina = to_number(&u["kolicina"]);
-        if stanje < kolicina - TOLERANCIJA_KOLICINE {
+        if stanje < kolicina - TOLERANCIJA_ZALIHE {
             let naziv = if u["naziv"].is_null() { format!("#{}", js::to_string(&u["productId"])) } else { js::to_string(&u["naziv"]) };
             baci!(
                 "Proizvod \"{naziv}\" je već prodan/izdat — nalog se ne može vratiti u izradu (na stanju {}, nalog je uveo {})",
@@ -862,8 +880,8 @@ pub fn osiguraj_prodajnu_uslugu(db: &Db) -> R<i64> {
 static IZDAVANJA_U_TOKU: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 
 /// Upiše fakturisanje naloga (status → fakturisan, racunId) u transakciji.
-/// Račun je u tom trenutku već odštampan (ili je već postojao) — greška ovdje
-/// ne smije proći nezapaženo jer nalog i knjigovodstvo ispadnu iz sinhrona.
+/// Račun u tom trenutku već postoji (ponuda konvertovana sa ekrana Ponude) —
+/// greška ovdje ne smije proći nezapaženo jer nalog i knjigovodstvo ispadnu iz sinhrona.
 fn knjizi_fakturisanje_naloga(db: &Db, nalog_id: &Value, racun_id: &Value, broj_fiskalnog_racuna: &Value) -> R<()> {
     if let Err(e) = db.tx(|| fakturisi_nalog(db, nalog_id, racun_id)) {
         baci!(
@@ -879,11 +897,44 @@ fn knjizi_fakturisanje_naloga(db: &Db, nalog_id: &Value, racun_id: &Value, broj_
     Ok(())
 }
 
+/// Upis računa za samostalni nalog iz write-ahead snapshota: stavka usluge NAMJ
+/// (kreira se tek ovdje — neuspjela štampa ne ostavlja tragove) i nalog →
+/// fakturisan. Isti upis ide nakon uspješne štampe i iz dijaloga nezavršenih
+/// računa. U transakciji. TS: `upisiRacunNaloga`.
+pub fn upisi_racun_naloga(db: &Db, snap: &Value, broj_fiskalnog_racuna: &Value, created_at: &Value, is_manual: i64) -> R<i64> {
+    let usluga = match postojeca_prodajna_usluga(db)? {
+        Some(id) => id,
+        None => json!(osiguraj_prodajnu_uslugu(db)?),
+    };
+    let stavke: Vec<Value> = snap["stavke"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|s| {
+            let mut s = s.clone();
+            s["productId"] = usluga.clone();
+            s
+        })
+        .collect();
+    let order_id = upisi_racun(
+        db,
+        &json!({
+            "korisnikId": snap["korisnikId"], "ukupno": snap["ukupno"], "pdvIznos": snap["pdvIznos"],
+            "nacinPlacanja": snap["nacinPlacanja"], "brojFiskalnogRacuna": broj_fiskalnog_racuna,
+            "kupac": snap["kupac"], "stavke": stavke, "createdAt": created_at, "isManual": is_manual,
+        }),
+    )?;
+    fakturisi_nalog(db, &snap["nalogId"], &json!(order_id))?;
+    Ok(order_id)
+}
+
 /// Fiskalni račun za završen nalog po narudžbi. Nalog iz ponude ide kroz
-/// konverziju ponude (stvarne stavke); samostalan nalog ide kao jedna stavka
-/// usluge "Namještaj po mjeri" po dogovorenoj cijeni. Upis tek nakon štampe.
-/// Ako je ponuda već konvertovana direktno (npr. sa ekrana Ponude), nalog se
-/// samo poveže sa postojećim računom — bez ponovne štampe.
+/// konverziju ponude (stvarne stavke; nalog se fakturiše u istoj transakciji);
+/// samostalan nalog ide kao jedna stavka usluge "Namještaj po mjeri" po
+/// dogovorenoj cijeni. Upis tek nakon štampe, uz write-ahead red (vrsta
+/// 'ponuda' odnosno 'nalog' — pending_racun.rs). Ako je ponuda već
+/// konvertovana direktno (npr. sa ekrana Ponude), nalog se samo poveže sa
+/// postojećim računom — bez ponovne štampe.
 pub fn izdaj_racun_za_nalog(b: &Backend, kanal: &str, data: &Value) -> R<Value> {
     let db = b.baza()?;
     let nalog = get_nalog(db, &data["id"])?;
@@ -893,9 +944,9 @@ pub fn izdaj_racun_za_nalog(b: &Backend, kanal: &str, data: &Value) -> R<Value> 
     if nalog["status"] != "zavrsen" {
         baci!("Nalog mora biti završen prije izdavanja računa");
     }
-    let Some(_u_toku) = UToku::zauzmi(&IZDAVANJA_U_TOKU, &nalog["id"]) else {
+    if UToku::zauzet(&IZDAVANJA_U_TOKU, &nalog["id"]) {
         baci!("Izdavanje računa za ovaj nalog je već u toku");
-    };
+    }
     // Sve što bi upis nakon štampe odbio (FK na korisnika) provjerava se prije štampe.
     let korisnik = if truthy(&data["korisnikId"]) {
         db.get("SELECT id FROM users WHERE id = ?", p![data["korisnikId"]])?
@@ -907,6 +958,9 @@ pub fn izdaj_racun_za_nalog(b: &Backend, kanal: &str, data: &Value) -> R<Value> 
     }
     // Štampa bez oznake plaćanja ide kao Gotovina — i u bazu se tako upisuje.
     let nacin_placanja = json!(provjera_racuna::provjeri_nacin_placanja(js::or(&data["nacinPlacanja"], &json!("Gotovina")))?);
+    baci_ako_ceka_nezavrsen(db, "nalogId", &nalog["id"], "Račun za ovaj nalog", "prije nove štampe")?;
+
+    let _u_toku = UToku::zauzmi(&IZDAVANJA_U_TOKU, &nalog["id"]);
 
     if truthy(&nalog["ponudaId"]) {
         let ponuda = db.get("SELECT status, racunId FROM ponude WHERE id = ?", p![nalog["ponudaId"]])?;
@@ -918,24 +972,21 @@ pub fn izdaj_racun_za_nalog(b: &Backend, kanal: &str, data: &Value) -> R<Value> 
             return Ok(ponude::uspjesna_stampa(&ponuda["racunId"], &broj_fiskalnog_racuna, &json!({})));
         }
 
-        let res = ponude::konvertuj_ponudu(
+        return ponude::konvertuj_ponudu(
             b,
             kanal,
             &json!({ "id": nalog["ponudaId"], "korisnikId": data["korisnikId"], "nacinPlacanja": nacin_placanja }),
-        )?;
-        if truthy(&res["success"]) && truthy(&res["racunId"]) {
-            knjizi_fakturisanje_naloga(db, &nalog["id"], &res["racunId"], &res["brojFiskalnogRacuna"])?;
-        }
-        return Ok(res);
+            Some(&nalog["id"]),
+        );
     }
 
     if !(to_number(&nalog["dogovorenaCijena"]) > 0.0) {
         baci!("Dogovorena cijena mora biti upisana prije izdavanja računa");
     }
-    // Usluga se kreira tek uz uspješan upis — neuspjela štampa ne ostavlja tragove.
+    // Usluga se kreira tek uz uspješan upis — ovdje se samo provjeri da šifra nije zauzeta.
     let postojeca_usluga = postojeca_prodajna_usluga(db)?;
-    let mut stavke = vec![json!({
-        "productId": postojeca_usluga.unwrap_or(json!(0)), "kolicina": 1, "cijena": nalog["dogovorenaCijena"], "rabat": 0, "pdvStopa": "E",
+    let stavke = vec![json!({
+        "productId": postojeca_usluga.clone().unwrap_or(json!(0)), "kolicina": 1, "cijena": nalog["dogovorenaCijena"], "rabat": 0, "pdvStopa": "E",
         "productSifra": PRODAJNA_USLUGA_SIFRA, "productNaziv": PRODAJNA_USLUGA_NAZIV, "productJm": "kom", "productTip": "usluga",
     })];
     let (ukupno, pdv_iznos) = izracunaj_totale(&stavke);
@@ -945,34 +996,39 @@ pub fn izdaj_racun_za_nalog(b: &Backend, kanal: &str, data: &Value) -> R<Value> 
         "stavke": stavke, "ukupno": js::f(ukupno), "nacinPlacanja": nacin_placanja,
         "kupac": ponude::kupac_za_racun(&kupac),
     }));
+
+    let snapshot = json!({
+        "vrsta": "nalog", "nalogId": nalog["id"], "nalogBroj": nalog["broj"], "nalogGodina": nalog["godina"],
+        "korisnikId": data["korisnikId"], "ukupno": js::f(ukupno), "pdvIznos": js::f(pdv_iznos),
+        "nacinPlacanja": nacin_placanja, "kupac": snapshot_kupca(&kupac),
+        "stavke": [{
+            "productId": postojeca_usluga.unwrap_or(json!(0)), "naziv": PRODAJNA_USLUGA_NAZIV, "kolicina": 1,
+            "cijena": nalog["dogovorenaCijena"], "rabat": 0, "pdvStopa": "E", "productTip": "usluga",
+        }],
+    });
+    let pending_id = zapisi_pending(db, &data["korisnikId"], &snapshot)?;
+
     let result = ponude::stampaj(b, kanal, &racun);
+    // Siguran neuspjeh briše pending red; nepoznat ishod ga ostavlja.
     if !uspjeh(&result) {
-        return Ok(ponude::neuspjela_stampa(&result));
+        return neuspjela_stampa(db, pending_id, &result);
     }
     let broj_fiskalnog_racuna = js::or_null(&result["odgovori"]["BrojFiskalnogRacuna"]);
 
     let upis = db.tx(|| {
-        let usluga = match postojeca_prodajna_usluga(db)? {
-            Some(id) => id,
-            None => json!(osiguraj_prodajnu_uslugu(db)?),
-        };
-        stavke[0]["productId"] = usluga;
-        let order_id = json!(upisi_racun(
-            db,
-            &json!({
-                "korisnikId": data["korisnikId"], "ukupno": js::f(ukupno), "pdvIznos": js::f(pdv_iznos),
-                "nacinPlacanja": nacin_placanja, "brojFiskalnogRacuna": broj_fiskalnog_racuna,
-                "kupac": kupac.clone().unwrap_or(Value::Null), "stavke": stavke,
-            }),
-        )?);
-        fakturisi_nalog(db, &nalog["id"], &order_id)?;
-        Ok(order_id)
+        // Red riješen iz dijaloga dok je štampa trajala → bez drugog zapisa.
+        if !preuzmi_pending_red(db, pending_id)? {
+            return Ok(None);
+        }
+        upisi_racun_naloga(db, &snapshot, &broj_fiskalnog_racuna, &Value::Null, 0).map(Some)
     });
     match upis {
-        Ok(racun_id) => Ok(ponude::uspjesna_stampa(&racun_id, &broj_fiskalnog_racuna, &result["odgovori"])),
+        Ok(Some(racun_id)) => Ok(ponude::uspjesna_stampa(&json!(racun_id), &broj_fiskalnog_racuna, &result["odgovori"])),
+        Ok(None) => Ok(vec_evidentiran(&broj_fiskalnog_racuna)),
+        // Račun je već na papiru; pending red ostaje (rollback) za dijalog.
         Err(e) => baci!(
             "{}",
-            ponude::poruka_nakon_stampe(&broj_fiskalnog_racuna, "nije zabilježen u bazi", e.poruka(), "Evidentirajte račun ručno.")
+            ponude::poruka_nakon_stampe(&broj_fiskalnog_racuna, "nije zabilježen u bazi", e.poruka(), "Riješite ga kroz nezavršene račune.")
         ),
     }
 }

@@ -1,30 +1,35 @@
 import type * as Tring from '@/services/tring';
-import { provjeriReklamaciju } from '../services/tring';
+import { ishodNepoznat, provjeriReklamaciju } from '../services/tring';
 import type { SqlDb } from './sqldb';
 import { parseFiskalniBroj } from './fiskalni';
 import { buildTringReklamacija } from './tringRacun';
 import { PRILOG_SIFRA, prilogNaziv } from './prilog';
 import { gotovinskiIznos } from './drawer';
 import { round2 } from './novac';
+import {
+  baciAkoCekaNezavrsen, neuspjelaStampa, preuzmiPendingRed, vecEvidentiranStorno, zapisiPending, type SnapshotStorna,
+} from './pendingRacun';
 
 /**
  * Storno vraća tačno ono što je račun skinuo: za svaki izlaz računa (prodaja
  * 'order' ili prilog 'prilog') ulaz 'refund' iste količine za isti artikal.
  * Današnji tip artikla se ne gleda — artikal je mogao postati usluga i
- * obrnuto nakon prodaje. Rust: `vrati_zalihu_racuna` u racuni.rs.
+ * obrnuto nakon prodaje. `datum` = datum storna (bez njega: sada).
+ * Rust: `vrati_zalihu_racuna` u racuni.rs.
  */
-export function vratiZalihuRacuna(db: SqlDb, orderId: number): void {
+export function vratiZalihuRacuna(db: SqlDb, orderId: number, datum: string | null = null): void {
   const izlazi = db.prepare(
     "SELECT productId, kolicina FROM stock_movements WHERE tip = 'izlaz' AND referenceType IN ('order', 'prilog') AND referenceId = ? ORDER BY id"
   ).all(orderId) as Array<{ productId: number; kolicina: number }>;
   const insertStock = db.prepare(
-    "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'ulaz', ?, 'refund', ?)"
+    "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId, createdAt) VALUES (?, 'ulaz', ?, 'refund', ?, COALESCE(?, datetime('now','localtime')))"
   );
-  for (const izlaz of izlazi) insertStock.run(izlaz.productId, izlaz.kolicina, orderId);
+  for (const izlaz of izlazi) insertStock.run(izlaz.productId, izlaz.kolicina, orderId, datum);
 }
 
 /**
- * Označi račun storniranim, vrati zalihu i upiši broj reklamacije.
+ * Označi račun storniranim, vrati zalihu i upiši broj reklamacije. `datum` je
+ * datum storna s papira kad se storno upisuje iz dijaloga nezavršenih računa.
  *
  * Poziva se unutar transakcije. Provjera statusa je ujedno i zaštita od
  * dvostrukog storna: drugi poziv za isti račun više ne nađe 'completed' red.
@@ -32,18 +37,19 @@ export function vratiZalihuRacuna(db: SqlDb, orderId: number): void {
 export function refundOrderInTransaction(
   db: SqlDb,
   id: number,
-  brojReklamacije: string | null
+  brojReklamacije: string | null,
+  datum: string | null = null,
 ): void {
   const order = db.prepare("SELECT id FROM orders WHERE id = ? AND status = 'completed'")
     .get(id) as { id: number } | undefined;
   if (!order) throw new Error('Račun ne postoji ili je već storniran');
 
   db.prepare(
-    "UPDATE orders SET status = 'refunded', refundedAt = datetime('now','localtime'), " +
+    "UPDATE orders SET status = 'refunded', refundedAt = COALESCE(?, datetime('now','localtime')), " +
     'brojReklamacije = COALESCE(?, brojReklamacije) WHERE id = ?'
-  ).run(brojReklamacije, id);
+  ).run(datum, brojReklamacije, id);
 
-  vratiZalihuRacuna(db, id);
+  vratiZalihuRacuna(db, id, datum);
 }
 
 export interface RefundDeps {
@@ -79,6 +85,11 @@ export interface RefundResult {
   manjak?: number;
   /** Iznos automatski evidentiranog pologa kad je override iskorišten. */
   pologIznos?: number;
+  /** Uređaj nije potvrdio storno — red ostaje za dijalog nezavršenih računa. */
+  ishodNepoznat?: true;
+  /** Storno je odštampan, ali već upisan iz dijaloga nezavršenih računa. */
+  vecEvidentiran?: true;
+  brojFiskalnogRacuna?: string | null;
 }
 
 /**
@@ -102,10 +113,20 @@ const refundsInFlight = new Set<number>();
  * jednoj transakciji. Ranije su štampa, promjena statusa i upis broja bila tri
  * odvojena IPC poziva iz renderera, pa je pad ili dvoklik između njih ostavljao
  * odštampan fiskalni storno bez ikakvog traga u bazi.
+ *
+ * Write-ahead kao order:finalize (lib/pendingRacun.ts): snapshot `vrsta:
+ * 'storno'` prije unosa novca i štampe; nepoznat ishod ostavlja red (račun
+ * ostaje 'completed' dok ga dijalog nezavršenih ne riješi).
  */
 export async function refundAndPrint(
   deps: RefundDeps,
-  data: { id: number; brojReklamacije?: string; dozvoliPolog?: boolean }
+  data: {
+    id: number; brojReklamacije?: string; dozvoliPolog?: boolean;
+    /** Ko stornira (zapis nezavršenog storna); bez njega autor računa. */
+    korisnikId?: number;
+    /** Admin koji je odobrio storno kasira PIN-om — za trag 'storno' iz dijaloga. */
+    odobrioAdminId?: number | null;
+  }
 ): Promise<RefundResult> {
   const { db, print, transaction } = deps;
   const id = data.id;
@@ -114,6 +135,7 @@ export async function refundAndPrint(
 
   const order = db.prepare("SELECT * FROM orders WHERE id = ? AND status = 'completed'").get(id);
   if (!order) throw new Error('Račun ne postoji ili je već storniran');
+  baciAkoCekaNezavrsen(db, 'orderId', order.id, 'Storno ovog računa');
 
   const brojRacuna = parseFiskalniBroj(order.brojFiskalnogRacuna);
   if (brojRacuna === null) {
@@ -170,49 +192,71 @@ export async function refundAndPrint(
     } catch { /* stanje ladice je informativno — ne smije oboriti storno */ }
   }
 
+  // Gotovinski manjak je stvaran novac iz ladice — samo se on gura kroz
+  // override i samo se on evidentira kao polog (poznat prije štampe → snapshot).
+  const planiraniPolog = data.dozvoliPolog && manjakLadica > 0 && deps.depositCash ? manjakLadica : 0;
+
   refundsInFlight.add(id);
   try {
+    const snapshot: SnapshotStorna = {
+      vrsta: 'storno', orderId: order.id, brojRacuna: order.brojFiskalnogRacuna ?? null,
+      korisnikId: data.korisnikId ?? order.korisnikId, ukupno: order.ukupno,
+      odobrioAdminId: data.odobrioAdminId ?? null, pologIznos: planiraniPolog,
+      stavke: stavke.map((s: any) => ({
+        naziv: s.naziv ?? s.productNaziv ?? '', kolicina: s.kolicina, cijena: s.cijena, rabat: s.rabat ?? 0,
+      })),
+    };
+    const pendingId = zapisiPending(db, snapshot.korisnikId, snapshot);
+
+    let result: Tring.TringResponse | null;
     let uneseno = 0;
-
-    // Nenovčani dio pokrića ide automatski — nema odluke za operatera jer
-    // nikakav stvaran novac ne mijenja vlasnika (virmanski račun se ovdje
-    // pokriva u cijelosti, pa storno prolazi bez ijednog dodatnog klika).
-    const samoUredjaj = Math.max(0, round2(manjakUredjaj - manjakLadica));
-    if (samoUredjaj > 0 && deps.deviceCashIn) {
-      await deps.deviceCashIn(samoUredjaj);
-      uneseno = samoUredjaj;
-    }
-
-    // Gotovinski manjak je stvaran novac iz ladice — samo se on gura kroz
-    // override i samo se on evidentira kao polog.
     let pologIznos = 0;
-    if (data.dozvoliPolog && manjakLadica > 0 && deps.depositCash) {
-      await deps.depositCash(manjakLadica, `Automatski polog za reklamaciju računa #${id}`);
-      pologIznos = manjakLadica;
-      uneseno = round2(uneseno + manjakLadica);
-    }
-
-    let result = await print(racun);
-
-    // Stanje ladice je samo procjena brojača u uređaju (pologi se mogu voditi
-    // i mimo aplikacije), pa ako uređaj i dalje javlja manjak — dopuni do
-    // punog iznosa računa i pokušaj još jednom. Storno taj iznos odmah
-    // potroši, tako da brojač uređaja ne ostane napuhan. Bez pitanja kad
-    // gotovinski manjak ne postoji; inače tek uz override.
-    if ((manjakLadica === 0 || data.dozvoliPolog) && result && !result.success && jeNedovoljnoSredstava(result)) {
-      const dopuna = round2(potrebnoUredjaj - uneseno);
-      if (dopuna > 0 && deps.deviceCashIn) {
-        await deps.deviceCashIn(dopuna);
-        uneseno = round2(uneseno + dopuna);
-        result = await print(racun);
+    try {
+      // Nenovčani dio pokrića ide automatski — nema odluke za operatera jer
+      // nikakav stvaran novac ne mijenja vlasnika (virmanski račun se ovdje
+      // pokriva u cijelosti, pa storno prolazi bez ijednog dodatnog klika).
+      const samoUredjaj = Math.max(0, round2(manjakUredjaj - manjakLadica));
+      if (samoUredjaj > 0 && deps.deviceCashIn) {
+        await deps.deviceCashIn(samoUredjaj);
+        uneseno = samoUredjaj;
       }
+
+      if (planiraniPolog > 0 && deps.depositCash) {
+        await deps.depositCash(planiraniPolog, `Automatski polog za reklamaciju računa #${id}`);
+        pologIznos = planiraniPolog;
+        uneseno = round2(uneseno + planiraniPolog);
+      }
+
+      result = await print(racun);
+
+      // Stanje ladice je samo procjena brojača u uređaju (pologi se mogu voditi
+      // i mimo aplikacije), pa ako uređaj i dalje javlja manjak — dopuni do
+      // punog iznosa računa i pokušaj još jednom. Storno taj iznos odmah
+      // potroši, tako da brojač uređaja ne ostane napuhan. Bez pitanja kad
+      // gotovinski manjak ne postoji; inače tek uz override. Nikad nakon
+      // nepoznatog ishoda — storno je možda već odštampan.
+      if ((manjakLadica === 0 || data.dozvoliPolog) && result && !result.success &&
+          !ishodNepoznat(result) && jeNedovoljnoSredstava(result)) {
+        const dopuna = round2(potrebnoUredjaj - uneseno);
+        if (dopuna > 0 && deps.deviceCashIn) {
+          await deps.deviceCashIn(dopuna);
+          uneseno = round2(uneseno + dopuna);
+          result = await print(racun);
+        }
+      }
+    } catch (err) {
+      // Unos novca ili štampa bacili izuzetak — storno nije odštampan.
+      db.prepare('DELETE FROM pending_receipts WHERE id = ?').run(pendingId);
+      throw err;
     }
 
     if (!result || !result.success) {
+      // Siguran neuspjeh briše pending red; nepoznat ishod ga ostavlja (bez
+      // ponude pologa — storno se ne smije slati ponovo dok se ne riješi).
+      const neuspjeh = neuspjelaStampa(db, pendingId, result);
+      if (neuspjeh.ishodNepoznat) return neuspjeh;
       return {
-        success: false,
-        error: result?.error || result?.vrstaOdgovora || 'Nepoznata greška',
-        odgovori: result?.odgovori ?? {},
+        ...neuspjeh,
         // Override se nudi samo ako može pomoći: kad fali stvarna gotovina, ili
         // kad uređaj i dalje traži novac a nismo ga dopunili do punog iznosa.
         nedovoljnoSredstava:
@@ -226,15 +270,21 @@ export async function refundAndPrint(
     const brojReklamacije =
       data.brojReklamacije?.trim() || result.odgovori?.BrojFiskalnogRacuna || null;
 
+    let vecUpisan = false;
     try {
-      transaction(() => refundOrderInTransaction(db, id, brojReklamacije))();
+      transaction(() => {
+        // Red riješen iz dijaloga dok je štampa trajala → bez drugog storna.
+        if (!preuzmiPendingRed(db, pendingId)) { vecUpisan = true; return; }
+        refundOrderInTransaction(db, id, brojReklamacije);
+      })();
     } catch (err: any) {
-      // Storno je već na papiru i u fiskalnom uređaju — operater to mora znati.
+      // Storno je već na papiru; pending red ostaje (rollback) za dijalog.
       throw new Error(
         `Reklamacija #${brojReklamacije ?? '?'} JE odštampana, ali nije zabilježena u bazi: ` +
-        `${err?.message || 'nepoznata greška'}. Evidentirajte račun ručno.`
+        `${err?.message || 'nepoznata greška'}. Riješite je kroz nezavršene račune.`
       );
     }
+    if (vecUpisan) return vecEvidentiranStorno(brojReklamacije);
 
     return { success: true, brojReklamacije, odgovori: result.odgovori, pologIznos };
   } finally {

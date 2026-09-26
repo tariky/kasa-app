@@ -1,6 +1,6 @@
 //! Iznosi računa i upis odštampanog računa (`lib/racun.ts`).
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::greska::R;
 use crate::js::{round2, to_number};
@@ -29,16 +29,20 @@ pub fn izracunaj_totale(stavke: &[Value]) -> (f64, f64) {
 }
 
 /// Upis već odštampanog fiskalnog računa: orders + order_items + izlaz
-/// skladišta. `input` ima oblik `UpisRacunaInput` iz TS-a. Poziva se u transakciji.
+/// skladišta. `input` ima oblik `UpisRacunaInput` iz TS-a (s opcionim
+/// `createdAt` i `isManual` za račun iz dijaloga nezavršenih). Poziva se u transakciji.
 pub fn upisi_racun(db: &Db, input: &Value) -> R<i64> {
     let k = &input["kupac"];
+    // Bez datuma: zadani datum kolone (sada), kao i ranije.
+    let created_at = input["createdAt"].as_str().filter(|s| !s.is_empty());
+    let is_manual = if input["isManual"].is_null() { json!(0) } else { input["isManual"].clone() };
     let r = db.run(
         "INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, status,
-      kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj)
-    VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?)",
+      kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj, isManual, createdAt)
+    VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now','localtime')))",
         p![
             input["korisnikId"], input["ukupno"], input["pdvIznos"], input["nacinPlacanja"], input["brojFiskalnogRacuna"],
-            k["naziv"], k["idBroj"], k["adresa"], k["grad"], k["postanskiBroj"]
+            k["naziv"], k["idBroj"], k["adresa"], k["grad"], k["postanskiBroj"], is_manual, created_at
         ],
     )?;
     let order_id = r.last_insert_rowid;
@@ -49,8 +53,8 @@ pub fn upisi_racun(db: &Db, input: &Value) -> R<i64> {
         )?;
         if s["productTip"] != "usluga" {
             db.run(
-                "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'izlaz', ?, 'order', ?)",
-                p![s["productId"], s["kolicina"], order_id],
+                "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId, createdAt) VALUES (?, 'izlaz', ?, 'order', ?, COALESCE(?, datetime('now','localtime')))",
+                p![s["productId"], s["kolicina"], order_id, created_at],
             )?;
         }
     }

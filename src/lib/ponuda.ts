@@ -6,6 +6,10 @@ import { buildTringRacun } from './tringRacun';
 import { provjeriStavke } from './provjeraRacuna';
 import { provjeriNacinPlacanja } from './placanje';
 import { formatBroja, nastavakNumeracije, ZADANE_DOKUMENT_POSTAVKE, type FormatBroja } from './dokumentPostavke';
+import {
+  baciAkoCekaNezavrsen, neuspjelaStampa, preuzmiPendingRed, snapshotKupca, vecEvidentiran, zapisiPending,
+  type SnapshotPonude,
+} from './pendingRacun';
 
 export interface PonudaStavka {
   productId: number;
@@ -125,6 +129,8 @@ export function setStatusPonude(db: SqlDb, id: number, status: PonudaStatus): vo
   const ponuda = db.prepare('SELECT status FROM ponude WHERE id = ?')
     .get(id) as { status: string } | undefined;
   if (!ponuda) throw new Error('Ponuda ne postoji');
+  // Račun po ponudi koji čeka konvertuje ponudu kad se riješi.
+  baciAkoCekaNezavrsen(db, 'ponudaId', id, 'Račun po ovoj ponudi', 'prije promjene statusa ponude');
   if (ponuda.status === 'konvertovana') throw new Error('Konvertovana ponuda se ne može mijenjati');
 
   db.prepare('UPDATE ponude SET status = ? WHERE id = ?').run(status, id);
@@ -139,6 +145,7 @@ export function setStatusPonude(db: SqlDb, id: number, status: PonudaStatus): vo
 export function deletePonuda(db: SqlDb, id: number): { changes: number } {
   const ponuda = db.prepare('SELECT status FROM ponude WHERE id = ?').get(id) as { status: string } | undefined;
   if (!ponuda) return { changes: 0 };
+  baciAkoCekaNezavrsen(db, 'ponudaId', id, 'Račun po ovoj ponudi', 'prije brisanja ponude');
   if (ponuda.status === 'konvertovana') {
     throw new Error('Konvertovana ponuda se ne može obrisati — po njoj je izdat račun');
   }
@@ -170,6 +177,8 @@ export function updatePonuda(
   const ponuda = db.prepare('SELECT id, status, kupacId, datum, vaziDo FROM ponude WHERE id = ?')
     .get(id) as { id: number; status: string; kupacId: number; datum: string; vaziDo: string } | undefined;
   if (!ponuda) throw new Error('Ponuda ne postoji');
+  // Snapshot računa koji čeka nosi stare stavke — izmjena bi ih razdvojila od ponude.
+  baciAkoCekaNezavrsen(db, 'ponudaId', id, 'Račun po ovoj ponudi', 'prije izmjene ponude');
   if (ponuda.status === 'konvertovana') throw new Error('Konvertovana ponuda se ne može mijenjati');
   const stavke = provjeriStavke(db, data.stavke);
 
@@ -207,6 +216,10 @@ export interface KonverzijaResult {
   brojFiskalnogRacuna?: string | null;
   error?: string;
   odgovori?: Record<string, string>;
+  /** Uređaj nije potvrdio račun — red ostaje za dijalog nezavršenih računa. */
+  ishodNepoznat?: true;
+  /** Račun je odštampan, ali već upisan iz dijaloga nezavršenih računa. */
+  vecEvidentiran?: true;
 }
 
 export { NACINI_PLACANJA } from './placanje';
@@ -215,18 +228,51 @@ export { NACINI_PLACANJA } from './placanje';
 const konverzijeInFlight = new Set<number>();
 
 /**
+ * Upis računa po ponudi iz write-ahead snapshota: račun + razduženje skladišta,
+ * ponuda → konvertovana, a nalog iz kojeg je račun izdat → fakturisan. Isti
+ * upis ide nakon uspješne štampe i iz dijaloga nezavršenih računa (tada s
+ * datumom s papira, kao ručni račun). Ponuda koja je u međuvremenu već
+ * konvertovana i nalog koji više nije završen ostaju kakvi jesu — račun je na
+ * papiru i mora postojati u bazi. U transakciji. Rust: `upisi_konverziju_ponude`.
+ */
+export function upisiKonverzijuPonude(
+  db: SqlDb, snap: SnapshotPonude,
+  opts: { brojFiskalnogRacuna: string | null; createdAt?: string; isManual?: 0 | 1 },
+): number {
+  const orderId = upisiRacun(db, {
+    korisnikId: snap.korisnikId, ukupno: snap.ukupno, pdvIznos: snap.pdvIznos,
+    nacinPlacanja: snap.nacinPlacanja, brojFiskalnogRacuna: opts.brojFiskalnogRacuna,
+    kupac: snap.kupac, stavke: snap.stavke, createdAt: opts.createdAt, isManual: opts.isManual,
+  });
+  db.prepare("UPDATE ponude SET status = 'konvertovana', racunId = ? WHERE id = ? AND status <> 'konvertovana'")
+    .run(orderId, snap.ponudaId);
+  // Kao fakturisiNalog (lib/proizvodnja.ts), bez bacanja: nalog vraćen u izradu ostaje.
+  if (snap.nalogId != null) {
+    db.prepare(
+      "UPDATE radni_nalozi SET status = 'fakturisan', racunId = ? WHERE id = ? AND status = 'zavrsen' AND vrsta = 'narudzba'"
+    ).run(orderId, snap.nalogId);
+  }
+  return orderId;
+}
+
+/**
  * Odštampa fiskalni račun po ponudi i tek nakon uspješne štampe upiše račun,
- * razduži skladište i zaključa ponudu — u jednoj transakciji (isti obrazac
- * kao refundAndPrint). Račun ide po cijenama zamrznutim na ponudi, ne po
- * trenutnom cjenovniku. Istekla ponuda se smije konvertovati — operater
- * odlučuje da li dogovor još važi; odbijena ne smije.
+ * razduži skladište i zaključa ponudu — u jednoj transakciji. Račun ide po
+ * cijenama zamrznutim na ponudi, ne po trenutnom cjenovniku. Istekla ponuda se
+ * smije konvertovati — operater odlučuje da li dogovor još važi; odbijena ne smije.
  *
  * Sve što bi upis u bazu moglo oboriti (korisnik, način plaćanja, artikli)
  * provjerava se PRIJE štampe — odštampan fiskalni račun se ne može povući.
+ * Write-ahead kao order:finalize (lib/pendingRacun.ts): snapshot `vrsta:
+ * 'ponuda'` prije štampe; nepoznat ishod ga ostavlja za dijalog nezavršenih.
+ *
+ * `opts.nalogId` (samo iz izdajRacunZaNalog, ne iz IPC payload-a): nalog iz
+ * kojeg se račun izdaje — fakturiše se u istoj transakciji.
  */
 export async function konvertujPonudu(
   deps: KonverzijaDeps,
-  data: { id: number; korisnikId: number; nacinPlacanja: string }
+  data: { id: number; korisnikId: number; nacinPlacanja: string },
+  opts: { nalogId?: number } = {},
 ): Promise<KonverzijaResult> {
   const { db, print, transaction } = deps;
   const id = data.id;
@@ -246,6 +292,7 @@ export async function konvertujPonudu(
   if (ponuda.status === 'odbijena') {
     throw new Error('Odbijena ponuda se ne može pretvoriti u račun — ako kupac ipak prihvata, prvo promijenite status');
   }
+  baciAkoCekaNezavrsen(db, 'ponudaId', ponuda.id, 'Račun po ovoj ponudi');
 
   const stavke = db.prepare(`
     SELECT ps.*, p.naziv AS productNaziv, p.jm AS productJm, p.sifra AS productSifra,
@@ -275,38 +322,49 @@ export async function konvertujPonudu(
       } : undefined,
     });
 
-    const result = await print(racun);
+    const snapshot: SnapshotPonude = {
+      vrsta: 'ponuda', ponudaId: ponuda.id, ponudaBroj: ponuda.broj, ponudaGodina: ponuda.godina,
+      ...(opts.nalogId != null ? { nalogId: opts.nalogId } : {}),
+      korisnikId: data.korisnikId, ukupno: ponuda.ukupno, pdvIznos: ponuda.pdvIznos, nacinPlacanja,
+      kupac: snapshotKupca(kupac),
+      stavke: stavke.map(s => ({
+        productId: s.productId, naziv: s.productNaziv, kolicina: s.kolicina, cijena: s.cijena,
+        rabat: s.rabat, pdvStopa: s.pdvStopa, productTip: s.productTip,
+      })),
+    };
+    const pendingId = zapisiPending(db, data.korisnikId, snapshot);
 
-    if (!result || !result.success) {
-      return {
-        success: false,
-        error: result?.error || result?.vrstaOdgovora || 'Nepoznata greška',
-        odgovori: result?.odgovori ?? {},
-      };
+    let result: Tring.TringResponse | null;
+    try {
+      result = await print(racun);
+    } catch (err) {
+      // Izuzetak iz štampe — ništa nije odštampano, počisti write-ahead red.
+      db.prepare('DELETE FROM pending_receipts WHERE id = ?').run(pendingId);
+      throw err;
     }
+
+    // Siguran neuspjeh briše pending red; nepoznat ishod ga ostavlja.
+    if (!result || !result.success) return neuspjelaStampa(db, pendingId, result);
 
     const brojFiskalnogRacuna = result.odgovori?.BrojFiskalnogRacuna || null;
 
+    let racunId: number | null;
     try {
-      const racunId = transaction(() => {
-        const orderId = upisiRacun(db, {
-          korisnikId: data.korisnikId, ukupno: ponuda.ukupno, pdvIznos: ponuda.pdvIznos,
-          nacinPlacanja, brojFiskalnogRacuna,
-          kupac: kupac ?? null, stavke,
-        });
-        db.prepare("UPDATE ponude SET status = 'konvertovana', racunId = ? WHERE id = ?")
-          .run(orderId, id);
-        return orderId;
+      racunId = transaction(() => {
+        // Red riješen iz dijaloga dok je štampa trajala → bez drugog zapisa.
+        if (!preuzmiPendingRed(db, pendingId)) return null;
+        return upisiKonverzijuPonude(db, snapshot, { brojFiskalnogRacuna });
       })();
-
-      return { success: true, racunId, brojFiskalnogRacuna, odgovori: result.odgovori };
     } catch (err: any) {
-      // Račun je već na papiru i u fiskalnom uređaju — operater to mora znati.
+      // Račun je već na papiru; pending red ostaje (rollback) za dijalog.
       throw new Error(
         `Račun ${brojFiskalnogRacuna ?? '?'} JE odštampan, ali nije zabilježen u bazi: ` +
-        `${err?.message || 'nepoznata greška'}. Evidentirajte račun ručno.`
+        `${err?.message || 'nepoznata greška'}. Riješite ga kroz nezavršene račune.`
       );
     }
+    if (racunId === null) return vecEvidentiran(brojFiskalnogRacuna);
+
+    return { success: true, racunId, brojFiskalnogRacuna, odgovori: result.odgovori };
   } finally {
     konverzijeInFlight.delete(id);
   }

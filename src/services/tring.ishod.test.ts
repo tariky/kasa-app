@@ -116,3 +116,25 @@ describe('zahtjev je stigao, a odgovora nema — ishod nepoznat', () => {
     }
   });
 });
+
+// Greška mreže nakon što je zahtjev predan uređaju (npr. LAN pukne dok se čeka
+// odgovor → EHOSTUNREACH) ne znači "nije odštampano": uređaj je možda štampao.
+// Takvu grešku nije moguće pouzdano izazvati u testu, pa se provjerava sama
+// klasifikacija. Rust: `ishod_greska_mreze_poslije_povezivanja_je_nepoznata`.
+describe('klasifikacija greške zahtjeva', () => {
+  const mrezne = ['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'EHOSTDOWN', 'ENETUNREACH', 'EADDRNOTAVAIL'];
+
+  test('poslije povezivanja je svaka greška nepoznat ishod', () => {
+    for (const kod of [...mrezne, 'ECONNRESET', 'EPIPE', undefined]) {
+      expect([kod, Tring.greskaZahtjevaNepoznata(kod, true)]).toEqual([kod, true]);
+    }
+  });
+
+  test('bez preuzete veze (Bun) mrežne greške povezivanja su siguran neuspjeh', () => {
+    for (const kod of mrezne) {
+      expect([kod, Tring.greskaZahtjevaNepoznata(kod, false)]).toEqual([kod, false]);
+    }
+    expect(Tring.greskaZahtjevaNepoznata('ECONNRESET', false)).toBe(true);
+    expect(Tring.greskaZahtjevaNepoznata(undefined, false)).toBe(true);
+  });
+});

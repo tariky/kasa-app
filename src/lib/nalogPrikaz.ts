@@ -2,6 +2,7 @@
 // Čisti pomoćnici za prikaz radnog naloga — bez baze, bez React-a.
 import type { NalogStatus, NalogVrsta, ProizvodPonude } from '@/types';
 import { danaIzmedju } from './ponuda';
+import { TOLERANCIJA_ZALIHE } from './tolerancije';
 
 export type RokTon = 'ok' | 'warn' | 'late';
 
@@ -56,7 +57,7 @@ export function uskladiIzbor<P extends { productId: number; kolicina: number }>(
   const oznacene = new Set<number>();
   const neuskladjeni: P[] = [];
   for (const p of proizvodi) {
-    const i = slobodne.findIndex(l => l.productId === p.productId && Math.abs(l.kolicina - p.kolicina) < 1e-9);
+    const i = slobodne.findIndex(l => l.productId === p.productId && Math.abs(l.kolicina - p.kolicina) < TOLERANCIJA_ZALIHE);
     if (i < 0) { neuskladjeni.push(p); continue; }
     oznacene.add(slobodne[i].ponudaStavkaId);
     slobodne.splice(i, 1);

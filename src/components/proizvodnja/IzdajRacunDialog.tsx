@@ -9,6 +9,7 @@ import { Separator } from '@/components/ui/separator';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Eyebrow, Key, mod } from '@/components/ui/ledger';
 import { Receipt, AlertTriangle, Banknote, CreditCard, Building, FileCheck } from 'lucide-react';
+import { otvoriNezavrseneRacune } from '@/lib/nezavrseniRacuni';
 
 type PaymentType = 'Gotovina' | 'Kartica' | 'Virman' | 'Ček';
 const PAYMENTS: { type: PaymentType; icon: React.ReactNode }[] = [
@@ -18,9 +19,11 @@ const PAYMENTS: { type: PaymentType; icon: React.ReactNode }[] = [
   { type: 'Ček', icon: <FileCheck size={14} /> },
 ];
 
-export function IzdajRacunDialog({ open, onOpenChange, nalog, onIzdat }: {
+export function IzdajRacunDialog({ open, onOpenChange, nalog, onIzdat, onNezavrseno }: {
   open: boolean; onOpenChange: (v: boolean) => void; nalog: RadniNalog;
   onIzdat: (brojFiskalnog: string | null) => void;
+  /** Ishod štampe nije poznat ili je račun već upisan iz dijaloga nezavršenih računa. */
+  onNezavrseno: (poruka: string) => void;
 }) {
   const { postavke } = useDokumentPostavke();
   const [paymentType, setPaymentType] = useState<PaymentType>('Gotovina');
@@ -37,6 +40,14 @@ export function IzdajRacunDialog({ open, onOpenChange, nalog, onIzdat }: {
     setBusy(true); setErr(null);
     try {
       const r = await window.api.izdajRacunZaNalog({ id: nalog.id, nacinPlacanja: paymentType });
+      // Račun je možda odštampan (ili već upisan iz dijaloga nezavršenih) —
+      // dijalog se zatvara da se nalog ne pošalje ponovo.
+      if (r && !r.success && (r.ishodNepoznat || r.vecEvidentiran)) {
+        onOpenChange(false);
+        if (r.ishodNepoznat) otvoriNezavrseneRacune();
+        onNezavrseno(r.error || 'Ishod štampe nije poznat.');
+        return;
+      }
       if (!r || !r.success) {
         const det = r?.odgovori ? Object.entries(r.odgovori).map(([k, v]) => `${k}: ${v}`).join(', ') : '';
         setErr(`Greška: ${r?.error || 'Nepoznata greška'}${det ? ` (${det})` : ''}`);

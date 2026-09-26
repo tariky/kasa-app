@@ -149,11 +149,23 @@ function nextRequestNumber(): number {
  * zahtjev krenuo (timeout, prekid veze, neparsiran odgovor) znači da je
  * uređaj možda štampao: ishod nije poznat. Rust: `nije_poslano` u tring.rs.
  *
- * U Electronu (Node) zahtjev ide preko veze koju `postXml` sam uspostavi, pa
- * ovi kodovi tu stižu samo prije povezivanja; lista pokriva Bun (testovi),
- * čiji `node:http` ne koristi `createConnection` nego otvara svoju vezu.
+ * Lista važi samo dok zahtjev nije preuzeo vezu: u Electronu (Node) zahtjev
+ * ide preko veze koju `postXml` sam uspostavi, i tada je SVAKA greška —
+ * uključujući EHOSTUNREACH/ENETUNREACH kad LAN pukne dok se čeka odgovor —
+ * nepoznat ishod. Bez preuzete veze (Bun u testovima: `node:http` ne koristi
+ * `createConnection` nego otvara svoju vezu) mrežni kodovi su greške
+ * povezivanja te druge veze.
  */
 const NIJE_POSLANO = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'EHOSTDOWN', 'ENETUNREACH', 'EADDRNOTAVAIL']);
+
+/**
+ * Da li greška HTTP zahtjeva (poslije uspostavljene probne veze) znači
+ * nepoznat ishod. `vezaPreuzeta` — zahtjev ide baš preko veze koja je već
+ * uspostavljena, pa je mogao stići do uređaja. Rust: `nije_poslano`.
+ */
+export function greskaZahtjevaNepoznata(kod: string | undefined, vezaPreuzeta: boolean): boolean {
+  return vezaPreuzeta || !NIJE_POSLANO.has(kod ?? "");
+}
 
 /** Odgovor uređaja ima `<VrstaOdgovora>` (OK/Greska) ili `<Greska>` (greska.xsd). */
 function odgovorUredjaja(xml: string): boolean {
@@ -270,7 +282,7 @@ function postXml(urlPath: string, body: string): Promise<TringResponse> {
       });
 
       req.on("error", (err: NodeJS.ErrnoException) => {
-        zavrsi(neuspjeh(err.message, !NIJE_POSLANO.has(err.code ?? "")), "");
+        zavrsi(neuspjeh(err.message, greskaZahtjevaNepoznata(err.code, vezaPreuzeta)), "");
       });
 
       // Bun ignoriše createConnection i otvara svoju vezu — probna se zatvara.

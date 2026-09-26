@@ -1,15 +1,12 @@
 import type { SqlDb } from './sqldb';
 import type { PregledCijenaUlaza } from '../types';
+import { TOLERANCIJA_ZALIHE } from './tolerancije';
+
+/** Vidi lib/tolerancije.ts. */
+export { TOLERANCIJA_ZALIHE };
 
 /** Tolerancija pri poređenju cijena (fening). */
 const EPS = 0.001;
-
-/**
- * Tolerancija za stanje zalihe: |stanje| < 1e-9 je nula. Stanje je zbir
- * kretanja u REAL-u, pa ostaje šum (0,1 + 0,2 − 0,3 ≠ 0) — takva "zaliha" ne
- * pravi nivelaciju, upozorenje ni korekciju. Ista granica važi u izvozu.
- */
-export const TOLERANCIJA_ZALIHE = 1e-9;
 
 export interface PriceChange {
   productId: number;

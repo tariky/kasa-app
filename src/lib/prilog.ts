@@ -7,7 +7,7 @@ import { iznosStavke, izracunajTotale } from './racun';
 import { buildTringRacun } from './tringRacun';
 import { provjeriIznoseStavke, provjeriKupca } from './provjeraRacuna';
 import { provjeriNacinPlacanja } from './placanje';
-import { neuspjelaStampa, preuzmiPendingRed, vecEvidentiran } from './pendingRacun';
+import { baciAkoCekaNezavrsen, neuspjelaStampa, preuzmiPendingRed, vecEvidentiran } from './pendingRacun';
 
 /**
  * Račun po prilogu: fiskalno se kuca jedna zbirna stavka, a stvarne stavke se
@@ -255,6 +255,8 @@ export async function finalizePrilogAndPrint(
   const nacinPlacanja = provjeriNacinPlacanja(data.nacinPlacanja);
   const kupac = provjeriKupca(data.kupac);
   const { datumValute, napomena, ponudaId } = provjeriDodatkeFakture(db, data);
+  // Faktura iz ponude čiji račun još čeka u nezavršenim bila bi drugi račun za isti posao.
+  if (ponudaId != null) baciAkoCekaNezavrsen(db, 'ponudaId', ponudaId, 'Račun po ovoj ponudi');
   const skicaId = Number.isInteger(data.skicaId) ? data.skicaId as number : null;
 
   // Naziv stavke mora nositi broj isječka na koji se kuca, a njega uređaj vrati
