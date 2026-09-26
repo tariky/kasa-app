@@ -8,10 +8,9 @@ use serde_json::{json, Map, Value};
 use crate::greska::R;
 use crate::js::{self, truthy};
 use crate::sql::Db;
-use crate::stampa::{self, Rod, Uredjaj};
-use crate::tring;
+use crate::stampa::{self, Fiskalizacija, Uredjaj};
 use crate::sesija;
-use crate::pending_racun::{self, preuzmi_pending_red, vec_evidentiran};
+use crate::pending_racun;
 use crate::prilog::{
     finalize_prilog_and_print, oznaci_ponudu_fakturisanom, prilog_naziv, save_prilog_stavke_in_transaction, PRILOG_SIFRA,
 };
@@ -183,46 +182,21 @@ fn finalize(b: &Backend, unos: &Value) -> R<Value> {
         .collect();
     m.insert("stavke".into(), Value::from(stavke));
     let data = Value::Object(m);
-    // Sve što može pasti prije štampe (postavke uređaja, račun za uređaj) ide
-    // prije write-ahead reda — greška ovdje ne ostavlja nezavršen račun.
+    // Postavke uređaja i račun za uređaj prije write-ahead reda (stampa::fiskalizuj).
     let uredjaj = Uredjaj::iz_postavki(b)?;
     let racun = tring_racun::build_tring_racun(&js::spoji(&data, vec![("items", data["stavke"].clone())]));
-
-    // 1. Write-ahead: persist the snapshot BEFORE printing (committed immediately).
-    let pending_id = db
-        .run("INSERT INTO pending_receipts (korisnikId, snapshot) VALUES (?, ?)", p![data["korisnikId"], js::stringify(&data)])?
-        .last_insert_rowid;
-
-    // 2. Print.
-    let result = uredjaj.fiskalni("finalize", &racun);
-
-    // 3b. Print failed → surely not printed: drop the pending row; unknown
-    // outcome (timeout, dropped connection): keep it for the pending dialog.
-    if !tring::uspjeh(&result) {
-        return stampa::neuspjeh(db, pending_id, &result);
-    }
-
-    // 3a. Print succeeded → delete pending row + create order atomically. A
-    // row already resolved from the dialog meanwhile means no second order.
-    let broj_fiskalnog_racuna = stampa::broj_sa_uredjaja(&result);
-    let upis = db.tx(|| {
-        if !preuzmi_pending_red(db, pending_id)? {
-            return Ok(None);
-        }
-        racun::upisi_racun(
-            db,
-            &js::spoji(&data, vec![("brojFiskalnogRacuna", broj_fiskalnog_racuna.clone()), ("isManual", json!(0))]),
-        )
-        .map(Some)
-    });
-    let order_id = match upis {
-        Ok(Some(id)) => id,
-        Ok(None) => return Ok(vec_evidentiran(&broj_fiskalnog_racuna)),
-        // Račun je već na papiru; pending red ostaje (rollback) za dijalog.
-        Err(e) => return Err(stampa::nije_zabiljezen(&stampa::racun_s_brojem(&broj_fiskalnog_racuna), Rod::Muski, &e)),
-    };
-
-    Ok(json!({ "success": true, "id": order_id, "brojFiskalnogRacuna": broj_fiskalnog_racuna, "odgovori": result["odgovori"] }))
+    let r = stampa::fiskalizuj(
+        db,
+        Fiskalizacija::racun(
+            &data,
+            || Ok(uredjaj.fiskalni("finalize", &racun)),
+            |bf| racun::upisi_racun(db, &js::spoji(&data, vec![("brojFiskalnogRacuna", bf.clone()), ("isManual", json!(0))])),
+        ),
+    )?;
+    Ok(match r {
+        Ok(u) => json!({ "success": true, "id": u.id, "brojFiskalnogRacuna": u.bf, "odgovori": u.odgovori }),
+        Err(odgovor) => odgovor,
+    })
 }
 
 /// `order:refundAndPrint`. Admin PIN (`kasa.requirePinRefund`) je provjeren

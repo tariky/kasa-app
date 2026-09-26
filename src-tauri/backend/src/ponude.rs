@@ -4,13 +4,12 @@ use chrono::{Datelike, Duration, NaiveDate};
 use serde_json::{json, Map, Value};
 
 use crate::greska::R;
-use crate::pending_racun::{baci_ako_ceka_nezavrsen, preuzmi_pending_red, snapshot_kupca, vec_evidentiran, zapisi_pending};
+use crate::pending_racun::{baci_ako_ceka_nezavrsen, snapshot_kupca};
 use crate::js::{self, or, truthy};
 use crate::postavke;
 use crate::racun::{izracunaj_totale, upisi_racun};
 use crate::sql::Db;
-use crate::stampa::{self, Rod, UToku, Uredjaj};
-use crate::tring::uspjeh;
+use crate::stampa::{self, Fiskalizacija, UToku, Uredjaj};
 use crate::tring_racun::build_tring_racun;
 use crate::sesija;
 use crate::kanali::Kanal;
@@ -276,8 +275,8 @@ pub fn upisi_konverziju_ponude(db: &Db, snap: &Value, broj_fiskalnog_racuna: &Va
 ///
 /// Sve što bi upis u bazu moglo oboriti (korisnik, način plaćanja, artikli)
 /// provjerava se PRIJE štampe — odštampan fiskalni račun se ne može povući.
-/// Write-ahead kao order:finalize (pending_racun.rs): snapshot `vrsta:
-/// 'ponuda'` prije štampe; nepoznat ishod ga ostavlja za dijalog nezavršenih.
+/// Tok kao order:finalize (`stampa::fiskalizuj`): snapshot `vrsta: 'ponuda'`
+/// prije štampe; nepoznat ishod ga ostavlja za dijalog nezavršenih.
 ///
 /// `kanal` je samo oznaka za dnevnik štampe (ponuda:konvertuj / nalog:izdajRacun).
 /// `nalog_id` (samo iz `izdaj_racun_za_nalog`, ne iz IPC payload-a): nalog iz
@@ -351,32 +350,18 @@ pub fn konvertuj_ponudu(b: &Backend, kanal: &str, data: &Value, nalog_id: Option
         snapshot["nalogId"] = n.clone();
     }
     let uredjaj = Uredjaj::iz_postavki(b)?;
-    let pending_id = zapisi_pending(db, &data["korisnikId"], &snapshot)?;
-
-    // Štampa u Rustu ne baca — greška veze stiže kao neuspješan odgovor.
-    let result = uredjaj.fiskalni(kanal, &racun);
-
-    // Siguran neuspjeh briše pending red; nepoznat ishod ga ostavlja.
-    if !uspjeh(&result) {
-        return stampa::neuspjeh(db, pending_id, &result);
-    }
-
-    let broj_fiskalnog_racuna = stampa::broj_sa_uredjaja(&result);
-
-    let upis = db.tx(|| {
-        // Red riješen iz dijaloga dok je štampa trajala → bez drugog zapisa.
-        if !preuzmi_pending_red(db, pending_id)? {
-            return Ok(None);
-        }
-        upisi_konverziju_ponude(db, &snapshot, &broj_fiskalnog_racuna, &Value::Null, 0).map(Some)
-    });
-
-    match upis {
-        Ok(Some(racun_id)) => Ok(uspjesna_stampa(&json!(racun_id), &broj_fiskalnog_racuna, &result["odgovori"])),
-        Ok(None) => Ok(vec_evidentiran(&broj_fiskalnog_racuna)),
-        // Račun je već na papiru; pending red ostaje (rollback) za dijalog.
-        Err(e) => Err(stampa::nije_zabiljezen(&stampa::racun_s_brojem(&broj_fiskalnog_racuna), Rod::Muski, &e)),
-    }
+    let r = stampa::fiskalizuj(
+        db,
+        Fiskalizacija::racun(
+            &snapshot,
+            || Ok(uredjaj.fiskalni(kanal, &racun)),
+            |bf| upisi_konverziju_ponude(db, &snapshot, bf, &Value::Null, 0),
+        ),
+    )?;
+    Ok(match r {
+        Ok(u) => uspjesna_stampa(&json!(u.id), &u.bf, &u.odgovori),
+        Err(odgovor) => odgovor,
+    })
 }
 
 fn get_all(db: &Db) -> R<Value> {

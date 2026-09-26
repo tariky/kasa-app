@@ -5,14 +5,13 @@ use std::collections::{HashMap, HashSet};
 use serde_json::{json, Map, Value};
 
 use crate::greska::R;
-use crate::pending_racun::{baci_ako_ceka_nezavrsen, preuzmi_pending_red, snapshot_kupca, vec_evidentiran, zapisi_pending};
+use crate::pending_racun::{baci_ako_ceka_nezavrsen, snapshot_kupca};
 use crate::js::{self, has, round2, to_number, truthy};
 use crate::ponude;
 use crate::racun::{izracunaj_totale, upisi_racun};
 use crate::zaliha::{self, Dokument, Smjer, TOLERANCIJA_ZALIHE};
 use crate::sql::Db;
-use crate::stampa::{self, Rod, UToku, Uredjaj};
-use crate::tring::uspjeh;
+use crate::stampa::{self, Fiskalizacija, UToku, Uredjaj};
 use crate::tring_racun::build_tring_racun;
 use crate::kanali::Kanal;
 use crate::{baci, p, provjera_racuna, sesija, Backend};
@@ -953,28 +952,18 @@ pub fn izdaj_racun_za_nalog(b: &Backend, kanal: &str, data: &Value) -> R<Value> 
         }],
     });
     let uredjaj = Uredjaj::iz_postavki(b)?;
-    let pending_id = zapisi_pending(db, &data["korisnikId"], &snapshot)?;
-
-    let result = uredjaj.fiskalni(kanal, &racun);
-    // Siguran neuspjeh briše pending red; nepoznat ishod ga ostavlja.
-    if !uspjeh(&result) {
-        return stampa::neuspjeh(db, pending_id, &result);
-    }
-    let broj_fiskalnog_racuna = stampa::broj_sa_uredjaja(&result);
-
-    let upis = db.tx(|| {
-        // Red riješen iz dijaloga dok je štampa trajala → bez drugog zapisa.
-        if !preuzmi_pending_red(db, pending_id)? {
-            return Ok(None);
-        }
-        upisi_racun_naloga(db, &snapshot, &broj_fiskalnog_racuna, &Value::Null, 0).map(Some)
-    });
-    match upis {
-        Ok(Some(racun_id)) => Ok(ponude::uspjesna_stampa(&json!(racun_id), &broj_fiskalnog_racuna, &result["odgovori"])),
-        Ok(None) => Ok(vec_evidentiran(&broj_fiskalnog_racuna)),
-        // Račun je već na papiru; pending red ostaje (rollback) za dijalog.
-        Err(e) => Err(stampa::nije_zabiljezen(&stampa::racun_s_brojem(&broj_fiskalnog_racuna), Rod::Muski, &e)),
-    }
+    let r = stampa::fiskalizuj(
+        db,
+        Fiskalizacija::racun(
+            &snapshot,
+            || Ok(uredjaj.fiskalni(kanal, &racun)),
+            |bf| upisi_racun_naloga(db, &snapshot, bf, &Value::Null, 0),
+        ),
+    )?;
+    Ok(match r {
+        Ok(u) => ponude::uspjesna_stampa(&json!(u.id), &u.bf, &u.odgovori),
+        Err(odgovor) => odgovor,
+    })
 }
 
 fn set_status(b: &Backend, data: &Value) -> R<Value> {

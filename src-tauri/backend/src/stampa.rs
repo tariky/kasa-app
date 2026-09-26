@@ -1,11 +1,11 @@
 //! Fiskalna štampa za sve tokove (račun, prilog, ponuda, nalog, storno,
-//! gotovina, izvještaji) i zajednički oblici njenog ishoda.
+//! gotovina, izvještaji) i tok fiskalnog dokumenta ([`fiskalizuj`]).
 //!
-//! [`Uredjaj::iz_postavki`] je jedino mjesto koje učita Tring postavke iz baze
-//! (`loadTringConfig`), a svaki poziv uređaja zapiše zahtjev i odgovor u
-//! dnevnik kad je uključen. Uređaj se nikad ne zove u transakciji: dok čeka
-//! uređaj, poziv otpušta petlju (petlja.rs), a transakcija je ne otpušta.
-//! TS: `lib/fiskalniUredjaj.ts` i dijelovi `lib/pendingRacun.ts`.
+//! [`Uredjaj::iz_postavki`] učita Tring postavke iz baze (`postavke::tring`),
+//! a svaki poziv uređaja zapiše zahtjev i odgovor u dnevnik kad je uključen.
+//! Uređaj se nikad ne zove u transakciji: dok čeka uređaj, poziv otpušta
+//! petlju (petlja.rs), a transakcija je ne otpušta. TS:
+//! `lib/fiskalniUredjaj.ts`, `lib/fiskalizacija.ts` i dijelovi `lib/pendingRacun.ts`.
 
 use std::collections::BTreeSet;
 use std::sync::atomic::Ordering;
@@ -15,6 +15,7 @@ use serde_json::{json, Value};
 
 use crate::greska::{Greska, R};
 use crate::js::{self, or, or_null};
+use crate::pending_racun::{preuzmi_pending_red, vec_evidentiran, zapisi_pending};
 use crate::sql::Db;
 use crate::tring::{self, Odgovor};
 use crate::{p, postavke, Backend};
@@ -160,7 +161,7 @@ impl Drop for UToku<'_> {
 // ─── Ishod štampe ───────────────────────────────────────────
 
 /// Broj koji je uređaj vratio: `result.odgovori?.BrojFiskalnogRacuna || null`.
-pub fn broj_sa_uredjaja(result: &Odgovor) -> Value {
+fn broj_sa_uredjaja(result: &Odgovor) -> Value {
     or_null(&result["odgovori"]["BrojFiskalnogRacuna"])
 }
 
@@ -168,7 +169,7 @@ pub fn broj_sa_uredjaja(result: &Odgovor) -> Value {
 /// write-ahead red; nepoznat ishod ga ostavlja i vraća poruku koja operatera
 /// šalje u dijalog nezavršenih računa (`ishodNepoznat: true` za renderer).
 /// TS: `neuspjelaStampa`.
-pub fn neuspjeh(db: &Db, pending_id: i64, result: &Odgovor) -> R<Value> {
+fn neuspjeh(db: &Db, pending_id: i64, result: &Odgovor) -> R<Value> {
     // `result.error || result.vrstaOdgovora || 'Nepoznata greška'`, `result.odgovori ?? {}`
     let greska = or(&result["error"], or(&result["vrstaOdgovora"], &json!("Nepoznata greška"))).clone();
     let odgovori = js::nn(&result["odgovori"], &json!({})).clone();
@@ -226,8 +227,99 @@ pub fn poruka_nakon_stampe(dokument: &str, greska: &str, rod: Rod) -> String {
 
 /// Štampa je uspjela, a upis nije: dokument je na papiru, transakcija je
 /// poništena pa write-ahead red ostaje za dijalog nezavršenih računa.
-pub fn nije_zabiljezen(dokument: &str, rod: Rod, greska: &Greska) -> Greska {
+fn nije_zabiljezen(dokument: &str, rod: Rod, greska: &Greska) -> Greska {
     Greska(poruka_nakon_stampe(dokument, prikaz_greske(greska.poruka()), rod))
+}
+
+// ─── Tok fiskalnog dokumenta ────────────────────────────────
+
+/// Jedan fiskalni dokument za [`fiskalizuj`] (TS `Fiskalizacija`). Pozivalac
+/// PRIJE `fiskalizuj` uradi sve što može pasti: provjere koje bi oborile upis
+/// (odštampan fiskalni dokument se ne može povući), postavke uređaja
+/// (`Uredjaj::iz_postavki`) i dokument za uređaj — write-ahead red se upisuje
+/// tek kad preostaje samo slanje.
+pub struct Fiskalizacija<'a, T> {
+    /// Write-ahead snapshot (oblik po vrsti dokumenta — pending_racun.rs);
+    /// red pripada `snapshot.korisnikId`.
+    pub snapshot: &'a Value,
+    /// Štampa na uređaju (račun, ili reklamacija s unosom novca i ponovnim
+    /// pokušajem). Greška znači da ništa nije odštampano.
+    pub stampaj: Box<dyn FnOnce() -> R<Odgovor> + 'a>,
+    /// Upis nakon uspješne štampe, u istoj transakciji u kojoj se preuzima
+    /// write-ahead red (s vezama: ponuda konvertovana, nalog fakturisan…).
+    /// Dobija broj koji je vratio uređaj.
+    pub upisi: Box<dyn FnOnce(&Value) -> R<T> + 'a>,
+    /// Naziv dokumenta u poruci kad upis nakon štampe padne
+    /// (`poruka_nakon_stampe`), iz broja koji je vratio uređaj.
+    pub dokument: Box<dyn FnOnce(&Value) -> String + 'a>,
+    /// `Rod::Zenski` za reklamaciju.
+    pub rod: Rod,
+    /// Odgovor kad je red u međuvremenu riješen iz dijaloga nezavršenih.
+    pub vec_evidentiran: Box<dyn FnOnce(&Value) -> Value + 'a>,
+}
+
+impl<'a, T> Fiskalizacija<'a, T> {
+    /// Fiskalni račun (kasa, faktura, ponuda, nalog): u poruci „Račun <bf>", a
+    /// za red riješen iz dijaloga `vec_evidentiran` (BF).
+    pub fn racun(
+        snapshot: &'a Value,
+        stampaj: impl FnOnce() -> R<Odgovor> + 'a,
+        upisi: impl FnOnce(&Value) -> R<T> + 'a,
+    ) -> Self {
+        Fiskalizacija {
+            snapshot,
+            stampaj: Box::new(stampaj),
+            upisi: Box::new(upisi),
+            dokument: Box::new(racun_s_brojem),
+            rod: Rod::Muski,
+            vec_evidentiran: Box::new(vec_evidentiran),
+        }
+    }
+}
+
+/// Dokument je odštampan i upisan (TS `Uspjeh`).
+pub struct Uspjeh<T> {
+    /// Ono što je vratio `upisi`.
+    pub id: T,
+    /// Broj koji je vratio uređaj (null kad ga nije vratio).
+    pub bf: Value,
+    /// `odgovori` uređaja.
+    pub odgovori: Value,
+}
+
+/// Write-ahead red (odmah, van transakcije) → štampa → ishod (TS `fiskalizuj`):
+/// - greška iz štampe: ništa nije odštampano, red se briše, greška ide dalje;
+/// - siguran neuspjeh briše red, nepoznat ishod ga ostavlja (`neuspjeh`);
+/// - uspjeh: u jednoj transakciji preuzmi red → `upisi`. Red koji je dijalog
+///   nezavršenih u međuvremenu riješio ili odbacio znači bez drugog zapisa
+///   (`vec_evidentiran`). Pad upisa poništi transakciju — red ostaje za
+///   dijalog, a greška kaže da je dokument odštampan (`nije_zabiljezen`).
+///
+/// `Ok(Err(odgovor))` je odgovor rendereru bez novog upisa: štampa nije
+/// uspjela ili je dokument već evidentiran.
+pub fn fiskalizuj<T>(db: &Db, f: Fiskalizacija<T>) -> R<Result<Uspjeh<T>, Value>> {
+    let Fiskalizacija { snapshot, stampaj, upisi, dokument, rod, vec_evidentiran } = f;
+    let pending_id = zapisi_pending(db, &snapshot["korisnikId"], snapshot)?;
+
+    let result = match stampaj() {
+        Ok(r) => r,
+        Err(e) => {
+            db.run("DELETE FROM pending_receipts WHERE id = ?", p![pending_id])?;
+            return Err(e);
+        }
+    };
+    if !tring::uspjeh(&result) {
+        return neuspjeh(db, pending_id, &result).map(Err);
+    }
+
+    let bf = broj_sa_uredjaja(&result);
+    let upis = db.tx(|| if preuzmi_pending_red(db, pending_id)? { upisi(&bf).map(Some) } else { Ok(None) });
+    match upis {
+        Ok(Some(id)) => Ok(Ok(Uspjeh { id, bf, odgovori: result["odgovori"].clone() })),
+        Ok(None) => Ok(Err(vec_evidentiran(&bf))),
+        // Dokument je već na papiru; red ostaje (rollback) za dijalog nezavršenih.
+        Err(e) => Err(nije_zabiljezen(&dokument(&bf), rod, &e)),
+    }
 }
 
 #[cfg(test)]
