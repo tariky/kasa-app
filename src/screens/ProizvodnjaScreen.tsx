@@ -13,6 +13,8 @@ import { NalogDialog } from '@/components/proizvodnja/NalogDialog';
 import { NalogDetailDialog } from '@/components/proizvodnja/NalogDetailDialog';
 import { NormativiTab } from '@/components/proizvodnja/NormativiTab';
 import { RefreshCw, Plus, Hammer, ClipboardList, AlertTriangle, X, Factory, User, Package } from 'lucide-react';
+import { useIpcPodaci } from '@/hooks/useIpcPodaci';
+import { GreskaUcitavanja } from '@/components/GreskaUcitavanja';
 
 export const STATUS_META: Record<NalogStatus, { label: string; cls: string; dot: string }> = {
   otvoren: { label: 'Otvoren', cls: 'bg-slate-50 text-slate-500 border-slate-200', dot: 'bg-slate-400' },
@@ -64,7 +66,6 @@ export default function ProizvodnjaScreen({ uloga, initialNalogId }: {
 }) {
   const { postavke } = useDokumentPostavke();
   const [tab, setTab] = useState<Tab>('nalozi');
-  const [nalozi, setNalozi] = useState<RadniNalog[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [openId, setOpenId] = useState<number | null>(null);
   const [filter, setFilter] = useState<Filter>('aktivni');
@@ -72,10 +73,8 @@ export default function ProizvodnjaScreen({ uloga, initialNalogId }: {
   const [formOpen, setFormOpen] = useState(false);
   const rowRefs = useRef<(HTMLTableRowElement | null)[]>([]);
 
-  const load = useCallback(async () => {
-    setNalozi(await window.api.getNalozi());
-  }, []);
-  useEffect(() => { load(); }, [load]);
+  const { podaci, greska, osvjezi: load } = useIpcPodaci(() => window.api.getNalozi(), []);
+  const nalozi = useMemo<RadniNalog[]>(() => podaci ?? [], [podaci]);
 
   useEffect(() => {
     if (initialNalogId) { setTab('nalozi'); setSelectedId(initialNalogId); setOpenId(initialNalogId); }
@@ -195,6 +194,8 @@ export default function ProizvodnjaScreen({ uloga, initialNalogId }: {
         </div>
       )}
 
+      {tab === 'nalozi' && <GreskaUcitavanja greska={greska} onPonovo={load} />}
+
       {msg && (
         <div className={cn('flex-shrink-0 flex items-center gap-2 px-6 py-2 border-b text-[12px] font-medium',
           msg.type === 'error' ? 'bg-rose-50/60 border-rose-100 text-rose-700' : 'bg-emerald-50/60 border-emerald-100 text-emerald-700')}>
@@ -206,7 +207,7 @@ export default function ProizvodnjaScreen({ uloga, initialNalogId }: {
 
       {tab === 'normativi' ? (
         <NormativiTab />
-      ) : visible.length === 0 ? (
+      ) : visible.length === 0 ? podaci && (
         <div className="flex-1 flex flex-col items-center justify-center text-slate-400 select-none">
           <div className="w-12 h-12 rounded-2xl bg-slate-50 flex items-center justify-center mb-3"><Hammer size={20} className="text-slate-300" /></div>
           <p className="text-[13px] font-medium text-slate-500">{nalozi.length > 0 ? 'Nema naloga u ovom filteru' : 'Nema radnih naloga'}</p>

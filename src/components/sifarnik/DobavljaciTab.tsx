@@ -15,6 +15,8 @@ import {
 } from 'lucide-react';
 import { potvrdi, obavijesti } from '@/lib/dijalog';
 import { filtriraj, type PoljaPretrage } from '@/lib/pretraga';
+import { useIpcPodaci } from '@/hooks/useIpcPodaci';
+import { GreskaUcitavanja } from '@/components/GreskaUcitavanja';
 
 // ---------------------------------------------------------------------------
 // Dobavljač Dialog
@@ -216,13 +218,9 @@ const poljaDobavljaca = (d: Dobavljac): PoljaPretrage => ({
   dodatno: [d.idBroj, d.pdvBroj, d.adresa].join(' '),
 });
 
-export function DobavljaciTab({
-  dobavljaci,
-  onReload,
-}: {
-  dobavljaci: Dobavljac[];
-  onReload: () => void;
-}) {
+export function DobavljaciTab() {
+  const { podaci, greska, osvjezi: onReload } = useIpcPodaci(() => window.api.getDobavljaci(), []);
+  const dobavljaci = podaci ?? [];
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editDobavljac, setEditDobavljac] = useState<Dobavljac | null>(null);
   const [search, setSearch] = useState('');
@@ -294,7 +292,9 @@ export function DobavljaciTab({
         </Button>
       </div>
 
-      {filtered.length === 0 ? (
+      <GreskaUcitavanja greska={greska} onPonovo={onReload} />
+
+      {filtered.length === 0 ? podaci && (
         <div className="flex-1 flex flex-col items-center justify-center text-slate-400 select-none">
           <div className="w-12 h-12 rounded-2xl bg-slate-50 flex items-center justify-center mb-3"><Building2 size={20} className="text-slate-300" /></div>
           <p className="text-[13px] font-medium text-slate-500">{search ? 'Nema rezultata pretrage' : 'Nema dobavljača'}</p>

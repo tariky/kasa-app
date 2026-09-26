@@ -14,6 +14,8 @@ import { Key, LedgerHead, SegmentedFilter } from '@/components/ui/ledger';
 import { Plus, Trash2, Search, Pencil, X, Layers } from 'lucide-react';
 import { potvrdi } from '@/lib/dijalog';
 import { filtriraj, type PoljaPretrage } from '@/lib/pretraga';
+import { useIpcPodaci } from '@/hooks/useIpcPodaci';
+import { GreskaUcitavanja } from '@/components/GreskaUcitavanja';
 
 const JEDINICE = [JM_PLOCA, 'kom', 'm', 'kg', 'l', 'pak'] as const;
 
@@ -115,7 +117,9 @@ const STANJE_FILTERI: { id: StanjeFilter; label: string }[] = [
 /** Materijal se traži po nazivu i šifri. */
 const poljaMaterijala = (p: Product): PoljaPretrage => ({ naziv: p.naziv, sifra: p.sifra });
 
-export function MaterijalTab({ materijali, onReload }: { materijali: Product[]; onReload: () => void }) {
+export function MaterijalTab() {
+  const { podaci, greska, osvjezi: onReload } = useIpcPodaci(() => window.api.getProducts('materijal'), []);
+  const materijali = podaci ?? [];
   const [search, setSearch] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [edit, setEdit] = useState<Product | null>(null);
@@ -189,8 +193,9 @@ export function MaterijalTab({ materijali, onReload }: { materijali: Product[]; 
         </Button>
       </div>
       {msg && <p className="flex-shrink-0 px-6 py-2 text-[12px] text-rose-600 bg-rose-50 border-b border-rose-100">{msg}</p>}
+      <GreskaUcitavanja greska={greska} onPonovo={onReload} />
 
-      {filtered.length === 0 ? (
+      {filtered.length === 0 ? podaci && (
         <div className="flex-1 flex flex-col items-center justify-center text-slate-400 select-none">
           <div className="w-12 h-12 rounded-2xl bg-slate-50 flex items-center justify-center mb-3"><Layers size={20} className="text-slate-300" /></div>
           <p className="text-[13px] font-medium text-slate-500">

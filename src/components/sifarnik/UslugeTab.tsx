@@ -20,6 +20,8 @@ import {
 } from 'lucide-react';
 import { potvrdi, obavijesti } from '@/lib/dijalog';
 import { filtriraj, type PoljaPretrage } from '@/lib/pretraga';
+import { useIpcPodaci } from '@/hooks/useIpcPodaci';
+import { GreskaUcitavanja } from '@/components/GreskaUcitavanja';
 
 // ---------------------------------------------------------------------------
 // Usluga Dialog — simplified for services
@@ -125,7 +127,9 @@ function UslugaDialog({
 /** Usluge se traže po nazivu i šifri. */
 const poljaUsluge = (p: Product): PoljaPretrage => ({ naziv: p.naziv, sifra: p.sifra });
 
-export function UslugeTab({ usluge, onReload }: { usluge: Product[]; onReload: () => void }) {
+export function UslugeTab() {
+  const { podaci, greska, osvjezi: onReload } = useIpcPodaci(() => window.api.getProducts('usluga'), []);
+  const usluge = podaci ?? [];
   const [search, setSearch] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editProduct, setEditProduct] = useState<Product | null>(null);
@@ -216,7 +220,9 @@ export function UslugeTab({ usluge, onReload }: { usluge: Product[]; onReload: (
         </Button>
       </div>
 
-      {filtered.length === 0 ? (
+      <GreskaUcitavanja greska={greska} onPonovo={onReload} />
+
+      {filtered.length === 0 ? podaci && (
         <div className="flex-1 flex flex-col items-center justify-center text-slate-400 select-none">
           <div className="w-12 h-12 rounded-2xl bg-slate-50 flex items-center justify-center mb-3"><Wrench size={20} className="text-slate-300" /></div>
           <p className="text-[13px] font-medium text-slate-500">{search ? 'Nema rezultata pretrage' : 'Nema usluga'}</p>

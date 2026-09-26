@@ -29,6 +29,8 @@ import {
   Lock, RefreshCw,
 } from 'lucide-react';
 import { potvrdi, obavijesti } from '@/lib/dijalog';
+import { useIpcPodaci } from '@/hooks/useIpcPodaci';
+import { GreskaUcitavanja } from '@/components/GreskaUcitavanja';
 
 type SkladisteTab = 'artikli' | 'primke';
 
@@ -429,9 +431,12 @@ function razinaZalihe(p: Product): ZalihaFilter {
 
 function ArtikliTab({
   products,
+  ucitano,
   onReload,
 }: {
   products: Product[];
+  /** false dok artikli nisu učitani — tada nema poruke „Nema artikala“. */
+  ucitano: boolean;
   onReload: () => void;
 }) {
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -526,7 +531,7 @@ function ArtikliTab({
         </Button>
       </div>
 
-      {filtered.length === 0 ? (
+      {filtered.length === 0 ? ucitano && (
         <div className="flex-1 flex flex-col items-center justify-center text-slate-400 select-none">
           <div className="w-12 h-12 rounded-2xl bg-slate-50 flex items-center justify-center mb-3"><Package size={20} className="text-slate-300" /></div>
           <p className="text-[13px] font-medium text-slate-500">
@@ -642,16 +647,14 @@ const poljaPrimke = (p: Primka): PoljaPretrage => ({
 });
 
 function PrimkeTab({ products, dobavljaci, onReloadProducts }: { products: Product[]; dobavljaci: Dobavljac[]; onReloadProducts: () => void }) {
-  const [primke, setPrimke] = useState<Primka[]>([]);
+  const { podaci, greska, osvjezi: loadPrimke } = useIpcPodaci(() => window.api.getPrimke(), []);
+  const primke: Primka[] = podaci ?? [];
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [stanje, setStanje] = useState<UlazStanje>({ kind: 'zatvoren' });
   const [search, setSearch] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
   const rowRefs = useRef<(HTMLTableRowElement | null)[]>([]);
   const searchRef = useRef<HTMLInputElement>(null);
-
-  const loadPrimke = useCallback(async () => { setPrimke(await window.api.getPrimke()); }, []);
-  useEffect(() => { loadPrimke(); }, [loadPrimke]);
 
   const visible = useMemo(() => {
     return filtriraj(primke, search, poljaPrimke);
@@ -745,6 +748,8 @@ function PrimkeTab({ products, dobavljaci, onReloadProducts }: { products: Produ
         </div>
       </div>
 
+      <GreskaUcitavanja greska={greska} onPonovo={loadPrimke} />
+
       {msg && (
         <div className="flex-shrink-0 flex items-center gap-2 px-6 py-2 border-b border-emerald-100 bg-emerald-50/60 text-[12px] font-medium text-emerald-700">
           <PackagePlus className="h-3.5 w-3.5" /> {msg}
@@ -752,7 +757,7 @@ function PrimkeTab({ products, dobavljaci, onReloadProducts }: { products: Produ
         </div>
       )}
 
-      {visible.length === 0 ? (
+      {visible.length === 0 ? podaci && (
         <div className="flex-1 flex flex-col items-center justify-center text-slate-400 select-none">
           <div className="w-12 h-12 rounded-2xl bg-slate-50 flex items-center justify-center mb-3"><FileText size={20} className="text-slate-300" /></div>
           <p className="text-[13px] font-medium text-slate-500">{search ? 'Nema rezultata pretrage' : 'Nema ulaza robe'}</p>
@@ -840,26 +845,16 @@ function PrimkeTab({ products, dobavljaci, onReloadProducts }: { products: Produ
 // ---------------------------------------------------------------------------
 
 export default function SkladisteScreen() {
-  const [products, setProducts] = useState<Product[]>([]);
-  const [dobavljaci, setDobavljaci] = useState<Dobavljac[]>([]);
   const [activeTab, setActiveTab] = useState<SkladisteTab>('artikli');
   const proizvodnja = useProizvodnja();
 
-  const loadProducts = useCallback(async () => {
+  const proizvodi = useIpcPodaci(async () => {
     const artikli = await window.api.getProducts('artikal');
     const materijal = proizvodnja ? await window.api.getProducts('materijal') : [];
-    setProducts([...artikli, ...materijal]);
+    return [...artikli, ...materijal];
   }, [proizvodnja]);
-
-  const loadDobavljaci = useCallback(async () => {
-    const data = await window.api.getDobavljaci();
-    setDobavljaci(data);
-  }, []);
-
-  useEffect(() => {
-    loadProducts();
-    loadDobavljaci();
-  }, [loadProducts, loadDobavljaci]);
+  const dobavljaci = useIpcPodaci(() => window.api.getDobavljaci(), []);
+  const products = proizvodi.podaci ?? [];
 
   const tabs: { id: SkladisteTab; label: string; icon: typeof Package }[] = [
     { id: 'artikli', label: 'Artikli', icon: Package },
@@ -893,10 +888,15 @@ export default function SkladisteScreen() {
         </div>
       </div>
 
+      <GreskaUcitavanja
+        greska={proizvodi.greska ?? dobavljaci.greska}
+        onPonovo={() => { proizvodi.osvjezi(); dobavljaci.osvjezi(); }}
+      />
+
       {/* Content */}
       <div className="flex-1 min-h-0 overflow-hidden">
-        {activeTab === 'artikli' && <ArtikliTab products={products} onReload={loadProducts} />}
-        {activeTab === 'primke' && <PrimkeTab products={products} dobavljaci={dobavljaci} onReloadProducts={loadProducts} />}
+        {activeTab === 'artikli' && <ArtikliTab products={products} ucitano={proizvodi.podaci !== undefined} onReload={proizvodi.osvjezi} />}
+        {activeTab === 'primke' && <PrimkeTab products={products} dobavljaci={dobavljaci.podaci ?? []} onReloadProducts={proizvodi.osvjezi} />}
       </div>
     </div>
   );
