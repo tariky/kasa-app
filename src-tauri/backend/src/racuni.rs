@@ -1,20 +1,19 @@
 //! Kanali `order:*`, `pending:*`, `prilog:*` i `fiscal:*` (handlers.ts) i
 //! logika iz `lib/prilog.ts`, `lib/refund.ts` i `lib/valuta.ts`.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
-use std::sync::Mutex;
+use std::collections::{HashMap, HashSet};
 
 use regex::Regex;
 use serde_json::{json, Map, Value};
 
-use crate::greska::{Greska, R};
+use crate::greska::R;
 use crate::js::{self, or, or_null, round2, to_number, truthy};
 use crate::sql::Db;
+use crate::stampa::{self, UToku, Uredjaj};
 use crate::tring::{self, Odgovor};
 use crate::sesija::{self, Korisnik};
 use crate::pending_racun::{
-    baci_ako_ceka_nezavrsen, neuspjela_stampa, preuzmi_pending_red, vec_evidentiran, vec_evidentiran_storno,
-    zapisi_pending,
+    baci_ako_ceka_nezavrsen, preuzmi_pending_red, vec_evidentiran, vec_evidentiran_storno, zapisi_pending,
 };
 use crate::{audit, baci, cash, fiskalni, korisnici, p, ponude, proizvodnja, provjera_racuna, racun, tring_racun, Args, Backend};
 
@@ -35,16 +34,6 @@ fn niz<'a>(v: &'a Value, ime: &str) -> R<&'a Vec<Value>> {
         Some(a) => Ok(a),
         None => baci!("{ime} is not iterable"),
     }
-}
-
-/// `result.odgovori?.BrojFiskalnogRacuna || null`
-fn broj_sa_uredjaja(result: &Odgovor) -> Value {
-    or_null(&result["odgovori"]["BrojFiskalnogRacuna"])
-}
-
-/// `err?.message || 'nepoznata greška'`
-fn poruka(e: &Greska) -> &str {
-    if e.0.is_empty() { "nepoznata greška" } else { &e.0 }
 }
 
 /// JS `Math.max(a, b)` / `Math.min(a, b)` — NaN se širi (Rustov `max` ga preskače).
@@ -370,6 +359,7 @@ fn finalize_prilog_and_print(b: &Backend, data: &Value) -> R<Value> {
     if let Some(id) = skica_id {
         snapshot.insert("skicaId".into(), json!(id));
     }
+    let uredjaj = Uredjaj::iz_postavki(b)?;
     let pending_id = db
         .run(
             "INSERT INTO pending_receipts (korisnikId, snapshot) VALUES (?, ?)",
@@ -385,20 +375,14 @@ fn finalize_prilog_and_print(b: &Backend, data: &Value) -> R<Value> {
         "kupac": kupac_v,
         "items": [stavka],
     }));
-    if b.tring.is_logging_enabled() {
-        eprintln!("[Tring] finalizePrilog request: {}", js::stringify(&racun));
-    }
-    let result = b.tring.stampati_fiskalni_racun(&racun);
-    if b.tring.is_logging_enabled() {
-        eprintln!("[Tring] finalizePrilog response: {}", js::stringify(&result));
-    }
+    let result = uredjaj.fiskalni("finalizePrilog", &racun);
 
     // Siguran neuspjeh briše pending red; nepoznat ishod ga ostavlja.
     if !tring::uspjeh(&result) {
-        return neuspjela_stampa(db, pending_id, &result);
+        return stampa::neuspjeh(db, pending_id, &result);
     }
 
-    let broj_fiskalnog_racuna = broj_sa_uredjaja(&result);
+    let broj_fiskalnog_racuna = stampa::broj_sa_uredjaja(&result);
     // Faktura nosi isti broj kao fiskalni isječak uz koji ide. Kad uređaj vrati
     // broj različit od predviđenog, papir već nosi pogrešan broj u nazivu stavke —
     // faktura ide po stvarnom, a operater to mora saznati odmah.
@@ -447,8 +431,8 @@ fn finalize_prilog_and_print(b: &Backend, data: &Value) -> R<Value> {
         // kroz pending:resolve, ali operater to mora znati odmah.
         Err(e) => baci!(
             "Fiskalni račun po prilogu br. {prilog_broj} (BF {}) JE odštampan, ali nije zabilježen u bazi: {}. Riješite ga kroz nezavršene račune.",
-            if broj_fiskalnog_racuna.is_null() { "?".to_string() } else { js::to_string(&broj_fiskalnog_racuna) },
-            poruka(&e)
+            stampa::prikaz_broja(&broj_fiskalnog_racuna),
+            stampa::prikaz_greske(e.poruka())
         ),
     };
 
@@ -517,34 +501,6 @@ fn je_nedovoljno_sredstava(r: &Odgovor) -> bool {
     NEDOVOLJNO_RE.with(|re| re.is_match(&dijelovi.join(" ")))
 }
 
-/// Računi kojima se storno trenutno štampa — zaštita od dvoklika (dok jedan
-/// poziv čeka uređaj, drugi može stići; vidi petlja.rs).
-static REFUNDS_IN_FLIGHT: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
-
-fn refunds_in_flight() -> std::sync::MutexGuard<'static, BTreeSet<String>> {
-    REFUNDS_IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner())
-}
-
-/// Skida račun iz `REFUNDS_IN_FLIGHT` kad storno završi (JS `finally`).
-struct UToku(String);
-
-impl Drop for UToku {
-    fn drop(&mut self) {
-        refunds_in_flight().remove(&self.0);
-    }
-}
-
-fn print_reklamacija(b: &Backend, racun: &Value) -> Odgovor {
-    if b.tring.is_logging_enabled() {
-        eprintln!("[Tring] refundAndPrint request: {}", js::stringify(racun));
-    }
-    let result = b.tring.stampati_reklamirani_racun(racun);
-    if b.tring.is_logging_enabled() {
-        eprintln!("[Tring] refundAndPrint response: {}", js::stringify(&result));
-    }
-    result
-}
-
 /// Odštampa reklamaciju i tek nakon uspješne štampe upiše storno u bazu, u
 /// jednoj transakciji. Ranije su štampa, promjena statusa i upis broja bila tri
 /// odvojena IPC poziva iz renderera, pa je pad ili dvoklik između njih ostavljao
@@ -558,11 +514,8 @@ fn print_reklamacija(b: &Backend, racun: &Value) -> Odgovor {
 fn refund_and_print(b: &Backend, data: &Value, korisnik_id: i64, odobrio_admin_id: &Value) -> R<Value> {
     let db = b.baza()?;
     let id = &data["id"];
-    let kljuc = js::stringify(id);
 
-    if refunds_in_flight().contains(&kljuc) {
-        baci!("Storniranje ovog računa je već u toku");
-    }
+    let _u_toku = UToku::zauzmi("storno", id, "Storniranje ovog računa je već u toku")?;
 
     let Some(order) = db.get("SELECT * FROM orders WHERE id = ? AND status = 'completed'", p![id])? else {
         baci!("Račun ne postoji ili je već storniran");
@@ -639,9 +592,6 @@ fn refund_and_print(b: &Backend, data: &Value, korisnik_id: i64, odobrio_admin_i
     // override i samo se on evidentira kao polog (poznat prije štampe → snapshot).
     let planirani_polog = if dozvoli_polog && manjak_ladica > 0.0 { manjak_ladica } else { 0.0 };
 
-    refunds_in_flight().insert(kljuc.clone());
-    let _u_toku = UToku(kljuc);
-
     let snapshot = json!({
         "vrsta": "storno", "orderId": order["id"], "brojRacuna": order["brojFiskalnogRacuna"],
         "korisnikId": korisnik_id, "ukupno": order["ukupno"],
@@ -652,12 +602,13 @@ fn refund_and_print(b: &Backend, data: &Value, korisnik_id: i64, odobrio_admin_i
             json!({ "naziv": naziv, "kolicina": s["kolicina"], "cijena": s["cijena"], "rabat": js::nn(&s["rabat"], &json!(0)) })
         }).collect::<Vec<_>>(),
     });
+    let uredjaj = Uredjaj::iz_postavki(b)?;
     let pending_id = zapisi_pending(db, &json!(korisnik_id), &snapshot)?;
 
     let mut uneseno = 0.0;
     let mut polog_iznos = 0.0;
 
-    let stampa = (|| -> R<Odgovor> {
+    let pokusaj = (|| -> R<Odgovor> {
         // Nenovčani dio pokrića ide automatski — nema odluke za operatera jer
         // nikakav stvaran novac ne mijenja vlasnika (virmanski račun se ovdje
         // pokriva u cijelosti, pa storno prolazi bez ijednog dodatnog klika).
@@ -674,7 +625,7 @@ fn refund_and_print(b: &Backend, data: &Value, korisnik_id: i64, odobrio_admin_i
             uneseno = round2(uneseno + planirani_polog);
         }
 
-        let mut result = print_reklamacija(b, &racun);
+        let mut result = uredjaj.reklamacija("refundAndPrint", &racun);
 
         // Stanje ladice je samo procjena brojača u uređaju (pologi se mogu voditi
         // i mimo aplikacije), pa ako uređaj i dalje javlja manjak — dopuni do
@@ -691,12 +642,12 @@ fn refund_and_print(b: &Backend, data: &Value, korisnik_id: i64, odobrio_admin_i
             if dopuna > 0.0 {
                 cash::device_cash_in(b, dopuna)?;
                 uneseno = round2(uneseno + dopuna);
-                result = print_reklamacija(b, &racun);
+                result = uredjaj.reklamacija("refundAndPrint", &racun);
             }
         }
         Ok(result)
     })();
-    let result = match stampa {
+    let result = match pokusaj {
         Ok(r) => r,
         Err(e) => {
             // Unos novca nije prihvaćen — storno nije odštampan.
@@ -708,7 +659,7 @@ fn refund_and_print(b: &Backend, data: &Value, korisnik_id: i64, odobrio_admin_i
     if !tring::uspjeh(&result) {
         // Siguran neuspjeh briše pending red; nepoznat ishod ga ostavlja (bez
         // ponude pologa — storno se ne smije slati ponovo dok se ne riješi).
-        let mut neuspjeh = neuspjela_stampa(db, pending_id, &result)?;
+        let mut neuspjeh = stampa::neuspjeh(db, pending_id, &result)?;
         if truthy(&neuspjeh["ishodNepoznat"]) {
             return Ok(neuspjeh);
         }
@@ -723,7 +674,7 @@ fn refund_and_print(b: &Backend, data: &Value, korisnik_id: i64, odobrio_admin_i
     }
 
     let unesen_broj = data["brojReklamacije"].as_str().map(str::trim).unwrap_or("");
-    let broj_reklamacije = if !unesen_broj.is_empty() { json!(unesen_broj) } else { broj_sa_uredjaja(&result) };
+    let broj_reklamacije = if !unesen_broj.is_empty() { json!(unesen_broj) } else { stampa::broj_sa_uredjaja(&result) };
 
     let upis = db.tx(|| {
         // Red riješen iz dijaloga dok je štampa trajala → bez drugog storna.
@@ -739,8 +690,8 @@ fn refund_and_print(b: &Backend, data: &Value, korisnik_id: i64, odobrio_admin_i
         // Storno je već na papiru; pending red ostaje (rollback) za dijalog.
         Err(e) => baci!(
             "Reklamacija #{} JE odštampana, ali nije zabilježena u bazi: {}. Riješite je kroz nezavršene račune.",
-            if broj_reklamacije.is_null() { "?".to_string() } else { js::to_string(&broj_reklamacije) },
-            poruka(&e)
+            stampa::prikaz_broja(&broj_reklamacije),
+            stampa::prikaz_greske(e.poruka())
         ),
     }
 
@@ -766,7 +717,6 @@ fn storno(b: &Backend, data: &Value) -> R<Value> {
         odobrio_admin_id = json!(korisnici::provjeri_admin_pin(b, &data["adminPin"])?.id);
     }
     let original = db.get("SELECT brojFiskalnogRacuna, ukupno FROM orders WHERE id = ?", p![data["id"]])?;
-    b.load_tring_config()?;
     let rezultat = refund_and_print(b, data, k.id, &odobrio_admin_id)?;
     if truthy(&rezultat["success"]) {
         // Storno je već odštampan i upisan — greška traga ne smije to sakriti.
@@ -955,6 +905,7 @@ fn finalize(b: &Backend, unos: &Value) -> R<Value> {
         .collect();
     m.insert("stavke".into(), Value::from(stavke));
     let data = Value::Object(m);
+    let uredjaj = Uredjaj::iz_postavki(b)?;
 
     // 1. Write-ahead: persist the snapshot BEFORE printing (committed immediately).
     let pending_id = db
@@ -962,25 +913,18 @@ fn finalize(b: &Backend, unos: &Value) -> R<Value> {
         .last_insert_rowid;
 
     // 2. Print.
-    b.load_tring_config()?;
     let racun = tring_racun::build_tring_racun(&spoji(&data, vec![("items", data["stavke"].clone())]));
-    if b.tring.is_logging_enabled() {
-        eprintln!("[Tring] finalize request: {}", js::stringify(&racun));
-    }
-    let result = b.tring.stampati_fiskalni_racun(&racun);
-    if b.tring.is_logging_enabled() {
-        eprintln!("[Tring] finalize response: {}", js::stringify(&result));
-    }
+    let result = uredjaj.fiskalni("finalize", &racun);
 
     // 3b. Print failed → surely not printed: drop the pending row; unknown
     // outcome (timeout, dropped connection): keep it for the pending dialog.
     if !tring::uspjeh(&result) {
-        return neuspjela_stampa(db, pending_id, &result);
+        return stampa::neuspjeh(db, pending_id, &result);
     }
 
     // 3a. Print succeeded → delete pending row + create order atomically. A
     // row already resolved from the dialog meanwhile means no second order.
-    let broj_fiskalnog_racuna = broj_sa_uredjaja(&result);
+    let broj_fiskalnog_racuna = stampa::broj_sa_uredjaja(&result);
     let order_id = db.tx(|| {
         if !preuzmi_pending_red(db, pending_id)? {
             return Ok(None);
@@ -1208,7 +1152,6 @@ pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
         // se dodjeljuju naknadno.
         "order:finalizePrilog" => sesija::korisnik(b).and_then(|k| {
             let data = sesija::sa_korisnikom(&a[0], k.id);
-            b.load_tring_config()?;
             finalize_prilog_and_print(b, &data)
         }),
         // Fiskalni niz: račun po prilogu mora znati broj isječka prije nego ga odštampa.

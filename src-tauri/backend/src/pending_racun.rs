@@ -7,44 +7,22 @@
 //! Ponuda→račun, nalog→račun i storno idu kroz isti red; snapshot nosi
 //! `vrsta` ('ponuda' | 'nalog' | 'storno') da dijalog zna kojom operacijom ga
 //! upisati. Snapshot bez `vrsta` je običan račun (kasa, faktura) — stare baze.
+//! Ishod štampe (siguran neuspjeh briše red) je u `stampa::neuspjeh`.
 
 use serde_json::{json, Value};
 
 use crate::greska::R;
-use crate::js::{self, or};
+use crate::js;
 use crate::sql::Db;
-use crate::tring::{self, Odgovor};
+use crate::stampa::prikaz_broja;
 use crate::{baci, p};
-
-/// Štampa nije uspjela. Siguran neuspjeh (uređaj odbio, veza odbijena) briše
-/// write-ahead red; nepoznat ishod ga ostavlja i vraća poruku koja operatera
-/// šalje u dijalog nezavršenih računa (`ishodNepoznat: true` za renderer).
-pub fn neuspjela_stampa(db: &Db, pending_id: i64, result: &Odgovor) -> R<Value> {
-    // `result.error || result.vrstaOdgovora || 'Nepoznata greška'`, `result.odgovori ?? {}`
-    let greska = or(&result["error"], or(&result["vrstaOdgovora"], &json!("Nepoznata greška"))).clone();
-    let odgovori = js::nn(&result["odgovori"], &json!({})).clone();
-    if tring::ishod_nepoznat(result) {
-        return Ok(json!({
-            "success": false,
-            "error": format!(
-                "Uređaj nije potvrdio račun ({}) — ishod štampe nije poznat. \
-                 Provjerite da li je račun odštampan i riješite ga u dijalogu nezavršenih računa.",
-                js::to_string(&greska)
-            ),
-            "odgovori": odgovori,
-            "ishodNepoznat": true,
-        }));
-    }
-    db.run("DELETE FROM pending_receipts WHERE id = ?", p![pending_id])?;
-    Ok(json!({ "success": false, "error": greska, "odgovori": odgovori }))
-}
 
 /// Tekst odgovora `vec_evidentiran`.
 pub fn poruka_vec_evidentiran(broj_fiskalnog_racuna: &Value) -> String {
     format!(
         "Fiskalni račun BF {} JE odštampan, ali je njegov nezavršeni zapis u međuvremenu riješen ili odbačen — \
          račun je već evidentiran i drugi zapis nije napravljen. Ako je zapis odbačen, unesite račun ručno.",
-        if broj_fiskalnog_racuna.is_null() { "?".to_string() } else { js::to_string(broj_fiskalnog_racuna) }
+        prikaz_broja(broj_fiskalnog_racuna)
     )
 }
 
@@ -77,7 +55,7 @@ pub fn vec_evidentiran_storno(broj_reklamacije: &Value) -> Value {
             "Reklamacija #{} JE odštampana, ali je njen nezavršeni zapis u međuvremenu riješen ili odbačen — \
              storno je već evidentiran i drugi zapis nije napravljen. Ako je zapis odbačen, storno je na papiru, \
              ali ne i u bazi — ne ponavljajte ga, javite se administratoru.",
-            if broj_reklamacije.is_null() { "?".to_string() } else { js::to_string(broj_reklamacije) }
+            prikaz_broja(broj_reklamacije)
         ),
         "brojFiskalnogRacuna": broj_reklamacije,
     })

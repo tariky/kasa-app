@@ -1,20 +1,18 @@
 //! Kanali `nalog:*`, `normativ:*` (handlers.ts) i logika iz `lib/proizvodnja.ts`.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
-use std::sync::Mutex;
+use std::collections::{HashMap, HashSet};
 
 use regex::Regex;
 use serde_json::{json, Map, Value};
 
 use crate::greska::R;
-use crate::pending_racun::{
-    baci_ako_ceka_nezavrsen, neuspjela_stampa, preuzmi_pending_red, snapshot_kupca, vec_evidentiran, zapisi_pending,
-};
+use crate::pending_racun::{baci_ako_ceka_nezavrsen, preuzmi_pending_red, snapshot_kupca, vec_evidentiran, zapisi_pending};
 use crate::js::{self, has, round2, to_number, truthy};
-use crate::ponude::{self, UToku};
+use crate::ponude;
 use crate::racun::{izracunaj_totale, upisi_racun};
 use crate::skladiste::TOLERANCIJA_ZALIHE;
 use crate::sql::Db;
+use crate::stampa::{self, UToku, Uredjaj};
 use crate::tring::uspjeh;
 use crate::tring_racun::build_tring_racun;
 use crate::{baci, p, provjera_racuna, sesija, Args, Backend};
@@ -877,8 +875,6 @@ pub fn osiguraj_prodajnu_uslugu(db: &Db) -> R<i64> {
     Ok(r.last_insert_rowid)
 }
 
-static IZDAVANJA_U_TOKU: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
-
 /// Upiše fakturisanje naloga (status → fakturisan, racunId) u transakciji.
 /// Račun u tom trenutku već postoji (ponuda konvertovana sa ekrana Ponude) —
 /// greška ovdje ne smije proći nezapaženo jer nalog i knjigovodstvo ispadnu iz sinhrona.
@@ -886,7 +882,7 @@ fn knjizi_fakturisanje_naloga(db: &Db, nalog_id: &Value, racun_id: &Value, broj_
     if let Err(e) = db.tx(|| fakturisi_nalog(db, nalog_id, racun_id)) {
         baci!(
             "{}",
-            ponude::poruka_nakon_stampe(
+            stampa::poruka_nakon_stampe(
                 broj_fiskalnog_racuna,
                 "nalog nije zabilježen kao fakturisan u bazi",
                 e.poruka(),
@@ -944,9 +940,7 @@ pub fn izdaj_racun_za_nalog(b: &Backend, kanal: &str, data: &Value) -> R<Value> 
     if nalog["status"] != "zavrsen" {
         baci!("Nalog mora biti završen prije izdavanja računa");
     }
-    if UToku::zauzet(&IZDAVANJA_U_TOKU, &nalog["id"]) {
-        baci!("Izdavanje računa za ovaj nalog je već u toku");
-    }
+    let _u_toku = UToku::zauzmi("nalog", &nalog["id"], "Izdavanje računa za ovaj nalog je već u toku")?;
     // Sve što bi upis nakon štampe odbio (FK na korisnika) provjerava se prije štampe.
     let korisnik = if truthy(&data["korisnikId"]) {
         db.get("SELECT id FROM users WHERE id = ?", p![data["korisnikId"]])?
@@ -959,8 +953,6 @@ pub fn izdaj_racun_za_nalog(b: &Backend, kanal: &str, data: &Value) -> R<Value> 
     // Štampa bez oznake plaćanja ide kao Gotovina — i u bazu se tako upisuje.
     let nacin_placanja = json!(provjera_racuna::provjeri_nacin_placanja(js::or(&data["nacinPlacanja"], &json!("Gotovina")))?);
     baci_ako_ceka_nezavrsen(db, "nalogId", &nalog["id"], "Račun za ovaj nalog", "prije nove štampe")?;
-
-    let _u_toku = UToku::zauzmi(&IZDAVANJA_U_TOKU, &nalog["id"]);
 
     if truthy(&nalog["ponudaId"]) {
         let ponuda = db.get("SELECT status, racunId FROM ponude WHERE id = ?", p![nalog["ponudaId"]])?;
@@ -1006,14 +998,15 @@ pub fn izdaj_racun_za_nalog(b: &Backend, kanal: &str, data: &Value) -> R<Value> 
             "cijena": nalog["dogovorenaCijena"], "rabat": 0, "pdvStopa": "E", "productTip": "usluga",
         }],
     });
+    let uredjaj = Uredjaj::iz_postavki(b)?;
     let pending_id = zapisi_pending(db, &data["korisnikId"], &snapshot)?;
 
-    let result = ponude::stampaj(b, kanal, &racun);
+    let result = uredjaj.fiskalni(kanal, &racun);
     // Siguran neuspjeh briše pending red; nepoznat ishod ga ostavlja.
     if !uspjeh(&result) {
-        return neuspjela_stampa(db, pending_id, &result);
+        return stampa::neuspjeh(db, pending_id, &result);
     }
-    let broj_fiskalnog_racuna = js::or_null(&result["odgovori"]["BrojFiskalnogRacuna"]);
+    let broj_fiskalnog_racuna = stampa::broj_sa_uredjaja(&result);
 
     let upis = db.tx(|| {
         // Red riješen iz dijaloga dok je štampa trajala → bez drugog zapisa.
@@ -1028,7 +1021,7 @@ pub fn izdaj_racun_za_nalog(b: &Backend, kanal: &str, data: &Value) -> R<Value> 
         // Račun je već na papiru; pending red ostaje (rollback) za dijalog.
         Err(e) => baci!(
             "{}",
-            ponude::poruka_nakon_stampe(&broj_fiskalnog_racuna, "nije zabilježen u bazi", e.poruka(), "Riješite ga kroz nezavršene račune.")
+            stampa::poruka_nakon_stampe(&broj_fiskalnog_racuna, "nije zabilježen u bazi", e.poruka(), "Riješite ga kroz nezavršene račune.")
         ),
     }
 }
@@ -1089,7 +1082,6 @@ pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
         "nalog:kalkulacija" => kalkulacija_naloga(db, &a[0]),
         "nalog:izdajRacun" => sesija::korisnik(b).and_then(|k| {
             let data = sesija::sa_korisnikom(&a[0], k.id);
-            b.load_tring_config()?;
             izdaj_racun_za_nalog(b, kanal, &data)
         }),
         "normativ:get" => get_normativ(db, &a[0]).map(Value::from),

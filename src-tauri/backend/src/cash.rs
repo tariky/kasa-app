@@ -9,6 +9,7 @@ use serde_json::{json, Map, Value};
 use crate::greska::R;
 use crate::js::{self, round2, to_number};
 use crate::sql::Db;
+use crate::stampa::Uredjaj;
 use crate::tring::{self, Odgovor};
 use crate::{baci, p, provjera_racuna, sesija, Args, Backend};
 
@@ -59,12 +60,8 @@ pub fn ocekivano_stanje(movements: &[Value], prodaje: &[Value], reklamirani: &[V
 
 /// Pošalje UnosNovca/PovratNovca (`cashDeps().send`). U aplikaciji integracija
 /// uvijek odgovara, pa status 'skipped' (odgovor `null`) ovdje ne nastaje.
-fn send(b: &Backend, tip: &str, iznos: f64) -> Odgovor {
-    let result = if tip == "polog" { b.tring.unos_novca(iznos) } else { b.tring.povrat_novca(iznos) };
-    if b.tring.is_logging_enabled() {
-        eprintln!("[Tring] {tip}: {}", js::stringify(&result));
-    }
-    result
+fn send(uredjaj: &Uredjaj, tip: &str, iznos: f64) -> Odgovor {
+    if tip == "polog" { uredjaj.unos_novca(tip, iznos) } else { uredjaj.povrat_novca(tip, iznos) }
 }
 
 fn tring_status(result: &Odgovor) -> &'static str {
@@ -92,7 +89,7 @@ fn rezultat(id: Value, tring_status: &str, result: &Odgovor) -> Value {
 /// Kao `addCashMovement(cashDeps(), data)`: Tring postavke se učitaju prije
 /// provjera.
 pub fn add_cash_movement(b: &Backend, data: &Value) -> R<Value> {
-    b.load_tring_config()?;
+    let uredjaj = Uredjaj::iz_postavki(b)?;
     let db = b.baza()?;
     // Sve provjere prije slanja: uređaj je fizički primio/izdao novac čim
     // odgovori, pa upis nakon toga ne smije pasti na CHECK ili FOREIGN KEY.
@@ -108,7 +105,7 @@ pub fn add_cash_movement(b: &Backend, data: &Value) -> R<Value> {
         baci!("Korisnik ne postoji");
     }
 
-    let result = send(b, tip, iznos);
+    let result = send(&uredjaj, tip, iznos);
     let tring_status = tring_status(&result);
 
     let r = db.run(
@@ -120,7 +117,7 @@ pub fn add_cash_movement(b: &Backend, data: &Value) -> R<Value> {
 }
 
 pub fn retry_cash_movement(b: &Backend, id: &Value) -> R<Value> {
-    b.load_tring_config()?;
+    let uredjaj = Uredjaj::iz_postavki(b)?;
     let db = b.baza()?;
     let Some(row) = db.get("SELECT * FROM cash_movements WHERE id = ?", p![id])? else {
         baci!("Zapis ne postoji");
@@ -130,7 +127,7 @@ pub fn retry_cash_movement(b: &Backend, id: &Value) -> R<Value> {
     }
 
     let tip = js::to_string(&row["tip"]);
-    let result = send(b, &tip, to_number(&row["iznos"]));
+    let result = send(&uredjaj, &tip, to_number(&row["iznos"]));
     let tring_status = tring_status(&result);
     db.run("UPDATE cash_movements SET tringStatus = ? WHERE id = ?", p![tring_status, id])?;
 
@@ -203,11 +200,7 @@ pub fn deposit_cash(b: &Backend, iznos: f64, napomena: &str, korisnik_id: &Value
 
 /// Pokriće koje fizički ne ulazi u ladicu — samo brojač uređaja.
 pub fn device_cash_in(b: &Backend, iznos: f64) -> R<()> {
-    b.load_tring_config()?;
-    let res = b.tring.unos_novca(iznos);
-    if b.tring.is_logging_enabled() {
-        eprintln!("[Tring] deviceCashIn: {}", js::stringify(&res));
-    }
+    let res = Uredjaj::iz_postavki(b)?.unos_novca("deviceCashIn", iznos);
     if !tring::uspjeh(&res) {
         baci!(
             "Unos novca od {} KM nije prihvaćen na printeru: {}",
