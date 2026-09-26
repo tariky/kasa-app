@@ -30,6 +30,7 @@ export function PotpisPecat({ forma, izmijeni }: {
     <Sekcija naslov="Potpis i pečat" opis="Pečat se štampa preko lijeve potpisne linije.">
       <SekcijaTijelo className="space-y-5">
         <SlikaBirac slika={forma.pecat.slika} onChange={slika => pecat({ slika })} accept="image/png,image/jpeg"
+          dozvoljeni={{ tipovi: ['image/png', 'image/jpeg'], poruka: 'Pečat mora biti PNG ili JPG.' }}
           alt="Pečat" dodajTekst="Dodaj pečat" zamijeniTekst="Zamijeni pečat"
           napomena="PNG sa providnom pozadinom izgleda najbolje. Širok pečat se smanji da stane iznad potpisa." />
         <VelicinaSlike naslov="Veličina pečata" vrijednost={forma.pecat.velicina} onChange={velicina => pecat({ velicina })}

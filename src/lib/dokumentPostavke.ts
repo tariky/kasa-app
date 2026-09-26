@@ -106,7 +106,8 @@ function prekidac(v: string | null | undefined, zadano: boolean): boolean {
   return v === 'true' ? true : v === 'false' ? false : zadano;
 }
 
-const jeSlika = (v: string) => v.startsWith('data:image/');
+/** react-pdf štampa samo PNG i JPEG — svg/webp/gif bi tiho izostali. */
+const jeSlika = (v: string) => /^data:image\/(png|jpeg);base64,/.test(v);
 
 /** Nastavak važi samo kad su i broj i godina ispravni. */
 function nastavak(broj: string | null | undefined, godina: string | null | undefined): NastavakNumeracije | null {

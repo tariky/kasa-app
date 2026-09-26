@@ -1,10 +1,14 @@
+import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { cn } from '@/lib/utils';
 import { ImagePlus, X } from 'lucide-react';
 
-/** Kvadratić s pregledom slike, dugme Dodaj/Zamijeni i Ukloni — logo firme, pečat. Slika ide kao data URL. */
-export function SlikaBirac({ slika, onChange, alt, dodajTekst, zamijeniTekst, napomena, accept = 'image/*' }: {
+/**
+ * Kvadratić s pregledom slike, dugme Dodaj/Zamijeni i Ukloni — logo firme, pečat. Slika ide kao data URL.
+ * `dozvoljeni`: samo ti MIME tipovi se učitavaju, za ostale se umjesto napomene prikaže poruka.
+ */
+export function SlikaBirac({ slika, onChange, alt, dodajTekst, zamijeniTekst, napomena, accept = 'image/*', dozvoljeni }: {
   slika: string;
   onChange: (v: string) => void;
   alt: string;
@@ -12,13 +16,17 @@ export function SlikaBirac({ slika, onChange, alt, dodajTekst, zamijeniTekst, na
   zamijeniTekst: string;
   napomena: string;
   accept?: string;
+  dozvoljeni?: { tipovi: string[]; poruka: string };
 }) {
+  const [greska, setGreska] = useState('');
+  const postavi = (v: string) => { setGreska(''); onChange(v); };
   const ucitaj = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
+    if (dozvoljeni && !dozvoljeni.tipovi.includes(file.type)) { setGreska(dozvoljeni.poruka); return; }
     const reader = new FileReader();
-    reader.onload = () => onChange(reader.result as string);
+    reader.onload = () => postavi(reader.result as string);
     reader.readAsDataURL(file);
   };
 
@@ -42,14 +50,16 @@ export function SlikaBirac({ slika, onChange, alt, dodajTekst, zamijeniTekst, na
             </label>
           </Button>
           {slika && (
-            <Button variant="ghost" size="sm" onClick={() => onChange('')}
+            <Button variant="ghost" size="sm" onClick={() => postavi('')}
               className="h-8 gap-1.5 text-[12px] text-slate-500 hover:text-rose-600 hover:bg-rose-50">
               <X className="h-3.5 w-3.5" />
               Ukloni
             </Button>
           )}
         </div>
-        <p className="mt-1.5 text-[11.5px] text-slate-400">{napomena}</p>
+        {greska
+          ? <p role="alert" className="mt-1.5 text-[11.5px] font-medium text-rose-600">{greska}</p>
+          : <p className="mt-1.5 text-[11.5px] text-slate-400">{napomena}</p>}
       </div>
     </div>
   );

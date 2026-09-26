@@ -165,6 +165,18 @@ describe('pecatZa', () => {
     expect(pecatZa(procitajDokumentPostavke({ 'dokumenti.pecat.faktura': 'true' }), 'faktura')).toBeNull();
     expect(pecatZa(procitajDokumentPostavke({ 'dokumenti.pecat': 'nije-slika', 'dokumenti.pecat.faktura': 'true' }), 'faktura')).toBeNull();
   });
+  test('samo PNG i JPEG — svg/webp react-pdf ne štampa', () => {
+    for (const s of ['data:image/svg+xml;base64,AAA', 'data:image/webp;base64,AAA', 'data:image/gif;base64,AAA']) {
+      const p = procitajDokumentPostavke({ 'dokumenti.pecat': s, 'dokumenti.pecat.faktura': 'true' });
+      expect(p.pecat.slika).toBe('');
+      expect(pecatZa(p, 'faktura')).toBeNull();
+    }
+    for (const s of ['data:image/png;base64,AAA', 'data:image/jpeg;base64,AAA']) {
+      const p = procitajDokumentPostavke({ 'dokumenti.pecat': s, 'dokumenti.pecat.faktura': 'true' });
+      expect(p.pecat.slika).toBe(s);
+      expect(pecatZa(p, 'faktura')).toEqual({ slika: s, velicina: 90 });
+    }
+  });
 });
 
 describe('način plaćanja kupca na kasi', () => {
