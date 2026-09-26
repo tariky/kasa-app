@@ -30,6 +30,19 @@ function proizvod(over: Partial<Product>): Product {
   };
 }
 
+// Deterministički RNG (mulberry32, kao u batchRacuni.test.ts): s Math.random
+// broj računa, pa i broj expect() poziva, mijenjao se od runa do runa.
+function seededRng(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 // Ista funkcija koju koristi IPC handler — ne kopija, da test hvata i izmjene u njoj.
 function buildRacun(r: { stavke: any[]; ukupno: number }): Tring.Racun {
   return buildTringRacun({ ...r, nacinPlacanja: 'Gotovina' });
@@ -43,7 +56,7 @@ const katalog: Product[] = [
 ];
 
 test('svi generisani računi se uspješno štampaju kroz mock fiskalni server', async () => {
-  const res = generirajRacune(katalog, { target: 60 });
+  const res = generirajRacune(katalog, { target: 60, rng: seededRng(1) });
   expect(res.racuni.length).toBeGreaterThan(0);
 
   const fiskalniBrojevi: string[] = [];
