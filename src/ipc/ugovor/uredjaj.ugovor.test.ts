@@ -5,6 +5,7 @@ import { Database } from 'bun:sqlite';
 import { copyFileSync, existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { ADMIN_PIN, otvoriBackend, prijavi, type Backend } from './backend';
+import { tag } from './laziTring';
 import { scenarij, ADMIN, sada, postoji, neuspjehStampe } from './scenarij';
 
 let b: Backend;
@@ -12,11 +13,6 @@ const baza = scenarij(() => b);
 
 beforeEach(async () => { b = await otvoriBackend(); });
 afterEach(async () => { await b.close(); });
-
-/** Vrijednost prvog XML taga u tijelu zahtjeva. */
-function tag(xml: string, naziv: string): string | undefined {
-  return xml.match(new RegExp(`<${naziv}>([\\s\\S]*?)</${naziv}>`))?.[1];
-}
 
 function zadnji() {
   const z = b.tring.zahtjevi.at(-1);

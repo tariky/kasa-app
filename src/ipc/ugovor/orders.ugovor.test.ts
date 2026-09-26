@@ -1,7 +1,7 @@
 // Ugovor za kanale order:* i pending:* — vidi backend.ts.
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
 import { otvoriBackend, type Backend } from './backend';
-import { pokreniPokvareniTring, slobodanPort, type Kvar } from './laziTring';
+import { pokreniPokvareniTring, slobodanPort, stavkeZahtjeva, tag, type Kvar } from './laziTring';
 import { sekundiOdSada } from './zona';
 import { scenarij, ADMIN, sada, stavka, uspjeh, neuspjehStampe, postoji, neuspjeh } from './scenarij';
 import { izracunajTotale } from '../../lib/racun';
@@ -161,6 +161,7 @@ describe('order:finalizePrilog', () => {
     await expect(b.call('order:finalizePrilog', { korisnikId: ADMIN, iznos: 50, nacinPlacanja: 'Virman' }))
       .rejects.toThrow('Nije poznat posljednji fiskalni broj');
     expect(b.tring.zahtjevi).toEqual([]);
+    expect(baza.broj('SELECT COUNT(*) FROM pending_receipts')).toBe(0);
   });
 
   test('račun nosi broj isječka i jednu zbirnu stavku', async () => {
@@ -173,6 +174,126 @@ describe('order:finalizePrilog', () => {
     expect(o).toMatchObject({ prilogBroj: 101, ukupno: 50 });
     expect(o.stavke).toHaveLength(1);
     expect(postoji(o.stavke)[0]).toMatchObject({ kolicina: 1, cijena: 50, pdvStopa: 'E' });
+    // Zbirna stavka postoji samo na isječku: bez order_items, kretanja i nezavršenog reda.
+    expect(o.pdvIznos).toBeCloseTo(50 - 50 / 1.17, 2);
+    expect(o.status).toBe('completed');
+    expect(baza.broj('SELECT COUNT(*) FROM order_items')).toBe(0);
+    expect(baza.broj('SELECT COUNT(*) FROM stock_movements')).toBe(0);
+    expect(baza.broj('SELECT COUNT(*) FROM pending_receipts')).toBe(0);
+  });
+
+  test('svaki prilog račun nosi BF broj svog isječka', async () => {
+    await b.call('fiscal:setZadnjiBroj', 100);
+    const prvi = await b.pozovi('order:finalizePrilog', { iznos: 10, nacinPlacanja: 'Gotovina' });
+    const drugi = await b.pozovi('order:finalizePrilog', { iznos: 20, nacinPlacanja: 'Kartica' });
+
+    expect(prvi.prilogBroj).toBe(Number(prvi.brojFiskalnogRacuna));
+    expect(drugi.prilogBroj).toBe(Number(drugi.brojFiskalnogRacuna));
+    expect(drugi.prilogBroj).toBe(postoji(prvi.prilogBroj) + 1);
+  });
+
+  test('zbirna stavka na uređaju nosi predviđeni broj isječka', async () => {
+    await b.call('fiscal:setZadnjiBroj', 127);
+    b.tring.sljedeciBroj('/sfr', '128');
+
+    const r = await b.pozovi('order:finalizePrilog', { iznos: 150, nacinPlacanja: 'Gotovina' });
+
+    expect(r).toMatchObject({ success: true, prilogBroj: 128 });
+    expect(r.upozorenje).toBeUndefined();
+    const { tijelo } = postoji(b.tring.zahtjevi.find(z => z.putanja === '/sfr'));
+    expect(stavkeZahtjeva(tijelo)).toEqual([{ sifra: 'PRILOG', naziv: 'Stavke po računu br. 128', cijena: '150', stopa: 'E', kolicina: '1', rabat: '0' }]);
+    expect([tag(tijelo, 'Oznaka'), tag(tijelo, 'Iznos')]).toEqual(['Gotovina', '150']);
+  });
+
+  test('stvarni BF različit od predviđenog: faktura po stvarnom broju, uz upozorenje', async () => {
+    await b.call('fiscal:setZadnjiBroj', 127);
+    b.tring.sljedeciBroj('/sfr', '130');
+
+    const r = await b.pozovi('order:finalizePrilog', { iznos: 150, nacinPlacanja: 'Gotovina' });
+
+    // Isječak već nosi 128 u nazivu stavke; faktura ide po stvarnom broju.
+    expect(r).toMatchObject({ success: true, prilogBroj: 130 });
+    expect(r.upozorenje).toContain('128');
+    expect(r.upozorenje).toContain('130');
+    expect(baza.red('SELECT prilogBroj FROM orders WHERE id = ?', postoji(r.id)).prilogBroj).toBe(130);
+  });
+
+  test('nenumerički BF: faktura nosi predviđeni broj, bez upozorenja', async () => {
+    await b.call('fiscal:setZadnjiBroj', 127);
+    b.tring.sljedeciBroj('/sfr', 'R-12');
+
+    const r = await b.pozovi('order:finalizePrilog', { iznos: 150, nacinPlacanja: 'Gotovina' });
+
+    expect(r).toMatchObject({ success: true, brojFiskalnogRacuna: 'R-12', prilogBroj: 128 });
+    expect(r.upozorenje).toBeUndefined();
+    expect(baza.red('SELECT prilogBroj FROM orders WHERE id = ?', postoji(r.id)).prilogBroj).toBe(128);
+  });
+
+  test('naziv zbirne stavke iz unosa ide na uređaj i pamti se uz račun', async () => {
+    await b.call('fiscal:setZadnjiBroj', 127);
+    b.tring.sljedeciBroj('/sfr', '128');
+
+    const r = await b.pozovi('order:finalizePrilog', { iznos: 150, nacinPlacanja: 'Gotovina', prilogOpis: 'CNC obrada', prilogVeza: 'fakturi' });
+
+    expect(r.success).toBe(true);
+    expect(stavkeZahtjeva(postoji(b.tring.zahtjevi.at(-1)).tijelo).map(s => s.naziv)).toEqual(['CNC obrada po fakturi br. 128']);
+    // Storno i kopija računa čitaju naziv iz baze — mora biti isti kao odštampani.
+    expect(baza.red('SELECT prilogNaziv FROM orders WHERE id = ?', postoji(r.id)).prilogNaziv).toBe('CNC obrada po fakturi br. 128');
+  });
+
+  test('stavke određuju iznos (ukucani se ignoriše); usluga ne razdužuje zalihu', async () => {
+    await b.call('fiscal:setZadnjiBroj', 100);
+    const a = baza.artikal({ sifra: 'A1', cijena: 30, stanje: 100 });
+    const u = baza.artikal({ sifra: 'U1', cijena: 90, tip: 'usluga' });
+
+    const r = await b.pozovi('order:finalizePrilog', {
+      nacinPlacanja: 'Gotovina', iznos: 999,
+      stavke: [{ productId: a, kolicina: 2, cijena: 30, rabat: 0, pdvStopa: 'E' }, { productId: u, kolicina: 1, cijena: 90, rabat: 0, pdvStopa: 'E' }],
+    });
+
+    expect(r.success).toBe(true);
+    expect(stavkeZahtjeva(postoji(b.tring.zahtjevi.at(-1)).tijelo).map(s => [s.naziv, s.cijena]))
+      .toEqual([['Stavke po računu br. 101', '150']]);
+    expect(baza.red('SELECT ukupno FROM orders WHERE id = ?', postoji(r.id)).ukupno).toBe(150);
+    expect(baza.redovi('SELECT productId, kolicina FROM prilog_stavke WHERE orderId = ? ORDER BY productId', postoji(r.id)))
+      .toEqual([{ productId: a, kolicina: 2 }, { productId: u, kolicina: 1 }]);
+    expect(baza.stanje(a)).toBe(98);
+    expect(baza.broj('SELECT COUNT(*) FROM stock_movements WHERE productId = ?', u)).toBe(0);
+    expect(baza.broj('SELECT COUNT(*) FROM pending_receipts')).toBe(0);
+  });
+
+  test('iznos 0 bez stavki i stavka sa stopom K se odbijaju prije štampe', async () => {
+    await b.call('fiscal:setZadnjiBroj', 100);
+    const k = baza.artikal({ sifra: 'K1', naziv: 'Oslobođeno', cijena: 30, pdvStopa: 'K' });
+
+    await expect(b.call('order:finalizePrilog', { iznos: 0, nacinPlacanja: 'Gotovina' })).rejects.toThrow('Iznos mora biti veći');
+    await expect(b.call('order:finalizePrilog', {
+      nacinPlacanja: 'Gotovina', stavke: [{ productId: k, kolicina: 1, cijena: 30, pdvStopa: 'K' }],
+    })).rejects.toThrow('stopom E');
+
+    expect(b.tring.zahtjevi).toEqual([]);
+    expect(baza.broj('SELECT COUNT(*) FROM orders')).toBe(0);
+    expect(baza.broj('SELECT COUNT(*) FROM pending_receipts')).toBe(0);
+  });
+
+  test('datum valute i napomena su u redu nezavršenih već tokom štampe', async () => {
+    await b.call('fiscal:setZadnjiBroj', 100);
+    const stampa = b.tring.zadrzi('/sfr');
+    const faktura = b.pozovi('order:finalizePrilog', {
+      iznos: 100, nacinPlacanja: 'Virman', datumValute: '2026-10-15', napomena: '  Isporuka na gradilište  ',
+    });
+    await stampa.stigao;
+    let snapshot: unknown;
+    try {
+      [{ snapshot }] = await b.pozovi('pending:list');
+    } finally {
+      stampa.pusti();
+    }
+    expect(snapshot).toMatchObject({ datumValute: '2026-10-15', napomena: 'Isporuka na gradilište' });
+
+    const r = await faktura;
+    expect(baza.red('SELECT datumValute, napomena FROM orders WHERE id = ?', postoji(r.id)))
+      .toEqual({ datumValute: '2026-10-15', napomena: 'Isporuka na gradilište' });
   });
 
   test('stavke s rabatom, valuta i napomena idu na fakturu', async () => {
@@ -189,6 +310,10 @@ describe('order:finalizePrilog', () => {
     expect(baza.red('SELECT kolicina, cijena, rabat FROM prilog_stavke WHERE orderId = ?', postoji(r.id)))
       .toEqual({ kolicina: 3, cijena: 20, rabat: 25 });
     expect(baza.stanje(p)).toBe(7);
+    // Rabat umanjuje zbirnu stavku na uređaju, a stavke s rabatom čine fakturu kompletnom.
+    expect(stavkeZahtjeva(postoji(b.tring.zahtjevi.at(-1)).tijelo).map(s => s.cijena)).toEqual(['45']);
+    await expect(b.call('prilog:saveStavke', postoji(r.id), [{ productId: p, kolicina: 1, cijena: 20, pdvStopa: 'E' }]))
+      .rejects.toThrow('Faktura je završena — stavke se ne mogu mijenjati');
   });
 
   test('neispravan datum valute, predugačka napomena i rabat se odbijaju prije štampe', async () => {
@@ -197,6 +322,8 @@ describe('order:finalizePrilog', () => {
     const osnova = { korisnikId: ADMIN, nacinPlacanja: 'Virman', iznos: 10 };
     await expect(b.call('order:finalizePrilog', { ...osnova, datumValute: '2026-13-01' }))
       .rejects.toThrow('Neispravan datum valute: 2026-13-01');
+    await expect(b.call('order:finalizePrilog', { ...osnova, datumValute: '2026-02-30' }))
+      .rejects.toThrow('Neispravan datum valute: 2026-02-30');
     await expect(b.call('order:finalizePrilog', { ...osnova, napomena: 'x'.repeat(501) }))
       .rejects.toThrow('Napomena može imati najviše 500 znakova');
     await expect(b.call('order:finalizePrilog', { ...osnova, stavke: [{ productId: p, kolicina: 1, cijena: 20, rabat: 100.01, pdvStopa: 'E' }] }))
@@ -223,6 +350,7 @@ describe('order:finalizePrilog', () => {
     expect(baza.red('SELECT status, racunId FROM ponude WHERE id = ?', prihvacena)).toEqual({ status: 'konvertovana', racunId: r.id });
     await expect(b.call('order:finalizePrilog', { ...osnova, ponudaId: prihvacena }))
       .rejects.toThrow('Ponuda je već konvertovana u račun');
+    expect(b.tring.zahtjevi).toHaveLength(1);
   });
 });
 
@@ -279,11 +407,12 @@ describe('order:refundAndPrint', () => {
   test('greška printera: račun ostaje nestorniran', async () => {
     const p = baza.artikal({ sifra: 'S4', cijena: 3, stanje: 10 });
     const { id } = await izdaj([stavka(p, 1, 3)], { brojFiskalnogRacuna: '57' });
-    b.tring.greskaNa('/srr', 'Uređaj zauzet');
+    b.tring.greskaNa('/srr', 'Uređaj zauzet', 901);
 
     const r = await b.pozovi('order:refundAndPrint', { id });
 
     expect(r.success).toBe(false);
+    expect(r.error).toBe('Uređaj zauzet [901]');
     expect(baza.red('SELECT status FROM orders WHERE id = ?', id).status).toBe('completed');
     expect(baza.stanje(p)).toBe(9);
   });
@@ -293,6 +422,74 @@ describe('order:refundAndPrint', () => {
     const { id } = await izdaj([stavka(p, 1, 3)], { brojFiskalnogRacuna: '12/A' });
     await expect(b.call('order:refundAndPrint', { id })).rejects.toThrow('nije ispravan broj računa');
     expect(b.tring.zahtjevi).toEqual([]);
+    expect(baza.red('SELECT status FROM orders WHERE id = ?', id).status).toBe('completed');
+    expect(baza.stanje(p)).toBe(-1);
+  });
+
+  test('ručno unesen broj reklamacije ima prednost nad brojem sa uređaja', async () => {
+    const p = baza.artikal({ sifra: 'S7', cijena: 5 });
+    const { id } = await izdaj([stavka(p, 1, 5)], { brojFiskalnogRacuna: '556' });
+
+    expect(await b.pozovi('order:refundAndPrint', { id, brojReklamacije: 'RUC-42' }))
+      .toMatchObject({ success: true, brojReklamacije: 'RUC-42' });
+    expect(baza.red('SELECT brojReklamacije FROM orders WHERE id = ?', id).brojReklamacije).toBe('RUC-42');
+  });
+
+  test('dvoklik: drugi storno dok prvi štampa se odbija — jedna reklamacija, zaliha vraćena jednom', async () => {
+    const p = baza.artikal({ sifra: 'S8', cijena: 5, stanje: 10 });
+    const { id } = await izdaj([stavka(p, 2, 5)], { brojFiskalnogRacuna: '558' });
+    expect(baza.stanje(p)).toBe(8);
+
+    const stampa = b.tring.zadrzi('/srr');
+    const prvi = b.pozovi('order:refundAndPrint', { id });
+    await stampa.stigao;
+    try {
+      await expect(b.call('order:refundAndPrint', { id })).rejects.toThrow('Storniranje ovog računa je već u toku');
+    } finally {
+      stampa.pusti();
+    }
+
+    expect(await prvi).toMatchObject({ success: true });
+    expect(b.tring.zahtjevi.filter(z => z.putanja === '/srr')).toHaveLength(1);
+    expect(baza.red('SELECT status FROM orders WHERE id = ?', id).status).toBe('refunded');
+    expect(baza.stanje(p)).toBe(10);
+  });
+
+  test('kupac s računa ide uređaju uz broj originalnog računa', async () => {
+    const p = baza.artikal({ sifra: '008', cijena: 5 });
+    const { id } = await izdaj([stavka(p, 1, 5)], {
+      brojFiskalnogRacuna: '561',
+      kupac: { naziv: 'Firma d.o.o.', idBroj: '4200000000000', adresa: 'Titova 1', grad: 'Sarajevo', postanskiBroj: '71000' },
+    });
+
+    expect(await b.pozovi('order:refundAndPrint', { id })).toMatchObject({ success: true });
+    const { tijelo } = postoji(b.tring.zahtjevi.find(z => z.putanja === '/srr'));
+    expect(tag(tijelo, 'IDbroj')).toBe('4200000000000');
+    expect(tag(postoji(tag(tijelo, 'Kupac')), 'Naziv')).toBe('Firma d.o.o.');
+    expect(tag(tijelo, 'BrojRacuna')).toBe('561');
+    expect(stavkeZahtjeva(tijelo).map(s => s.sifra)).toEqual(['008']);
+  });
+
+  test('račun po prilogu: reklamacija nosi istu zbirnu stavku kao original', async () => {
+    const racun = baza.racun({ ukupno: 60, brojFiskalnogRacuna: '563', prilogBroj: 7 });
+    // Naziv zbirne stavke zapamćen uz račun ima prednost nad zadanim.
+    const sNazivom = baza.racun({ ukupno: 60, brojFiskalnogRacuna: '564', prilogBroj: 8, prilogNaziv: 'CNC obrada po fakturi br. 8' });
+
+    expect(await b.pozovi('order:refundAndPrint', { id: racun })).toMatchObject({ success: true });
+    expect(await b.pozovi('order:refundAndPrint', { id: sNazivom })).toMatchObject({ success: true });
+
+    const [prva, druga] = b.tring.zahtjevi.filter(z => z.putanja === '/srr').map(z => z.tijelo);
+    expect(stavkeZahtjeva(prva)).toEqual([{ sifra: 'PRILOG', naziv: 'Stavke po računu br. 7', cijena: '60', stopa: 'E', kolicina: '1', rabat: '0' }]);
+    expect(tag(prva, 'BrojRacuna')).toBe('563');
+    expect(stavkeZahtjeva(druga).map(s => s.naziv)).toEqual(['CNC obrada po fakturi br. 8']);
+  });
+
+  test('račun po prilogu bez dodijeljenih stavki se stornira (nema zalihe za vratiti)', async () => {
+    const id = baza.racun({ ukupno: 60, brojFiskalnogRacuna: '565', prilogBroj: 2 });
+
+    expect(await b.pozovi('order:refundAndPrint', { id })).toMatchObject({ success: true });
+    expect(baza.red('SELECT status FROM orders WHERE id = ?', id).status).toBe('refunded');
+    expect(baza.broj("SELECT COUNT(*) FROM stock_movements WHERE referenceType = 'refund'")).toBe(0);
   });
 
   test('reklamacija koju uređaj ne bi primio se odbija prije unosa novca i štampe', async () => {
@@ -664,11 +861,13 @@ describe('nepoznat ishod štampe', () => {
 
   test('finalizePrilog: greška uređaja briše red', async () => {
     await b.call('fiscal:setZadnjiBroj', 100);
-    b.tring.greskaNa('/sfr', 'Nema papira');
+    b.tring.greskaNa('/sfr', 'Nema papira', 901);
     const r = await b.pozovi('order:finalizePrilog', { iznos: 10, nacinPlacanja: 'Virman' });
     expect(r.success).toBe(false);
+    expect(r.error).toBe('Nema papira [901]');
     expect(r.ishodNepoznat).toBeUndefined();
     expect(pending()).toEqual([]);
+    expect(baza.broj('SELECT COUNT(*) FROM orders')).toBe(0);
   });
 });
 
@@ -856,6 +1055,7 @@ describe('storno i zaliha', () => {
 
     expect(povrat(id)).toEqual([{ productId: p, tip: 'ulaz', kolicina: 3 }]);
     expect(baza.stanje(p)).toBe(10);
+    expect(baza.red('SELECT status FROM orders WHERE id = ?', id).status).toBe('refunded');
   });
 
   test('prodaja i storno bez datuma s papira: kretanja nose lokalno vrijeme računa i storna („Zalihe na dan")', async () => {

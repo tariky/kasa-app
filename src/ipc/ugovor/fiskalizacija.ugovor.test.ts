@@ -114,7 +114,9 @@ describe('štampa uspjela, upis pao', () => {
     expect(baza.broj('SELECT COUNT(*) AS n FROM orders')).toBe(0);
     expect(baza.broj('SELECT COUNT(*) AS n FROM prilog_stavke')).toBe(0);
     expect(baza.stanje(p)).toBe(10);
-    expect(pending()[0].snapshot).toMatchObject({ prilogBroj: 101, prilogStavke: [{ productId: p, kolicina: 2 }] });
+    expect(pending()[0].snapshot).toMatchObject({
+      prilogBroj: 101, ukupno: 10, stavke: [], prilogStavke: [{ productId: p, kolicina: 2, cijena: 5, pdvStopa: 'E' }],
+    });
 
     odblokiraj();
     const id = await rijesi('101');
