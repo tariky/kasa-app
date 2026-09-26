@@ -25,7 +25,6 @@ const POTPIS_ZA: Record<VrstaDokumenta, DokumentSaPotpisom> = {
   racun: 'racun', ponuda: 'ponuda', otpremnica: 'otpremnica', prilog: 'faktura', nalog: 'nalog',
 };
 
-
 const s = StyleSheet.create({
   page: { padding: M.margina, fontFamily: F, fontSize: 9, color: '#000' },
 

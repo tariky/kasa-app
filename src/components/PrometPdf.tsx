@@ -23,7 +23,6 @@ export interface PrometPdfProps {
 /** Storno (reklamacija) je crven u mreži i u sažetku. */
 const STORNO = { color: '#dc2626' };
 
-
 const KOLONE: KolonaMreze<PrometPdfProps['orders'][number]>[] = [
   { kljuc: 'rb', naslov: 'Rb', sirina: '5%', poravnanje: 'sredina', vrijednost: (_, i) => i + 1 },
   { kljuc: 'datum', naslov: 'Datum', sirina: '15%', poravnanje: 'lijevo', vrijednost: o => (o.createdAt ? formatDateTime(o.createdAt, '') : '—') },

@@ -18,7 +18,6 @@ export interface PrimkePdfProps {
   };
 }
 
-
 const KOLONE: KolonaMreze<PrimkePdfProps['primke'][number]>[] = [
   { kljuc: 'rb', naslov: 'Rb', sirina: '5%', poravnanje: 'sredina', vrijednost: (_, i) => i + 1 },
   { kljuc: 'broj', naslov: 'Br. primke', sirina: '12%', poravnanje: 'lijevo', vrijednost: p => p.brojPrimke },
