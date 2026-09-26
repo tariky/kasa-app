@@ -190,3 +190,21 @@ test('tick ne radi ništa kad licenca izgubi backup', async () => {
   expect(poslano).toHaveLength(0);
   expect(dogadjaji).toHaveLength(0);
 });
+
+test('stanje se ne može upisati: motor pamti stanje u memoriji, ne šalje svake minute', async () => {
+  o.pisiStanje = () => { throw new Error('EACCES'); };
+  const b = napraviBackup(o);
+  sat = min(1);
+  await b.tick();
+  expect(poslano).toHaveLength(1);
+  sat = min(2);
+  await b.tick();
+  expect(poslano).toHaveLength(1);
+  sat = min(1 + 179);
+  await b.tick();
+  expect(poslano).toHaveLength(1);
+  expect(b.info().zadnjiUspjeh).toBe(min(1).toISOString());
+  sat = min(1 + 180);
+  await b.tick();
+  expect(poslano).toHaveLength(2);
+});

@@ -39,8 +39,15 @@ export function napraviBackup(o: BackupOkruzenje) {
   let tekuci: Promise<BackupInfo> | null = null;
 
   const pristup = () => { try { return o.pristup(); } catch { return null; } };
-  const stanje = (): BackupStanje => { try { return o.citajStanje() ?? {}; } catch { return {}; } };
+  // Zadnje poznato stanje u memoriji: i kad se fajl ne može upisati, raspored
+  // ne smije slati svake minute (svaki objekt je 14 dana zaključan i plaća se).
+  let memorija: BackupStanje | null = null;
+  const stanje = (): BackupStanje => {
+    if (!memorija) { try { memorija = o.citajStanje() ?? {}; } catch { memorija = {}; } }
+    return memorija;
+  };
   const pisi = (s: BackupStanje) => {
+    memorija = s;
     try { o.pisiStanje(s); } catch (e) { console.error('Backup: stanje nije upisano:', porukaGreske(e)); }
   };
   const javi = (d: BackupDogadjaj) => { try { o.javi(d); } catch { /* prozor zatvoren */ } };
