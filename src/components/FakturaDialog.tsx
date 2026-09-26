@@ -24,6 +24,7 @@ import type { Kupac, Product } from '@/types';
 import { PretragaProizvoda } from '@/components/PretragaProizvoda';
 import SlobodnaStavkaDialog from '@/components/kasa/SlobodnaStavkaDialog';
 import { localDateStr } from '@/lib/novac';
+import { otvoriNezavrseneRacune } from '@/lib/nezavrseniRacuni';
 import { useDokumentPostavke } from '@/components/DokumentPostavkeProvider';
 import { rokUIzbor, zadanoZaFakturu, primijeniRabatKupca, formatRabat } from '@/lib/dokumentPostavke';
 
@@ -410,6 +411,11 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
           upozorenje: res.upozorenje ?? null,
         });
         onOpenChange(false);
+      } else if (res?.ishodNepoznat) {
+        // Faktura je možda fiskalizovana — dijalog se zatvara (skica ostaje)
+        // da je operater ne pošalje ponovo, a ishod rješava u nezavršenim računima.
+        onOpenChange(false);
+        otvoriNezavrseneRacune();
       } else {
         const details = res?.odgovori ? Object.entries(res.odgovori).map(([k, v]) => `${k}: ${v}`).join(', ') : '';
         setError(`${res?.error || 'Štampa nije uspjela'}${details ? ` (${details})` : ''}`);

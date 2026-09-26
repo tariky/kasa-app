@@ -106,6 +106,27 @@ test('ponovni upis radi diff: stara kretanja se zamijene, bez duplog skidanja', 
   expect(rows.map(r => r.productId)).toEqual([3]);
 });
 
+// „Zalihe na dan" čitaju datum kretanja — prilog koji se dodjeljuje danima
+// nakon fiskalizacije mora skinuti robu na datum računa, i pri svakom
+// ponovnom spremanju.
+test('kretanja priloga nose datum računa, i nakon ponovnog spremanja', () => {
+  dodajArtikal(1, 30);
+  dodajArtikal(3, 50);
+  const orderId = dodajOrder({ ukupno: 150, prilogBroj: 1 });
+  db.prepare("UPDATE orders SET createdAt = '2026-01-10 09:15:00' WHERE id = ?").run(orderId);
+  const datumi = () => db.prepare("SELECT createdAt FROM stock_movements WHERE referenceType = 'prilog' AND referenceId = ?")
+    .all(orderId).map((r: any) => r.createdAt);
+
+  savePrilogStavkeInTransaction(db, orderId, [{ productId: 1, kolicina: 2, cijena: 30, pdvStopa: 'E' }]);
+  expect(datumi()).toEqual(['2026-01-10 09:15:00']);
+
+  savePrilogStavkeInTransaction(db, orderId, [
+    { productId: 1, kolicina: 1, cijena: 30, pdvStopa: 'E' },
+    { productId: 3, kolicina: 1, cijena: 50, pdvStopa: 'E' },
+  ]);
+  expect(datumi()).toEqual(['2026-01-10 09:15:00', '2026-01-10 09:15:00']);
+});
+
 test('odbija stavku sa PDV stopom različitom od E', () => {
   dodajArtikal(1, 30, 'artikal', 'K');
   const orderId = dodajOrder({ ukupno: 60, prilogBroj: 1 });

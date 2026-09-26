@@ -21,6 +21,7 @@ import {
   izdajRacunZaNalog, getNormativ, saveNormativ, osigurajProdajnuUslugu,
 } from '../lib/proizvodnja';
 import { refundAndPrint } from '../lib/refund';
+import { neuspjelaStampa, preuzmiPendingRed } from '../lib/pendingRacun';
 import { postaviDatumValute } from '../lib/valuta';
 import {
   savePrilogStavkeInTransaction, finalizePrilogAndPrint, oznaciPonuduFakturisanom,
@@ -1245,22 +1246,16 @@ export function registerIpcHandlers(): void {
     const result = await Tring.stampatiFiskalniRacun(racun);
     if (Tring.isLoggingEnabled()) console.log('[Tring] finalize response:', JSON.stringify(result));
 
-    // 3b. Print failed → nothing was printed, drop the pending row.
-    if (!result || !result.success) {
-      db.prepare('DELETE FROM pending_receipts WHERE id = ?').run(pendingId);
-      return {
-        success: false,
-        error: result?.error || result?.vrstaOdgovora || 'Nepoznata greška',
-        odgovori: result?.odgovori ?? {},
-      };
-    }
+    // 3b. Print failed → surely not printed: drop the pending row; unknown
+    // outcome (timeout, dropped connection): keep it for the pending dialog.
+    if (!result || !result.success) return neuspjelaStampa(db, pendingId, result);
 
-    // 3a. Print succeeded → create order + delete pending row atomically.
+    // 3a. Print succeeded → delete pending row + create order atomically. A
+    // row already resolved from the dialog meanwhile means no second order.
     const brojFiskalnogRacuna = result.odgovori?.BrojFiskalnogRacuna || null;
     const finalizeTx = db.transaction(() => {
-      const orderId = insertCompletedOrder(db, { ...data, brojFiskalnogRacuna, isManual: 0 });
-      db.prepare('DELETE FROM pending_receipts WHERE id = ?').run(pendingId);
-      return orderId;
+      preuzmiPendingRed(db, pendingId, brojFiskalnogRacuna);
+      return insertCompletedOrder(db, { ...data, brojFiskalnogRacuna, isManual: 0 });
     });
     const orderId = finalizeTx();
 

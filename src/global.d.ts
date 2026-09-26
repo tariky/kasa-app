@@ -65,7 +65,11 @@ interface Window {
       success: boolean; brojReklamacije?: string | null; error?: string; odgovori?: Record<string, string>;
       nedovoljnoSredstava?: boolean; manjak?: number; pologIznos?: number;
     }>;
-    finalizeOrder: (data: any) => Promise<{ success: boolean; id?: number; brojFiskalnogRacuna?: string | null; error?: string; odgovori?: Record<string, string> }>;
+    finalizeOrder: (data: any) => Promise<{
+      success: boolean; id?: number; brojFiskalnogRacuna?: string | null; error?: string; odgovori?: Record<string, string>;
+      /** Uređaj nije potvrdio račun — možda je odštampan; riješava se u dijalogu nezavršenih računa. */
+      ishodNepoznat?: boolean;
+    }>;
     finalizePrilogOrder: (data: {
       iznos?: number; nacinPlacanja: string; kupac?: any;
       stavke?: Array<{ productId: number; kolicina: number; cijena: number; rabat?: number; pdvStopa: string }>;
@@ -73,7 +77,7 @@ interface Window {
       datumValute?: string | null; napomena?: string | null; ponudaId?: number | null;
     }) => Promise<{
       success: boolean; id?: number; prilogBroj?: number; brojFiskalnogRacuna?: string | null;
-      upozorenje?: string; error?: string; odgovori?: Record<string, string>;
+      upozorenje?: string; error?: string; odgovori?: Record<string, string>; ishodNepoznat?: boolean;
     }>;
     getFiskalnaNumeracija: () => Promise<{
       zadnjiUBazi: number | null; zadnjiUpisani: number | null; predvidjeni: number | null;

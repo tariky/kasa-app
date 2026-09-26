@@ -10,10 +10,12 @@ import {
 import { Product } from '@/types';
 import { formatKM, parseDecimal } from '@/lib/utils';
 import { generirajRacune, GeneratedRacun, GenerateResult } from '@/lib/batchRacuni';
+import { otvoriNezavrseneRacune } from '@/lib/nezavrseniRacuni';
 
 const DELAY_SECONDS = 5;
 
-type RacunStatus = 'pending' | 'done' | 'failed';
+/** `nepoznat`: uređaj nije potvrdio račun — rješava se u nezavršenim računima, ne štampa ponovo. */
+type RacunStatus = 'pending' | 'done' | 'failed' | 'nepoznat';
 
 export default function GeneratorScreen() {
   const [products, setProducts] = useState<Product[]>([]);
@@ -83,7 +85,7 @@ export default function GeneratorScreen() {
 
   const processAll = async () => {
     if (!result || running) return;
-    const queue = result.racuni.filter(r => statuses[r.id] !== 'done');
+    const queue = result.racuni.filter(r => statuses[r.id] !== 'done' && statuses[r.id] !== 'nepoznat');
     if (queue.length === 0) return;
 
     setRunning(true);
@@ -97,12 +99,28 @@ export default function GeneratorScreen() {
       setPhase('print');
 
       // Print, with a single retry after the recovery delay (retry-then-stop).
-      let res = await finalizeOne(r).catch((e: any) => ({ success: false, error: e?.message }));
-      if (!res || !res.success) {
+      let res: { success: boolean; error?: string; ishodNepoznat?: boolean } =
+        await finalizeOne(r).catch((e: any) => ({ success: false, error: e?.message }));
+      // Nepoznat ishod se ne ponavlja — račun je možda već odštampan.
+      if ((!res || !res.success) && !res?.ishodNepoznat) {
         setPhase('wait');
         await sleepWithCountdown(DELAY_SECONDS);
         setPhase('print');
         res = await finalizeOne(r).catch((e: any) => ({ success: false, error: e?.message }));
+      }
+
+      if (res?.ishodNepoznat) {
+        setStatuses(prev => ({ ...prev, [r.id]: 'nepoznat' }));
+        setRunning(false);
+        runningRef.current = false;
+        setActiveId(null);
+        setMessage({
+          type: 'error',
+          text: `Zaustavljeno na računu ${printed + 1}/${queue.length}: ${res.error || 'ishod štampe nije poznat'}`,
+        });
+        otvoriNezavrseneRacune();
+        await loadProducts();
+        return;
       }
 
       if (!res || !res.success) {
@@ -256,7 +274,8 @@ export default function GeneratorScreen() {
                   className={`rounded-xl border bg-white p-3 transition-all ${
                     isActive ? 'ring-2 ring-blue-400 border-blue-300' :
                     st === 'done' ? 'border-emerald-200 bg-emerald-50/40' :
-                    st === 'failed' ? 'border-red-300 bg-red-50/50' : 'border-slate-200'
+                    st === 'failed' ? 'border-red-300 bg-red-50/50' :
+                    st === 'nepoznat' ? 'border-amber-300 bg-amber-50/50' : 'border-slate-200'
                   }`}
                 >
                   <div className="flex items-center justify-between mb-2">
@@ -264,6 +283,7 @@ export default function GeneratorScreen() {
                       <span className="text-[12px] font-mono text-slate-400">#{idx + 1}</span>
                       {st === 'done' && <CheckCircle2 className="h-4 w-4 text-emerald-500" />}
                       {st === 'failed' && <AlertTriangle className="h-4 w-4 text-red-500" />}
+                      {st === 'nepoznat' && <AlertTriangle className="h-4 w-4 text-amber-500" />}
                       {isActive && <Loader2 className="h-4 w-4 animate-spin text-blue-500" />}
                     </div>
                     <div className="flex items-center gap-2">

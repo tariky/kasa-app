@@ -54,6 +54,8 @@ function addLog(entry: Omit<TringLogEntry, 'id' | 'timestamp'>): void {
 export interface TringConfig {
   host?: string;
   port?: number;
+  /** Koliko se čeka uređaj (ms); zadano 30 s — kraće samo u testovima. */
+  timeoutMs?: number;
 }
 
 export interface TringResponse {
@@ -63,6 +65,12 @@ export interface TringResponse {
   error?: string;
   /** HTTP status odgovora; null kad veza nije ni uspostavljena. */
   statusCode?: number | null;
+  /**
+   * Zahtjev je stigao do uređaja, ali odgovor izostao ili nije razumljiv
+   * (timeout, prekid veze, neparsiran odgovor) — račun je možda odštampan.
+   * Nema ga kad je neuspjeh siguran. Vidi `ishodNepoznat()`.
+   */
+  ishodNepoznat?: boolean;
 }
 
 export interface Artikal {
@@ -124,12 +132,60 @@ function nextRequestNumber(): number {
   return ++requestCounter;
 }
 
+/**
+ * Greške veze kod kojih zahtjev sigurno nije stigao do uređaja (veza nije ni
+ * uspostavljena) — račun nije odštampan. Svaka druga greška nakon što je
+ * zahtjev krenuo (timeout, prekid veze, neparsiran odgovor) znači da je
+ * uređaj možda štampao: ishod nije poznat. Rust: `nije_poslano` u tring.rs.
+ */
+const NIJE_POSLANO = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'EHOSTDOWN', 'ENETUNREACH', 'EADDRNOTAVAIL']);
+
+/** Odgovor uređaja ima `<VrstaOdgovora>` (OK/Greska) ili `<Greska>` (greska.xsd). */
+function odgovorUredjaja(xml: string): boolean {
+  return /<VrstaOdgovora>/.test(xml) || /<Greska>/.test(xml);
+}
+
+/**
+ * Uređaj nije potvrdio ni uspjeh ni grešku, a zahtjev je do njega stigao —
+ * račun je možda odštampan. Pozivalac tada NE smije brisati write-ahead red
+ * (pending_receipts); operater ishod razrješava ručno.
+ */
+export function ishodNepoznat(r: TringResponse | null | undefined): boolean {
+  return !!r && !r.success && r.ishodNepoznat === true;
+}
+
 function postXml(urlPath: string, body: string): Promise<TringResponse> {
   const host = config.host ?? DEFAULT_HOST;
   const port = config.port ?? DEFAULT_PORT;
   const startTime = Date.now();
 
   return new Promise((resolve) => {
+    // Timeout i prekid veze mogu stići oba (req.destroy() izazove i 'error') —
+    // prvi ishod je konačan, i u dnevniku ostaje jedan zapis.
+    let gotovo = false;
+    const zavrsi = (result: TringResponse, responseXml: string) => {
+      if (gotovo) return;
+      gotovo = true;
+      addLog({
+        method: "POST",
+        path: urlPath,
+        requestXml: body,
+        responseXml,
+        statusCode: result.statusCode ?? null,
+        parsed: result,
+        durationMs: Date.now() - startTime,
+      });
+      resolve(result);
+    };
+    const neuspjeh = (error: string, nepoznat: boolean, statusCode: number | null = null): TringResponse => ({
+      success: false,
+      vrstaOdgovora: "Greska",
+      odgovori: {},
+      error,
+      statusCode,
+      ...(nepoznat ? { ishodNepoznat: true } : {}),
+    });
+
     const req = http.request(
       {
         hostname: host,
@@ -140,7 +196,7 @@ function postXml(urlPath: string, body: string): Promise<TringResponse> {
           "Content-Type": "text/xml",
           "Content-Length": Buffer.byteLength(body, "utf-8"),
         },
-        timeout: TIMEOUT_MS,
+        timeout: config.timeoutMs ?? TIMEOUT_MS,
       },
       (res) => {
         const chunks: Buffer[] = [];
@@ -149,59 +205,26 @@ function postXml(urlPath: string, body: string): Promise<TringResponse> {
           const xml = Buffer.concat(chunks).toString("utf-8");
           const parsed = parseResponse(xml);
           parsed.statusCode = res.statusCode ?? null;
-          addLog({
-            method: "POST",
-            path: urlPath,
-            requestXml: body,
-            responseXml: xml,
-            statusCode: res.statusCode ?? null,
-            parsed,
-            durationMs: Date.now() - startTime,
-          });
-          resolve(parsed);
+          if (!odgovorUredjaja(xml)) {
+            parsed.error ??= "Neispravan odgovor fiskalnog uređaja";
+            parsed.ishodNepoznat = true;
+          }
+          zavrsi(parsed, xml);
+        });
+        // Veza prekinuta usred odgovora — bez ovoga obećanje nikad ne završi.
+        res.on("error", (err) => {
+          zavrsi(neuspjeh(err.message, true, res.statusCode ?? null), Buffer.concat(chunks).toString("utf-8"));
         });
       }
     );
 
     req.on("timeout", () => {
       req.destroy();
-      const result: TringResponse = {
-        success: false,
-        vrstaOdgovora: "Greska",
-        odgovori: {},
-        error: "Request timed out",
-        statusCode: null,
-      };
-      addLog({
-        method: "POST",
-        path: urlPath,
-        requestXml: body,
-        responseXml: "",
-        statusCode: null,
-        parsed: result,
-        durationMs: Date.now() - startTime,
-      });
-      resolve(result);
+      zavrsi(neuspjeh("Request timed out", true), "");
     });
 
-    req.on("error", (err) => {
-      const result: TringResponse = {
-        success: false,
-        vrstaOdgovora: "Greska",
-        odgovori: {},
-        error: err.message,
-        statusCode: null,
-      };
-      addLog({
-        method: "POST",
-        path: urlPath,
-        requestXml: body,
-        responseXml: "",
-        statusCode: null,
-        parsed: result,
-        durationMs: Date.now() - startTime,
-      });
-      resolve(result);
+    req.on("error", (err: NodeJS.ErrnoException) => {
+      zavrsi(neuspjeh(err.message, !NIJE_POSLANO.has(err.code ?? "")), "");
     });
 
     req.write(body);

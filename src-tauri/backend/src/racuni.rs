@@ -72,6 +72,53 @@ fn kupac_polje(data: &Value, k: &str) -> Value {
     or_null(&data["kupac"][k])
 }
 
+// ─── Write-ahead računa (lib/pendingRacun.ts) ───────────────
+// Snapshot u pending_receipts se upiše prije štampe, a briše tek kad je ishod
+// poznat — neuspjeh sa sigurnim ishodom ga briše, nepoznat ishod ga ostavlja
+// za dijalog nezavršenih računa, a uspjeh ga briše u istoj transakciji s
+// upisom računa (docs/superpowers/specs/2026-07-06-crash-safe-racuni-design.md).
+
+/// Štampa nije uspjela. Siguran neuspjeh (uređaj odbio, veza odbijena) briše
+/// write-ahead red; nepoznat ishod ga ostavlja i vraća poruku koja operatera
+/// šalje u dijalog nezavršenih računa (`ishodNepoznat: true` za renderer).
+pub fn neuspjela_stampa(db: &Db, pending_id: i64, result: &Odgovor) -> R<Value> {
+    let greska = greska_odgovora(result);
+    if tring::ishod_nepoznat(result) {
+        return Ok(json!({
+            "success": false,
+            "error": format!(
+                "Uređaj nije potvrdio račun ({}) — ishod štampe nije poznat. \
+                 Provjerite da li je račun odštampan i riješite ga u dijalogu nezavršenih računa.",
+                js::to_string(&greska)
+            ),
+            "odgovori": odgovori(result),
+            "ishodNepoznat": true,
+        }));
+    }
+    db.run("DELETE FROM pending_receipts WHERE id = ?", p![pending_id])?;
+    Ok(json!({ "success": false, "error": greska, "odgovori": odgovori(result) }))
+}
+
+/// Write-ahead red je nestao dok je štampa trajala — račun se ne upisuje drugi put.
+pub fn poruka_vec_evidentiran(broj_fiskalnog_racuna: &Value) -> String {
+    format!(
+        "Fiskalni račun BF {} JE odštampan, ali je njegov nezavršeni zapis u međuvremenu riješen ili odbačen — \
+         račun je već evidentiran i drugi zapis nije napravljen. Ako je zapis odbačen, unesite račun ručno.",
+        if broj_fiskalnog_racuna.is_null() { "?".to_string() } else { js::to_string(broj_fiskalnog_racuna) }
+    )
+}
+
+/// Prvi korak transakcije upisa nakon uspješne štampe: obriše write-ahead red i
+/// time preuzme račun. Ako red više ne postoji (riješen ili odbačen iz dijaloga
+/// dok je štampa trajala), vraća grešku `poruka_vec_evidentiran` pa transakcija
+/// ne upiše drugi zapis istog računa.
+pub fn preuzmi_pending_red(db: &Db, pending_id: i64, broj_fiskalnog_racuna: &Value) -> R<()> {
+    if db.run("DELETE FROM pending_receipts WHERE id = ?", p![pending_id])?.changes != 1 {
+        baci!("{}", poruka_vec_evidentiran(broj_fiskalnog_racuna));
+    }
+    Ok(())
+}
+
 // ─── insertCompletedOrder (handlers.ts) ─────────────────────
 
 // Insert a completed order + items + stock movements from a snapshot-shaped payload.
@@ -201,11 +248,13 @@ pub fn validiraj_prilog_stavke(db: &Db, stavke: &[Value]) -> R<HashMap<String, V
 /// Poziva se unutar transakcije (handler omotava u `db.tx`). Diff je
 /// najjednostavniji mogući: obriši stara kretanja tipa 'prilog' pa upiši nova —
 /// neto efekat na zalihu je isti kao ručni diff, a nema stanja za greške.
+/// Kretanja nose datum računa, ne dan dodjele — „Zalihe na dan" inače skidaju
+/// robu na pogrešan datum.
 ///
 /// Sve provjere idu prije prvog upisa da poziv bez transakcije (testovi) ne
 /// ostavi pola stavki u bazi.
 pub fn save_prilog_stavke_in_transaction(db: &Db, order_id: &Value, stavke: &Value) -> R<()> {
-    let Some(order) = db.get("SELECT prilogBroj, status, ukupno FROM orders WHERE id = ?", p![order_id])? else {
+    let Some(order) = db.get("SELECT prilogBroj, status, ukupno, createdAt FROM orders WHERE id = ?", p![order_id])? else {
         baci!("Račun ne postoji");
     };
     if order["prilogBroj"].is_null() {
@@ -233,8 +282,8 @@ pub fn save_prilog_stavke_in_transaction(db: &Db, order_id: &Value, stavke: &Val
         )?;
         if tipovi.get(&js::stringify(&s["productId"])).map_or(true, |t| t != "usluga") {
             db.run(
-                "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'izlaz', ?, 'prilog', ?)",
-                p![s["productId"], s["kolicina"], order_id],
+                "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId, createdAt) VALUES (?, 'izlaz', ?, 'prilog', ?, ?)",
+                p![s["productId"], s["kolicina"], order_id, order["createdAt"]],
             )?;
         }
     }
@@ -385,13 +434,9 @@ fn finalize_prilog_and_print(b: &Backend, data: &Value) -> R<Value> {
         eprintln!("[Tring] finalizePrilog response: {}", js::stringify(&result));
     }
 
+    // Siguran neuspjeh briše pending red; nepoznat ishod ga ostavlja.
     if !tring::uspjeh(&result) {
-        db.run("DELETE FROM pending_receipts WHERE id = ?", p![pending_id])?;
-        return Ok(json!({
-            "success": false,
-            "error": greska_odgovora(&result),
-            "odgovori": odgovori(&result),
-        }));
+        return neuspjela_stampa(db, pending_id, &result);
     }
 
     let broj_fiskalnog_racuna = broj_sa_uredjaja(&result);
@@ -406,6 +451,8 @@ fn finalize_prilog_and_print(b: &Backend, data: &Value) -> R<Value> {
         )
     });
     let upis = db.tx(|| {
+        // Red riješen iz dijaloga dok je štampa trajala → bez drugog zapisa.
+        preuzmi_pending_red(db, pending_id, &broj_fiskalnog_racuna)?;
         let r = db.run(
             "
         INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, status,
@@ -427,11 +474,11 @@ fn finalize_prilog_and_print(b: &Backend, data: &Value) -> R<Value> {
         if !ponuda_id.is_null() {
             oznaci_ponudu_fakturisanom(db, &ponuda_id, &json!(order_id))?;
         }
-        db.run("DELETE FROM pending_receipts WHERE id = ?", p![pending_id])?;
         Ok(order_id)
     });
     let order_id = match upis {
         Ok(id) => id,
+        Err(e) if e.0 == poruka_vec_evidentiran(&broj_fiskalnog_racuna) => return Err(e),
         // Račun je već na papiru; pending red namjerno ostaje da se može riješiti
         // kroz pending:resolve, ali operater to mora znati odmah.
         Err(e) => baci!(
@@ -455,38 +502,39 @@ fn finalize_prilog_and_print(b: &Backend, data: &Value) -> R<Value> {
 
 // ─── lib/refund.ts ──────────────────────────────────────────
 
+/// Storno vraća tačno ono što je račun skinuo: za svaki izlaz računa (prodaja
+/// 'order' ili prilog 'prilog') ulaz 'refund' iste količine za isti artikal.
+/// Današnji tip artikla se ne gleda — artikal je mogao postati usluga i
+/// obrnuto nakon prodaje. TS: `vratiZalihuRacuna` u lib/refund.ts.
+pub fn vrati_zalihu_racuna(db: &Db, order_id: &Value) -> R<()> {
+    let izlazi = db.all(
+        "SELECT productId, kolicina FROM stock_movements WHERE tip = 'izlaz' AND referenceType IN ('order', 'prilog') AND referenceId = ? ORDER BY id",
+        p![order_id],
+    )?;
+    for izlaz in izlazi {
+        db.run(
+            "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'ulaz', ?, 'refund', ?)",
+            p![izlaz["productId"], izlaz["kolicina"], order_id],
+        )?;
+    }
+    Ok(())
+}
+
 /// Označi račun storniranim, vrati zalihu i upiši broj reklamacije.
 ///
 /// Poziva se unutar transakcije. Provjera statusa je ujedno i zaštita od
 /// dvostrukog storna: drugi poziv za isti račun više ne nađe 'completed' red.
-/// Usluge nemaju zalihu pa se za njih ne kreira kretanje.
 pub fn refund_order_in_transaction(db: &Db, id: &Value, broj_reklamacije: &Value) -> R<()> {
-    let Some(order) = db.get("SELECT id, prilogBroj FROM orders WHERE id = ? AND status = 'completed'", p![id])? else {
+    if !db.ima("SELECT id FROM orders WHERE id = ? AND status = 'completed'", p![id])? {
         baci!("Račun ne postoji ili je već storniran");
-    };
+    }
 
     db.run(
         "UPDATE orders SET status = 'refunded', refundedAt = datetime('now','localtime'), brojReklamacije = COALESCE(?, brojReklamacije) WHERE id = ?",
         p![broj_reklamacije, id],
     )?;
 
-    // Prilog račun nema order_items — zaliha se vraća po stavkama priloga.
-    let items = if !order["prilogBroj"].is_null() {
-        db.all("SELECT productId, kolicina FROM prilog_stavke WHERE orderId = ?", p![id])?
-    } else {
-        db.all("SELECT productId, kolicina FROM order_items WHERE orderId = ?", p![id])?
-    };
-
-    for item in items {
-        let product = db.get("SELECT tip FROM products WHERE id = ?", p![item["productId"]])?;
-        if product.map_or(true, |p| p["tip"] != "usluga") {
-            db.run(
-                "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'ulaz', ?, 'refund', ?)",
-                p![item["productId"], item["kolicina"], id],
-            )?;
-        }
-    }
-    Ok(())
+    vrati_zalihu_racuna(db, id)
 }
 
 /// Tring ne vraća šifru greške za praznu ladicu, samo tekst, pa se prepoznaje
@@ -909,25 +957,21 @@ fn finalize(b: &Backend, unos: &Value) -> R<Value> {
         eprintln!("[Tring] finalize response: {}", js::stringify(&result));
     }
 
-    // 3b. Print failed → nothing was printed, drop the pending row.
+    // 3b. Print failed → surely not printed: drop the pending row; unknown
+    // outcome (timeout, dropped connection): keep it for the pending dialog.
     if !tring::uspjeh(&result) {
-        db.run("DELETE FROM pending_receipts WHERE id = ?", p![pending_id])?;
-        return Ok(json!({
-            "success": false,
-            "error": greska_odgovora(&result),
-            "odgovori": odgovori(&result),
-        }));
+        return neuspjela_stampa(db, pending_id, &result);
     }
 
-    // 3a. Print succeeded → create order + delete pending row atomically.
+    // 3a. Print succeeded → delete pending row + create order atomically. A
+    // row already resolved from the dialog meanwhile means no second order.
     let broj_fiskalnog_racuna = broj_sa_uredjaja(&result);
     let order_id = db.tx(|| {
-        let order_id = insert_completed_order(
+        preuzmi_pending_red(db, pending_id, &broj_fiskalnog_racuna)?;
+        insert_completed_order(
             db,
             &spoji(&data, vec![("brojFiskalnogRacuna", broj_fiskalnog_racuna.clone()), ("isManual", json!(0))]),
-        )?;
-        db.run("DELETE FROM pending_receipts WHERE id = ?", p![pending_id])?;
-        Ok(order_id)
+        )
     })?;
 
     Ok(json!({ "success": true, "id": order_id, "brojFiskalnogRacuna": broj_fiskalnog_racuna, "odgovori": result["odgovori"] }))
