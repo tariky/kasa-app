@@ -10,14 +10,18 @@ import { buildTringRacun, buildTringReklamacija } from '@/lib/tringRacun';
 
 const PORT = 8096; // ne sudara se s ostalim testovima (8097, 8099)
 let server: Server;
+const log = console.log;
 
 beforeAll(() => {
   server = startMockTringServer(PORT, { kasnjenjeMs: 0 });
   Tring.configure({ host: 'localhost', port: PORT });
+  // Dnevnik (getLogs) nosi poslani XML; ispis u konzolu koji ga prati se utiša.
   Tring.setLoggingEnabled(true);
+  console.log = () => undefined;
 });
 
 afterAll(() => {
+  console.log = log;
   Tring.setLoggingEnabled(false);
   server.close();
 });

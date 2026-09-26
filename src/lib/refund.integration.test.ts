@@ -9,6 +9,7 @@ import * as Tring from '@/services/tring';
 import { startMockTringServer } from '@/services/tring-mock-server';
 import { schema } from '@/database/schema';
 import { refundAndPrint, type RefundDeps } from './refund';
+import { uredjajIzFunkcija, type TringFunkcije } from './fiskalniUredjaj';
 import { getProductStock } from './skladiste';
 import type { SqlDb } from './sqldb';
 
@@ -33,11 +34,12 @@ beforeEach(() => {
 });
 
 /** Iste zavisnosti koje handler prosljeđuje u produkciji. */
-function deps(): RefundDeps {
+/** Iste zavisnosti koje handler prosljeđuje u produkciji; `print` zamjenjuje štampu reklamacije. */
+function deps(print: TringFunkcije['stampatiReklamiraniRacun'] = Tring.stampatiReklamiraniRacun): RefundDeps {
   return {
     db,
     transaction: (fn) => db.transaction(fn),
-    print: (racun) => Tring.stampatiReklamiraniRacun(racun),
+    uredjaj: uredjajIzFunkcija({ stampatiReklamiraniRacun: print }),
   };
 }
 
@@ -144,7 +146,7 @@ test('neuspjela štampa ne mijenja bazu', async () => {
   const orderId = dodajRacun({ brojFiskalnog: '559', stavke: [{ productId: 1, kolicina: 3, cijena: 5 }] });
 
   const res = await refundAndPrint(
-    { ...deps(), print: async () => ({ success: false, vrstaOdgovora: 'Greska', error: 'Nema papira', odgovori: {} }) },
+    deps(async () => ({ success: false, vrstaOdgovora: 'Greska', error: 'Nema papira', odgovori: {} })),
     { id: orderId }
   );
 
@@ -177,7 +179,7 @@ test('kupac sa računa se prosljeđuje uređaju', async () => {
 
   let poslato: any = null;
   const res = await refundAndPrint(
-    { ...deps(), print: async (racun) => { poslato = racun; return Tring.stampatiReklamiraniRacun(racun); } },
+    deps(async (racun) => { poslato = racun; return Tring.stampatiReklamiraniRacun(racun); }),
     { id: orderId }
   );
 
@@ -231,7 +233,7 @@ test('reklamacija prilog računa nosi istu zbirnu stavku kao original', async ()
 
   let poslato: any = null;
   const result = await refundAndPrint(
-    { ...deps(), print: async (racun) => { poslato = racun; return Tring.stampatiReklamiraniRacun(racun); } },
+    deps(async (racun) => { poslato = racun; return Tring.stampatiReklamiraniRacun(racun); }),
     { id: orderId }
   );
 
@@ -254,7 +256,7 @@ test('reklamacija koristi naziv zbirne stavke zapamćen uz račun', async () => 
 
   let poslato: any = null;
   const result = await refundAndPrint(
-    { ...deps(), print: async (racun) => { poslato = racun; return Tring.stampatiReklamiraniRacun(racun); } },
+    deps(async (racun) => { poslato = racun; return Tring.stampatiReklamiraniRacun(racun); }),
     { id: orderId }
   );
 

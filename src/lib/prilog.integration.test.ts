@@ -13,6 +13,7 @@ import {
   type FinalizePrilogDeps,
 } from './prilog';
 import { refundAndPrint } from './refund';
+import { uredjajIzFunkcija, type TringFunkcije } from './fiskalniUredjaj';
 import { postaviZadnjiFiskalniBroj, predvidjeniFiskalniBroj } from './fiskalni';
 import { getProductStock } from './skladiste';
 
@@ -46,12 +47,12 @@ function printSaBrojem(broj: string, zabiljezi?: (racun: any) => void) {
   };
 }
 
-/** Iste zavisnosti koje handler prosljeđuje u produkciji. */
-function deps(): FinalizePrilogDeps {
+/** Iste zavisnosti koje handler prosljeđuje u produkciji; `print` zamjenjuje štampu računa. */
+function deps(print: TringFunkcije['stampatiFiskalniRacun'] = Tring.stampatiFiskalniRacun): FinalizePrilogDeps {
   return {
     db,
     transaction: (fn) => db.transaction(fn),
-    print: (racun) => Tring.stampatiFiskalniRacun(racun),
+    uredjaj: uredjajIzFunkcija({ stampatiFiskalniRacun: print }),
   };
 }
 
@@ -85,7 +86,7 @@ test('zbirna stavka koja ide uređaju nosi predviđeni broj isječka', async () 
 
   let poslato: any = null;
   const res = await finalizePrilogAndPrint(
-    { ...deps(), print: printSaBrojem('128', r => { poslato = r; }) },
+    deps(printSaBrojem('128', r => { poslato = r; })),
     { korisnikId: 1, iznos: 150, nacinPlacanja: 'Gotovina' }
   );
 
@@ -103,7 +104,7 @@ test('naziv zbirne stavke se preuzima iz unosa i pamti uz račun', async () => {
   postaviZadnjiFiskalniBroj(db, 127);
   let poslato: any = null;
   const res = await finalizePrilogAndPrint(
-    { ...deps(), print: printSaBrojem('128', r => { poslato = r; }) },
+    deps(printSaBrojem('128', r => { poslato = r; })),
     { korisnikId: 1, iznos: 150, nacinPlacanja: 'Gotovina', prilogOpis: 'CNC obrada', prilogVeza: 'fakturi' }
   );
 
@@ -117,7 +118,7 @@ test('naziv zbirne stavke se preuzima iz unosa i pamti uz račun', async () => {
 test('stvarni BF različit od predviđenog vraća upozorenje', async () => {
   postaviZadnjiFiskalniBroj(db, 127);
   const res = await finalizePrilogAndPrint(
-    { ...deps(), print: printSaBrojem('130') },
+    deps(printSaBrojem('130')),
     { korisnikId: 1, iznos: 150, nacinPlacanja: 'Gotovina' }
   );
 
@@ -150,7 +151,7 @@ test('nenumerički BF pada na predviđeni broj', async () => {
   // Uređaj koji vrati npr. „R-12" ne smije ostaviti fakturu bez broja.
   postaviZadnjiFiskalniBroj(db, 127);
   const res = await finalizePrilogAndPrint(
-    { ...deps(), print: printSaBrojem('R-12') },
+    deps(printSaBrojem('R-12')),
     { korisnikId: 1, iznos: 150, nacinPlacanja: 'Gotovina' }
   );
 
@@ -181,7 +182,7 @@ test('odbija iznos <= 0', async () => {
 
 test('neuspješna štampa ne ostavlja ni order ni pending red', async () => {
   const res = await finalizePrilogAndPrint(
-    { ...deps(), print: async () => ({ success: false, vrstaOdgovora: 'Greska', error: 'Nema papira', odgovori: {} }) },
+    deps(async () => ({ success: false, vrstaOdgovora: 'Greska', error: 'Nema papira', odgovori: {} })),
     { korisnikId: 1, iznos: 150, nacinPlacanja: 'Gotovina' }
   );
 
@@ -193,7 +194,7 @@ test('neuspješna štampa ne ostavlja ni order ni pending red', async () => {
 
 test('pad štampe (izuzetak) čisti pending red i propušta grešku', async () => {
   await expect(finalizePrilogAndPrint(
-    { ...deps(), print: async () => { throw new Error('mreža nedostupna'); } },
+    deps(async () => { throw new Error('mreža nedostupna'); }),
     { korisnikId: 1, iznos: 150, nacinPlacanja: 'Gotovina' }
   )).rejects.toThrow('mreža nedostupna');
 
@@ -229,7 +230,7 @@ test('stavke unesene na kasi određuju iznos i upisuju se uz račun', async () =
 
   let poslato: any = null;
   const res = await finalizePrilogAndPrint(
-    { ...deps(), print: async (racun) => { poslato = racun; return Tring.stampatiFiskalniRacun(racun); } },
+    deps(async (racun) => { poslato = racun; return Tring.stampatiFiskalniRacun(racun); }),
     {
       korisnikId: 1, nacinPlacanja: 'Gotovina',
       // Ukucani iznos se ignoriše kad stavke postoje — suma je jedini izvor istine.
@@ -282,7 +283,7 @@ test('neispravna stavka se odbija prije štampe', async () => {
   let stampano = false;
 
   await expect(finalizePrilogAndPrint(
-    { ...deps(), print: async (r) => { stampano = true; return Tring.stampatiFiskalniRacun(r); } },
+    deps(async (r) => { stampano = true; return Tring.stampatiFiskalniRacun(r); }),
     {
       korisnikId: 1, nacinPlacanja: 'Gotovina',
       stavke: [{ productId: 1, kolicina: 1, cijena: 30, pdvStopa: 'K' }],
@@ -329,7 +330,7 @@ test('cijeli tok: fiskalizacija → dodjela stavki → kompletna zaključana →
 
   // 4. Storno vraća zalihu po stavkama priloga.
   const storno = await refundAndPrint(
-    { db, transaction: (fn) => db.transaction(fn), print: (r) => Tring.stampatiReklamiraniRacun(r) },
+    { db, transaction: (fn) => db.transaction(fn), uredjaj: uredjajIzFunkcija({ stampatiReklamiraniRacun: Tring.stampatiReklamiraniRacun }) },
     { id: orderId }
   );
   expect(storno.success).toBe(true);
@@ -346,7 +347,7 @@ test('rabat po stavci smanjuje iznos zbirne stavke i pamti se uz stavku', async 
 
   let poslato: any = null;
   const res = await finalizePrilogAndPrint(
-    { ...deps(), print: printSaBrojem('1', r => { poslato = r; }) },
+    deps(printSaBrojem('1', r => { poslato = r; })),
     {
       korisnikId: 1, nacinPlacanja: 'Virman',
       stavke: [{ productId: 1, kolicina: 3, cijena: 30, rabat: 10, pdvStopa: 'E' }],
@@ -364,7 +365,7 @@ test('rabat van 0–100 se odbija prije štampe', async () => {
   db.prepare("INSERT INTO products (id, sifra, naziv, jm, cijena, pdvStopa, tip) VALUES (1, 'A1', 'Artikal', 'kom', 30, 'E', 'artikal')").run();
   let stampano = false;
   await expect(finalizePrilogAndPrint(
-    { ...deps(), print: async () => { stampano = true; return null; } },
+    deps(async () => { stampano = true; return null; }),
     { korisnikId: 1, nacinPlacanja: 'Virman', stavke: [{ productId: 1, kolicina: 1, cijena: 30, rabat: 100.5, pdvStopa: 'E' }] }
   )).rejects.toThrow(/Rabat/);
   expect(stampano).toBe(false);
@@ -373,13 +374,10 @@ test('rabat van 0–100 se odbija prije štampe', async () => {
 test('datum valute i napomena se upisuju na fakturu i nose u snapshotu', async () => {
   let snapTokomStampe: any = null;
   const res = await finalizePrilogAndPrint(
-    {
-      ...deps(),
-      print: async () => {
-        snapTokomStampe = JSON.parse((db.prepare('SELECT snapshot FROM pending_receipts').get() as any).snapshot);
-        return { success: true, vrstaOdgovora: 'OK', odgovori: { BrojFiskalnogRacuna: '1' } } as any;
-      },
-    },
+    deps(async () => {
+      snapTokomStampe = JSON.parse((db.prepare('SELECT snapshot FROM pending_receipts').get() as any).snapshot);
+      return { success: true, vrstaOdgovora: 'OK', odgovori: { BrojFiskalnogRacuna: '1' } } as any;
+    }),
     { korisnikId: 1, iznos: 100, nacinPlacanja: 'Virman', datumValute: '2026-10-15', napomena: '  Isporuka na gradilište  ' }
   );
 
@@ -392,7 +390,7 @@ test('datum valute i napomena se upisuju na fakturu i nose u snapshotu', async (
 test('neispravan datum valute se odbija prije štampe', async () => {
   let stampano = false;
   await expect(finalizePrilogAndPrint(
-    { ...deps(), print: async () => { stampano = true; return null; } },
+    deps(async () => { stampano = true; return null; }),
     { korisnikId: 1, iznos: 100, nacinPlacanja: 'Virman', datumValute: '2026-02-30' }
   )).rejects.toThrow(/datum valute/);
   expect(stampano).toBe(false);
@@ -409,7 +407,7 @@ function ponuda(status = 'draft'): number {
 test('faktura iz ponude označava ponudu konvertovanom', async () => {
   const id = ponuda();
   const res = await finalizePrilogAndPrint(
-    { ...deps(), print: printSaBrojem('1') },
+    deps(printSaBrojem('1')),
     { korisnikId: 1, iznos: 100, nacinPlacanja: 'Virman', ponudaId: id }
   );
   const p = db.prepare('SELECT status, racunId FROM ponude WHERE id = ?').get(id) as any;
@@ -420,10 +418,10 @@ test('konvertovana ili odbijena ponuda ne može u fakturu — ništa se ne štam
   const id = ponuda('odbijena');
   let stampano = false;
   const print = async () => { stampano = true; return null; };
-  await expect(finalizePrilogAndPrint({ ...deps(), print }, { korisnikId: 1, iznos: 100, nacinPlacanja: 'Virman', ponudaId: id }))
+  await expect(finalizePrilogAndPrint(deps(print), { korisnikId: 1, iznos: 100, nacinPlacanja: 'Virman', ponudaId: id }))
     .rejects.toThrow(/Odbijena/);
   db.prepare("UPDATE ponude SET status = 'konvertovana' WHERE id = ?").run(id);
-  await expect(finalizePrilogAndPrint({ ...deps(), print }, { korisnikId: 1, iznos: 100, nacinPlacanja: 'Virman', ponudaId: id }))
+  await expect(finalizePrilogAndPrint(deps(print), { korisnikId: 1, iznos: 100, nacinPlacanja: 'Virman', ponudaId: id }))
     .rejects.toThrow(/već konvertovana/);
   expect(stampano).toBe(false);
 });

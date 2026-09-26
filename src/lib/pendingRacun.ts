@@ -1,5 +1,6 @@
-import type * as Tring from '@/services/tring';
 import type { SqlDb } from './sqldb';
+import type { NeuspjehUredjaja } from './fiskalniUredjaj';
+import { NACINI_PLACANJA, raspodjelaPlacanja } from './placanje';
 
 /**
  * Write-ahead zapis računa (pending_receipts, vidi
@@ -23,24 +24,19 @@ export interface NeuspjehStampe {
  * write-ahead red; nepoznat ishod ga ostavlja i vraća poruku koja operatera
  * šalje u dijalog nezavršenih računa.
  */
-export function neuspjelaStampa(
-  db: SqlDb, pendingId: number, result: Tring.TringResponse | null | undefined,
-): NeuspjehStampe {
-  const greska = result?.error || result?.vrstaOdgovora || 'Nepoznata greška';
-  const odgovori = result?.odgovori ?? {};
-  // Kao `ishodNepoznat` iz services/tring — bez runtime importa, jer lib/ se
-  // (preko ponuda.ts, prilog.ts, proizvodnja.ts) učitava i u rendereru.
-  if (!!result && !result.success && result.ishodNepoznat === true) {
+export function neuspjelaStampa(db: SqlDb, pendingId: number, ishod: NeuspjehUredjaja): NeuspjehStampe {
+  const odgovori = ishod.odgovori ?? {};
+  if (ishod.nepoznat) {
     return {
       success: false,
-      error: `Uređaj nije potvrdio račun (${greska}) — ishod štampe nije poznat. ` +
+      error: `Uređaj nije potvrdio račun (${ishod.greska}) — ishod štampe nije poznat. ` +
         'Provjerite da li je račun odštampan i riješite ga u dijalogu nezavršenih računa.',
       odgovori,
       ishodNepoznat: true,
     };
   }
   db.prepare('DELETE FROM pending_receipts WHERE id = ?').run(pendingId);
-  return { success: false, error: greska, odgovori };
+  return { success: false, error: ishod.greska, odgovori };
 }
 
 export function porukaVecEvidentiran(brojFiskalnogRacuna: string | null): string {
@@ -98,7 +94,7 @@ export interface SnapshotStavka {
   cijena: number;
   rabat: number;
   pdvStopa: string;
-  /** 'usluga' ne razdužuje skladište (upisiRacun). */
+  /** Tip artikla u trenutku štampe; upisiRacun razdužuje po tipu iz baze (usluga ne razdužuje). */
   productTip?: string | null;
 }
 
@@ -148,6 +144,31 @@ export function snapshotKupca(k: Partial<Record<keyof SnapshotKupac, string | nu
     naziv: k.naziv ?? null, idBroj: k.idBroj ?? null, adresa: k.adresa ?? null,
     grad: k.grad ?? null, postanskiBroj: k.postanskiBroj ?? null,
   };
+}
+
+/**
+ * Način plaćanja iz snapshota prije naknadnog upisa (pending:resolve): kanonski
+ * tekst s liste NACINI_PLACANJA ili JSON raspodjela koju čita
+ * `raspodjelaPlacanja`. Snapshot pišu provjereni putevi, ali stari red ili
+ * uvezen backup može nositi oblik koji ladica i izvoz ne znaju (odluka 4).
+ * Rust: ista provjera u pending:resolve (racuni.rs).
+ */
+export function provjeriNacinPlacanjaSnapshota(nacin: unknown): string {
+  if (typeof nacin === 'string') {
+    if ((NACINI_PLACANJA as readonly string[]).includes(nacin)) return nacin;
+    // Samo JSON objekat — tekst u drugom obliku ('gotovina') nije kanonski.
+    if (jsonObjekat(nacin) && raspodjelaPlacanja(nacin, 0).poznat) return nacin;
+  }
+  throw new Error(`Nepoznat način plaćanja: "${String(nacin ?? '')}"`);
+}
+
+function jsonObjekat(tekst: string): boolean {
+  try {
+    const json: unknown = JSON.parse(tekst);
+    return !!json && typeof json === 'object' && !Array.isArray(json);
+  } catch {
+    return false;
+  }
 }
 
 /** Write-ahead: snapshot se upiše (odmah, van transakcije) prije štampe. */

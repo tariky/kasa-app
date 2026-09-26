@@ -89,6 +89,32 @@ describe('lozinka operatora', () => {
     await Tring.inicijalizacija(5, `a<b>&"'</Lozinka>`);
     expect(poslano()).toContain('<Lozinka>a&lt;b&gt;&amp;&quot;&apos;&lt;/Lozinka&gt;</Lozinka></Operator>');
   });
+
+  test('ne ispisuje se u konzolu uz dev.logging (uređaj je dobije cijelu)', async () => {
+    const ispis: string[] = [];
+    const log = console.log;
+    console.log = (...a: unknown[]) => { ispis.push(a.join(' ')); };
+    Tring.setLoggingEnabled(true);
+    try {
+      await Tring.inicijalizacija(5, `tajna<&>'"</Lozinka>`);
+    } finally {
+      Tring.setLoggingEnabled(false);
+      Tring.clearLogs();
+      console.log = log;
+    }
+    expect(poslano()).toContain('<Lozinka>tajna&lt;&amp;&gt;&apos;&quot;&lt;/Lozinka&gt;</Lozinka>');
+    expect(ispis).toHaveLength(1);
+    expect(ispis[0]).toContain('<BrojOperatora>5</BrojOperatora><Lozinka>***</Lozinka></Operator>');
+    expect(ispis[0]).not.toContain('tajna');
+  });
+
+  test('bezLozinke mijenja samo sadržaj <Lozinka>', () => {
+    expect(Tring.bezLozinke('<Operator><BrojOperatora>1</BrojOperatora><Lozinka>0</Lozinka></Operator>'))
+      .toBe('<Operator><BrojOperatora>1</BrojOperatora><Lozinka>***</Lozinka></Operator>');
+    expect(Tring.bezLozinke('<Lozinka></Lozinka>')).toBe('<Lozinka>***</Lozinka>');
+    const racunXml = '<RacunZahtjev><NoviObjekat><Naziv>Lozinka</Naziv></NoviObjekat></RacunZahtjev>';
+    expect(Tring.bezLozinke(racunXml)).toBe(racunXml);
+  });
 });
 
 describe('stopa', () => {

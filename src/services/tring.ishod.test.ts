@@ -105,12 +105,15 @@ describe('zahtjev je stigao, a odgovora nema — ishod nepoznat', () => {
     Tring.configure({ host: '127.0.0.1', port: uredjaj.port, timeoutMs: 200, connectTimeoutMs: 100 });
     Tring.setLoggingEnabled(true);
     Tring.clearLogs();
+    const log = console.log;
+    console.log = () => undefined; // dnevnik uz dev.logging ispisuje i u konzolu
     try {
       const r = await Tring.stampatiFiskalniRacun(racun());
       await new Promise(res => setTimeout(res, 100));
       expect(r.error).toBe('Request timed out');
       expect(Tring.getLogs()).toHaveLength(1);
     } finally {
+      console.log = log;
       Tring.setLoggingEnabled(false);
       Tring.clearLogs();
     }
