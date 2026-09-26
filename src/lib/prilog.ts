@@ -74,7 +74,7 @@ export function prilogKompletan(ukupno: number, stavke: PrilogStavkaUnos[]): boo
  * stavke mogu odbiti i prije štampe — greška poslije štampe znači papir bez
  * pokrića.
  */
-export function validirajPrilogStavke(db: SqlDb, stavke: PrilogStavkaUnos[]): void {
+function validirajPrilogStavke(db: SqlDb, stavke: PrilogStavkaUnos[]): void {
   for (const s of stavke) {
     if (!s || typeof s !== 'object') throw new Error('Neispravna stavka računa');
     provjeriIznoseStavke(s);
@@ -147,7 +147,7 @@ export function buildPrilogFiskalnaStavka(prilogBroj: number | null, iznos: numb
  * Datum valute, napomena i ponuda se provjeravaju prije štampe — greška poslije
  * štampe znači papir bez zapisa. Vraća normalizovane vrijednosti za upis.
  */
-export function provjeriDodatkeFakture(
+function provjeriDodatkeFakture(
   db: SqlDb,
   data: { datumValute?: string | null; napomena?: string | null; ponudaId?: number | null },
 ): { datumValute: string | null; napomena: string | null; ponudaId: number | null } {
