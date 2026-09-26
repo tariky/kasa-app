@@ -1,5 +1,5 @@
 // Zajedničke granice poređenja — bez importa, pa ih smiju koristiti i renderer
-// i backend (lib/). Rust: `skladiste::TOLERANCIJA_ZALIHE`.
+// i backend (lib/). Rust: `zaliha::TOLERANCIJA_ZALIHE`.
 
 /**
  * Tolerancija za stanje zalihe i količine: |stanje| < 1e-9 je nula. Stanje je

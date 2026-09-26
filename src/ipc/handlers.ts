@@ -8,9 +8,8 @@ import {
   zadnjiUpisaniFiskalniBroj, postaviZadnjiFiskalniBroj, predvidjeniFiskalniBroj,
 } from '../lib/fiskalni';
 import { round2, localDateStr } from '../lib/novac';
-import {
-  zapisiPromjeneCijena, isDobavljacUsed, cijenaKasnijeMijenjana, TOLERANCIJA_ZALIHE,
-} from '../lib/skladiste';
+import { zapisiPromjeneCijena, isDobavljacUsed, cijenaKasnijeMijenjana } from '../lib/skladiste';
+import * as zaliha from '../lib/zaliha';
 import { napraviPrimke } from '../lib/primka';
 import {
   nextBrojNaloga, createNalog, createNalogIzPonude, nalogZaPonudu, updateNalog, replaceStavke,
@@ -192,11 +191,7 @@ export function registerIpcHandlers(): void {
     return db
       .prepare(`
         SELECT p.*,
-          COALESCE(
-            (SELECT SUM(CASE WHEN sm.tip = 'ulaz' THEN sm.kolicina ELSE -sm.kolicina END)
-             FROM stock_movements sm WHERE sm.productId = p.id),
-            0
-          ) AS stanje,
+          ${zaliha.STANJE_SQL} AS stanje,
           ${SIFRE_DOBAVLJACA}
         FROM products p
         ${where}
@@ -269,26 +264,14 @@ export function registerIpcHandlers(): void {
   handle('product:adjustStock', (productId: number, newStanje: number) => {
     if (!db.prepare('SELECT 1 FROM products WHERE id = ?').get(productId)) throw new Error('Artikal ne postoji');
     if (typeof newStanje !== 'number' || !Number.isFinite(newStanje)) throw new Error('Stanje mora biti broj');
-    // Calculate current stock
-    const row = db.prepare(`
-      SELECT COALESCE(
-        SUM(CASE WHEN tip = 'ulaz' THEN kolicina ELSE -kolicina END), 0
-      ) AS stanje
-      FROM stock_movements WHERE productId = ?
-    `).get(productId) as { stanje: number };
-
-    const diff = newStanje - row.stanje;
+    const staroStanje = zaliha.stanje(db, productId);
+    const diff = newStanje - staroStanje;
     // Ostatak zaokruživanja (0,1 + 0,2 − 0,3) nije korekcija.
-    if (Math.abs(diff) < TOLERANCIJA_ZALIHE) return { changes: 0 };
-
-    const tip = diff > 0 ? 'ulaz' : 'izlaz';
-    const kolicina = Math.abs(diff);
+    if (Math.abs(diff) < zaliha.TOLERANCIJA_ZALIHE) return { changes: 0 };
 
     db.transaction(() => {
-      db.prepare(
-        "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, ?, ?, 'adjustment', 0)"
-      ).run(productId, tip, kolicina);
-      audit('zaliha:korekcija', { productId, staroStanje: row.stanje, novoStanje: newStanje });
+      zaliha.knjizi(db, { vrsta: 'adjustment', id: 0 }, diff > 0 ? 'ulaz' : 'izlaz', [{ productId, kolicina: Math.abs(diff) }]);
+      audit('zaliha:korekcija', { productId, staroStanje, novoStanje: newStanje });
     })();
 
     return { changes: 1 };
@@ -337,12 +320,7 @@ export function registerIpcHandlers(): void {
     const s = sifra?.trim();
     if (!s) return null;
     return db.prepare(`
-      SELECT p.*,
-        COALESCE(
-          (SELECT SUM(CASE WHEN sm.tip = 'ulaz' THEN sm.kolicina ELSE -sm.kolicina END)
-           FROM stock_movements sm WHERE sm.productId = p.id),
-          0
-        ) AS stanje
+      SELECT p.*, ${zaliha.STANJE_SQL} AS stanje
       FROM artikal_dobavljac_sifre ds JOIN products p ON p.id = ds.productId
       WHERE ds.dobavljacId = ? AND ds.sifra = ?
     `).get(dobavljacId, s) ?? null;

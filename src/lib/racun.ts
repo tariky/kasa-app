@@ -1,6 +1,7 @@
 import type { SqlDb } from './sqldb';
 import { round2 } from './novac';
 import { PDV_FAKTOR_E } from './pdv';
+import * as zaliha from './zaliha';
 
 export interface RacunStavka {
   cijena: number;
@@ -76,8 +77,8 @@ function kolonaKupca(v: string | null | undefined): string | null {
  * Upis već odštampanog fiskalnog računa: orders + order_items + izlaz
  * skladišta. Jedini INSERT u `orders` — kasa, ručni račun, faktura (prilog),
  * ponuda, nalog i dijalog nezavršenih računa. Poziva se u transakciji, tek
- * nakon uspješne štampe (ili s brojem s papira). Usluga ne razdužuje
- * skladište; tip artikla se uvijek čita iz baze. Rust: `upisi_racun` u racun.rs.
+ * nakon uspješne štampe (ili s brojem s papira). Izlaz ide kroz knjigu zalihe
+ * (usluga ne razdužuje; tip artikla iz baze). Rust: `upisi_racun` u racun.rs.
  */
 export function upisiRacun(db: SqlDb, input: UpisRacunaInput): number {
   const k = input.kupac;
@@ -99,14 +100,7 @@ export function upisiRacun(db: SqlDb, input: UpisRacunaInput): number {
   const insertItem = db.prepare(
     'INSERT INTO order_items (orderId, productId, kolicina, cijena, rabat, pdvStopa) VALUES (?, ?, ?, ?, ?, ?)'
   );
-  const tipArtikla = db.prepare('SELECT tip FROM products WHERE id = ?');
-  const insertStock = db.prepare(
-    "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId, createdAt) VALUES (?, 'izlaz', ?, 'order', ?, COALESCE(?, datetime('now','localtime')))"
-  );
-  for (const s of input.stavke) {
-    insertItem.run(orderId, s.productId, s.kolicina, s.cijena, s.rabat, s.pdvStopa);
-    const artikal = tipArtikla.get(s.productId) as { tip: string } | undefined;
-    if (artikal?.tip !== 'usluga') insertStock.run(s.productId, s.kolicina, orderId, createdAt);
-  }
+  for (const s of input.stavke) insertItem.run(orderId, s.productId, s.kolicina, s.cijena, s.rabat, s.pdvStopa);
+  zaliha.knjizi(db, { vrsta: 'order', id: orderId }, 'izlaz', input.stavke, { datum: createdAt ?? undefined });
   return orderId;
 }

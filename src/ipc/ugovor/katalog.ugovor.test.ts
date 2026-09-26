@@ -424,6 +424,21 @@ describe('product:adjustStock', () => {
     expect(stanje(id)).toBe(-2);
   });
 
+  test('korekcija nosi lokalno vrijeme upisa; i usluga se koriguje (pravilo usluge važi samo za prodaju)', async () => {
+    const id = dodajArtikal('U1', { tip: 'usluga', stanje: 4 });
+    expect(await b.call('product:adjustStock', id, 1)).toEqual({ changes: 1 });
+    // Oba vremena piše backend (datetime('now','localtime') u svojoj zoni) — porede se međusobno.
+    const k = red(`
+      SELECT sm.tip, sm.kolicina, sm.createdAt, abs(julianday(sm.createdAt) - julianday(a.createdAt)) * 86400 AS razlika
+      FROM stock_movements sm, audit_log a
+      WHERE sm.referenceType = 'adjustment' AND a.akcija = 'zaliha:korekcija'
+    `);
+    expect([k.tip, k.kolicina]).toEqual(['izlaz', 3]);
+    expect(k.createdAt).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    expect(k.razlika).toBeLessThanOrEqual(1);
+    expect(stanje(id)).toBe(1);
+  });
+
   test('isto stanje ne upisuje ništa', async () => {
     const id = dodajArtikal('S1', { stanje: 4 });
     expect(await b.call('product:adjustStock', id, 4)).toEqual({ changes: 0 });

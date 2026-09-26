@@ -1,6 +1,7 @@
 import type { SqlDb } from './sqldb';
 import type { PregledCijenaUlaza } from '../types';
 import { TOLERANCIJA_ZALIHE } from './tolerancije';
+import * as zaliha from './zaliha';
 
 /** Vidi lib/tolerancije.ts. */
 export { TOLERANCIJA_ZALIHE };
@@ -14,17 +15,6 @@ export interface PriceChange {
   staraCijena: number;
   novaCijena: number;
   pdvStopa: string;
-}
-
-/** Trenutno stanje artikla izračunato iz kretanja zaliha. */
-export function getProductStock(db: SqlDb, productId: number): number {
-  const row = db.prepare(`
-    SELECT COALESCE(
-      SUM(CASE WHEN tip = 'ulaz' THEN kolicina ELSE -kolicina END), 0
-    ) AS stanje
-    FROM stock_movements WHERE productId = ?
-  `).get(productId) as { stanje: number };
-  return row.stanje;
 }
 
 /**
@@ -53,7 +43,7 @@ export function collectPriceChanges(
     if (!product || product.tip === 'materijal') continue;
     if (Math.abs(product.cijena - stavka.cijena) <= EPS) continue;
 
-    const existingStock = getProductStock(db, stavka.productId);
+    const existingStock = zaliha.stanje(db, stavka.productId);
     const change: PriceChange = {
       productId: stavka.productId,
       kolicina: existingStock,
@@ -281,7 +271,7 @@ export function promjeneUProdaji(db: SqlDb, prije: Map<number, number>): PriceCh
   for (const [productId, staraCijena] of prije) {
     const p = get.get(productId) as { cijena: number; pdvStopa: string; tip: string } | undefined;
     if (!p || p.tip === 'materijal' || Math.abs(p.cijena - staraCijena) <= EPS) continue;
-    const kolicina = getProductStock(db, productId);
+    const kolicina = zaliha.stanje(db, productId);
     if (kolicina > TOLERANCIJA_ZALIHE) out.push({ productId, kolicina, staraCijena, novaCijena: p.cijena, pdvStopa: p.pdvStopa });
   }
   return out;
@@ -460,7 +450,7 @@ export function pocetakPregleda(db: SqlDb, primkaId?: number): PocetakPregleda {
   if (primkaId !== undefined) {
     const ulaz = db.prepare("SELECT COALESCE(SUM(kolicina), 0) AS k FROM stock_movements WHERE referenceType = 'primka' AND referenceId = ? AND productId = ? AND tip = 'ulaz'");
     for (const productId of artikliPrimke(db, primkaId).sort((a, b) => a - b)) {
-      const stanje = getProductStock(db, productId);
+      const stanje = zaliha.stanje(db, productId);
       zalihe.set(productId, { stanje, bezPrimke: stanje - (ulaz.get(primkaId, productId) as { k: number }).k });
     }
   }
@@ -503,7 +493,7 @@ export function rezultatPregleda(db: SqlDb, pocetak: PocetakPregleda, cijenaOsta
   const naziv = db.prepare('SELECT naziv FROM products WHERE id = ?');
   const upozorenja: PregledCijenaUlaza['upozorenja'] = [];
   for (const [productId, z] of pocetak.zalihe) {
-    const stanjePoslije = getProductStock(db, productId);
+    const stanjePoslije = zaliha.stanje(db, productId);
     const productNaziv = (naziv.get(productId) as { naziv: string } | undefined)?.naziv ?? '';
     const r = { productId, productNaziv, stanjePrije: z.stanje, stanjePoslije };
     if (stanjePoslije < -TOLERANCIJA_ZALIHE && stanjePoslije < z.stanje - TOLERANCIJA_ZALIHE) upozorenja.push({ vrsta: 'minus', ...r });

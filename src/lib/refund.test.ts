@@ -4,7 +4,7 @@ import { schema } from '@/database/schema';
 import { refundOrderInTransaction, refundAndPrint, type RefundDeps } from './refund';
 import type { TringResponse } from '@/services/tring';
 import { uredjajIzFunkcija, type TringFunkcije } from './fiskalniUredjaj';
-import { getProductStock } from './skladiste';
+import { stanje } from './zaliha';
 import type { SqlDb } from './sqldb';
 
 let db: SqlDb & Database;
@@ -49,14 +49,14 @@ function kretanjaStorna(orderId: number) {
 test('storno mijenja status, vraća zalihu i upisuje broj reklamacije', () => {
   dodajArtikal(1);
   const orderId = dodajRacun([{ productId: 1, kolicina: 3 }]);
-  expect(getProductStock(db, 1)).toBe(97);
+  expect(stanje(db, 1)).toBe(97);
 
   refundOrderInTransaction(db, orderId, 'R-77');
 
   const order = db.prepare('SELECT status, brojReklamacije FROM orders WHERE id = ?').get(orderId) as any;
   expect(order.status).toBe('refunded');
   expect(order.brojReklamacije).toBe('R-77');
-  expect(getProductStock(db, 1)).toBe(100);
+  expect(stanje(db, 1)).toBe(100);
 });
 
 test('drugi storno istog računa ne prolazi', () => {
@@ -66,7 +66,7 @@ test('drugi storno istog računa ne prolazi', () => {
 
   expect(() => refundOrderInTransaction(db, orderId, 'R-2')).toThrow('već storniran');
   // Zaliha se ne smije vratiti dvaput.
-  expect(getProductStock(db, 1)).toBe(100);
+  expect(stanje(db, 1)).toBe(100);
 });
 
 test('storno bez broja reklamacije ne briše postojeći broj', () => {
@@ -84,12 +84,12 @@ test('usluge se ne vraćaju na zalihu', () => {
   dodajArtikal(1);
   dodajArtikal(2, 'usluga');
   const orderId = dodajRacun([{ productId: 1, kolicina: 2 }, { productId: 2, kolicina: 1 }]);
-  const uslugaPrije = getProductStock(db, 2);
+  const uslugaPrije = stanje(db, 2);
 
   refundOrderInTransaction(db, orderId, 'R-9');
 
-  expect(getProductStock(db, 1)).toBe(100);
-  expect(getProductStock(db, 2)).toBe(uslugaPrije);
+  expect(stanje(db, 1)).toBe(100);
+  expect(stanje(db, 2)).toBe(uslugaPrije);
 });
 
 // Storno vraća tačno ono što je račun skinuo (izlazna kretanja računa), ne
@@ -102,19 +102,19 @@ test('artikal koji je nakon prodaje postao usluga ipak se vraća na zalihu', () 
   refundOrderInTransaction(db, orderId, 'R-1');
 
   expect(kretanjaStorna(orderId)).toEqual([{ productId: 1, tip: 'ulaz', kolicina: 3 }]);
-  expect(getProductStock(db, 1)).toBe(100);
+  expect(stanje(db, 1)).toBe(100);
 });
 
 test('usluga koja je nakon prodaje postala artikal ne dobija ulaz', () => {
   dodajArtikal(2, 'usluga');
   const orderId = dodajRacun([{ productId: 2, kolicina: 1 }]);
   db.prepare("UPDATE products SET tip = 'artikal' WHERE id = 2").run();
-  const prije = getProductStock(db, 2);
+  const prije = stanje(db, 2);
 
   refundOrderInTransaction(db, orderId, 'R-2');
 
   expect(kretanjaStorna(orderId)).toEqual([]);
-  expect(getProductStock(db, 2)).toBe(prije);
+  expect(stanje(db, 2)).toBe(prije);
 });
 
 test('storno prilog računa vraća prilog izlaze; tuđa kretanja s istim brojem se ne diraju', () => {
@@ -134,7 +134,7 @@ test('storno prilog računa vraća prilog izlaze; tuđa kretanja s istim brojem 
   refundOrderInTransaction(db, orderId, 'R-3');
 
   expect(kretanjaStorna(orderId)).toEqual([{ productId: 1, tip: 'ulaz', kolicina: 2 }]);
-  expect(getProductStock(db, 1)).toBe(100);
+  expect(stanje(db, 1)).toBe(100);
 });
 
 test('storno upisuje refundedAt — bez njega se dnevni obračun ladice ne može izvesti', () => {
@@ -154,10 +154,10 @@ test('storno nepostojećeg računa baca grešku', () => {
 test('decimalna količina se vraća u cijelosti', () => {
   dodajArtikal(1);
   const orderId = dodajRacun([{ productId: 1, kolicina: 2.5 }]);
-  expect(getProductStock(db, 1)).toBe(97.5);
+  expect(stanje(db, 1)).toBe(97.5);
 
   refundOrderInTransaction(db, orderId, 'R-3');
-  expect(getProductStock(db, 1)).toBe(100);
+  expect(stanje(db, 1)).toBe(100);
 });
 
 // ── Override praznog stanja kase ─────────────────────────────────────────────

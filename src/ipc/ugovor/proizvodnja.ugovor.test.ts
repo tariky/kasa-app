@@ -684,6 +684,27 @@ describe('nalog:setStatus', () => {
     expect(n.zavrsenAt).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
   });
 
+  test('kretanja završetka nose lokalno vrijeme završetka („Zalihe na dan")', async () => {
+    const stol = dodajProizvod('STOL', 'artikal');
+    const iverica = dodajProizvod('IV', 'materijal', { jm: 'm²', stanje: 10 });
+    await b.call('normativ:save', stol, [{ materijalId: iverica, kolicina: 1.5 }]);
+    const id = await zaliha(stol, 2);
+
+    await zavrsi(id);
+
+    // Oba vremena piše backend (datetime('now','localtime') u svojoj zoni) — porede se međusobno.
+    const k = redovi(`
+      SELECT sm.tip, sm.createdAt, abs(julianday(sm.createdAt) - julianday(rn.zavrsenAt)) * 86400 AS razlika
+      FROM stock_movements sm JOIN radni_nalozi rn ON rn.id = sm.referenceId
+      WHERE sm.referenceType = 'radni_nalog' AND sm.referenceId = ? ORDER BY sm.id
+    `, id);
+    expect(k.map(r => r.tip)).toEqual(['izlaz', 'ulaz']);
+    for (const r of k) {
+      expect(r.createdAt).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+      expect(r.razlika).toBeLessThanOrEqual(1);
+    }
+  });
+
   test('završetak narudžbe direktno iz "otvoren": samo izlaz materijala, bez ulaza proizvoda; bez primke cijena 0', async () => {
     const { id, mat } = await zavrsenaNarudzba(100);
     expect(status(id)).toBe('zavrsen');

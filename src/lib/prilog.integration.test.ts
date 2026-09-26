@@ -15,7 +15,7 @@ import {
 import { refundAndPrint } from './refund';
 import { uredjajIzFunkcija, type TringFunkcije } from './fiskalniUredjaj';
 import { postaviZadnjiFiskalniBroj, predvidjeniFiskalniBroj } from './fiskalni';
-import { getProductStock } from './skladiste';
+import { stanje } from './zaliha';
 
 const PORT = 8098; // 8085 dev, 8097 refund, 8099 batch
 
@@ -256,7 +256,7 @@ test('stavke unesene na kasi određuju iznos i upisuju se uz račun', async () =
   expect(stavke.length).toBe(2);
   expect(stavke[0].kolicina).toBe(2);
   // Usluga ne dira zalihu, artikal da.
-  expect(getProductStock(db, 1)).toBe(98);
+  expect(stanje(db, 1)).toBe(98);
   expect(db.prepare('SELECT * FROM pending_receipts').all().length).toBe(0);
 }, 15000);
 
@@ -311,7 +311,7 @@ test('cijeli tok: fiskalizacija → dodjela stavki → kompletna zaključana →
     { productId: 1, kolicina: 1, cijena: 30, pdvStopa: 'E' },
     { productId: 2, kolicina: 1, cijena: 90, pdvStopa: 'E' },
   ]))();
-  expect(getProductStock(db, 1)).toBe(99);
+  expect(stanje(db, 1)).toBe(99);
 
   // 3. Dopuna do 150 ne skida duplo (količina 1 → 2).
   const stavke = [
@@ -320,13 +320,13 @@ test('cijeli tok: fiskalizacija → dodjela stavki → kompletna zaključana →
   ];
   expect(prilogKompletan(150, stavke)).toBe(true);
   db.transaction(() => savePrilogStavkeInTransaction(db, orderId, stavke))();
-  expect(getProductStock(db, 1)).toBe(98);
+  expect(stanje(db, 1)).toBe(98);
 
   // 3b. Kompletna faktura je zaključana.
   expect(() => db.transaction(() => savePrilogStavkeInTransaction(db, orderId, [
     { productId: 1, kolicina: 3, cijena: 30, pdvStopa: 'E' },
   ]))()).toThrow(/završena/);
-  expect(getProductStock(db, 1)).toBe(98);
+  expect(stanje(db, 1)).toBe(98);
 
   // 4. Storno vraća zalihu po stavkama priloga.
   const storno = await refundAndPrint(
@@ -334,7 +334,7 @@ test('cijeli tok: fiskalizacija → dodjela stavki → kompletna zaključana →
     { id: orderId }
   );
   expect(storno.success).toBe(true);
-  expect(getProductStock(db, 1)).toBe(100);
+  expect(stanje(db, 1)).toBe(100);
 
   // 5. Prilog storniranog računa se više ne može mijenjati.
   expect(() => savePrilogStavkeInTransaction(db, orderId, [

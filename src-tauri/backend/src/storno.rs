@@ -10,6 +10,7 @@ use crate::prilog::{prilog_naziv, PRILOG_SIFRA};
 use crate::sql::Db;
 use crate::stampa::{self, Odstampan, UToku, Uredjaj};
 use crate::tring::{self, Odgovor};
+use crate::zaliha::{self, Dokument, Smjer};
 use crate::{baci, cash, fiskalni, p, tring_racun, Backend};
 
 /// JS `Math.max(a, b)` / `Math.min(a, b)` — NaN se širi (Rustov `max` ga preskače).
@@ -33,13 +34,13 @@ pub fn vrati_zalihu_racuna(db: &Db, order_id: &Value, datum: &Value) -> R<()> {
         "SELECT productId, kolicina FROM stock_movements WHERE tip = 'izlaz' AND referenceType IN ('order', 'prilog') AND referenceId = ? ORDER BY id",
         p![order_id],
     )?;
-    for izlaz in izlazi {
-        db.run(
-            "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId, createdAt) VALUES (?, 'ulaz', ?, 'refund', ?, COALESCE(?, datetime('now','localtime')))",
-            p![izlaz["productId"], izlaz["kolicina"], order_id, datum],
-        )?;
-    }
-    Ok(())
+    zaliha::knjizi(
+        db,
+        Dokument { vrsta: "refund", id: order_id },
+        Smjer::Ulaz,
+        izlazi.iter().map(|i| (&i["productId"], &i["kolicina"])),
+        datum,
+    )
 }
 
 /// Označi račun storniranim, vrati zalihu i upiši broj reklamacije. `datum` je

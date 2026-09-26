@@ -8,22 +8,20 @@ import { gotovinskiIznos } from './drawer';
 import { round2 } from './novac';
 import { baciAkoCekaNezavrsen, vecEvidentiranStorno, type SnapshotStorna } from './pendingRacun';
 import { fiskalizuj, uToku } from './fiskalizacija';
+import * as zaliha from './zaliha';
 
 /**
  * Storno vraća tačno ono što je račun skinuo: za svaki izlaz računa (prodaja
  * 'order' ili prilog 'prilog') ulaz 'refund' iste količine za isti artikal.
  * Današnji tip artikla se ne gleda — artikal je mogao postati usluga i
  * obrnuto nakon prodaje. `datum` = datum storna (bez njega: sada).
- * Rust: `vrati_zalihu_racuna` u racuni.rs.
+ * Rust: `vrati_zalihu_racuna` u storno.rs.
  */
 export function vratiZalihuRacuna(db: SqlDb, orderId: number, datum: string | null = null): void {
   const izlazi = db.prepare(
     "SELECT productId, kolicina FROM stock_movements WHERE tip = 'izlaz' AND referenceType IN ('order', 'prilog') AND referenceId = ? ORDER BY id"
   ).all(orderId) as Array<{ productId: number; kolicina: number }>;
-  const insertStock = db.prepare(
-    "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId, createdAt) VALUES (?, 'ulaz', ?, 'refund', ?, COALESCE(?, datetime('now','localtime')))"
-  );
-  for (const izlaz of izlazi) insertStock.run(izlaz.productId, izlaz.kolicina, orderId, datum);
+  zaliha.knjizi(db, { vrsta: 'refund', id: orderId }, 'ulaz', izlazi, { datum: datum ?? undefined });
 }
 
 /**

@@ -10,7 +10,7 @@ import { startMockTringServer } from '@/services/tring-mock-server';
 import { schema } from '@/database/schema';
 import { refundAndPrint, type RefundDeps } from './refund';
 import { uredjajIzFunkcija, type TringFunkcije } from './fiskalniUredjaj';
-import { getProductStock } from './skladiste';
+import { stanje } from './zaliha';
 import type { SqlDb } from './sqldb';
 
 const PORT = 8097; // ne sudara se sa dev mockom (8085) ni batch testom (8099)
@@ -72,7 +72,7 @@ function dodajRacun(opts: {
 test('uspješan storno: uređaj odštampa, baza upiše, zaliha se vrati', async () => {
   dodajArtikal(1, '001', 2.30);
   const orderId = dodajRacun({ brojFiskalnog: '555', stavke: [{ productId: 1, kolicina: 3, cijena: 2.30 }] });
-  expect(getProductStock(db, 1)).toBe(97);
+  expect(stanje(db, 1)).toBe(97);
 
   const res = await refundAndPrint(deps(), { id: orderId });
 
@@ -81,7 +81,7 @@ test('uspješan storno: uređaj odštampa, baza upiše, zaliha se vrati', async 
   const order = db.prepare('SELECT status, brojReklamacije FROM orders WHERE id = ?').get(orderId) as any;
   expect(order.status).toBe('refunded');
   expect(order.brojReklamacije).toBe(res.brojReklamacije);
-  expect(getProductStock(db, 1)).toBe(100);
+  expect(stanje(db, 1)).toBe(100);
 }, 15000);
 
 test('ručno unesen broj reklamacije ima prednost nad brojem sa uređaja', async () => {
@@ -105,7 +105,7 @@ test('nenumerički fiskalni broj se odbija PRIJE štampe', async () => {
   // Ništa nije odštampano ni promijenjeno.
   const order = db.prepare('SELECT status FROM orders WHERE id = ?').get(orderId) as any;
   expect(order.status).toBe('completed');
-  expect(getProductStock(db, 1)).toBe(99);
+  expect(stanje(db, 1)).toBe(99);
 }, 15000);
 
 test('drugi storno istog računa se odbija, zaliha se ne vraća dvaput', async () => {
@@ -114,10 +114,10 @@ test('drugi storno istog računa se odbija, zaliha se ne vraća dvaput', async (
 
   const prvi = await refundAndPrint(deps(), { id: orderId });
   expect(prvi.success).toBe(true);
-  expect(getProductStock(db, 1)).toBe(100);
+  expect(stanje(db, 1)).toBe(100);
 
   await expect(refundAndPrint(deps(), { id: orderId })).rejects.toThrow('već storniran');
-  expect(getProductStock(db, 1)).toBe(100);
+  expect(stanje(db, 1)).toBe(100);
 }, 20000);
 
 test('dvoklik ne odštampa dva storna', async () => {
@@ -138,7 +138,7 @@ test('dvoklik ne odštampa dva storna', async () => {
 
   const uspjeli = rezultati.filter(r => r.status === 'fulfilled' && (r.value as any).success);
   expect(uspjeli.length).toBe(1);
-  expect(getProductStock(db, 1)).toBe(100);
+  expect(stanje(db, 1)).toBe(100);
 }, 20000);
 
 test('neuspjela štampa ne mijenja bazu', async () => {
@@ -154,7 +154,7 @@ test('neuspjela štampa ne mijenja bazu', async () => {
   expect(res.error).toBe('Nema papira');
   const order = db.prepare('SELECT status FROM orders WHERE id = ?').get(orderId) as any;
   expect(order.status).toBe('completed');
-  expect(getProductStock(db, 1)).toBe(97);
+  expect(stanje(db, 1)).toBe(97);
 });
 
 test('pad baze nakon štampe javlja da je storno na papiru', async () => {
@@ -214,12 +214,12 @@ test('storno prilog računa vraća zalihu po prilog_stavke', async () => {
     brojFiskalnog: '562', prilogBroj: 1, ukupno: 60,
     stavke: [{ productId: 1, kolicina: 2, cijena: 30 }],
   });
-  expect(getProductStock(db, 1)).toBe(98);
+  expect(stanje(db, 1)).toBe(98);
 
   const result = await refundAndPrint(deps(), { id: orderId });
 
   expect(result.success).toBe(true);
-  expect(getProductStock(db, 1)).toBe(100); // 100 ulaz - 2 prilog + 2 refund
+  expect(stanje(db, 1)).toBe(100); // 100 ulaz - 2 prilog + 2 refund
   const order = db.prepare('SELECT status FROM orders WHERE id = ?').get(orderId) as any;
   expect(order.status).toBe('refunded');
 }, 15000);

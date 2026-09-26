@@ -9,8 +9,9 @@ import {
   cijeneArtikala, promjeneUProdaji, artikliPrimke, brojeviNivelacijaPrimke, napomenaProtunivelacije,
   revertPrimkaPrices, stareCijeneStavki, datumKretanjaPrimke,
   zapisiPromjeneCijena,
-  getProductStock, isDobavljacUsed, istiPregled, validirajPrimku, TOLERANCIJA_ZALIHE,
+  isDobavljacUsed, istiPregled, validirajPrimku, TOLERANCIJA_ZALIHE,
 } from './skladiste';
+import { stanje } from './zaliha';
 import type { SqlDb } from './sqldb';
 import type { PregledCijenaUlaza } from '../types';
 
@@ -90,13 +91,6 @@ test('isti artikal na više stavki se broji jednom', () => {
   ]);
   expect(nivelacija.length).toBe(1);
   expect(nivelacija[0].novaCijena).toBe(12);
-});
-
-test('getProductStock sabira ulaze i oduzima izlaze', () => {
-  const id = dodajArtikal('005', 10);
-  dodajZalihu(id, 10);
-  db.prepare("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'izlaz', 2.5, 'order', 1)").run(id);
-  expect(getProductStock(db, id)).toBe(7.5);
 });
 
 /** Nivelacija primke upisana SQL-om (kao stara verzija, bez historije cijena). */
@@ -221,8 +215,8 @@ test('ostatak zaokruživanja (0,1 + 0,2 − 0,3) je prazna zaliha: nema nivelaci
   expect(TOLERANCIJA_ZALIHE).toBe(1e-9);
   const id = dodajArtikal('037', 10);
   dodajZalihu(id, 0.1); dodajZalihu(id, 0.2); dodajIzlaz(id, 0.3);
-  expect(getProductStock(db, id)).not.toBe(0);
-  expect(Math.abs(getProductStock(db, id))).toBeLessThan(TOLERANCIJA_ZALIHE);
+  expect(stanje(db, id)).not.toBe(0);
+  expect(Math.abs(stanje(db, id))).toBeLessThan(TOLERANCIJA_ZALIHE);
 
   const { nivelacija, bezZaliha } = collectPriceChanges(db, [{ productId: id, cijena: 12, pdvStopa: 'E' }]);
   expect(nivelacija).toEqual([]);
