@@ -105,6 +105,7 @@ test('STANJE_SQL je stanje artikla p u upitu nad artiklima', () => {
 
 test('jedna tolerancija zalihe (lib/tolerancije.ts)', () => {
   expect(TOLERANCIJA_ZALIHE).toBe(IZ_TOLERANCIJA);
+  expect(TOLERANCIJA_ZALIHE).toBe(1e-9);
 });
 
 test('Rust (zaliha.rs) čita STANJE_SQL kao jedini tekst između backtickova u zaliha.ts', () => {
