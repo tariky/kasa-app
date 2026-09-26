@@ -27,10 +27,7 @@ import {
 } from '../lib/prilog';
 import { saveCart, listSavedCarts, deleteSavedCart } from '../lib/savedCarts';
 import { spremiSkicuFakture, listSkiceFaktura, obrisiSkicuFakture } from '../lib/fakturaSkice';
-import {
-  validirajPin, validirajUlogu, VEZE_KORISNIKA, ZADANI_PIN, hesirajPin, nadjiPoPinu, pinZauzet, pinKorisnika,
-  type JavniKorisnik,
-} from '../lib/korisnici';
+import { validirajPin, validirajUlogu, VEZE_KORISNIKA, hesirajPin, pinZauzet } from '../lib/korisnici';
 import type { SavedCartItem } from '../lib/kosarica';
 import {
   nextBrojPonude, createPonuda, updatePonuda, setStatusPonude, deletePonuda, konvertujPonudu,
@@ -47,9 +44,7 @@ import * as Tring from '../services/tring';
 import { provjeriKanal, stanjeLicence, aktivirajLicencu } from './licenca';
 import { backupInfo, backupSada, backupNakonAktivacije, registrujBackup } from './backup';
 import { imeZaCuvanje, dozvoljeniFilteri, dozvoljenaEkstenzija } from './cuvanje';
-import {
-  provjeriPristup, OgranicenjePokusaja, OgranicenjePromjenaPina, PORUKA_NISTE_PRIJAVLJENI, TAJNE_POSTAVKE, KLJUC_BLOKADE,
-} from './sesija';
+import { napraviSesiju, TAJNE_POSTAVKE } from './sesija';
 import Database from 'better-sqlite3';
 
 // Provjera sesije i uloge prije svakog handlera; postavlja je registerIpcHandlers
@@ -149,95 +144,25 @@ export function registerIpcHandlers(): void {
   const postavka = (key: string): string | null => procitajPostavku(db, key);
 
   // ─── Sesija i korisnici ──────────────────────────────────
-  // Prijavljeni korisnik živi samo u main procesu (jedan prozor = jedna sesija);
-  // uloga se svaki put čita iz baze, pa izmjena ili brisanje korisnika važi odmah.
+  // Prijava, PIN-ovi, blokada pokušaja i pravila pristupa: napraviSesiju (sesija.ts).
 
-  let prijavljeniId: number | null = null;
-  // Prijava PIN-om 0000: dok ga ne promijeni, korisnik smije samo promijeniSvojPin i odjavu.
-  let sesijaSaZadanimPinom = false;
-  // Stanje blokade je u bazi — restart programa ne briše ni blokadu ni eskalaciju.
-  const pokusaji = new OgranicenjePokusaja(undefined, {
-    ucitaj: () => postavka(KLJUC_BLOKADE),
-    spremi: (json) => {
-      db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
-        .run(KLJUC_BLOKADE, json);
-    },
-  });
-  const promjenePina = new OgranicenjePromjenaPina();
-
-  const trenutni = (): JavniKorisnik | null => {
-    if (prijavljeniId === null) return null;
-    return (db.prepare('SELECT id, ime, uloga FROM users WHERE id = ?').get(prijavljeniId) as JavniKorisnik | undefined) ?? null;
-  };
-  /** Prijavljeni korisnik; kanal je već prošao provjeriSesiju, ali korisnik je mogao biti obrisan. */
-  const korisnik = (): JavniKorisnik => {
-    const k = trenutni();
-    if (!k) throw new Error(PORUKA_NISTE_PRIJAVLJENI);
-    return k;
-  };
-  provjeriSesiju = (channel, args) => provjeriPristup(channel, args, trenutni(), sesijaSaZadanimPinom);
+  const sesija = napraviSesiju(db);
+  const { korisnik } = sesija;
+  provjeriSesiju = (channel, args) => sesija.provjeriPristup(channel, args);
 
   /** Trag radnje u audit_log, s prijavljenim korisnikom (lib/audit.ts). */
-  const audit = (akcija: string, detalji: Record<string, unknown>) => zapisiAudit(db, prijavljeniId, akcija, detalji);
+  const audit = (akcija: string, detalji: Record<string, unknown>) => zapisiAudit(db, sesija.prijavljeniId(), akcija, detalji);
 
-  /**
-   * Admin PIN za radnju kasira (storno). Neuspjeh ulazi u ograničenje pokušaja;
-   * baca 'Neispravan admin PIN'. Uspjeh ne briše ranije neuspjehe.
-   */
-  const provjeriAdminPin = (pin: unknown): JavniKorisnik => {
-    pokusaji.provjeri();
-    const admin = nadjiPoPinu(db, pin, { samoAdmin: true });
-    if (!admin) {
-      pokusaji.neuspjeh();
-      throw new Error('Neispravan admin PIN');
-    }
-    return admin;
-  };
-
-  handle('user:login', (pin: string) => {
-    // Nova prijava uvijek poništi staru sesiju, i kad ne uspije.
-    prijavljeniId = null;
-    sesijaSaZadanimPinom = false;
-    pokusaji.provjeri();
-    const u = nadjiPoPinu(db, pin);
-    if (!u) {
-      pokusaji.neuspjeh();
-      return null;
-    }
-    prijavljeniId = u.id;
-    sesijaSaZadanimPinom = pin === ZADANI_PIN;
-    return { ...u, zadaniPin: sesijaSaZadanimPinom };
-  });
+  handle('user:login', (pin: string) => sesija.prijavi(pin));
 
   handle('user:logout', () => {
-    prijavljeniId = null;
-    sesijaSaZadanimPinom = false;
+    sesija.odjavi();
     return { success: true };
   });
 
   // Prijavljeni korisnik mijenja svoj PIN (obavezno nakon prijave sa zadanim 0000).
-  // Kanal ne smije postati proročište za tuđe PIN-ove: uspjeh ne briše neuspjehe,
-  // zauzet PIN se broji kao neuspjeh, a i uspješne promjene su ograničene.
   handle('user:promijeniSvojPin', (stari: string, novi: string) => {
-    const k = korisnik();
-    validirajPin(novi);
-    if (novi === ZADANI_PIN) throw new Error(`Novi PIN ne smije biti ${ZADANI_PIN}`);
-    pokusaji.provjeri();
-    promjenePina.provjeri(k.id);
-    if (!pinKorisnika(db, k.id, stari)) {
-      pokusaji.neuspjeh();
-      throw new Error('Trenutni PIN nije tačan');
-    }
-    if (pinZauzet(db, novi, k.id)) {
-      pokusaji.neuspjeh();
-      throw new Error('Taj PIN je zauzet, odaberite drugi');
-    }
-    db.transaction(() => {
-      db.prepare('UPDATE users SET pin = ? WHERE id = ?').run(hesirajPin(novi), k.id);
-      audit('korisnik:promjenaPina', { id: k.id });
-    })();
-    promjenePina.zabiljezi(k.id);
-    sesijaSaZadanimPinom = false;
+    sesija.promijeniSvojPin(stari, novi);
     return { success: true };
   });
 
@@ -1063,14 +988,8 @@ export function registerIpcHandlers(): void {
     id: number; brojReklamacije?: string; dozvoliPolog?: boolean; adminPin?: string;
   }) => {
     const k = korisnik();
-    // Kasir uz uključen "PIN za reklamaciju" šalje admin PIN u istom pozivu;
-    // provjera je ovdje, prije štampe — odvojen korak provjere renderer bi
-    // mogao preskočiti.
-    let odobrioAdminId: number | null = null;
-    if (postavka('kasa.requirePinRefund') === 'true' && k.uloga !== 'admin') {
-      if (!data?.adminPin) throw new Error('Reklamacija traži PIN administratora');
-      odobrioAdminId = provjeriAdminPin(data.adminPin).id;
-    }
+    // Admin PIN (kasa.requirePinRefund) je provjeren prije handlera, u sesiji.
+    const odobrioAdminId = sesija.odobrioAdmin(data);
     const original = db.prepare('SELECT brojFiskalnogRacuna, ukupno FROM orders WHERE id = ?').get(data?.id) as
       { brojFiskalnogRacuna: string | null; ukupno: number } | undefined;
     loadTringConfig();
@@ -1166,7 +1085,7 @@ export function registerIpcHandlers(): void {
         zapisiAudit(db, snap.korisnikId ?? null, 'storno', {
           orderId, brojFiskalnogRacuna: snap.brojRacuna ?? null, brojReklamacije: broj, ukupno: snap.ukupno ?? null,
           odobrioAdminId: snap.odobrioAdminId ?? null, pologIznos: snap.pologIznos ?? 0,
-          pendingId: data.id, rijesioKorisnikId: prijavljeniId,
+          pendingId: data.id, rijesioKorisnikId: sesija.prijavljeniId(),
         });
       } else {
         // Snapshot bez vrste: račun sa kase ili faktura (i sve stare baze).
@@ -1373,10 +1292,9 @@ export function registerIpcHandlers(): void {
   handle('nalog:setStatus', (data: { id: number; status: 'u_izradi' | 'zavrsen' | 'vrati' }) => {
     if (data.status === 'u_izradi') setStatusNaloga(db, data.id, 'u_izradi');
     else if (data.status === 'zavrsen') db.transaction(() => zavrsiNalog(db, data.id))();
-    else if (data.status === 'vrati') {
-      if (korisnik().uloga !== 'admin') throw new Error('Vraćanje naloga u izradu može samo administrator');
-      db.transaction(() => vratiUIzradu(db, data.id))();
-    } else throw new Error('Nepoznat status');
+    // 'vrati' smije samo admin — provjereno u sesija.ts, prije handlera.
+    else if (data.status === 'vrati') db.transaction(() => vratiUIzradu(db, data.id))();
+    else throw new Error('Nepoznat status');
     return { success: true };
   });
 
@@ -1785,7 +1703,7 @@ export function registerIpcHandlers(): void {
     swapInBackup(source, dbPath, safetyPath, restoreDeps);
     // Trag ide u uvezenu bazu (nova konekcija iz getDb); stara ga ima u sigurnosnoj kopiji.
     try {
-      zapisiAudit(getDb(), prijavljeniId, 'baza:restore', { izvor: source, sigurnosnaKopija: safetyPath });
+      zapisiAudit(getDb(), sesija.prijavljeniId(), 'baza:restore', { izvor: source, sigurnosnaKopija: safetyPath });
     } catch (e) {
       console.error('[audit] baza:restore', e);
     }
