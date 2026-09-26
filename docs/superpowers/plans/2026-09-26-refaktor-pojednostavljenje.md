@@ -372,3 +372,55 @@ bunx vite build --config vite.renderer.config.ts --outDir <scratchpad>/renderer-
 - [ ] Integrator: svi taskovi spojeni u `refactor/pojednostavljenje`; `bun test`, Rust ugovor, `cargo test`, `cargo clippy`, `bunx tsc`, renderer build, `bunx eslint` nad dodirnutim fajlovima (bez novih kategorija), poređenje PDF slika.
 - [ ] Review cijele grane (superpowers:requesting-code-review) na najjačem modelu.
 - [ ] Izvještaj vlasniku; grana se NE spaja u `fix/zalihe`/`main` bez njegove odluke.
+
+---
+
+## Ishod (2026-09-26)
+
+Svih 22 taska (A1–A8, B1–B10; B8 i B9 podijeljeni na a/b) implementirano, svaki s task reviewom, plus integracijska popravka (INT1), završni review cijele grane i jedna završna fix runda (skica, flaky dijagnostika, fail-closed odobrenje storna, Rust ključ „u toku", ostaci). Stanje na kraju: `tsc` 0; `bun test` 1609 / 0 fail (~38 s, prije ~114 s); Rust ugovor 723 / 0 fail; `cargo test` 65; clippy 1 upozorenje (`js.rs`); `cargo check -p pazar` OK; renderer build OK; PDF poređenje 42 stranice / 0 razlika; eslint bez novih kategorija (`any` 439→221 u dodirnutim fajlovima).
+
+### Odluke koje je donio kontroler (s cijenom ako su pogrešne)
+
+1. Talas A paralelno u zasebnim worktree-ima (vlasnik tražio više subagenata) — cijena: merge konflikti (bio je samo import blok u `handlers.ts`).
+2. Svi subagenti na Opus (vlasnik tražio) — cijena: trošak.
+3. A4 ne dira `pdv.ts`/`racun.ts` — moguća mala duplikacija PDV izlučivanja.
+4. `PaymentType` u Kasi konsolidovan u B3, ne A6.
+5. A8 poslije A3 i A4.
+6. `PrimkaDeps.transaction` zadržan (SqlDb nema transakciju) — jedno polje viška.
+7. Pogrešna potvrda primke VRAĆA `{promijenjeno, pregled}` (plan je pogrešno rekao „baca") — današnje ponašanje sačuvano.
+8. `pending:resolve` mora provjeravati način plaćanja iz snapshota (zatvoreno u B1/B2).
+9. Talas B gradi na zalihe Task 4 kodu, bez novog oblika snapshota.
+10. B1 piše ugovorne testove novih pravila, B2 ih zadovoljava u Rustu.
+11. Čitanje Tring postavki u B1 (`fiskalniUredjaj.ts`), upis postavki u B5.
+12. B3 paralelno s B1 (oblici IPC odgovora se ne mijenjaju).
+13. Sitnice iz A4 u A8 (skripta, podnožje, datumi, EN tekstovi, oznaka postavke).
+14. Write-ahead red tek poslije učitanih postavki i sastavljenog računa; jedinstvena poruka „JE odštampan, ali nije zabilježen".
+15. Poruka za `null`/nedostajući način plaćanja: `Nepoznat način plaćanja: ""` (TS referenca).
+16. Maskiranje `<Lozinka>` u konzolnom logu Tringa (novo curenje uvedeno refaktorom).
+17. B8 podijeljen na B8a/B8b.
+18. `Backend.call` u ugovornim testovima tipizira ime i broj argumenata; tipizirani rezultati kroz `scenarij`.
+19. `product:get`/`primka:delete` vraćaju `null` i pod Electronom (kao ugovor i Rust).
+20. B9 podijeljen na B9a/B9b.
+21. Tri dodatna ugovorna testa (materijal u `promjeneUProdaji`, guard `fakturisiNalog`, historija u `artikliPrimke`).
+22. Ugovorni test pinuje DANAŠNJE ponašanje materijala pri izmjeni/brisanju primke (cijena se vraća bez nivelacije) — da li je to željeno, pitanje ispod.
+23. `scenarij.stanje` čita knjigu zalihe (`product:get` nema stanje).
+24. Skica fakture se ne fiskalizuje ponovo dok joj račun čeka u nezavršenim (postojeći propust, ista klasa kao odluka 1).
+25. Završna fix runda uključila i jeftine stavke (dijagnostika flaky testa, fail-closed odobrenje storna, ostaci).
+- Parkirano: snapshot u `pending_receipts` s nekanonskim načinom plaćanja (npr. `'gotovina'`) više se ne može razriješiti, samo odbaciti i unijeti ručno — snapshote pišu samo putevi koji već provjeravaju način plaćanja.
+
+### Otvorena pitanja za vlasnika
+
+- Materijal pri izmjeni/brisanju primke: cijena se vraća bez nivelacije i materijal ide u „bez zalihe" iako ima stanje — tako i treba? (odluka 22)
+- „Usluga ne razdužuje skladište" važi samo za prodaju (račun, prilog); korekcija i materijal naloga razdužuju i uslugu — proširiti?
+- Dnevnik uređaja (`tring:getLogs`, samo admin, uz dev.logging) čuva lozinku operatera u XML-u zahtjeva (postojeće; maskiranje mijenja ugovor oba backenda).
+- Storno ne-gotovinskog računa: kad uređaj ne potvrdi unos novca, ishod je greška iako je unos možda evidentiran — ponovni pokušaj može napuhati brojač uređaja.
+- 4 koraka `CREATE` i jedan indeks u `migracije.json` su suvišni (`schema.ts` ih već pravi) — izbaciti?
+- Enter u dijalogu „nespremljene izmjene" odbacuje izmjene (fokus na „Odbaci"); naslovi tog dijaloga nisu ujednačeni; u Ponudama prečice rade i kad je fokus na filteru statusa (P štampa); Esc forme odznači ponudu; Otkaži u rabatu Kase ne vraća fokus u pretragu; lažno upozorenje o stanju za decimalne količine (0,7 + 0,1 kg).
+- Pregled zaglavlja u Postavkama (`ZaglavljePrikaz`) ne prikazuje žiro račune.
+- Promjene ponašanja uvedene usput (za znanje): Generator ponovo pokušava stavku čiji poziv je sigurno pao; Otkaži je blokiran dok štampa traje; polja kupca na ručnom računu dobila ograničenja dužine; stopa RUC-a se prikazuje sa zarezom i u dijalogu primke.
+
+### Ručne provjere prije spajanja (nisu moguće iz sandboxa)
+
+1. Electron: prekidač modula u Postavkama i brisanje u Šifarniku.
+2. Electron i Tauri: PDF prozor — otvori, štampaj, snimi iz preglednika, zatvori.
+3. Jedan prolaz s Tringom (ili mock serverom): Kasa (F2/F3/F5, količina, kusur) i po jedan od svakog fiskalnog toka — kasa, faktura (i iz skice), ponuda→račun, nalog→račun, storno, polog.
