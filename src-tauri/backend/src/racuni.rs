@@ -8,7 +8,7 @@ use serde_json::{json, Map, Value};
 use crate::greska::R;
 use crate::js::{self, truthy};
 use crate::sql::Db;
-use crate::stampa::{self, Odstampan, Uredjaj};
+use crate::stampa::{self, Rod, Uredjaj};
 use crate::tring;
 use crate::sesija;
 use crate::pending_racun::{self, preuzmi_pending_red, vec_evidentiran};
@@ -219,7 +219,7 @@ fn finalize(b: &Backend, unos: &Value) -> R<Value> {
         Ok(Some(id)) => id,
         Ok(None) => return Ok(vec_evidentiran(&broj_fiskalnog_racuna)),
         // Račun je već na papiru; pending red ostaje (rollback) za dijalog.
-        Err(e) => return Err(stampa::nije_zabiljezen(Odstampan::Racun(&broj_fiskalnog_racuna), &e)),
+        Err(e) => return Err(stampa::nije_zabiljezen(&stampa::racun_s_brojem(&broj_fiskalnog_racuna), Rod::Muski, &e)),
     };
 
     Ok(json!({ "success": true, "id": order_id, "brojFiskalnogRacuna": broj_fiskalnog_racuna, "odgovori": result["odgovori"] }))

@@ -11,7 +11,7 @@ use crate::ponude;
 use crate::racun::{izracunaj_totale, upisi_racun};
 use crate::zaliha::{self, Dokument, Smjer, TOLERANCIJA_ZALIHE};
 use crate::sql::Db;
-use crate::stampa::{self, Odstampan, UToku, Uredjaj};
+use crate::stampa::{self, Rod, UToku, Uredjaj};
 use crate::tring::uspjeh;
 use crate::tring_racun::build_tring_racun;
 use crate::kanali::Kanal;
@@ -839,13 +839,9 @@ pub fn osiguraj_prodajnu_uslugu(db: &Db) -> R<i64> {
 fn knjizi_fakturisanje_naloga(db: &Db, nalog_id: &Value, racun_id: &Value, broj_fiskalnog_racuna: &Value) -> R<()> {
     if let Err(e) = db.tx(|| fakturisi_nalog(db, nalog_id, racun_id)) {
         baci!(
-            "{}",
-            stampa::poruka_nakon_stampe(
-                broj_fiskalnog_racuna,
-                "nalog nije zabilježen kao fakturisan u bazi",
-                e.poruka(),
-                "Evidentirajte nalog ručno."
-            )
+            "{} JE odštampan, ali nalog nije zabilježen kao fakturisan u bazi: {}. Evidentirajte nalog ručno.",
+            stampa::racun_s_brojem(broj_fiskalnog_racuna),
+            stampa::prikaz_greske(e.poruka())
         );
     }
     Ok(())
@@ -977,7 +973,7 @@ pub fn izdaj_racun_za_nalog(b: &Backend, kanal: &str, data: &Value) -> R<Value> 
         Ok(Some(racun_id)) => Ok(ponude::uspjesna_stampa(&json!(racun_id), &broj_fiskalnog_racuna, &result["odgovori"])),
         Ok(None) => Ok(vec_evidentiran(&broj_fiskalnog_racuna)),
         // Račun je već na papiru; pending red ostaje (rollback) za dijalog.
-        Err(e) => Err(stampa::nije_zabiljezen(Odstampan::Racun(&broj_fiskalnog_racuna), &e)),
+        Err(e) => Err(stampa::nije_zabiljezen(&stampa::racun_s_brojem(&broj_fiskalnog_racuna), Rod::Muski, &e)),
     }
 }
 

@@ -8,7 +8,7 @@ use crate::js::{self, or, round2, to_number, truthy};
 use crate::pending_racun::{baci_ako_ceka_nezavrsen, preuzmi_pending_red, vec_evidentiran_storno, zapisi_pending};
 use crate::prilog::{prilog_naziv, PRILOG_SIFRA};
 use crate::sql::Db;
-use crate::stampa::{self, Odstampan, UToku, Uredjaj};
+use crate::stampa::{self, Rod, UToku, Uredjaj};
 use crate::tring::{self, Odgovor};
 use crate::zaliha::{self, Dokument, Smjer};
 use crate::{baci, cash, fiskalni, p, tring_racun, Backend};
@@ -253,7 +253,10 @@ pub fn refund_and_print(b: &Backend, data: &Value, korisnik_id: i64, odobrio_adm
         Ok(true) => {}
         Ok(false) => return Ok(vec_evidentiran_storno(&broj_reklamacije)),
         // Storno je već na papiru; pending red ostaje (rollback) za dijalog.
-        Err(e) => return Err(stampa::nije_zabiljezen(Odstampan::Reklamacija(&broj_reklamacije), &e)),
+        Err(e) => {
+            let dokument = format!("Reklamacija #{}", stampa::prikaz_broja(&broj_reklamacije));
+            return Err(stampa::nije_zabiljezen(&dokument, Rod::Zenski, &e));
+        }
     }
 
     Ok(json!({

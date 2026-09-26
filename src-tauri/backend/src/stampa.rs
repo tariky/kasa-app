@@ -194,50 +194,47 @@ pub fn prikaz_broja(broj: &Value) -> String {
 }
 
 /// `err?.message || 'nepoznata greška'`
-fn prikaz_greske(greska: &str) -> &str {
+pub fn prikaz_greske(greska: &str) -> &str {
     if greska.is_empty() { "nepoznata greška" } else { greska }
 }
 
-/// `Račun X JE odštampan, ali ...` — greška upisa nakon uspješne štampe.
-pub fn poruka_nakon_stampe(broj: &Value, sredina: &str, greska: &str, kraj: &str) -> String {
-    format!("Račun {} JE odštampan, ali {sredina}: {}. {kraj}", prikaz_broja(broj), prikaz_greske(greska))
+/// `Račun <bf>` — fiskalni račun (kasa, ponuda, nalog) u poruci operateru.
+pub fn racun_s_brojem(bf: &Value) -> String {
+    format!("Račun {}", prikaz_broja(bf))
 }
 
-/// Dokument koji je uređaj odštampao, a upis u bazu nije uspio.
-pub enum Odstampan<'a> {
-    /// Fiskalni račun (kasa, ponuda, nalog): BF broj s uređaja.
-    Racun(&'a Value),
-    /// Račun po prilogu: broj fakture i BF broj.
-    Prilog(i64, &'a Value),
-    /// Reklamacija (storno): broj reklamacije.
-    Reklamacija(&'a Value),
+/// Rod dokumenta u poruci poslije štampe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Rod {
+    /// „Račun … JE odštampan, ali nije zabilježen"
+    Muski,
+    /// „Reklamacija … JE odštampana, ali nije zabilježena"
+    Zenski,
+}
+
+/// `<dokument> JE odštampan, ali nije zabilježen u bazi: <greška>. Riješite ga
+/// kroz nezavršene račune.` — jedina poruka za upis koji padne nakon štampe
+/// (`Rod::Zenski` za reklamaciju). TS: `porukaNakonStampe`.
+pub fn poruka_nakon_stampe(dokument: &str, greska: &str, rod: Rod) -> String {
+    match rod {
+        Rod::Muski => format!("{dokument} JE odštampan, ali nije zabilježen u bazi: {greska}. Riješite ga kroz nezavršene račune."),
+        Rod::Zenski => {
+            format!("{dokument} JE odštampana, ali nije zabilježena u bazi: {greska}. Riješite je kroz nezavršene račune.")
+        }
+    }
 }
 
 /// Štampa je uspjela, a upis nije: dokument je na papiru, transakcija je
-/// poništena pa write-ahead red ostaje za dijalog nezavršenih računa. Jedina
-/// poruka tog ishoda za sve tokove štampe (tekst kao u TS-u).
-pub fn nije_zabiljezen(dokument: Odstampan, greska: &Greska) -> Greska {
-    let g = prikaz_greske(greska.poruka());
-    Greska(match dokument {
-        Odstampan::Racun(broj) => {
-            poruka_nakon_stampe(broj, "nije zabilježen u bazi", greska.poruka(), "Riješite ga kroz nezavršene račune.")
-        }
-        Odstampan::Prilog(prilog_broj, broj) => format!(
-            "Fiskalni račun po prilogu br. {prilog_broj} (BF {}) JE odštampan, ali nije zabilježen u bazi: {g}. \
-             Riješite ga kroz nezavršene račune.",
-            prikaz_broja(broj)
-        ),
-        Odstampan::Reklamacija(broj) => format!(
-            "Reklamacija #{} JE odštampana, ali nije zabilježena u bazi: {g}. Riješite je kroz nezavršene račune.",
-            prikaz_broja(broj)
-        ),
-    })
+/// poništena pa write-ahead red ostaje za dijalog nezavršenih računa.
+pub fn nije_zabiljezen(dokument: &str, rod: Rod, greska: &Greska) -> Greska {
+    Greska(poruka_nakon_stampe(dokument, prikaz_greske(greska.poruka()), rod))
 }
 
 #[cfg(test)]
 mod tests {
     use serde_json::{json, Value};
 
+    use super::*;
     use crate::proba::{proba, Proba};
 
     /// Po jedan dokument za svaki tok štampe.
@@ -289,6 +286,20 @@ mod tests {
             ("nalog:izdajRacun", p.call("nalog:izdajRacun", vec![json!({ "id": d.nalog, "nacinPlacanja": "Gotovina" })])),
             ("order:refundAndPrint", p.call("order:refundAndPrint", vec![json!({ "id": d.racun })])),
         ]
+    }
+
+    /// Jedna poruka za upis koji padne poslije štampe, kao TS `porukaNakonStampe`.
+    #[test]
+    fn poruka_nakon_stampe_po_rodu() {
+        assert_eq!(
+            poruka_nakon_stampe("Račun 7", "disk pun", Rod::Muski),
+            "Račun 7 JE odštampan, ali nije zabilježen u bazi: disk pun. Riješite ga kroz nezavršene račune."
+        );
+        assert_eq!(
+            poruka_nakon_stampe("Reklamacija #3", "disk pun", Rod::Zenski),
+            "Reklamacija #3 JE odštampana, ali nije zabilježena u bazi: disk pun. Riješite je kroz nezavršene račune."
+        );
+        assert_eq!(nije_zabiljezen(&racun_s_brojem(&Value::Null), Rod::Muski, &Greska::nova("")).0, poruka_nakon_stampe("Račun ?", "nepoznata greška", Rod::Muski));
     }
 
     fn pending(p: &Proba) -> Value {

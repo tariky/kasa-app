@@ -9,7 +9,7 @@ use crate::js::{self, or, truthy};
 use crate::postavke;
 use crate::racun::{izracunaj_totale, upisi_racun};
 use crate::sql::Db;
-use crate::stampa::{self, Odstampan, UToku, Uredjaj};
+use crate::stampa::{self, Rod, UToku, Uredjaj};
 use crate::tring::uspjeh;
 use crate::tring_racun::build_tring_racun;
 use crate::sesija;
@@ -375,7 +375,7 @@ pub fn konvertuj_ponudu(b: &Backend, kanal: &str, data: &Value, nalog_id: Option
         Ok(Some(racun_id)) => Ok(uspjesna_stampa(&json!(racun_id), &broj_fiskalnog_racuna, &result["odgovori"])),
         Ok(None) => Ok(vec_evidentiran(&broj_fiskalnog_racuna)),
         // Račun je već na papiru; pending red ostaje (rollback) za dijalog.
-        Err(e) => Err(stampa::nije_zabiljezen(Odstampan::Racun(&broj_fiskalnog_racuna), &e)),
+        Err(e) => Err(stampa::nije_zabiljezen(&stampa::racun_s_brojem(&broj_fiskalnog_racuna), Rod::Muski, &e)),
     }
 }
 

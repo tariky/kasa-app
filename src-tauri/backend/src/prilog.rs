@@ -8,7 +8,7 @@ use crate::js::{self, round2, to_number, truthy};
 use crate::pending_racun::{baci_ako_ceka_nezavrsen, preuzmi_pending_red, vec_evidentiran};
 use crate::racuni::validan_datum_valute;
 use crate::sql::Db;
-use crate::stampa::{self, Odstampan, Uredjaj};
+use crate::stampa::{self, Rod, Uredjaj};
 use crate::zaliha::{self, Dokument, Smjer};
 use crate::{baci, fiskalni, p, provjera_racuna, racun, tring, tring_racun, Backend};
 
@@ -312,7 +312,10 @@ pub fn finalize_prilog_and_print(b: &Backend, data: &Value) -> R<Value> {
         Ok(None) => return Ok(vec_evidentiran(&broj_fiskalnog_racuna)),
         // Račun je već na papiru; pending red namjerno ostaje da se može riješiti
         // kroz pending:resolve, ali operater to mora znati odmah.
-        Err(e) => return Err(stampa::nije_zabiljezen(Odstampan::Prilog(prilog_broj, &broj_fiskalnog_racuna), &e)),
+        Err(e) => {
+            let dokument = format!("Fiskalni račun po prilogu br. {prilog_broj} (BF {})", stampa::prikaz_broja(&broj_fiskalnog_racuna));
+            return Err(stampa::nije_zabiljezen(&dokument, Rod::Muski, &e));
+        }
     };
 
     let mut out = Map::new();
