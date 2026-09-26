@@ -14,7 +14,7 @@ import { Label } from '@/components/ui/label';
 import { DatePicker } from '@/components/ui/date-picker';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Eyebrow, Key, mod } from '@/components/ui/ledger';
+import { Eyebrow, Key, jePoljeZaUnos, mod } from '@/components/ui/ledger';
 import { FullDialog, FullDialogContent, FullDialogHeader, FullDialogFooter, FullDialogNotice, FullDialogTitle, FooterBtn, Fact, HeaderBtn, LegendKey } from '@/components/ui/full-dialog';
 import { UlazPdf } from '@/components/UlazPdf';
 import { UlazStavkeEditor, type UlazStavkeHandle } from './UlazStavkeEditor';
@@ -327,7 +327,7 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
       }
       if (e.altKey) return;
       const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+      if (jePoljeZaUnos(t)) return;
       if (t && t.closest('[role="combobox"], [role="listbox"]')) return;
       if (edit) {
         if (e.key === '/') { e.preventDefault(); editorRef.current?.noviRed(); }

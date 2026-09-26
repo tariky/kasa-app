@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Key } from '@/components/ui/ledger';
+import { Key, jePoljeZaUnos } from '@/components/ui/ledger';
 import { GreskaUcitavanja } from '@/components/GreskaUcitavanja';
 import { potvrdi, obavijesti } from '@/lib/dijalog';
 import { porukaGreske } from '@/lib/utils';
@@ -51,7 +51,7 @@ export function SifarnikLista({
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) {
+      if (t && jePoljeZaUnos(t)) {
         if (t === searchRef.current && e.key === 'Escape') { onPretraga(''); t.blur(); }
         return;
       }

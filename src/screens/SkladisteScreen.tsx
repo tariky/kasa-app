@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { Product, Primka, Dobavljac } from '@/types';
 import { cn, formatKM, formatDate, parseDecimal, porukaGreske } from '@/lib/utils';
 import { useCijenaUnos } from '@/hooks/useCijenaUnos';
@@ -31,6 +31,8 @@ import {
 import { potvrdi, obavijesti } from '@/lib/dijalog';
 import { useIpcPodaci } from '@/hooks/useIpcPodaci';
 import { GreskaUcitavanja } from '@/components/GreskaUcitavanja';
+import { useLedgerLista } from '@/hooks/useLedgerLista';
+import { usePreciceListe } from '@/hooks/usePreciceListe';
 
 type SkladisteTab = 'artikli' | 'primke';
 
@@ -481,21 +483,7 @@ function ArtikliTab({
     });
 
   // "/" pretraga, "N" novi artikal — isto kao na ulazu robe.
-  useEffect(() => {
-    if (dialogOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) {
-        if (t === searchRef.current && e.key === 'Escape') { setSearch(''); t.blur(); }
-        return;
-      }
-      if (e.key === '/') { e.preventDefault(); searchRef.current?.focus(); return; }
-      if (e.key.toLowerCase() === 'n') { e.preventDefault(); handleNew(); }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [dialogOpen]);
+  usePreciceListe({ aktivno: !dialogOpen, searchRef, onPretraga: setSearch, onNovi: handleNew, preskociIzbornike: false });
 
   const td = 'py-2.5 border-b border-slate-100';
 
@@ -649,75 +637,29 @@ const poljaPrimke = (p: Primka): PoljaPretrage => ({
 function PrimkeTab({ products, dobavljaci, onReloadProducts }: { products: Product[]; dobavljaci: Dobavljac[]; onReloadProducts: () => void }) {
   const { podaci, greska, osvjezi: loadPrimke } = useIpcPodaci(() => window.api.getPrimke(), []);
   const primke: Primka[] = podaci ?? [];
-  const [selectedId, setSelectedId] = useState<number | null>(null);
   const [stanje, setStanje] = useState<UlazStanje>({ kind: 'zatvoren' });
   const [search, setSearch] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
-  const rowRefs = useRef<(HTMLTableRowElement | null)[]>([]);
   const searchRef = useRef<HTMLInputElement>(null);
 
   const visible = useMemo(() => {
     return filtriraj(primke, search, poljaPrimke);
   }, [primke, search]);
   const visibleIds = useMemo(() => visible.map(p => p.id), [visible]);
-  const selIndex = visible.findIndex(p => p.id === selectedId);
-
-  const focusRow = useCallback((index: number) => {
-    const p = visible[index];
-    if (!p) return;
-    setSelectedId(p.id);
-    const el = rowRefs.current[index];
-    el?.focus(); el?.scrollIntoView({ block: 'nearest' });
-  }, [visible]);
-
-  const otvori = (id: number) => { setSelectedId(id); setStanje({ kind: 'pregled', id }); };
+  const lista = useLedgerLista(visible, { onOtvori: id => setStanje({ kind: 'pregled', id }) });
+  const selIndex = lista.izabraniIndeks;
   const novi = () => setStanje({ kind: 'novi' });
 
-  const handleListKeyDown = (e: React.KeyboardEvent<HTMLTableSectionElement>) => {
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
-    const current = selIndex < 0 ? -1 : selIndex;
-    const last = visible.length - 1;
-    const go = (i: number) => { e.preventDefault(); focusRow(Math.max(0, Math.min(last, i))); };
-    switch (e.key) {
-      case 'ArrowDown': return go(current + 1);
-      case 'ArrowUp': return go(current < 0 ? 0 : current - 1);
-      case 'PageDown': return go(current + 10);
-      case 'PageUp': return go(current < 0 ? 0 : current - 10);
-      case 'Home': return go(0);
-      case 'End': return go(last);
-      case 'Enter': case ' ':
-        if (selectedId != null) { e.preventDefault(); otvori(selectedId); }
-        return;
-      default:
-    }
-  };
-
   const dialogOpen = stanje.kind !== 'zatvoren';
-  useEffect(() => {
-    if (dialogOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      const t = e.target as HTMLElement | null;
-      const uPolju = !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
-      if (uPolju) {
-        // Iz pretrage ↓ vodi na listu, esc briše upit.
-        if (t === searchRef.current && e.key === 'ArrowDown') { e.preventDefault(); focusRow(selIndex < 0 ? 0 : selIndex); }
-        if (t === searchRef.current && e.key === 'Escape') { setSearch(''); (t as HTMLInputElement).blur(); }
-        return;
-      }
-      if (e.key === '/') { e.preventDefault(); searchRef.current?.focus(); return; }
-      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { if (!t?.closest('tbody')) { e.preventDefault(); focusRow(selIndex < 0 ? 0 : selIndex); } return; }
-      if (e.key.toLowerCase() === 'n') { e.preventDefault(); novi(); return; }
-      if (e.key.toLowerCase() === 'r') { e.preventDefault(); loadPrimke(); return; }
-      if (e.key === 'Enter' && selectedId != null) { e.preventDefault(); otvori(selectedId); }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [dialogOpen, selectedId, selIndex, focusRow, loadPrimke]);
+  // Iz pretrage ↓ vodi na izabrani ulaz (ili prvi), esc briše upit.
+  usePreciceListe({
+    aktivno: !dialogOpen, lista, searchRef, onPretraga: setSearch, onNovi: novi, onOsvjezi: loadPrimke,
+    izPretrage: 'izabrani', preskociIzbornike: false,
+  });
 
   const zatvori = () => {
     setStanje({ kind: 'zatvoren' });
-    requestAnimationFrame(() => { const i = visible.findIndex(p => p.id === selectedId); if (i >= 0) rowRefs.current[i]?.focus(); });
+    lista.vratiFokus();
   };
 
   const td = 'py-2.5 border-b border-slate-100';
@@ -775,16 +717,13 @@ function PrimkeTab({ products, dobavljaci, onReloadProducts }: { products: Produ
                 { label: 'Napomena', className: 'text-left px-3 w-[32%] hidden xl:table-cell' },
                 { label: '', className: 'pr-6 pl-2 w-[1%]' },
               ]} />
-              <tbody onKeyDown={handleListKeyDown}>
+              <tbody onKeyDown={lista.onTbodyKeyDown}>
                 {visible.map((p, i) => {
-                  const isSel = selectedId === p.id;
+                  const isSel = lista.izabranId === p.id;
                   return (
                     <tr key={p.id}
-                      ref={el => { rowRefs.current[i] = el; }}
-                      tabIndex={isSel || (selIndex < 0 && i === 0) ? 0 : -1}
-                      aria-selected={isSel}
-                      onClick={() => otvori(p.id)}
-                      onFocus={() => setSelectedId(p.id)}
+                      {...lista.rowProps(i)}
+                      onClick={() => lista.otvori(p.id)}
                       className={cn('group cursor-pointer transition-colors',
                         'focus:outline focus:outline-2 focus:-outline-offset-2 focus:outline-blue-500',
                         isSel ? 'bg-blue-50/70' : 'hover:bg-slate-50')}>
@@ -832,9 +771,9 @@ function PrimkeTab({ products, dobavljaci, onReloadProducts }: { products: Produ
         dobavljaci={dobavljaci}
         redoslijed={visibleIds}
         onClose={zatvori}
-        onNavigate={otvori}
-        onSaved={async (id) => { await loadPrimke(); onReloadProducts(); if (id) { setSelectedId(id); setStanje({ kind: 'pregled', id }); } else setStanje({ kind: 'zatvoren' }); }}
-        onDeleted={async (p) => { setStanje({ kind: 'zatvoren' }); setSelectedId(null); await loadPrimke(); onReloadProducts(); setMsg(`Ulaz ${p.brojPrimke} obrisan`); }}
+        onNavigate={lista.otvori}
+        onSaved={async (id) => { await loadPrimke(); onReloadProducts(); if (id) lista.otvori(id); else setStanje({ kind: 'zatvoren' }); }}
+        onDeleted={async (p) => { setStanje({ kind: 'zatvoren' }); lista.postaviIzabran(null); await loadPrimke(); onReloadProducts(); setMsg(`Ulaz ${p.brojPrimke} obrisan`); }}
       />
     </div>
   );

@@ -11,7 +11,7 @@ import { cn, formatKM, formatDate } from '@/lib/utils';
 import { otvoriPdf, spremiPdf, ucitajZaStampu } from '@/lib/stampa';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Key, mod } from '@/components/ui/ledger';
+import { Key, jePoljeZaUnos, mod } from '@/components/ui/ledger';
 import { FullDialog, FullDialogContent, FullDialogHeader, FullDialogFooter, FullDialogNotice, FullDialogTitle, FooterBtn, Fact, HeaderBtn, LegendKey } from '@/components/ui/full-dialog';
 import { RadniNalogPdf } from '@/components/RadniNalogPdf';
 import { StatusRail } from './StatusRail';
@@ -162,7 +162,7 @@ export function NalogDetailDialog({ nalogId, redoslijed, uloga, onClose, onNavig
       }
       if (e.altKey) return;
       const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+      if (jePoljeZaUnos(t)) return;
       if (t && t.getAttribute('role') === 'combobox') return;
 
       switch (e.key) {

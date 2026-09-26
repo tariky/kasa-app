@@ -12,6 +12,13 @@ export const MOD = IS_MAC ? '⌘' : 'Ctrl';
 /** Spoji modifikator i tipku onako kako se piše na toj platformi: „⌘S“ / „Ctrl+S“. */
 export const mod = (key: string) => (IS_MAC ? `${MOD}${key}` : `${MOD}+${key}`);
 
+/** Polje za unos (input, textarea, select, contentEditable): tu tipke pripadaju polju, ne prečicama ekrana. */
+export function jePoljeZaUnos(t: EventTarget | null): boolean {
+  const el = t as HTMLElement | null;
+  if (!el) return false;
+  return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable;
+}
+
 /** Keycap — mono čip koji nosi stvarnu prečicu sa dugmeta pored kojeg stoji. */
 export function Key({ children, tone = 'light', className }: {
   children: React.ReactNode;

@@ -17,7 +17,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { DatePicker } from '@/components/ui/date-picker';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Eyebrow, Key, mod } from '@/components/ui/ledger';
+import { Eyebrow, Key, jePoljeZaUnos, mod } from '@/components/ui/ledger';
 import { FullDialog, FullDialogContent, FullDialogHeader, FullDialogFooter, FullDialogNotice, FullDialogTitle, FooterBtn, Fact, LegendKey } from '@/components/ui/full-dialog';
 import { RacunPdf, type InvoiceLang } from '@/components/RacunPdf';
 import { OtpremnicaPdf } from '@/components/OtpremnicaPdf';
@@ -271,7 +271,7 @@ export function RacunDetailDialog({ orderId, redoslijed, uloga, onClose, onNavig
       if (!contentRef.current?.contains(e.target as Node)) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+      if (jePoljeZaUnos(t)) return;
 
       switch (e.key) {
         case 'ArrowUp': if (prevId != null) { e.preventDefault(); onNavigate(prevId); } return;

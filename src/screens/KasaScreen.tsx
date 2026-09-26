@@ -5,7 +5,7 @@ import { DecimalInput } from '@/components/ui/decimal-input';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
 } from '@/components/ui/dialog';
-import { Key } from '@/components/ui/ledger';
+import { Key, jePoljeZaUnos } from '@/components/ui/ledger';
 import { PretragaProizvoda } from '@/components/PretragaProizvoda';
 import { PretragaKupaca } from '@/components/PretragaKupaca';
 import { KupacRacunaPolja } from '@/components/KupacRacunaPolja';
@@ -41,13 +41,6 @@ const ARTIKLI_I_USLUGE: Product['tip'][] = ['artikal', 'usluga'];
 
 /** Bosanski plural za "artikal": 1 artikal, 2–4 artikla, 5+ artikala. */
 const formatArtikliCount = (n: number) => `${n} ${mnozina(n, ['artikal', 'artikla', 'artikala'])}`;
-
-/** Kucanje van polja za unos ide u pretragu — skener radi i kad fokus pobjegne na dugme. */
-function uPoljuZaUnos(t: EventTarget | null): boolean {
-  const el = t as HTMLElement | null;
-  if (!el) return false;
-  return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable;
-}
 
 export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
   const { postavke } = useDokumentPostavke();
@@ -382,7 +375,8 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
       if (anyDialogOpen || loading) return;
       if (e.key === 'F2') { e.preventDefault(); toggleScanMode(!scanMode); return; }
       if (e.key === 'F3') { e.preventDefault(); setSlobodnaOpen(true); return; }
-      if (e.metaKey || e.ctrlKey || e.altKey || uPoljuZaUnos(e.target)) return;
+      if (e.metaKey || e.ctrlKey || e.altKey || jePoljeZaUnos(e.target)) return;
+      // Kucanje van polja za unos ide u pretragu — skener radi i kad fokus pobjegne na dugme.
       // Znak ili Backspace van polja: fokus u pretragu prije nego znak stigne, pa završi u njoj.
       if (e.key.length === 1 || e.key === 'Backspace') searchInputRef.current?.focus();
     };

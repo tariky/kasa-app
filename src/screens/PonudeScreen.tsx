@@ -40,6 +40,8 @@ import { useKupci } from '@/components/PretragaKupaca';
 import type { Product, ProizvodPonude } from '@/types';
 import FakturaDialog, { type FakturaPocetno } from '@/components/FakturaDialog';
 import { otvoriFakturuZaStampu } from '@/components/stampaFakture';
+import { useLedgerLista } from '@/hooks/useLedgerLista';
+import { usePreciceListe } from '@/hooks/usePreciceListe';
 
 /** "8 dana od datuma ponude" — bosanska množina: 1/21/31 dan, ostalo dana. */
 function opisRoka(dana: number): string {
@@ -174,7 +176,6 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
   const [nalogIzbor, setNalogIzbor] = useState<{ linije: ProizvodPonude[]; oznacene: Set<number> } | null>(null);
   const [otvaramNalog, setOtvaramNalog] = useState(false);
 
-  const rowRefs = useRef<(HTMLTableRowElement | null)[]>([]);
   const searchRef = useRef<HTMLInputElement>(null);
   const danas = localDateStr();
 
@@ -423,36 +424,15 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
 
   // ── Tastatura ──────────────────────────────────────────────
 
-  const selIndex = visible.findIndex(p => p.id === selected?.id);
-
-  /** Pomjera izbor u listi i drži fokus na redu — osnova za tastaturnu navigaciju. */
-  const focusRow = useCallback((index: number) => {
-    if (index < 0 || index >= visible.length) return;
-    selectPonuda(visible[index]);
-    const el = rowRefs.current[index];
-    el?.focus();
-    el?.scrollIntoView({ block: 'nearest' });
-  }, [visible]);
-
-  const handleListKeyDown = (e: React.KeyboardEvent<HTMLTableSectionElement>) => {
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
-    const current = selIndex < 0 ? -1 : selIndex;
-    const last = visible.length - 1;
-    const go = (i: number) => { e.preventDefault(); focusRow(Math.max(0, Math.min(last, i))); };
-
-    switch (e.key) {
-      case 'ArrowDown': return go(current + 1);
-      case 'ArrowUp': return go(current < 0 ? 0 : current - 1);
-      case 'PageDown': return go(current + 10);
-      case 'PageUp': return go(current < 0 ? 0 : current - 10);
-      case 'Home': return go(0);
-      case 'End': return go(last);
-      case 'Enter':
-        if (selected) { e.preventDefault(); handlePrintPdf(selected); }
-        return;
-      default:
-    }
-  };
+  // Izbor drži ekran: izabrana ponuda puni panel detalja, ↵ na redu je štampa.
+  const lista = useLedgerLista(visible, {
+    izabranId: selected?.id ?? null,
+    onIzaberi: selectPonuda,
+    onOtvori: () => { if (selected) handlePrintPdf(selected); },
+    razmakOtvara: false,
+    izborNaFokus: false,
+  });
+  const selIndex = lista.izabraniIndeks;
 
   const anyDialogOpen = formOpen || konvertujOpen || brisiOpen || fakturaOpen || nalogIzbor != null;
 
@@ -461,32 +441,14 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
    * statusa — status je srž toka ponude i zaslužuje najkraći potez. Konverzija i
    * brisanje nikad ne djeluju odmah: otvaraju dijalog s potvrdom.
    */
-  useEffect(() => {
-    if (anyDialogOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) {
-        if (t === searchRef.current) {
-          if (e.key === 'Escape') { setSearch(''); t.blur(); }
-          // ↓ iz pretrage vodi pravo na prvu pronađenu ponudu.
-          if (e.key === 'ArrowDown' && visible.length > 0) { e.preventDefault(); focusRow(0); }
-        }
-        return;
-      }
-      if (e.key === '/') { e.preventDefault(); searchRef.current?.focus(); return; }
-
-      const cycleFilter = (step: number) => {
-        e.preventDefault();
-        const i = FILTERS.findIndex(f => f.id === filter);
-        setFilter(FILTERS[(i + step + FILTERS.length) % FILTERS.length].id);
-      };
-
-      // Strelice lijevo/desno rade na svakom rasporedu tastature; zagrade su
-      // alias jer na bosanskom rasporedu traže AltGr, a Alt gasi prečice.
-      if (e.key === 'ArrowLeft' || e.key === '[') return cycleFilter(-1);
-      if (e.key === 'ArrowRight' || e.key === ']') return cycleFilter(1);
-      if (e.key.toLowerCase() === 'n') { e.preventDefault(); openNova(); return; }
+  usePreciceListe({
+    aktivno: !anyDialogOpen,
+    lista, searchRef, onPretraga: setSearch,
+    onNovi: openNova,
+    filteri: { opcije: FILTERS, vrijednost: filter, postavi: setFilter },
+    // Ponuda nema ↑↓ ni ↵ van liste, a prečice rade i s fokusom na filteru statusa.
+    strelicomUListu: false, enterOtvara: false, preskociIzbornike: false,
+    dodatne: e => {
       if (e.key === 'Escape' && selected) { e.preventDefault(); setSelected(null); return; }
 
       if (!selected) return;
@@ -514,10 +476,8 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
         case '3': if (selEditable) { e.preventDefault(); changeStatus(selected.id, 'odbijena'); } break;
         default:
       }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [selected, selEditable, selKonvertibilna, filter, anyDialogOpen, openNova, openUredi, otvoriKonverziju, nalogZaPonudu, visible.length, focusRow]);
+    },
+  });
 
   /** ⌘↵ potvrđuje dijalog s bilo kojeg polja. */
   const submitOnMeta = (fn: () => void) => (e: React.KeyboardEvent) => {
@@ -615,7 +575,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
                         { label: 'Status', className: 'text-left pl-3 pr-6 w-[1%] whitespace-nowrap' },
                       ]}
                     />
-                    <tbody onKeyDown={handleListKeyDown}>
+                    <tbody onKeyDown={lista.onTbodyKeyDown}>
                       {visible.map((p, i) => {
                         const st = efektivniStatus(p, danas);
                         const isSel = selected?.id === p.id;
@@ -623,15 +583,13 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
                         return (
                           <tr
                             key={p.id}
-                            ref={el => { rowRefs.current[i] = el; }}
-                            tabIndex={isSel || (selIndex < 0 && i === 0) ? 0 : -1}
-                            aria-selected={isSel}
+                            {...lista.rowProps(i)}
                             className={cn(
                               'group cursor-pointer transition-colors',
                               'focus:outline focus:outline-2 focus:-outline-offset-2 focus:outline-blue-500',
                               isSel ? 'bg-blue-50/80' : 'hover:bg-slate-50',
                             )}
-                            onClick={() => { selectPonuda(p); rowRefs.current[i]?.focus(); }}
+                            onClick={() => lista.fokusRed(i, { skrol: false })}
                           >
                             <td
                               className={cn(

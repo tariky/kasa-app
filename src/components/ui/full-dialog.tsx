@@ -2,7 +2,7 @@
 import * as React from 'react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { cn } from '@/lib/utils';
-import { Eyebrow, Key } from './ledger';
+import { Eyebrow, Key, jePoljeZaUnos } from './ledger';
 
 /**
  * Dijalog preko cijelog ekrana za jedan dokument (radni nalog, ulaz robe): tamno zaglavlje
@@ -37,7 +37,7 @@ export const FullDialogContent = React.forwardRef<HTMLDivElement, {
         onEscapeKeyDown={e => {
           e.preventDefault();
           const t = e.target as HTMLElement | null;
-          if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) {
+          if (t && jePoljeZaUnos(t)) {
             // Pretraga s upitom sama briše upit; ostala polja samo ispuštaju fokus.
             if (t.getAttribute('role') === 'combobox' && (t as HTMLInputElement).value) return;
             t.blur(); inner.current?.focus(); return;
