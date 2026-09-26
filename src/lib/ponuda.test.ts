@@ -4,7 +4,7 @@
 import { test, expect, beforeEach } from 'bun:test';
 import { testnaBaza, type TestnaBaza } from './testnaBaza';
 import {
-  formatBrojPonude, createPonuda, efektivniStatus, konvertujPonudu, plusDana, danaIzmedju, DEFAULT_ROK_DANA,
+  formatBrojPonude, createPonuda, efektivniStatus, konvertujPonudu, plusDana, danaIzmedju, DEFAULT_ROK_DANA, type KonverzijaDeps,
 } from './ponuda';
 import { uredjajIzFunkcija } from './fiskalniUredjaj';
 
@@ -47,9 +47,11 @@ test('konverzija se odbija PRIJE štampe kad korisnika nema u bazi (upis računa
     stavke: [{ productId, kolicina: 1, cijena: 10, rabat: 0, pdvStopa: 'E' }],
   });
   const stampa: unknown[] = [];
-  const deps = {
-    db, transaction: (fn: () => any) => db.transaction(fn),
-    uredjaj: uredjajIzFunkcija({ stampatiFiskalniRacun: async (racun: unknown) => { stampa.push(racun); return { success: true, odgovori: {} } as any; } }),
+  const deps: KonverzijaDeps = {
+    db, transaction: fn => db.transaction(fn),
+    uredjaj: uredjajIzFunkcija({
+      stampatiFiskalniRacun: async racun => { stampa.push(racun); return { success: true, vrstaOdgovora: 'OK', odgovori: {} }; },
+    }),
   };
 
   for (const korisnikId of [0, 9999]) {
