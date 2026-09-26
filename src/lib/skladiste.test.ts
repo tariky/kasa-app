@@ -1,11 +1,15 @@
-// Rubni slučajevi pomoćnih funkcija skladišta koje ugovor ne može izraziti:
+// Rubni slučajevi pomoćnih funkcija skladišta koje ugovor ne pokriva:
 // vrijednosti koje JSON ne prenosi (NaN, Infinity, undefined — Electron IPC ih
-// prenosi), datum s vremenom, napomena bez brojeva nivelacija, otisak pregleda
-// polje po polje. Primke, nivelacije, historija i protunivelacije su u ugovoru
-// oba backenda (ugovor/skladiste.ugovor.test.ts) i u primka.test.ts.
+// prenosi), datum s vremenom, napomena bez brojeva nivelacija, artikal koji je
+// postao materijal, artikli primke iz historije, otisak pregleda polje po polje.
+// Primke, nivelacije, historija i protunivelacije su u ugovoru oba backenda
+// (ugovor/skladiste.ugovor.test.ts) i u primka.test.ts.
 import { test, expect, beforeEach } from 'bun:test';
 import { testnaBaza, type TestnaBaza } from './testnaBaza';
-import { napomenaProtunivelacije, datumKretanjaPrimke, istiPregled, validirajPrimku } from './skladiste';
+import {
+  napomenaProtunivelacije, datumKretanjaPrimke, istiPregled, validirajPrimku,
+  cijeneArtikala, promjeneUProdaji, artikliPrimke, zapisiPromjeneCijena,
+} from './skladiste';
 import type { PregledCijenaUlaza } from '../types';
 
 let db: TestnaBaza;
@@ -14,11 +18,50 @@ beforeEach(() => {
   db = testnaBaza();
 });
 
-function dodajArtikal(sifra: string, cijena: number): number {
-  const r = db.prepare("INSERT INTO products (sifra, naziv, cijena, pdvStopa) VALUES (?, ?, ?, 'E')")
-    .run(sifra, `Artikal ${sifra}`, cijena);
+function dodajArtikal(sifra: string, cijena: number, tip = 'artikal'): number {
+  const r = db.prepare("INSERT INTO products (sifra, naziv, cijena, pdvStopa, tip) VALUES (?, ?, ?, 'E', ?)")
+    .run(sifra, `Artikal ${sifra}`, cijena, tip);
   return Number(r.lastInsertRowid);
 }
+
+function dodajZalihu(productId: number, kolicina: number): void {
+  db.prepare("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'ulaz', ?, 'test', 0)")
+    .run(productId, kolicina);
+}
+
+// ── Protunivelacija: promjene cijene u prodaji ─────────────────────────
+
+// Materijal: artikal kome je product:update promijenio tip u materijal poslije
+// primke — brisanje/izmjena te primke mu vraća cijenu, ali protunivelacije nema
+// (materijal nema prodajnu cijenu).
+test('promjeneUProdaji: razlika od snimka do trenutne cijene, na trenutnoj zalihi; materijal i artikal bez zalihe bez stavke', () => {
+  const sa = dodajArtikal('040', 12);
+  const bez = dodajArtikal('041', 12);
+  const ista = dodajArtikal('042', 12);
+  const mat = dodajArtikal('043', 12, 'materijal');
+  for (const id of [sa, ista, mat]) dodajZalihu(id, 4);
+  const prije = cijeneArtikala(db, [sa, bez, ista, mat, sa]);
+  expect([...prije]).toEqual([[sa, 12], [bez, 12], [ista, 12], [mat, 12]]);
+
+  db.prepare('UPDATE products SET cijena = 10 WHERE id IN (?, ?, ?)').run(sa, bez, mat);
+  expect(promjeneUProdaji(db, prije)).toEqual([
+    { productId: sa, kolicina: 4, staraCijena: 12, novaCijena: 10, pdvStopa: 'E' },
+  ]);
+});
+
+test('artikliPrimke: stavke i artikli iz historije primke (neponištene), bez duplikata', () => {
+  const a = dodajArtikal('050', 10);
+  const b = dodajArtikal('051', 10);
+  const c = dodajArtikal('052', 10);
+  db.prepare("INSERT INTO primke (id, brojPrimke, datum) VALUES (1, 'U-1', '2026-01-01')").run();
+  for (const cijena of [12, 13]) {
+    db.prepare("INSERT INTO primka_stavke (primkaId, productId, kolicina, cijena, pdvStopa) VALUES (1, ?, 1, ?, 'E')").run(a, cijena);
+  }
+  zapisiPromjeneCijena(db, 'primka', 1, [{ productId: b, staraCijena: 10, novaCijena: 11 }, { productId: c, staraCijena: 10, novaCijena: 11 }]);
+  zapisiPromjeneCijena(db, 'primka', 2, [{ productId: a, staraCijena: 10, novaCijena: 11 }]);
+  db.prepare('UPDATE cijena_historija SET ponistena = 1 WHERE productId = ?').run(c);
+  expect(artikliPrimke(db, 1).sort()).toEqual([a, b].sort());
+});
 
 test('napomena protunivelacije: brojevi poništenih nivelacija u zagradi, bez njih samo razlog', () => {
   expect(napomenaProtunivelacije('Poništenje primke U-5', ['NIV-2026-003'])).toBe('Poništenje primke U-5 (NIV-2026-003)');

@@ -5,7 +5,9 @@ import { test, expect, beforeEach } from 'bun:test';
 import { testnaBaza, type TestnaBaza } from './testnaBaza';
 import {
   formatBrojNaloga, createNalog, replaceStavke, getNalog, kalkulacija, zavrsiNalog, vratiUIzradu, stavkeIzNormativa,
+  upisiRacunNaloga, PRODAJNA_USLUGA,
 } from './proizvodnja';
+import type { SnapshotNaloga } from './pendingRacun';
 
 let db: TestnaBaza;
 
@@ -121,4 +123,56 @@ test('vraćanje u izradu je dozvoljeno kad na stanju ima bar koliko je nalog uve
   db.prepare("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'izlaz', 0.3, 'order', 1)").run(art);
   vratiUIzradu(db, r.id);
   expect(getNalog(db, r.id).status).toBe('u_izradi');
+});
+
+// ── upis računa naloga iz nezavršenih ────────────────────
+
+// Račun naloga s nepoznatim ishodom štampe čeka u nezavršenim; dok čeka, nalog se
+// može promijeniti (npr. vraćen u izradu). pending:resolve upisuje račun kroz
+// upisiRacunNaloga — nalog koji više nije završena narudžba ne smije postati
+// fakturisan, a transakcija ne ostavlja ni račun ni uslugu NAMJ.
+function snapshotNaloga(nalogId: number): SnapshotNaloga {
+  const n = getNalog(db, nalogId);
+  return {
+    vrsta: 'nalog', nalogId, nalogBroj: n.broj, nalogGodina: n.godina,
+    korisnikId: 1, ukupno: 100, pdvIznos: 14.53, nacinPlacanja: 'Gotovina', kupac: null,
+    stavke: [{ productId: 0, naziv: PRODAJNA_USLUGA.naziv, kolicina: 1, cijena: 100, rabat: 0, pdvStopa: 'E' }],
+  };
+}
+
+function upisiIzNezavrsenih(nalogId: number): () => number {
+  const snap = snapshotNaloga(nalogId);
+  return () => db.transaction(() => upisiRacunNaloga(db, snap, { brojFiskalnogRacuna: '77', isManual: 1 }))();
+}
+
+function nistaUpisano(): void {
+  expect(db.prepare('SELECT COUNT(*) AS n FROM orders').get()).toEqual({ n: 0 });
+  expect(db.prepare('SELECT COUNT(*) AS n FROM order_items').get()).toEqual({ n: 0 });
+  expect(db.prepare('SELECT COUNT(*) AS n FROM products WHERE sifra = ?').get(PRODAJNA_USLUGA.sifra)).toEqual({ n: 0 });
+}
+
+test('upis računa naloga: narudžba vraćena u izradu se ne fakturiše, ništa se ne upisuje', () => {
+  const kupacId = Number(db.prepare("INSERT INTO kupci (naziv, idBroj) VALUES ('Kupac d.o.o.', '4200000000001')").run().lastInsertRowid);
+  const iv = dodajMaterijal('IV');
+  const r = createNalog(db, { vrsta: 'narudzba', korisnikId: 1, kupacId, opis: 'Ormar', dogovorenaCijena: 100 });
+  replaceStavke(db, r.id, [{ materijalId: iv, kolicina: 1 }]);
+  zavrsiNalog(db, r.id);
+  const upis = upisiIzNezavrsenih(r.id);
+  vratiUIzradu(db, r.id);
+
+  expect(upis).toThrow('Nalog mora biti završen prije izdavanja računa');
+  nistaUpisano();
+  expect(getNalog(db, r.id)).toMatchObject({ status: 'u_izradi', racunId: null });
+});
+
+test('upis računa naloga: nalog za zalihu se ne fakturiše, ništa se ne upisuje', () => {
+  const art = dodajArtikal('LINA');
+  const iv = dodajMaterijal('IV');
+  const r = createNalog(db, { vrsta: 'zaliha', korisnikId: 1, productId: art, kolicina: 1 });
+  replaceStavke(db, r.id, [{ materijalId: iv, kolicina: 1 }]);
+  zavrsiNalog(db, r.id);
+
+  expect(upisiIzNezavrsenih(r.id)).toThrow('Račun se izdaje samo za nalog po narudžbi');
+  nistaUpisano();
+  expect(getNalog(db, r.id)).toMatchObject({ status: 'zavrsen', racunId: null });
 });
