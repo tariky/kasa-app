@@ -2,13 +2,14 @@ import type { ReactNode } from 'react';
 import { Document, Page, View, Text, Image, StyleSheet, type Styles } from '@react-pdf/renderer';
 import type { FirmaSettings } from '@/types';
 import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from '../pdf-fonts';
-import { POTPIS_AUTORA, POTPIS_AUTORA_EN } from '@/lib/brend';
 import { logoVelicina, kontaktFirme, mjestoZiroRacuna } from '@/lib/firma';
 import { pecatZa, type DokumentPostavke, type DokumentSaPotpisom } from '@/lib/dokumentPostavke';
 import { PotpisBlok } from './PotpisBlok';
 import { PdfPodnozje, DODATAK_PODNOZJA } from './PdfPodnozje';
 import { ZiroRacuniRedovi, ZiroRacuniTraka, PODNOZJE_S_RACUNIMA } from './ZiroRacuni';
-import { MJERE_ZAGLAVLJA as M, datumPdf } from './stil';
+import { MJERE_ZAGLAVLJA as M } from './stil';
+import { PRIJEVODI, type JezikPdf } from './prijevodi';
+import { formatDate } from '@/lib/utils';
 
 type Stil = Styles[string];
 
@@ -22,13 +23,6 @@ const DNO_STRANICE = 70;
 /** Faktura (prilog) potpisuje se i pečatira po postavkama fakture. */
 const POTPIS_ZA: Record<VrstaDokumenta, DokumentSaPotpisom> = {
   racun: 'racun', ponuda: 'ponuda', otpremnica: 'otpremnica', prilog: 'faktura', nalog: 'nalog',
-};
-
-/** Engleski dijelovi okvira — nazivi iz postavki su na bosanskom, pa su potpisi fiksni prijevodi. */
-const EN = {
-  potpisi: { lijevo: 'Issuer signature', desno: 'Recipient signature' },
-  generisano: 'Generated',
-  racuni: 'Bank accounts',
 };
 
 const s = StyleSheet.create({
@@ -99,7 +93,7 @@ export interface A4DokumentProps {
   naslov: string;
   broj: string;
   podnaslov?: ReactNode;
-  lang?: 'bs' | 'en';
+  lang?: JezikPdf;
   /** Dokument prema kupcu nosi žiro račune firme (po `ziroRacuniPozicija`); radni nalog ne. */
   ziro: boolean;
   children: ReactNode;
@@ -111,7 +105,7 @@ export interface A4DokumentProps {
  * zaglavlje ili u traku podnožja, a stranica ostavlja mjesta za podnožje koje ima.
  */
 export function A4Dokument({ vrsta, firma, postavke, naslov, broj, podnaslov, lang = 'bs', ziro, children }: A4DokumentProps) {
-  const en = lang === 'en';
+  const t = PRIJEVODI[lang];
   const racuni = ziro ? mjestoZiroRacuna(firma) : null;
   const paddingBottom = (racuni === 'podnozje' ? PODNOZJE_S_RACUNIMA : DNO_STRANICE) + (postavke.podnozje ? DODATAK_PODNOZJA : 0);
   const kontakt = kontaktFirme(firma);
@@ -148,15 +142,15 @@ export function A4Dokument({ vrsta, firma, postavke, naslov, broj, podnaslov, la
 
         {children}
 
-        <PotpisBlok linije={en ? EN.potpisi : postavke.potpisi[dok]} pecat={dok === 'nalog' ? null : pecatZa(postavke, dok)} />
+        <PotpisBlok linije={t.potpisi ?? postavke.potpisi[dok]} pecat={dok === 'nalog' ? null : pecatZa(postavke, dok)} />
 
         <PdfPodnozje
           firmaNaziv={firma.naziv}
-          danas={datumPdf()}
+          danas={formatDate(new Date())}
           tekst={postavke.podnozje}
-          potpisAutora={en ? POTPIS_AUTORA_EN : POTPIS_AUTORA}
-          generisano={en ? EN.generisano : undefined}
-          iznad={racuni === 'podnozje' ? <ZiroRacuniTraka racuni={firma.bankAccounts} naslov={en ? EN.racuni : undefined} /> : undefined}
+          potpisAutora={t.potpisAutora}
+          generisano={t.generisano}
+          iznad={racuni === 'podnozje' ? <ZiroRacuniTraka racuni={firma.bankAccounts} naslov={t.ziroRacuni} /> : undefined}
         />
       </Page>
     </Document>

@@ -1,6 +1,6 @@
 // Tab Ulaz robe i PDF-ovi ekrana Izvještaja: brojevi i oznake dolaze iz suma u lib/izvjestaji.
 import { test, expect } from 'bun:test';
-import { isValidElement, type ReactNode } from 'react';
+import { Fragment, isValidElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { Text, renderToBuffer } from '@react-pdf/renderer';
 import { PrimkePdf } from '../PrimkePdf';
@@ -15,7 +15,9 @@ const FIRMA = { naziv: 'Firma d.o.o.', adresa: 'Ulica 1', grad: 'Sarajevo', idBr
 function tekstovi(el: ReactNode): string[] {
   const out: string[] = [];
   const spoji = (n: ReactNode): string =>
-    n == null || typeof n === 'boolean' ? '' : Array.isArray(n) ? n.map(spoji).join('') : isValidElement(n) ? '' : String(n);
+    n == null || typeof n === 'boolean' ? '' : Array.isArray(n) ? n.map(spoji).join('')
+      // Fragment (`<>{iznos} KM</>`) je tekst po dijelovima; drugi elementi nisu tekst.
+      : isValidElement(n) ? (n.type === Fragment ? spoji((n.props as { children?: ReactNode }).children) : '') : String(n);
   const obidji = (n: ReactNode): void => {
     if (Array.isArray(n)) { n.forEach(obidji); return; }
     if (!isValidElement(n)) return;

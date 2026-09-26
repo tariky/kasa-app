@@ -9,6 +9,10 @@
  *   bun tools/pdf-poredjenje/poredjenje.tsx --uporedi <dir>   # renderuje u <dir>.trenutno, poredi s <dir>
  *   … --samo <regex>                                          # samo slučajevi čije ime odgovara
  *
+ * `--samo` koji ne pogodi nijedan slučaj je greška (kod 2) — tipfeler u regexu ne smije
+ * proći kao „0 stranica, 0 razlika“. S `--samo` se iz foldera brišu samo slike i PDF-ovi
+ * odabranih slučajeva; reference ostalih ostaju.
+ *
  * `--uporedi` ispisuje broj različitih piksela po stranici (0 = identično), slike
  * razlika ostavlja u <dir>.razlike i izlazi s kodom 1 ako se išta razlikuje.
  * Referentne slike se ne drže u repou — pravi ih se na stanju prije izmjene.
@@ -68,6 +72,8 @@ const FIRMA: FirmaSettings = {
 const FIRMA_PODNOZJE: FirmaSettings = { ...FIRMA, ziroRacuniPozicija: 'podnozje' };
 /** Najgori slučaj za podnožje: izabrano podnožje, a računa nema. */
 const FIRMA_BEZ_RACUNA: FirmaSettings = { ...FIRMA, logo: '', web: '', email: '', ziroRacuniPozicija: 'podnozje', bankAccounts: [] };
+/** Izvještaj bez kontakta, ID i PDV broja (desna kolona zaglavlja prazna) i bez naziva skladišta. */
+const FIRMA_BEZ_BROJEVA: FirmaSettings = { ...FIRMA_BEZ_RACUNA, idBroj: '', pdvBroj: '', skladiste: '' };
 
 const ZADANO = ZADANE_DOKUMENT_POSTAVKE;
 const SVE: DokumentPostavke = procitajDokumentPostavke({
@@ -141,6 +147,21 @@ const PRIMKA: Primka = {
   ],
 };
 const PRIMKA_MATERIJAL: Primka = { ...PRIMKA, id: 6, brojPrimke: 'P-2026-006', stavke: (PRIMKA.stavke ?? []).filter(s => s.cijena === 0) };
+/** Primka bez dobavljača, fakture i datuma (spisak primki pada na `createdAt` i „—“). */
+const PRIMKA_BEZ_DOBAVLJACA: Primka = { ...PRIMKA_MATERIJAL, id: 8, brojPrimke: 'P-2026-008', datum: '', dobavljacNaziv: '', dobavljacId: '', dobavljacAdresa: '', brojFakture: '' };
+/** Dovoljno stavki za drugu stranicu kalkulacije (pejzaž). */
+const PRIMKA_DUGA: Primka = {
+  ...PRIMKA, id: 7, brojPrimke: 'P-2026-007', brojFakture: '', dobavljacAdresa: undefined,
+  stavke: Array.from({ length: 45 }, (_, i) => {
+    const nabavna = Math.round((2.1 + i * 0.83) * 100) / 100;
+    return {
+      id: 100 + i, primkaId: 7, productId: 100 + i, kolicina: (i % 5) + 1, nabavnaCijena: nabavna, rabat: i % 4 === 0 ? 5 : 0,
+      zavisniTroskovi: i % 6 === 0 ? 1.5 : 0, cijena: i % 10 === 9 ? 0 : Math.round(nabavna * 1.6 * 100) / 100,
+      pdvStopa: i % 7 === 3 ? 'K' : 'E', createdAt: '2026-09-20 09:00:00',
+      productNaziv: `Artikal broj ${i + 1}${i % 6 === 0 ? ' s dugim nazivom koji se prelama' : ''}`, productJm: 'kom', productSifra: `A${1000 + i}`,
+    };
+  }),
+};
 
 const PROMET_ORDERS = [
   { id: 1, createdAt: '2026-09-02 08:15:00', korisnikIme: 'Admin', brojFiskalnogRacuna: '1230', nacinPlacanja: 'Gotovina', ukupno: 23.4, pdvIznos: 3.4, status: 'completed' },
@@ -148,6 +169,17 @@ const PROMET_ORDERS = [
   { id: 3, createdAt: '2026-09-03 12:05:00', korisnikIme: 'Admin', brojFiskalnogRacuna: '1232', nacinPlacanja: '{"gotovina":10,"kartica":13.4}', ukupno: 23.4, pdvIznos: 3.4, status: 'completed' },
   { id: 4, createdAt: '2026-09-04 16:20:00', korisnikIme: 'Admin', brojFiskalnogRacuna: '1233', nacinPlacanja: 'Virman', ukupno: 58.5, pdvIznos: 8.5, status: 'refunded' },
 ];
+/** Dovoljno računa za više stranica izvještaja; storna i računi bez kasira/načina plaćanja. */
+const PROMET_DUGI = Array.from({ length: 75 }, (_, i) => {
+  const ukupno = Math.round((11.7 + i * 3.51) * 100) / 100;
+  const dvije = (n: number) => String(n).padStart(2, '0');
+  return {
+    id: 100 + i, createdAt: `2026-09-${dvije(1 + (i % 28))} ${dvije(8 + (i % 10))}:${dvije((i * 7) % 60)}:00`,
+    korisnikIme: i % 11 === 5 ? '' : i % 3 ? 'Kasir' : 'Admin', brojFiskalnogRacuna: i % 13 === 7 ? '' : String(2000 + i),
+    nacinPlacanja: i % 17 === 8 ? '' : ['Gotovina', 'Kartica', 'Virman', 'Ček'][i % 4],
+    ukupno, pdvIznos: Math.round((ukupno * 17) / 117 * 100) / 100, status: i % 9 === 4 ? 'refunded' : 'completed',
+  };
+});
 
 const NIVELACIJA: Nivelacija = {
   id: 2, brojNivelacije: 'N-2026-002', datum: '2026-09-21', primkaId: 5, napomena: 'Nova cijena s ulaza', createdAt: '2026-09-21 10:00:00',
@@ -158,6 +190,9 @@ const NIVELACIJA: Nivelacija = {
     { id: 3, nivelacijaId: 2, productId: 6, kolicina: 1, staraCijena: 160, novaCijena: 175.5, razlika: 15.5, ukupnaRazlika: 15.5, pdvStopa: 'K', productNaziv: 'Radni sto', productSifra: 'RS1', productJm: 'kom' },
   ],
 };
+
+/** Bez vezane primke i napomene (desna kolona bez tih redova). */
+const NIVELACIJA_BEZ_VEZE: Nivelacija = { ...NIVELACIJA, id: 3, brojNivelacije: 'N-2026-003', primkaId: null, primkaBroj: undefined, napomena: null };
 
 const KNJIGOVODJA: KnjigovodjaIzvjestaj = {
   od: '2026-09-01', do: '2026-09-30', moduli: { skladiste: true, proizvodnja: true },
@@ -182,14 +217,17 @@ const SLUCAJEVI: Array<[ime: string, el: () => React.ReactElement]> = [
   ['racun-en-zaglavlje-sve', () => <RacunPdf order={order(STAVKE, { nacinPlacanja: 'Gotovina' })} firma={FIRMA} postavke={SVE} lang="en" />],
   ['racun-bez-racuna-storno', () => <RacunPdf order={order(BEZ_RABATA, { status: 'refunded', brojReklamacije: '3' })} firma={FIRMA_BEZ_RACUNA} postavke={SVE_BEZ_JM} />],
   ['racun-podnozje-dugi', () => <RacunPdf order={order(DUGE)} firma={FIRMA_PODNOZJE} postavke={SVE} />],
+  ['racun-en-podnozje-zadano', () => <RacunPdf order={order(STAVKE, { nacinPlacanja: 'Kartica' })} firma={FIRMA_PODNOZJE} postavke={ZADANO} lang="en" />],
 
   ['ponuda-zaglavlje-zadano', () => <PonudaPdf ponuda={ponuda(STAVKE)} firma={FIRMA} postavke={ZADANO} />],
   ['ponuda-podnozje-sve', () => <PonudaPdf ponuda={ponuda(STAVKE, { napomena: 'Isporuka 5 radnih dana od potvrde ponude.' })} firma={FIRMA_PODNOZJE} postavke={SVE} />],
   ['ponuda-bez-racuna', () => <PonudaPdf ponuda={ponuda(BEZ_RABATA)} firma={FIRMA_BEZ_RACUNA} postavke={SVE_BEZ_JM} />],
+  ['ponuda-zaglavlje-dugi', () => <PonudaPdf ponuda={ponuda(DUGE, { napomena: 'Isporuka 5 radnih dana od potvrde ponude.' })} firma={FIRMA} postavke={SVE} />],
 
   ['otpremnica-zaglavlje-zadano', () => <OtpremnicaPdf order={order(STAVKE)} firma={FIRMA} postavke={ZADANO} />],
   ['otpremnica-podnozje-sve', () => <OtpremnicaPdf order={order(STAVKE)} firma={FIRMA_PODNOZJE} postavke={SVE} />],
   ['otpremnica-bez-racuna', () => <OtpremnicaPdf order={order(BEZ_RABATA, { kupacNaziv: undefined, kupacIdBroj: undefined })} firma={FIRMA_BEZ_RACUNA} postavke={SVE_BEZ_JM} />],
+  ['otpremnica-zaglavlje-dugi', () => <OtpremnicaPdf order={order(DUGE)} firma={FIRMA} postavke={ZADANO} />],
 
   ['prilog-zaglavlje-zadano', () => <PrilogPdf order={order(STAVKE)} firma={FIRMA} stavke={STAVKE} postavke={ZADANO} />],
   ['prilog-podnozje-sve', () => <PrilogPdf order={order(STAVKE, { napomena: 'Roba se preuzima u skladištu.', datumValute: '2026-10-10' })} firma={FIRMA_PODNOZJE} stavke={STAVKE} postavke={SVE} />],
@@ -202,9 +240,13 @@ const SLUCAJEVI: Array<[ime: string, el: () => React.ReactElement]> = [
 
   ['ulaz-artikli-materijal', () => <UlazPdf primka={PRIMKA} firma={FIRMA} />],
   ['ulaz-samo-materijal', () => <UlazPdf primka={PRIMKA_MATERIJAL} firma={FIRMA_BEZ_RACUNA} />],
+  ['ulaz-dugi', () => <UlazPdf primka={PRIMKA_DUGA} firma={FIRMA_BEZ_BROJEVA} />],
   ['primke', () => <PrimkePdf primke={[PRIMKA, PRIMKA_MATERIJAL]} dateFrom="01.09.2026" dateTo="30.09.2026" firma={FIRMA} />],
+  ['primke-bez-brojeva', () => <PrimkePdf primke={[PRIMKA_BEZ_DOBAVLJACA, PRIMKA_DUGA]} dateFrom="01.09.2026" dateTo="30.09.2026" firma={FIRMA_BEZ_BROJEVA} />],
   ['promet', () => <PrometPdf orders={PROMET_ORDERS} dateFrom="01.09.2026" dateTo="30.09.2026" firma={FIRMA} />],
+  ['promet-dugi', () => <PrometPdf orders={PROMET_DUGI} dateFrom="01.09.2026" dateTo="30.09.2026" firma={FIRMA_BEZ_BROJEVA} />],
   ['nivelacija', () => <NivelacijaPdf nivelacija={NIVELACIJA} firma={FIRMA} />],
+  ['nivelacija-bez-veze', () => <NivelacijaPdf nivelacija={NIVELACIJA_BEZ_VEZE} firma={FIRMA_BEZ_BROJEVA} />],
   ['knjigovodja', () => <KnjigovodjaPdf izvjestaj={KNJIGOVODJA} firma={FIRMA} izvezeno={new Date()} />],
 ];
 
@@ -216,13 +258,23 @@ async function pokreni(cmd: string[]): Promise<{ kod: number; izlaz: string }> {
   return { kod: await p.exited, izlaz: (out + err).trim() };
 }
 
-/** Obriše stare slike i PDF-ove iz foldera (ništa drugo) i renderuje slučajeve u njega. */
+/** Ime slučaja iz imena fajla: `ime.pdf`, `ime.3.png` ili nedovršeni `ime__-03.png`. */
+const slucajFajla = (f: string) => f.replace(/(__-\d+|\.\d+)?\.(png|pdf)$/, '');
+
+/** Slučajevi koje `--samo` bira (svi bez filtera). */
+const odabrani = (filter: RegExp | null) => SLUCAJEVI.filter(([ime]) => !filter || filter.test(ime));
+
+/**
+ * Obriše stare slike i PDF-ove odabranih slučajeva iz foldera (ništa drugo; bez filtera sve
+ * slike i PDF-ove) i renderuje te slučajeve u njega.
+ */
 async function renderujSve(dir: string, filter: RegExp | null): Promise<string[]> {
   mkdirSync(dir, { recursive: true });
-  for (const f of readdirSync(dir)) if (/\.(png|pdf)$/.test(f)) rmSync(join(dir, f));
+  for (const f of readdirSync(dir)) {
+    if (/\.(png|pdf)$/.test(f) && (!filter || filter.test(slucajFajla(f)))) rmSync(join(dir, f));
+  }
   const imena: string[] = [];
-  for (const [ime, el] of SLUCAJEVI) {
-    if (filter && !filter.test(ime)) continue;
+  for (const [ime, el] of odabrani(filter)) {
     const pdfPut = join(dir, `${ime}.pdf`);
     await Bun.write(pdfPut, await renderToBuffer(el() as any));
     const r = await pokreni([PDFTOPPM, '-r', '72', '-png', pdfPut, join(dir, `${ime}__`)]);
@@ -260,7 +312,7 @@ async function uporedi(baza: string, filter: RegExp | null): Promise<number> {
   const prije = slike(baza);
   const sada = slike(trenutno);
   const sve = [...new Set([...prije, ...sada])]
-    .filter(f => !filter || filter.test(f.replace(/\.\d+\.png$/, '')))
+    .filter(f => !filter || filter.test(slucajFajla(f)))
     .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   let razlicitih = 0;
   for (const f of sve) {
@@ -290,12 +342,17 @@ async function main() {
   const vrijednost = (ime: string) => { const i = args.indexOf(ime); return i >= 0 ? args[i + 1] : undefined; };
   const samo = vrijednost('--samo');
   const filter = samo ? new RegExp(samo) : null;
+  if (filter && odabrani(filter).length === 0) {
+    console.error(`--samo ${samo}: nijedan slučaj ne odgovara (slučajevi: ${SLUCAJEVI.map(([ime]) => ime).join(', ')})`);
+    return 2;
+  }
   const baza = vrijednost('--baza');
   const poredi = vrijednost('--uporedi');
   if (baza) {
     const dir = resolve(baza);
     const imena = await renderujSve(dir, filter);
-    console.log(`${imena.length} PDF-ova, ${slike(dir).size} stranica → ${dir}`);
+    const stranica = [...slike(dir)].filter(f => imena.includes(slucajFajla(f))).length;
+    console.log(`${imena.length} PDF-ova, ${stranica} stranica → ${dir}`);
     return 0;
   }
   if (poredi) {

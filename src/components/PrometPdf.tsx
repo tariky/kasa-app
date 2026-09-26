@@ -1,11 +1,8 @@
-import React from 'react';
-import { Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
-import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
-import { POTPIS_AUTORA } from '@/lib/brend';
-import { kontaktFirme } from '@/lib/firma';
 import { opisPlacanja } from '@/lib/placanje';
 import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { sumePrometa } from '@/lib/izvjestaji';
+import { formatDateTime } from '@/lib/utils';
+import { IzvjestajStrana, MrezaTabela, Sazetak, poljaFirme, brojeviFirme, fmt, type KolonaMreze } from './pdf/izvjestaj';
 
 export interface PrometPdfProps {
   orders: any[];
@@ -23,180 +20,46 @@ export interface PrometPdfProps {
   };
 }
 
-const F = PDF_FONT_FAMILY;
-const FB = PDF_FONT_FAMILY_BOLD;
-const fmt = (n: number) => n.toFixed(2).replace('.', ',');
+/** Storno (reklamacija) je crven u mreži i u sažetku. */
+const STORNO = { color: '#dc2626' };
 
-const s = StyleSheet.create({
-  page: { padding: 40, paddingBottom: 60, fontFamily: F, fontSize: 8, color: '#000' },
-  title: { fontSize: 12, fontFamily: FB, fontWeight: 700, textAlign: 'center', marginBottom: 4 },
-  subtitle: { fontSize: 9, textAlign: 'center', marginBottom: 16 },
-  headerGrid: { flexDirection: 'row', marginBottom: 16, gap: 20 },
-  headerCol: { width: '50%' },
-  fieldRow: { flexDirection: 'row', marginBottom: 3 },
-  fieldLabel: { fontSize: 7, color: '#000', width: 100 },
-  fieldValue: { fontSize: 8, fontFamily: FB, fontWeight: 700, flex: 1 },
-  table: { marginBottom: 16 },
-  tHeadRow: { flexDirection: 'row', borderTop: '1pt solid #000', borderBottom: '1pt solid #000' },
-  tHeadCell: { fontSize: 6.5, fontFamily: FB, fontWeight: 700, padding: 3, borderRight: '0.5pt solid #999', textAlign: 'center' },
-  tRow: { flexDirection: 'row', borderBottom: '0.5pt solid #ccc' },
-  tCell: { fontSize: 7.5, padding: 3, borderRight: '0.5pt solid #ddd', textAlign: 'right' },
-  tCellLeft: { fontSize: 7.5, padding: 3, borderRight: '0.5pt solid #ddd', textAlign: 'left' },
-  tTotalRow: { flexDirection: 'row', borderTop: '1pt solid #000', borderBottom: '1pt solid #000' },
-  tTotalCell: { fontSize: 7.5, fontFamily: FB, fontWeight: 700, padding: 3, borderRight: '0.5pt solid #999', textAlign: 'right' },
-  cRb: { width: '5%' },
-  cDatum: { width: '15%' },
-  cKasir: { width: '14%' },
-  cFisk: { width: '10%' },
-  cPlacanje: { width: '10%' },
-  cOsnovica: { width: '14%' },
-  cPdv: { width: '12%' },
-  cUkupno: { width: '14%' },
-  cStatus: { width: '6%', borderRight: 'none' },
-  summaryRow: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12 },
-  summaryTable: { width: '45%' },
-  summaryLine: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 2, borderBottom: '0.5pt solid #eee' },
-  summaryLineBold: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 3, borderTop: '1pt solid #000', marginTop: 2 },
-  summaryLabel: { fontSize: 8 },
-  summaryValue: { fontSize: 8, fontFamily: FB, fontWeight: 700, textAlign: 'right' },
-  footer: { position: 'absolute', bottom: 22, left: 40, right: 40, flexDirection: 'row', justifyContent: 'space-between', fontSize: 6.5, color: '#999' },
-  refunded: { color: '#dc2626' },
-});
+const KOLONE: KolonaMreze<PrometPdfProps['orders'][number]>[] = [
+  { kljuc: 'rb', naslov: 'Rb', sirina: '5%', poravnanje: 'sredina', vrijednost: (_, i) => i + 1 },
+  { kljuc: 'datum', naslov: 'Datum', sirina: '15%', poravnanje: 'lijevo', vrijednost: o => (o.createdAt ? formatDateTime(o.createdAt, '') : '—') },
+  { kljuc: 'kasir', naslov: 'Kasir', sirina: '14%', poravnanje: 'lijevo', vrijednost: o => o.korisnikIme || '—' },
+  { kljuc: 'fisk', naslov: 'Fisk. br.', sirina: '10%', poravnanje: 'sredina', vrijednost: o => o.brojFiskalnogRacuna || '—' },
+  { kljuc: 'placanje', naslov: 'Plaćanje', sirina: '10%', poravnanje: 'lijevo', vrijednost: o => (o.nacinPlacanja ? opisPlacanja(o.nacinPlacanja, o.ukupno) : '—') },
+  { kljuc: 'osnovica', naslov: 'Osnovica', sirina: '14%', vrijednost: o => fmt(o.ukupno - o.pdvIznos) },
+  { kljuc: 'pdv', naslov: 'PDV', sirina: '12%', vrijednost: o => fmt(o.pdvIznos) },
+  { kljuc: 'ukupno', naslov: 'Ukupno', sirina: '14%', vrijednost: o => fmt(o.ukupno) },
+  { kljuc: 'status', naslov: 'St.', sirina: '6%', poravnanje: 'sredina', vrijednost: o => (o.status === 'refunded' ? 'S' : 'OK') },
+];
 
 export function PrometPdf({ orders, dateFrom, dateTo, firma }: PrometPdfProps) {
   const sume = sumePrometa(orders);
 
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const d = new Date();
-  const today = `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`;
-
-  const fmtDate = (str: string) => {
-    if (!str) return '—';
-    const dt = new Date(str);
-    return `${pad(dt.getDate())}.${pad(dt.getMonth() + 1)}.${dt.getFullYear()} ${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
-  };
-
   return (
-    <Document>
-      <Page size="A4" style={s.page}>
-        <Text style={s.title}>IZVJEŠTAJ O PROMETU</Text>
-        <Text style={s.subtitle}>Period: {dateFrom} — {dateTo}</Text>
+    <IzvjestajStrana
+      orijentacija="portrait" firma={firma}
+      naslov="IZVJEŠTAJ O PROMETU" podnaslov={<>Period: {dateFrom} — {dateTo}</>}
+      polja={[poljaFirme(firma), brojeviFirme(firma)]}
+    >
+      <MrezaTabela
+        kolone={KOLONE} redovi={orders}
+        stilReda={o => (o.status === 'refunded' ? STORNO : undefined)}
+        zbir={{ placanje: 'UKUPNO:', osnovica: fmt(sume.bezPdv), pdv: fmt(sume.pdv), ukupno: fmt(sume.ukupno) }}
+      />
 
-        <View style={s.headerGrid}>
-          <View style={s.headerCol}>
-            <View style={s.fieldRow}>
-              <Text style={s.fieldLabel}>Firma:</Text>
-              <Text style={s.fieldValue}>{firma.naziv}</Text>
-            </View>
-            <View style={s.fieldRow}>
-              <Text style={s.fieldLabel}>Adresa:</Text>
-              <Text style={s.fieldValue}>{firma.adresa}, {firma.grad}</Text>
-            </View>
-            {kontaktFirme(firma) ? (
-              <View style={s.fieldRow}>
-                <Text style={s.fieldLabel}>Web / Email:</Text>
-                <Text style={s.fieldValue}>{kontaktFirme(firma)}</Text>
-              </View>
-            ) : null}
-          </View>
-          <View style={s.headerCol}>
-            {firma.idBroj ? (
-              <View style={s.fieldRow}>
-                <Text style={s.fieldLabel}>ID broj:</Text>
-                <Text style={s.fieldValue}>{firma.idBroj}</Text>
-              </View>
-            ) : null}
-            {firma.pdvBroj ? (
-              <View style={s.fieldRow}>
-                <Text style={s.fieldLabel}>PDV broj:</Text>
-                <Text style={s.fieldValue}>{firma.pdvBroj}</Text>
-              </View>
-            ) : null}
-          </View>
-        </View>
-
-        <View style={s.table}>
-          <View style={s.tHeadRow}>
-            <Text style={[s.tHeadCell, s.cRb]}>Rb</Text>
-            <Text style={[s.tHeadCell, s.cDatum]}>Datum</Text>
-            <Text style={[s.tHeadCell, s.cKasir]}>Kasir</Text>
-            <Text style={[s.tHeadCell, s.cFisk]}>Fisk. br.</Text>
-            <Text style={[s.tHeadCell, s.cPlacanje]}>Plaćanje</Text>
-            <Text style={[s.tHeadCell, s.cOsnovica]}>Osnovica</Text>
-            <Text style={[s.tHeadCell, s.cPdv]}>PDV</Text>
-            <Text style={[s.tHeadCell, s.cUkupno]}>Ukupno</Text>
-            <Text style={[s.tHeadCell, s.cStatus, { borderRight: 'none' }]}>St.</Text>
-          </View>
-
-          {orders.map((order, i) => {
-            const isRefunded = order.status === 'refunded';
-            return (
-              <View key={order.id} style={s.tRow}>
-                <Text style={[s.tCell, s.cRb, { textAlign: 'center' }, isRefunded ? s.refunded : {}]}>{i + 1}</Text>
-                <Text style={[s.tCellLeft, s.cDatum, isRefunded ? s.refunded : {}]}>{fmtDate(order.createdAt)}</Text>
-                <Text style={[s.tCellLeft, s.cKasir, isRefunded ? s.refunded : {}]}>{order.korisnikIme || '—'}</Text>
-                <Text style={[s.tCell, s.cFisk, { textAlign: 'center' }, isRefunded ? s.refunded : {}]}>{order.brojFiskalnogRacuna || '—'}</Text>
-                <Text style={[s.tCellLeft, s.cPlacanje, isRefunded ? s.refunded : {}]}>{order.nacinPlacanja ? opisPlacanja(order.nacinPlacanja, order.ukupno) : '—'}</Text>
-                <Text style={[s.tCell, s.cOsnovica, isRefunded ? s.refunded : {}]}>{fmt(order.ukupno - order.pdvIznos)}</Text>
-                <Text style={[s.tCell, s.cPdv, isRefunded ? s.refunded : {}]}>{fmt(order.pdvIznos)}</Text>
-                <Text style={[s.tCell, s.cUkupno, isRefunded ? s.refunded : {}]}>{fmt(order.ukupno)}</Text>
-                <Text style={[s.tCell, s.cStatus, { textAlign: 'center', borderRight: 'none' }, isRefunded ? s.refunded : {}]}>
-                  {isRefunded ? 'S' : 'OK'}
-                </Text>
-              </View>
-            );
-          })}
-
-          <View style={s.tTotalRow}>
-            <Text style={[s.tTotalCell, s.cRb]} />
-            <Text style={[s.tTotalCell, s.cDatum]} />
-            <Text style={[s.tTotalCell, s.cKasir]} />
-            <Text style={[s.tTotalCell, s.cFisk]} />
-            <Text style={[s.tTotalCell, s.cPlacanje]}>UKUPNO:</Text>
-            <Text style={[s.tTotalCell, s.cOsnovica]}>{fmt(sume.bezPdv)}</Text>
-            <Text style={[s.tTotalCell, s.cPdv]}>{fmt(sume.pdv)}</Text>
-            <Text style={[s.tTotalCell, s.cUkupno]}>{fmt(sume.ukupno)}</Text>
-            <Text style={[s.tTotalCell, s.cStatus, { borderRight: 'none' }]} />
-          </View>
-        </View>
-
-        <View style={s.summaryRow}>
-          <View style={s.summaryTable}>
-            <View style={s.summaryLine}>
-              <Text style={s.summaryLabel}>Ukupna prodaja:</Text>
-              <Text style={s.summaryValue}>{fmt(sume.ukupno)} KM</Text>
-            </View>
-            <View style={s.summaryLine}>
-              <Text style={s.summaryLabel}>Osnovica (bez PDV):</Text>
-              <Text style={s.summaryValue}>{fmt(sume.bezPdv)} KM</Text>
-            </View>
-            <View style={s.summaryLine}>
-              <Text style={s.summaryLabel}>{`PDV (${PDV_STOPA_E_PCT}%):`}</Text>
-              <Text style={s.summaryValue}>{fmt(sume.pdv)} KM</Text>
-            </View>
-            <View style={s.summaryLine}>
-              <Text style={s.summaryLabel}>Broj računa:</Text>
-              <Text style={s.summaryValue}>{sume.brojRacuna}</Text>
-            </View>
-            {sume.brojReklamacija > 0 && (
-              <View style={s.summaryLine}>
-                <Text style={[s.summaryLabel, s.refunded]}>Reklamacije:</Text>
-                <Text style={[s.summaryValue, s.refunded]}>{fmt(sume.reklamacije)} KM ({sume.brojReklamacija})</Text>
-              </View>
-            )}
-            <View style={s.summaryLineBold}>
-              <Text style={[s.summaryLabel, { fontFamily: FB, fontWeight: 700 }]}>Neto promet:</Text>
-              <Text style={s.summaryValue}>{fmt(sume.ukupno - sume.reklamacije)} KM</Text>
-            </View>
-          </View>
-        </View>
-
-        <View style={s.footer} fixed>
-          <Text>{POTPIS_AUTORA}</Text>
-          <Text>{firma.naziv} · Generisano: {today}</Text>
-          <Text render={({ pageNumber, totalPages }) => `${pageNumber} / ${totalPages}`} />
-        </View>
-      </Page>
-    </Document>
+      <Sazetak
+        redovi={[
+          ['Ukupna prodaja:', <>{fmt(sume.ukupno)} KM</>],
+          ['Osnovica (bez PDV):', <>{fmt(sume.bezPdv)} KM</>],
+          [`PDV (${PDV_STOPA_E_PCT}%):`, <>{fmt(sume.pdv)} KM</>],
+          ['Broj računa:', sume.brojRacuna],
+          sume.brojReklamacija > 0 && ['Reklamacije:', <>{fmt(sume.reklamacije)} KM ({sume.brojReklamacija})</>, STORNO],
+        ]}
+        ukupno={['Neto promet:', <>{fmt(sume.ukupno - sume.reklamacije)} KM</>]}
+      />
+    </IzvjestajStrana>
   );
 }
