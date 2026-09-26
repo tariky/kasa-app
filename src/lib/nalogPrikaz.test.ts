@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test';
-import { rokOznaka, nalogKoraci, korakIndex } from './nalogPrikaz';
+import { rokOznaka, nalogKoraci, korakIndex, zadaniIzbor, oznaceneStavke, proizvodiIzIzbora } from './nalogPrikaz';
 
 test('rokOznaka: bez roka nema oznake', () => {
   expect(rokOznaka(null, '2026-09-24')).toBeNull();
@@ -30,4 +30,26 @@ test('korakIndex: trenutni korak po statusu', () => {
   expect(korakIndex('narudzba', 'otvoren')).toBe(0);
   expect(korakIndex('narudzba', 'fakturisan')).toBe(3);
   expect(korakIndex('zaliha', 'zavrsen')).toBe(2);
+});
+
+const linije = [
+  { ponudaStavkaId: 11, productId: 1, naziv: 'Kuhinja', sifra: 'K', jm: 'kom', kolicina: 1, stanje: 0, zadano: true },
+  { ponudaStavkaId: 12, productId: 2, naziv: 'Sudopera', sifra: 'S', jm: 'kom', kolicina: 1, stanje: 4, zadano: false },
+  { ponudaStavkaId: 13, productId: 1, naziv: 'Kuhinja', sifra: 'K', jm: 'kom', kolicina: 2, stanje: 0, zadano: true },
+];
+
+test('zadaniIzbor: stavke kojih nema dovoljno na zalihi', () => {
+  expect([...zadaniIzbor(linije)]).toEqual([11, 13]);
+});
+
+test('oznaceneStavke: proizvod označi stavku iste količine, pa prvu slobodnu istog artikla', () => {
+  expect([...oznaceneStavke(linije, [{ productId: 1, kolicina: 2 }])]).toEqual([13]);
+  expect([...oznaceneStavke(linije, [{ productId: 1, kolicina: 5 }, { productId: 1, kolicina: 1 }])].sort()).toEqual([11, 13]);
+  expect([...oznaceneStavke(linije, [{ productId: 2, kolicina: 1 }, { productId: 9, kolicina: 1 }])]).toEqual([12]);
+  expect(oznaceneStavke(linije, []).size).toBe(0);
+});
+
+test('proizvodiIzIzbora: po jedan proizvod za označenu stavku, redom ponude', () => {
+  expect(proizvodiIzIzbora(linije, new Set([13, 12]))).toEqual([{ productId: 2, kolicina: 1 }, { productId: 1, kolicina: 2 }]);
+  expect(proizvodiIzIzbora(linije, new Set())).toEqual([]);
 });

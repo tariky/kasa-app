@@ -1,12 +1,12 @@
 // src/components/proizvodnja/NalogDetailDialog.tsx
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { pdf } from '@react-pdf/renderer';
-import type { RadniNalog } from '@/types';
+import type { ProizvodPonude, RadniNalog } from '@/types';
 import type { Kalkulacija } from '@/lib/proizvodnja';
 import { formatBrojNaloga } from '@/lib/proizvodnja';
 import { formatBrojPonude } from '@/lib/ponuda';
 import { useDokumentPostavke } from '@/components/DokumentPostavkeProvider';
-import { rokOznaka } from '@/lib/nalogPrikaz';
+import { rokOznaka, oznaceneStavke, proizvodiIzIzbora } from '@/lib/nalogPrikaz';
 import { localDateStr } from '@/lib/novac';
 import { cn, formatKM, formatDate } from '@/lib/utils';
 import { ucitajZaStampu } from '@/lib/stampa';
@@ -18,6 +18,7 @@ import { RadniNalogPdf } from '@/components/RadniNalogPdf';
 import { StatusRail } from './StatusRail';
 import { StavkeUtroska, type StavkeHandle } from './StavkeUtroska';
 import { KalkulacijaPanel } from './KalkulacijaPanel';
+import { ProizvodiNaloga } from './ProizvodiNaloga';
 import { NalogDialog } from './NalogDialog';
 import { IzdajRacunDialog } from './IzdajRacunDialog';
 import { Pencil, Trash2, Play, CheckCircle2, Undo2, Receipt, Printer, Download, ChevronUp, ChevronDown, User, Package } from 'lucide-react';
@@ -39,6 +40,7 @@ export function NalogDetailDialog({ nalogId, redoslijed, uloga, onClose, onNavig
   const { postavke } = useDokumentPostavke();
   const [nalog, setNalog] = useState<RadniNalog | null>(null);
   const [kalk, setKalk] = useState<Kalkulacija | null>(null);
+  const [linijePonude, setLinijePonude] = useState<ProizvodPonude[]>([]);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [stavkeDirty, setStavkeDirty] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -57,11 +59,12 @@ export function NalogDetailDialog({ nalogId, redoslijed, uloga, onClose, onNavig
     try {
       const [n, k] = await Promise.all([window.api.getNalog(id), window.api.getNalogKalkulacija(id)]);
       setNalog(n); setKalk(k);
+      setLinijePonude(n.ponudaId ? await window.api.getProizvodiPonude(n.ponudaId) : []);
     } catch (e) { greska(e); }
   }, []);
 
   useEffect(() => {
-    if (nalogId == null) { setNalog(null); setKalk(null); return; }
+    if (nalogId == null) { setNalog(null); setKalk(null); setLinijePonude([]); return; }
     setNotice(null); setStavkeDirty(false);
     load(nalogId);
   }, [nalogId, load]);
@@ -72,6 +75,14 @@ export function NalogDetailDialog({ nalogId, redoslijed, uloga, onClose, onNavig
   }, [nalogId, load, onChanged]);
 
   const uredivo = !!nalog && (nalog.status === 'otvoren' || nalog.status === 'u_izradi');
+  const oznaceniProizvodi = useMemo(() => oznaceneStavke(linijePonude, nalog?.proizvodi ?? []), [linijePonude, nalog]);
+  const promijeniProizvod = async (ponudaStavkaId: number) => {
+    if (!nalog || !uredivo) return;
+    const oznacene = new Set(oznaceniProizvodi);
+    if (oznacene.has(ponudaStavkaId)) oznacene.delete(ponudaStavkaId); else oznacene.add(ponudaStavkaId);
+    try { await window.api.setNalogProizvodi(nalog.id, proizvodiIzIzbora(linijePonude, oznacene)); await reload(); }
+    catch (e) { greska(e); }
+  };
   useEffect(() => { if (!uredivo) setStavkeDirty(false); }, [uredivo]);
 
   const idx = nalogId != null ? redoslijed.indexOf(nalogId) : -1;
@@ -248,6 +259,10 @@ export function NalogDetailDialog({ nalogId, redoslijed, uloga, onClose, onNavig
                       {nalog.napomena && <Fact label="Napomena" className="col-span-2 md:col-span-4"><span className="text-slate-600">{nalog.napomena}</span></Fact>}
                     </div>
 
+                    {nalog.ponudaId != null && linijePonude.length > 0 && (
+                      <ProizvodiNaloga linije={linijePonude} oznacene={oznaceniProizvodi} onToggle={promijeniProizvod} zakljucano={!uredivo} />
+                    )}
+
                     <StavkeUtroska
                       ref={stavkeRef}
                       nalogId={nalog.id}
@@ -301,7 +316,7 @@ export function NalogDetailDialog({ nalogId, redoslijed, uloga, onClose, onNavig
 
       {nalog && (
         <>
-          <NalogDialog open={editOpen} onOpenChange={setEditOpen} nalog={nalog}
+          <NalogDialog open={editOpen} onOpenChange={setEditOpen} nalog={nalog} stavkeNespremljene={stavkeDirty}
             onSaved={async () => { await reload(); setNotice({ type: 'success', text: 'Nalog izmijenjen' }); }} />
 
           <IzdajRacunDialog open={racunOpen} onOpenChange={setRacunOpen} nalog={nalog}

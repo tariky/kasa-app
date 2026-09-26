@@ -27,11 +27,13 @@ import { localDateStr } from '@/lib/novac';
 import { cn, formatKM, formatDate } from '@/lib/utils';
 import { useModuli } from '@/hooks/useModuli';
 import { formatBrojNaloga } from '@/lib/proizvodnja';
+import { zadaniIzbor, proizvodiIzIzbora } from '@/lib/nalogPrikaz';
+import { ProizvodiNaloga } from '@/components/proizvodnja/ProizvodiNaloga';
 import { zadanoZaKupca, primijeniRabatKupca, formatRabat, type FormatBroja } from '@/lib/dokumentPostavke';
 import { useDokumentPostavke } from '@/components/DokumentPostavkeProvider';
 import { ucitajZaStampu } from '@/lib/stampa';
 import { PretragaProizvoda } from '@/components/PretragaProizvoda';
-import type { Product } from '@/types';
+import type { Product, ProizvodPonude } from '@/types';
 import FakturaDialog, { type FakturaPocetno } from '@/components/FakturaDialog';
 import { otvoriFakturuZaStampu } from '@/components/stampaFakture';
 
@@ -181,6 +183,9 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
   // ponudu koja već ima nalog (proizvodnja.ts povezuje račun ako se modul vrati).
   const veza = useModuli()?.vezaPonudaNalog ?? false;
   const [nalogZaPonudu, setNalogZaPonudu] = useState<{ id: number; broj: number; godina: number } | null>(null);
+  // Otvaranje naloga: izbor stavki ponude koje nalog izrađuje (null = dijalog zatvoren).
+  const [nalogIzbor, setNalogIzbor] = useState<{ linije: ProizvodPonude[]; oznacene: Set<number> } | null>(null);
+  const [otvaramNalog, setOtvaramNalog] = useState(false);
 
   const rowRefs = useRef<(HTMLTableRowElement | null)[]>([]);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -470,13 +475,26 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
 
   const otvoriNalog = (id: number) => window.dispatchEvent(new CustomEvent('ui:openNalog', { detail: id }));
 
+  /** Nalog iz ponude: prvo izbor stavki koje se izrađuju; bez artikala na ponudi odmah se otvara. */
   const napraviNalog = async () => {
     if (!selected) return;
     try {
-      const r = await window.api.createNalogIzPonude(selected.id);
+      const linije = await window.api.getProizvodiPonude(selected.id);
+      if (linije.length === 0) await otvoriNalogIzPonude([]);
+      else setNalogIzbor({ linije, oznacene: zadaniIzbor(linije) });
+    } catch (err: any) { setMsg({ type: 'error', text: err?.message || 'Nepoznata greška' }); }
+  };
+
+  const otvoriNalogIzPonude = async (proizvodi: Array<{ productId: number; kolicina: number }>) => {
+    if (!selected || otvaramNalog) return;
+    setOtvaramNalog(true);
+    try {
+      const r = await window.api.createNalogIzPonude(selected.id, proizvodi);
+      setNalogIzbor(null);
       setMsg({ type: 'success', text: `Radni nalog ${formatBrojNaloga(r, postavke.nalog.broj)} otvoren po ponudi ${formatBrojPonude(selected, postavke.ponuda.broj)}` });
       otvoriNalog(r.id);
-    } catch (err: any) { setMsg({ type: 'error', text: err?.message || 'Nepoznata greška' }); }
+    } catch (err: any) { setNalogIzbor(null); setMsg({ type: 'error', text: err?.message || 'Nepoznata greška' }); }
+    finally { setOtvaramNalog(false); }
   };
 
   // ── Tastatura ──────────────────────────────────────────────
@@ -512,7 +530,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
     }
   };
 
-  const anyDialogOpen = formOpen || konvertujOpen || brisiOpen || fakturaOpen;
+  const anyDialogOpen = formOpen || konvertujOpen || brisiOpen || fakturaOpen || nalogIzbor != null;
 
   /**
    * Prečice ekrana. Filteri idu na zagrade jer su cifre rezervisane za promjenu
@@ -1252,6 +1270,58 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
       </Dialog>
 
       {/* ── Obriši ponudu ── */}
+      <Dialog open={nalogIzbor != null} onOpenChange={v => { if (!v) setNalogIzbor(null); }}>
+        <DialogContent
+          className="sm:max-w-[560px] p-0 gap-0 overflow-hidden"
+          onKeyDown={submitOnMeta(() => { if (nalogIzbor) otvoriNalogIzPonude(proizvodiIzIzbora(nalogIzbor.linije, nalogIzbor.oznacene)); })}
+        >
+          <div className="px-6 pt-6 pb-4">
+            <DialogHeader>
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center">
+                  <Hammer className="h-5 w-5 text-slate-600" />
+                </div>
+                <div>
+                  <DialogTitle className="text-lg">
+                    Radni nalog po ponudi {selected ? formatBrojPonude(selected, postavke.ponuda.broj) : ''}
+                  </DialogTitle>
+                  <DialogDescription className="text-xs mt-0.5">
+                    Označite šta se izrađuje; robu koja je već na zalihi ostavite neoznačenu
+                  </DialogDescription>
+                </div>
+              </div>
+            </DialogHeader>
+          </div>
+          <Separator />
+          <div className="px-6 py-5">
+            {nalogIzbor && (
+              <ProizvodiNaloga
+                linije={nalogIzbor.linije}
+                oznacene={nalogIzbor.oznacene}
+                onToggle={id => setNalogIzbor(s => {
+                  if (!s) return s;
+                  const oznacene = new Set(s.oznacene);
+                  if (oznacene.has(id)) oznacene.delete(id); else oznacene.add(id);
+                  return { ...s, oznacene };
+                })}
+              />
+            )}
+          </div>
+          <div className="border-t bg-slate-50/50 px-6 py-4 flex items-center justify-between gap-3">
+            <span className="flex items-center gap-1.5 text-[10.5px] text-slate-400">
+              <Key className="ml-0">⌘↵</Key> otvori nalog
+            </span>
+            <div className="flex items-center gap-3">
+              <Button variant="ghost" onClick={() => setNalogIzbor(null)}>Otkaži</Button>
+              <Button disabled={otvaramNalog} className="min-w-[120px]"
+                onClick={() => { if (nalogIzbor) otvoriNalogIzPonude(proizvodiIzIzbora(nalogIzbor.linije, nalogIzbor.oznacene)); }}>
+                {otvaramNalog ? 'Otvaram…' : 'Otvori nalog'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={brisiOpen} onOpenChange={setBrisiOpen}>
         <DialogContent
           className="sm:max-w-[420px] p-0 gap-0 overflow-hidden"
