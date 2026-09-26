@@ -76,9 +76,10 @@ function KupacDialog({
 
   const handleSave = async () => {
     if (!naziv || !idBroj) return;
-    // Opseg provjerava backend; ovdje samo da smeće ne ode kao broj
-    const rabatBroj = rabat.trim() === '' ? null : parseDecimal(rabat);
-    if (rabatBroj !== null && !Number.isFinite(rabatBroj)) {
+    // Opseg provjerava backend; ovdje samo da smeće ne ode kao broj („5abc“, „1.234,5“ parseFloat bi progutao)
+    const rabatTekst = rabat.trim();
+    const rabatBroj = rabatTekst === '' ? null : parseDecimal(rabatTekst);
+    if (rabatBroj !== null && (!/^\d+([.,]\d+)?$/.test(rabatTekst) || !Number.isFinite(rabatBroj))) {
       setError('Rabat mora biti broj, npr. 5 ili 5,5');
       return;
     }

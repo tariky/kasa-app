@@ -167,7 +167,7 @@ export default function DokumentiGrupa({ onIzmijenjeno }: { onIzmijenjeno: (izmi
             opis="Na računu, ponudi i otpremnici. Faktura uvijek prikazuje šifru."
             onChange={sifra => dio('kolone', { sifra })} />
           <PrekidacRed id="dok-kolona-jm" naslov="Prikaži jedinicu mjere" checked={forma.kolone.jm}
-            opis="Na svim dokumentima."
+            opis="Na fakturi, računu, ponudi i otpremnici."
             onChange={jm => dio('kolone', { jm })} />
           <SekcijaTijelo className="border-t border-slate-100">
             <Polje label="Tekst u podnožju" htmlFor="dok-podnozje"
