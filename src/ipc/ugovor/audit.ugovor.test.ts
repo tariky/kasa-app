@@ -5,14 +5,13 @@ import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import path from 'node:path';
 import { otvoriBackend, prijavi, ADMIN_PIN, type Backend } from './backend';
-import { hesirajPin } from '../../lib/korisnici';
+import { scenarij, ADMIN } from './scenarij';
 
 let b: Backend;
+const baza = scenarij(() => b);
 
 beforeEach(async () => { b = await otvoriBackend(); });
 afterEach(async () => { await b.close(); });
-
-const ADMIN = 1;
 
 interface Zapis { korisnikId: number | null; akcija: string; detalji: any }
 
@@ -24,18 +23,8 @@ function audit(db: Database = b.db): Zapis[] {
     });
 }
 
-function dodajArtikal(sifra: string, cijena: number): number {
-  return Number(b.db.prepare(
-    "INSERT INTO products (sifra, naziv, jm, cijena, pdvStopa, plu) VALUES (?, ?, 'kom', ?, 'E', 1)"
-  ).run(sifra, `Artikal ${sifra}`, cijena).lastInsertRowid);
-}
-
-function dodajKorisnika(ime: string, pin: string, uloga: 'admin' | 'kasir' = 'kasir'): number {
-  return Number(b.db.prepare('INSERT INTO users (ime, pin, uloga) VALUES (?, ?, ?)').run(ime, hesirajPin(pin), uloga).lastInsertRowid);
-}
-
 async function rucniRacun(broj: string, cijena = 3): Promise<number> {
-  const p = dodajArtikal(`R${broj}`, cijena);
+  const p = baza.artikal({ sifra: `R${broj}`, cijena: cijena });
   return (await b.call('order:createManual', {
     nacinPlacanja: 'Gotovina', brojFiskalnogRacuna: broj, createdAt: '2026-09-01 10:00:00',
     stavke: [{ productId: p, kolicina: 1, cijena, rabat: 0, pdvStopa: 'E' }],
@@ -69,9 +58,9 @@ describe('audit_log', () => {
 
   test('storno → storno, s adminom koji je odobrio PIN-om', async () => {
     const id = await rucniRacun('55');
-    const kasir = dodajKorisnika('Kasir', '1234');
-    const berina = dodajKorisnika('Berina', '1111', 'admin');
-    b.db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('kasa.requirePinRefund', 'true')").run();
+    const kasir = baza.korisnik('Kasir', '1234');
+    const berina = baza.korisnik('Berina', '1111', 'admin');
+    baza.postavka('kasa.requirePinRefund', 'true');
     await prijavi(b, '1234');
     await expect(b.call('order:refundAndPrint', { id, adminPin: '9999' })).rejects.toThrow('Neispravan admin PIN');
     const r = await b.call('order:refundAndPrint', { id, adminPin: '1111' });
@@ -90,7 +79,7 @@ describe('audit_log', () => {
   });
 
   test('product:adjustStock → zaliha:korekcija; bez promjene nema zapisa', async () => {
-    const p = dodajArtikal('Z1', 2);
+    const p = baza.artikal({ sifra: 'Z1', cijena: 2 });
     await b.call('product:adjustStock', p, 7);
     await b.call('product:adjustStock', p, 7);
     await b.call('product:adjustStock', p, 4.5);
@@ -102,7 +91,7 @@ describe('audit_log', () => {
   });
 
   test('promjena cijene artikla (product:update) → artikal:cijena; ostale izmjene ne', async () => {
-    const p = dodajArtikal('C1', 10);
+    const p = baza.artikal({ sifra: 'C1', cijena: 10 });
     await b.call('product:update', p, { naziv: 'Novi naziv' });
     await b.call('product:update', p, { cijena: 10 });
     await b.call('product:update', p, { cijena: 12.5 });
@@ -118,9 +107,9 @@ describe('audit_log', () => {
   });
 
   test('primka: nova cijena, izmjena i vraćanje cijene pri brisanju → artikal:cijena; pregled ne ostavlja trag', async () => {
-    const saZalihom = dodajArtikal('P1', 10);
-    b.db.prepare("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'ulaz', 5, 'test', 0)").run(saZalihom);
-    const bezZalihe = dodajArtikal('P2', 8);
+    const saZalihom = baza.artikal({ sifra: 'P1', cijena: 10 });
+    baza.kretanje({ productId: saZalihom, tip: 'ulaz', kolicina: 5 });
+    const bezZalihe = baza.artikal({ sifra: 'P2', cijena: 8 });
     const stavka = (productId: number, cijena: number) => ({ productId, kolicina: 1, cijena, nabavnaCijena: 5, rabat: 0, pdvStopa: 'E' });
     const data = { brojPrimke: 'U-1', datum: '2026-03-10', stavke: [stavka(saZalihom, 12), stavka(bezZalihe, 9)] };
 
@@ -187,7 +176,7 @@ describe('audit_log', () => {
     await b.call('fiscal:setZadnjiBroj', 120);
     await b.call('order:dismissFiscalGap', 7);
     const snapshot = { korisnikId: ADMIN, ukupno: 5, nacinPlacanja: 'Gotovina', stavke: [] };
-    const pid = Number(b.db.prepare('INSERT INTO pending_receipts (korisnikId, snapshot) VALUES (?, ?)').run(ADMIN, JSON.stringify(snapshot)).lastInsertRowid);
+    const pid = baza.upisi('pending_receipts', { korisnikId: ADMIN, snapshot: JSON.stringify(snapshot) });
     await b.call('pending:discard', pid);
     await b.call('pending:discard', pid);
     expect(audit()).toEqual([

@@ -9,8 +9,10 @@
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
 import { otvoriBackend, type Backend } from './backend';
 import { pokreniPokvareniTring } from './laziTring';
+import { scenarij } from './scenarij';
 
 let b: Backend;
+const baza = scenarij(() => b);
 let zaustavi: (() => void) | null = null;
 
 beforeEach(async () => { b = await otvoriBackend(); });
@@ -18,26 +20,8 @@ afterEach(async () => { zaustavi?.(); zaustavi = null; await b.close(); });
 
 const DATUM = '2026-09-20 11:30:00';
 
-function red(sql: string, ...params: any[]): any {
-  return b.db.prepare(sql).get(...params);
-}
-
 function dodajProizvod(sifra: string, tip: 'artikal' | 'materijal' | 'usluga', cijena: number, stanje = 0): number {
-  const id = Number(b.db.prepare(
-    "INSERT INTO products (sifra, naziv, jm, cijena, pdvStopa, plu, tip) VALUES (?, ?, 'kom', ?, 'E', 1, ?)"
-  ).run(sifra, `Proizvod ${sifra}`, cijena, tip).lastInsertRowid);
-  if (stanje) {
-    b.db.prepare("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'ulaz', ?, 'test', 0)")
-      .run(id, stanje);
-  }
-  return id;
-}
-
-function stanje(productId: number): number {
-  return red(`
-    SELECT COALESCE(SUM(CASE WHEN tip = 'ulaz' THEN kolicina ELSE -kolicina END), 0) AS s
-    FROM stock_movements WHERE productId = ?
-  `, productId).s;
+  return baza.artikal({ sifra, naziv: `Proizvod ${sifra}`, cijena, tip, stanje });
 }
 
 interface Tok { ponudaId: number; nalogId: number; ormar: number; sudopera: number; ploca: number }
@@ -47,9 +31,7 @@ interface Tok { ponudaId: number; nalogId: number; ormar: number; sudopera: numb
  * izrađuje ormar i troši 2 ploče (na stanju 10). Nalog još nije završen.
  */
 async function ponudaSNalogom(): Promise<Tok> {
-  const kupacId = Number(b.db.prepare(
-    "INSERT INTO kupci (naziv, idBroj, adresa, postanskiBroj, grad) VALUES ('Kupac d.o.o.', '4200000000009', 'Titova 1', '71000', 'Sarajevo')"
-  ).run().lastInsertRowid);
+  const kupacId = baza.kupac({ naziv: 'Kupac d.o.o.', idBroj: '4200000000009', adresa: 'Titova 1', postanskiBroj: '71000', grad: 'Sarajevo' });
   const ormar = dodajProizvod('ORM', 'artikal', 400);
   const sudopera = dodajProizvod('SUD', 'artikal', 150, 5);
   const montaza = dodajProizvod('MONT', 'usluga', 100);
@@ -75,9 +57,9 @@ const izdaj = (id: number) => b.call('nalog:izdajRacun', { id, nacinPlacanja: 'V
 const storniraj = (id: number) => b.call('order:refundAndPrint', { id });
 
 /** [ormar, sudopera, ploča] */
-const zalihe = (t: Tok) => [stanje(t.ormar), stanje(t.sudopera), stanje(t.ploca)];
-const nalog = (id: number) => red('SELECT status, racunId FROM radni_nalozi WHERE id = ?', id);
-const ponuda = (id: number) => red('SELECT status, racunId FROM ponude WHERE id = ?', id);
+const zalihe = (t: Tok) => [baza.stanje(t.ormar), baza.stanje(t.sudopera), baza.stanje(t.ploca)];
+const nalog = (id: number) => baza.red('SELECT status, racunId FROM radni_nalozi WHERE id = ?', id);
+const ponuda = (id: number) => baza.red('SELECT status, racunId FROM ponude WHERE id = ?', id);
 
 describe('ponuda → nalog → račun → storno: zaliha', () => {
   test('A: završen nalog, račun kroz nalog, storno', async () => {
@@ -134,8 +116,8 @@ describe('ponuda → nalog → račun → storno: zaliha', () => {
 
     const u = await pokreniPokvareniTring('prekid');
     zaustavi = u.stop;
-    b.db.prepare("UPDATE settings SET value = '127.0.0.1' WHERE key = 'tring.host'").run();
-    b.db.prepare("UPDATE settings SET value = ? WHERE key = 'tring.port'").run(String(u.port));
+    baza.postavka('tring.host', '127.0.0.1');
+    baza.postavka('tring.port', String(u.port));
 
     const r = await izdaj(t.nalogId);
     expect(r).toMatchObject({ success: false, ishodNepoznat: true });
@@ -151,8 +133,8 @@ describe('ponuda → nalog → račun → storno: zaliha', () => {
     expect(ponuda(t.ponudaId)).toEqual({ status: 'konvertovana', racunId: rijeseno.id });
 
     zaustavi(); zaustavi = null;
-    b.db.prepare("UPDATE settings SET value = 'localhost' WHERE key = 'tring.host'").run();
-    b.db.prepare("UPDATE settings SET value = ? WHERE key = 'tring.port'").run(String(b.tring.port));
+    baza.postavka('tring.host', 'localhost');
+    baza.postavka('tring.port', String(b.tring.port));
     expect(await storniraj(rijeseno.id)).toMatchObject({ success: true });
     expect(zalihe(t)).toEqual([1, 5, 8]);
   });

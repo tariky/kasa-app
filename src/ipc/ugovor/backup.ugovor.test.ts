@@ -8,17 +8,18 @@ import { readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { desifrujBackup } from '../../lib/backupFajl';
-import { hesirajPin } from '../../lib/korisnici';
 import type { R2Podaci } from '../../lib/licenca';
 import { PORUKA_SAMO_ADMIN } from '../sesija';
 import { otvoriBackend, prijavi, type Backend } from './backend';
 import { pokreniLaziS3, S3_KLJUC, S3_TAJNA, type LaziS3 } from './laziS3';
+import { scenarij } from './scenarij';
 
 const IME = /^[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}\/\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z\.db\.age$/;
 
 // Rust backend dobija backup:* u fazi 4 — do tada ovaj ugovor važi samo za TS.
 describe.skipIf(process.env.KASA_BACKEND === 'rust')('backup:*', () => {
   let b: Backend;
+  const baza = scenarij(() => b);
   let s3: LaziS3;
   let identitet: string;
   let r2: R2Podaci;
@@ -39,10 +40,6 @@ describe.skipIf(process.env.KASA_BACKEND === 'rust')('backup:*', () => {
 
   const stanjaBackupa = () => b.dogadjaji.filter(d => d.ime === 'backup:stanje').map(d => d.podaci as Record<string, unknown>);
 
-  function dodajKorisnika(ime: string, pin: string, uloga: 'admin' | 'kasir' = 'kasir'): number {
-    return Number(b.db.prepare('INSERT INTO users (ime, pin, uloga) VALUES (?, ?, ?)').run(ime, hesirajPin(pin), uloga).lastInsertRowid);
-  }
-
   test('licenca bez backup-a: info neaktivan, backup:sada odbija, ništa se ne šalje', async () => {
     expect(await b.call('backup:info')).toEqual({ aktivan: false, uToku: false });
     await expect(b.call('backup:sada')).rejects.toThrow('Automatski backup nije uključen u licencu.');
@@ -51,7 +48,7 @@ describe.skipIf(process.env.KASA_BACKEND === 'rust')('backup:*', () => {
 
   test('backup:sada šalje potpisanu, šifrovanu kopiju baze u bucket klijenta', async () => {
     b.postaviBackupLicencu(r2);
-    b.db.prepare("INSERT INTO kupci (naziv, idBroj) VALUES ('Kupac iz backup-a', '4200000000000')").run();
+    baza.kupac({ naziv: 'Kupac iz backup-a', idBroj: '4200000000000' });
 
     const info = await b.call('backup:sada');
     expect(info.aktivan).toBe(true);
@@ -134,7 +131,7 @@ describe.skipIf(process.env.KASA_BACKEND === 'rust')('backup:*', () => {
 
   test('kasir vidi backup:info, a backup:sada je samo za administratora', async () => {
     b.postaviBackupLicencu(r2);
-    dodajKorisnika('Kasir', '1234');
+    baza.korisnik('Kasir', '1234');
     await prijavi(b, '1234');
     expect((await b.call('backup:info')).aktivan).toBe(true);
     await expect(b.call('backup:sada')).rejects.toThrow(PORUKA_SAMO_ADMIN);

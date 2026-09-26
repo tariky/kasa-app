@@ -8,15 +8,16 @@
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
 import { otvoriBackend, type Backend } from './backend';
 import { pokreniPokvareniTring } from './laziTring';
+import { scenarij, ADMIN } from './scenarij';
 import { izracunajTotale } from '../../lib/racun';
 
 let b: Backend;
+const baza = scenarij(() => b);
 let zaustavi: (() => void) | null = null;
 
 beforeEach(async () => { b = await otvoriBackend(); });
 afterEach(async () => { zaustavi?.(); zaustavi = null; await b.close(); });
 
-const ADMIN = 1;
 const DATUM = '2026-09-20 11:30:00';
 
 type Kupac = { naziv: string; idBroj: string; adresa: string; grad: string; postanskiBroj: string };
@@ -40,47 +41,37 @@ const KUPCI: Array<{ opis: string; kupac: Kupac; ocekivano: Record<string, strin
   },
 ];
 
-function red<T>(sql: string, ...params: Array<string | number>): T {
-  return b.db.prepare(sql).get(...params) as T;
-}
-
 function kupacRacuna(orderId: number): Record<string, string | null> {
-  return red<Record<string, string | null>>('SELECT kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj FROM orders WHERE id = ?', orderId);
+  return baza.red('SELECT kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj FROM orders WHERE id = ?', orderId);
 }
 
 let sifra = 0;
+/** „Proizvod K<n>" od 5 KM s ulazom na zalihu. */
 function dodajProizvod(tip: 'artikal' | 'materijal', stanje = 10): number {
   const s = `K${++sifra}`;
-  const id = Number(b.db.prepare(
-    "INSERT INTO products (sifra, naziv, jm, cijena, pdvStopa, plu, tip) VALUES (?, ?, 'kom', 5, 'E', 1, ?)"
-  ).run(s, `Proizvod ${s}`, tip).lastInsertRowid);
-  b.db.prepare("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'ulaz', ?, 'test', 0)")
-    .run(id, stanje);
+  const id = baza.artikal({ sifra: s, naziv: `Proizvod ${s}`, cijena: 5, tip });
+  baza.kretanje({ productId: id, tip: 'ulaz', kolicina: stanje });
   return id;
 }
 
 /** Kupac upisan direktno u šifarnik (stari zapis ili uvezen backup s praznim poljima). */
 function dodajKupca(k: Kupac): number {
-  return Number(b.db.prepare('INSERT INTO kupci (naziv, idBroj, adresa, grad, postanskiBroj) VALUES (?, ?, ?, ?, ?)')
-    .run(k.naziv, k.idBroj, k.adresa, k.grad, k.postanskiBroj).lastInsertRowid);
+  return baza.kupac({ naziv: k.naziv, idBroj: k.idBroj, adresa: k.adresa, grad: k.grad, postanskiBroj: k.postanskiBroj });
 }
 
 function kasaRacun(kupac: Kupac, extra: Record<string, unknown> = {}) {
-  const p = dodajProizvod('artikal');
-  const s = red<{ sifra: string; naziv: string; jm: string; plu: number }>('SELECT sifra, naziv, jm, plu FROM products WHERE id = ?', p);
-  const stavka = { productId: p, kolicina: 1, cijena: 5, rabat: 0, pdvStopa: 'E', ...s };
+  const stavka = baza.kasaStavka(dodajProizvod('artikal'), 1, 5);
   return { ...izracunajTotale([stavka]), nacinPlacanja: 'Gotovina', stavke: [stavka], kupac, ...extra };
 }
 
 let brojPonude = 0;
 /** Prihvaćena ponuda kupca s jednom stavkom (5 KM). */
 function prihvacenaPonuda(kupacId: number): number {
-  const id = Number(b.db.prepare(`
-    INSERT INTO ponude (broj, godina, kupacId, korisnikId, datum, vaziDo, status, ukupno, pdvIznos)
-    VALUES (?, 2026, ?, ?, '2026-03-01', '2026-03-31', 'prihvacena', 5, 0.73)
-  `).run(++brojPonude, kupacId, ADMIN).lastInsertRowid);
-  b.db.prepare("INSERT INTO ponuda_stavke (ponudaId, productId, kolicina, cijena, rabat, pdvStopa) VALUES (?, ?, 1, 5, 0, 'E')")
-    .run(id, dodajProizvod('artikal'));
+  const id = baza.upisi('ponude', {
+    broj: ++brojPonude, godina: 2026, kupacId, korisnikId: ADMIN, datum: '2026-03-01', vaziDo: '2026-03-31',
+    status: 'prihvacena', ukupno: 5, pdvIznos: 0.73,
+  });
+  baza.upisi('ponuda_stavke', { ponudaId: id, productId: dodajProizvod('artikal'), kolicina: 1, cijena: 5, rabat: 0, pdvStopa: 'E' });
   return id;
 }
 
@@ -96,8 +87,8 @@ async function zavrsenNalog(kupacId: number): Promise<number> {
 async function uredjajBezPotvrde(): Promise<void> {
   const u = await pokreniPokvareniTring('prekid');
   zaustavi = u.stop;
-  b.db.prepare("UPDATE settings SET value = '127.0.0.1' WHERE key = 'tring.host'").run();
-  b.db.prepare("UPDATE settings SET value = ? WHERE key = 'tring.port'").run(String(u.port));
+  baza.postavka('tring.host', '127.0.0.1');
+  baza.postavka('tring.port', String(u.port));
 }
 
 let fiskalniBroj = 500;
@@ -173,6 +164,6 @@ describe('prazan kupac → NULL na svakom putu upisa računa', () => {
         expect(kupacRacuna(await rijesi()), `${put}: ${opis}`).toEqual(ocekivano);
       }
     }
-    expect(red<{ n: number }>('SELECT COUNT(*) AS n FROM pending_receipts').n).toBe(0);
+    expect(baza.broj('SELECT COUNT(*) AS n FROM pending_receipts')).toBe(0);
   });
 });

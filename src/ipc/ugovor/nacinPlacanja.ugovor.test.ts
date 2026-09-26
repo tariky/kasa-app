@@ -5,28 +5,17 @@
 // uredjaj.ugovor.test.ts → cash:drawerState) — vidi backend.ts.
 import { test, expect, beforeEach, afterEach } from 'bun:test';
 import { otvoriBackend, type Backend } from './backend';
+import { scenarij, ADMIN } from './scenarij';
 import { izracunajTotale } from '../../lib/racun';
 
 let b: Backend;
+const baza = scenarij(() => b);
 
 beforeEach(async () => { b = await otvoriBackend(); });
 afterEach(async () => { await b.close(); });
 
-const ADMIN = 1; // seedovani admin; harness mu postavi ADMIN_PIN i prijavi se
-
-function broj(sql: string): number {
-  return (b.db.prepare(sql).get() as { n: number }).n;
-}
-
 function dodajProizvod(sifra: string, tip: 'artikal' | 'materijal' | 'usluga', stanje = 0): number {
-  const id = Number(b.db.prepare(
-    "INSERT INTO products (sifra, naziv, jm, cijena, pdvStopa, plu, tip) VALUES (?, ?, 'kom', 5, 'E', 1, ?)"
-  ).run(sifra, `Proizvod ${sifra}`, tip).lastInsertRowid);
-  if (stanje) {
-    b.db.prepare("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'ulaz', ?, 'test', 0)")
-      .run(id, stanje);
-  }
-  return id;
+  return baza.artikal({ sifra, naziv: `Proizvod ${sifra}`, cijena: 5, tip, stanje });
 }
 
 const DATUM = '2026-09-20 11:30:00';
@@ -38,23 +27,21 @@ function dodajProduktZaSnapshot(): number {
 }
 
 function dodajPending(snapshot: object): number {
-  return Number(b.db.prepare('INSERT INTO pending_receipts (korisnikId, snapshot) VALUES (?, ?)')
-    .run(ADMIN, JSON.stringify(snapshot)).lastInsertRowid);
+  return baza.upisi('pending_receipts', { korisnikId: ADMIN, snapshot: JSON.stringify(snapshot) });
 }
 
 function dodajKupca(): number {
-  return Number(b.db.prepare("INSERT INTO kupci (naziv, idBroj) VALUES ('Kupac d.o.o.', '4200000000009')").run().lastInsertRowid);
+  return baza.kupac({ naziv: 'Kupac d.o.o.', idBroj: '4200000000009' });
 }
 
 let brojPonude = 0;
 /** Prihvaćena ponuda s jednom stavkom (5 KM), spremna za račun. */
 function prihvacenaPonuda(kupacId: number, productId: number): number {
-  const id = Number(b.db.prepare(`
-    INSERT INTO ponude (broj, godina, kupacId, korisnikId, datum, vaziDo, status, ukupno, pdvIznos)
-    VALUES (?, 2026, ?, ?, '2026-03-01', '2026-03-31', 'prihvacena', 5, 0.73)
-  `).run(++brojPonude, kupacId, ADMIN).lastInsertRowid);
-  b.db.prepare("INSERT INTO ponuda_stavke (ponudaId, productId, kolicina, cijena, rabat, pdvStopa) VALUES (?, ?, 1, 5, 0, 'E')")
-    .run(id, productId);
+  const id = baza.upisi('ponude', {
+    broj: ++brojPonude, godina: 2026, kupacId, korisnikId: ADMIN, datum: '2026-03-01', vaziDo: '2026-03-31',
+    status: 'prihvacena', ukupno: 5, pdvIznos: 0.73,
+  });
+  baza.upisi('ponuda_stavke', { ponudaId: id, productId, kolicina: 1, cijena: 5, rabat: 0, pdvStopa: 'E' });
   return id;
 }
 
@@ -99,10 +86,10 @@ test('stari oblik načina plaćanja (mala slova, cek, JSON) ne prolazi nijednim 
   }
 
   expect(b.tring.zahtjevi).toEqual([]);
-  expect(broj('SELECT COUNT(*) AS n FROM orders')).toBe(0);
-  expect(broj('SELECT COUNT(*) AS n FROM pending_receipts')).toBe(0);
-  expect(broj("SELECT COUNT(*) AS n FROM ponude WHERE status <> 'prihvacena' OR racunId IS NOT NULL")).toBe(0);
-  expect(broj("SELECT COUNT(*) AS n FROM radni_nalozi WHERE status <> 'zavrsen'")).toBe(0);
+  expect(baza.broj('SELECT COUNT(*) AS n FROM orders')).toBe(0);
+  expect(baza.broj('SELECT COUNT(*) AS n FROM pending_receipts')).toBe(0);
+  expect(baza.broj("SELECT COUNT(*) AS n FROM ponude WHERE status <> 'prihvacena' OR racunId IS NOT NULL")).toBe(0);
+  expect(baza.broj("SELECT COUNT(*) AS n FROM radni_nalozi WHERE status <> 'zavrsen'")).toBe(0);
 });
 
 // I naknadni upis iz nezavršenih (pending:resolve) provjerava način
@@ -142,15 +129,15 @@ test('pending:resolve odbija nepoznat način plaćanja iz snapshota, ništa ne u
       expect('nacinPlacanja' in JSON.parse(upisan)).toBe(nacin !== undefined);
       await expect(b.call('pending:resolve', { id, brojFiskalnogRacuna: '700', createdAt: DATUM }), `${vrsta}: ${nacin}`)
         .rejects.toThrow(`Nepoznat način plaćanja: "${nacin ?? ''}"`);
-      expect(broj(`SELECT COUNT(*) AS n FROM pending_receipts WHERE id = ${id}`), `${vrsta}: ${nacin}`).toBe(1);
+      expect(baza.broj(`SELECT COUNT(*) AS n FROM pending_receipts WHERE id = ${id}`), `${vrsta}: ${nacin}`).toBe(1);
     }
   }
 
-  expect(broj('SELECT COUNT(*) AS n FROM orders')).toBe(0);
-  expect(broj("SELECT COUNT(*) AS n FROM audit_log WHERE akcija = 'pending:rijesi'")).toBe(0);
-  expect(broj("SELECT COUNT(*) AS n FROM products WHERE sifra = 'NAMJ'")).toBe(0);
-  expect(broj(`SELECT COUNT(*) AS n FROM ponude WHERE id = ${ponudaId} AND status = 'prihvacena' AND racunId IS NULL`)).toBe(1);
-  expect(broj(`SELECT COUNT(*) AS n FROM radni_nalozi WHERE id = ${nalogId} AND status = 'zavrsen'`)).toBe(1);
+  expect(baza.broj('SELECT COUNT(*) AS n FROM orders')).toBe(0);
+  expect(baza.broj("SELECT COUNT(*) AS n FROM audit_log WHERE akcija = 'pending:rijesi'")).toBe(0);
+  expect(baza.broj("SELECT COUNT(*) AS n FROM products WHERE sifra = 'NAMJ'")).toBe(0);
+  expect(baza.broj(`SELECT COUNT(*) AS n FROM ponude WHERE id = ${ponudaId} AND status = 'prihvacena' AND racunId IS NULL`)).toBe(1);
+  expect(baza.broj(`SELECT COUNT(*) AS n FROM radni_nalozi WHERE id = ${nalogId} AND status = 'zavrsen'`)).toBe(1);
 });
 
 test('pending:resolve prima kanonski tekst i JSON raspodjelu koju ladica čita', async () => {
@@ -165,5 +152,5 @@ test('pending:resolve prima kanonski tekst i JSON raspodjelu koju ladica čita',
     expect((b.db.prepare('SELECT nacinPlacanja FROM orders WHERE id = ?').get(r.id) as { nacinPlacanja: string }).nacinPlacanja, nacin)
       .toBe(nacin);
   }
-  expect(broj('SELECT COUNT(*) AS n FROM pending_receipts')).toBe(0);
+  expect(baza.broj('SELECT COUNT(*) AS n FROM pending_receipts')).toBe(0);
 });
