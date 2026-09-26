@@ -10,11 +10,11 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { DecimalInput } from '@/components/ui/decimal-input';
 import { DatePicker } from '@/components/ui/date-picker';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Eyebrow, mod } from '@/components/ui/ledger';
 import { FullDialog, FullDialogContent, FullDialogHeader, FullDialogFooter, FullDialogNotice, FooterBtn, Fact, LegendKey } from '@/components/ui/full-dialog';
 import { PretragaStavki, type PretragaStavkiHandle } from '@/components/ui/pretraga-stavki';
 import { PretragaProizvoda } from '@/components/PretragaProizvoda';
+import { useCuvarIzmjena } from '@/hooks/useCuvarIzmjena';
 import { User, Package, X, Save, FolderPlus, Lock, AlertTriangle, RefreshCw } from 'lucide-react';
 
 const ROK_TONE = { ok: 'bg-emerald-50 text-emerald-700', warn: 'bg-amber-50 text-amber-700', late: 'bg-rose-50 text-rose-700' } as const;
@@ -75,7 +75,6 @@ export function NalogDialog({ open, onOpenChange, nalog, onSaved, stavkeNespreml
   const [kupci, setKupci] = useState<Kupac[] | null>(null);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
-  const [odbaciOpen, setOdbaciOpen] = useState(false);
   // Normativ proizvoda naloga za zalihu — za preračun utroška kad se promijeni količina.
   const [normativ, setNormativ] = useState<NormativStavka[]>([]);
   const [preracunaj, setPreracunaj] = useState(false);
@@ -86,6 +85,13 @@ export function NalogDialog({ open, onOpenChange, nalog, onSaved, stavkeNespreml
   const isEdit = !!nalog;
   const zavrsen = nalog?.status === 'zavrsen';
   const set = <K extends keyof Forma>(k: K, v: Forma[K]) => setForma(f => ({ ...f, [k]: v }));
+  const dirty = open && pocetna !== '' && JSON.stringify(forma) !== pocetna;
+  const cuvar = useCuvarIzmjena(dirty && !saving, {
+    onClose: () => onOpenChange(false),
+    naslov: isEdit ? 'Odbaciti izmjene?' : 'Odbaciti novi nalog?',
+    opis: isEdit ? 'Izmjene naloga nisu spremljene.' : 'Upisani podaci nisu spremljeni i nalog neće biti otvoren.',
+    odbaci: 'Odbaci', ostani: 'Nastavi uređivanje',
+  });
 
   const fokusirajIzbor = useCallback((vrsta: NalogVrsta) => {
     requestAnimationFrame(() => (vrsta === 'narudzba' ? kupacRef : proizvodRef).current?.focus());
@@ -95,13 +101,13 @@ export function NalogDialog({ open, onOpenChange, nalog, onSaved, stavkeNespreml
     if (!open) return;
     const f = nalog ? izNaloga(nalog) : prazna();
     setForma(f); setPocetna(JSON.stringify(f));
-    setError(''); setOdbaciOpen(false); setPreracunaj(false); setNormativ([]);
+    setError(''); cuvar.ponisti(); setPreracunaj(false); setNormativ([]);
     window.api.getKupci().then(setKupci).catch(() => setKupci([]));
     if (nalog?.vrsta === 'zaliha' && nalog.productId && nalog.status !== 'zavrsen') {
       window.api.getNormativ(nalog.productId).then(setNormativ).catch(() => setNormativ([]));
     }
     if (!nalog) fokusirajIzbor(f.vrsta);
-  }, [open, nalog, fokusirajIzbor]);
+  }, [open, nalog, fokusirajIzbor, cuvar.ponisti]);
 
   const kupac = useMemo(() => kupci?.find(k => k.id === forma.kupacId) ?? null, [kupci, forma.kupacId]);
   // Kupac naloga koji se uređuje poznat je iz JOIN polja i prije nego se lista kupaca učita.
@@ -111,7 +117,6 @@ export function NalogDialog({ open, onOpenChange, nalog, onSaved, stavkeNespreml
 
   const kolicinaBroj = parseDecimal(forma.kolicina);
   const cijenaBroj = forma.cijena ? parseDecimal(forma.cijena) : null;
-  const dirty = open && pocetna !== '' && JSON.stringify(forma) !== pocetna;
   // Backend ne preračunava stavke pri promjeni količine — korisnik to bira ovdje.
   const kolicinaPromijenjena = isEdit && !zavrsen && forma.vrsta === 'zaliha' && kolicinaBroj > 0 && kolicinaBroj !== nalog!.kolicina;
   const ponudiPreracun = kolicinaPromijenjena && normativ.length > 0;
@@ -121,7 +126,7 @@ export function NalogDialog({ open, onOpenChange, nalog, onSaved, stavkeNespreml
     : (!forma.proizvod ? 'Izaberite proizvod' : !(kolicinaBroj > 0) ? 'Upišite količinu' : null);
 
   const zatvori = () => onOpenChange(false);
-  const zatraziZatvaranje = () => { if (dirty && !saving) setOdbaciOpen(true); else zatvori(); };
+  const zatraziZatvaranje = () => cuvar.zatrazi();
 
   const promijeniVrstu = (v: NalogVrsta) => {
     if (v === forma.vrsta) return;
@@ -157,7 +162,7 @@ export function NalogDialog({ open, onOpenChange, nalog, onSaved, stavkeNespreml
 
   // ⌘↵ sprema iz bilo kojeg polja; pretraga bez "nove stavke" pušta ⌘↵ roditelju.
   useEffect(() => {
-    if (!open || odbaciOpen) return;
+    if (!open || cuvar.otvoren) return;
     const onKey = (e: KeyboardEvent) => {
       if (!contentRef.current?.contains(e.target as Node)) return;
       if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) { e.preventDefault(); spremi(); }
@@ -399,18 +404,7 @@ export function NalogDialog({ open, onOpenChange, nalog, onSaved, stavkeNespreml
         </FullDialogFooter>
       </FullDialogContent>
 
-      <Dialog open={odbaciOpen} onOpenChange={setOdbaciOpen}>
-        <DialogContent className="sm:max-w-[420px]">
-          <DialogHeader>
-            <DialogTitle>{isEdit ? 'Odbaciti izmjene?' : 'Odbaciti novi nalog?'}</DialogTitle>
-            <DialogDescription>{isEdit ? 'Izmjene naloga nisu spremljene.' : 'Upisani podaci nisu spremljeni i nalog neće biti otvoren.'}</DialogDescription>
-          </DialogHeader>
-          <div className="flex justify-between items-center gap-2 pt-2">
-            <Button variant="ghost" className="text-rose-600 hover:text-rose-700 hover:bg-rose-50" onClick={() => { setOdbaciOpen(false); zatvori(); }}>Odbaci</Button>
-            <Button variant="ghost" onClick={() => setOdbaciOpen(false)}>Nastavi uređivanje</Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {cuvar.dijalog}
     </FullDialog>
   );
 }

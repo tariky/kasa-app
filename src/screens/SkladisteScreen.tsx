@@ -11,9 +11,6 @@ import { Input } from '@/components/ui/input';
 import { DecimalInput } from '@/components/ui/decimal-input';
 import { Label } from '@/components/ui/label';
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
-} from '@/components/ui/dialog';
-import {
   FullDialog, FullDialogContent, FullDialogHeader, FullDialogFooter, FullDialogNotice, FooterBtn, LegendKey,
 } from '@/components/ui/full-dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -33,6 +30,7 @@ import { useIpcPodaci } from '@/hooks/useIpcPodaci';
 import { GreskaUcitavanja } from '@/components/GreskaUcitavanja';
 import { useLedgerLista } from '@/hooks/useLedgerLista';
 import { usePreciceListe } from '@/hooks/usePreciceListe';
+import { useCuvarIzmjena } from '@/hooks/useCuvarIzmjena';
 
 type SkladisteTab = 'artikli' | 'primke';
 
@@ -78,7 +76,6 @@ function ArtikalDialog({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [dirty, setDirty] = useState(false);
-  const [odbaciOpen, setOdbaciOpen] = useState(false);
   const cijena = useCijenaUnos(open, product, form.pdvStopa);
   const [dobavljaci, setDobavljaci] = useState<Dobavljac[]>([]);
   const [sifreRedovi, setSifreRedovi] = useState<SifraRed[]>([]);
@@ -87,6 +84,12 @@ function ArtikalDialog({
   // Artikal kreiran u ovom otvaranju dijaloga: ako padnu šifre dobavljača, ponovno
   // spremanje ga ažurira umjesto da pravi duplikat.
   const kreiranId = useRef<number | null>(null);
+  const isEdit = !!product;
+  const cuvar = useCuvarIzmjena(dirty, {
+    onClose: () => onOpenChange(false),
+    naslov: 'Nespremljene izmjene',
+    opis: isEdit ? 'Artikal ima izmjene koje nisu spremljene.' : 'Novi artikal nije spremljen.',
+  });
 
   const setForm = (izmjena: Partial<ArtikalFormData>) => {
     setFormState(f => ({ ...f, ...izmjena }));
@@ -111,7 +114,7 @@ function ArtikalDialog({
     if (!open) return;
     setError('');
     setDirty(false);
-    setOdbaciOpen(false);
+    cuvar.ponisti();
     if (product) {
       setFormState({
         sifra: product.sifra,
@@ -126,7 +129,7 @@ function ArtikalDialog({
     }
     // Fokus na naziv tek kad se sadržaj montira (FullDialog fokusira sebe na otvaranju).
     requestAnimationFrame(() => nazivRef.current?.focus());
-  }, [open, product]);
+  }, [open, product, cuvar.ponisti]);
 
   const cijenaOk = cijena.spremno && cijena.unos !== '' && !isNaN(cijena.bruto);
   const mozeSpremiti = !saving && !!form.sifra && !!form.naziv && cijenaOk;
@@ -176,13 +179,12 @@ function ArtikalDialog({
 
   const zatvori = () => {
     if (saving) return;
-    if (dirty) { setOdbaciOpen(true); return; }
-    onOpenChange(false);
+    cuvar.zatrazi();
   };
 
   // ⌘↵ sprema iz bilo kojeg polja.
   useEffect(() => {
-    if (!open || odbaciOpen) return;
+    if (!open || cuvar.otvoren) return;
     const onKey = (e: KeyboardEvent) => {
       if (!contentRef.current?.contains(e.target as Node)) return;
       if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
@@ -194,7 +196,6 @@ function ArtikalDialog({
     return () => window.removeEventListener('keydown', onKey);
   });
 
-  const isEdit = !!product;
   const stanjeBroj = parseDecimal(form.stanje);
   const promjenaStanja = isEdit && !isNaN(stanjeBroj) && stanjeBroj !== (product.stanje ?? 0)
     ? stanjeBroj - (product.stanje ?? 0) : 0;
@@ -351,23 +352,7 @@ function ArtikalDialog({
         </FullDialogFooter>
       </FullDialogContent>
 
-      <Dialog open={odbaciOpen} onOpenChange={setOdbaciOpen}>
-        <DialogContent className="sm:max-w-[420px]">
-          <DialogHeader>
-            <DialogTitle>Nespremljene izmjene</DialogTitle>
-            <DialogDescription>
-              {isEdit ? 'Artikal ima izmjene koje nisu spremljene.' : 'Novi artikal nije spremljen.'}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex justify-between items-center gap-2 pt-2">
-            <Button variant="ghost" className="text-rose-600 hover:text-rose-700 hover:bg-rose-50"
-              onClick={() => { setOdbaciOpen(false); onOpenChange(false); }}>
-              Odbaci izmjene
-            </Button>
-            <Button variant="ghost" autoFocus onClick={() => setOdbaciOpen(false)}>Ostani</Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {cuvar.dijalog}
     </FullDialog>
   );
 }

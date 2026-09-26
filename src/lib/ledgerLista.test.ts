@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { akcijaListe, indeksZaTipku, sljedeciFilter, type MjestoTipke, type MogucnostiListe } from './ledgerLista';
+import { akcijaListe, indeksZaTipku, sljedeciFilter, susjedni, type MjestoTipke, type MogucnostiListe } from './ledgerLista';
 
 describe('indeksZaTipku', () => {
   test('↓ i ↑ pomjeraju za jedan, a bez izbora ↓ ide na prvi i ↑ ostaje na prvom', () => {
@@ -137,5 +137,23 @@ describe('akcijaListe', () => {
       expect(akcijaListe(tipka(k), van, ponude)).toBe('dalje');
       expect(akcijaListe(tipka(k), naRedu, ponude)).toBe('dalje');
     }
+  });
+});
+
+describe('susjedni', () => {
+  test('prethodni i sljedeći dokument po redoslijedu liste, s pozicijom', () => {
+    expect(susjedni([7, 3, 9], 3)).toEqual({ prev: 7, next: 9, pozicija: '2 / 3' });
+  });
+
+  test('prvi nema prethodnog, zadnji nema sljedećeg', () => {
+    expect(susjedni([7, 3, 9], 7)).toEqual({ prev: null, next: 3, pozicija: '1 / 3' });
+    expect(susjedni([7, 3, 9], 9)).toEqual({ prev: 3, next: null, pozicija: '3 / 3' });
+    expect(susjedni([5], 5)).toEqual({ prev: null, next: null, pozicija: '1 / 1' });
+  });
+
+  test('dokument van liste (filter ga skriva) ili bez id-a: bez susjeda i bez pozicije', () => {
+    expect(susjedni([7, 3, 9], 4)).toEqual({ prev: null, next: null, pozicija: '' });
+    expect(susjedni([7, 3, 9], null)).toEqual({ prev: null, next: null, pozicija: '' });
+    expect(susjedni([], 4)).toEqual({ prev: null, next: null, pozicija: '' });
   });
 });

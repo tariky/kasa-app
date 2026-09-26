@@ -1,7 +1,8 @@
 /**
  * Tastatura ledger lista (Računi, Ponude, Proizvodnja, Skladište) kao čista
- * pravila: koji red bira tipka i šta tipka van polja za unos radi. Hookovi
- * `useLedgerLista` i `usePreciceListe` ih samo izvršavaju nad DOM-om.
+ * pravila: koji red bira tipka, šta tipka van polja za unos radi i koji su
+ * susjedni dokumenti otvorenog. Hookovi `useLedgerLista`, `usePreciceListe` i
+ * `useSusjedni` ih samo izvršavaju nad DOM-om.
  */
 
 /** Koliko redova preskače PageUp/PageDown. */
@@ -105,4 +106,21 @@ export function akcijaListe(t: TipkaListe, mjesto: MjestoTipke, m: MogucnostiLis
   if (slovo === 'r' && m.osvjezi) return { vrsta: 'osvjezi' };
   if (t.key === 'Enter' && (m.enterOtvara ?? !!m.lista)) return mjesto.uListi ? null : { vrsta: 'otvori' };
   return 'dalje';
+}
+
+export interface Susjedni {
+  prev: number | null;
+  next: number | null;
+  /** „2 / 14“ — prazno kad dokument nije u listi (npr. filter ga skriva). */
+  pozicija: string;
+}
+
+/** Prethodni i sljedeći dokument po redoslijedu liste iz koje je otvoren. */
+export function susjedni(redoslijed: readonly number[], id: number | null): Susjedni {
+  const i = id != null ? redoslijed.indexOf(id) : -1;
+  return {
+    prev: i > 0 ? redoslijed[i - 1] : null,
+    next: i >= 0 && i < redoslijed.length - 1 ? redoslijed[i + 1] : null,
+    pozicija: i >= 0 ? `${i + 1} / ${redoslijed.length}` : '',
+  };
 }
