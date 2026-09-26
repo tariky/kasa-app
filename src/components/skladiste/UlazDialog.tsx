@@ -5,6 +5,7 @@ import { jePloca, m2UKom } from '@/lib/ploca';
 import { localDateStr, round2 } from '@/lib/novac';
 import { nedostajeOpis, porukaUpozorenja, praznaStavka, redIzBaze, redStatus, ulazTotali, uPayload, type UlazRed } from '@/lib/ulaz';
 import { kalkulacijaPrimke, nabavnaVrijednost, type KalkulacijaPrimke } from '@/lib/kalkulacija';
+import { formatRucPct } from '@/lib/izvjestaji';
 import { cn, formatKM, formatDate } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -93,7 +94,7 @@ function Kalkulacija({ k }: { k: KalkulacijaPrimke }) {
       {k.imaArtikala && (
         <div className="mt-2 pt-2 border-t border-dashed border-slate-200">
           <Red label="Prodajna bez PDV (artikli)" value={formatKM(k.prodajnaBezPdv)} />
-          <Red label={`RUC · ${k.rucPct.toFixed(1)} %`} value={formatKM(k.ruc)} tone="plus" strong />
+          <Red label={`RUC · ${formatRucPct(k.rucPct)} %`} value={formatKM(k.ruc)} tone="plus" strong />
           <Red label="PDV" value={formatKM(k.pdv)} />
           <Red label="MP vrijednost sa PDV" value={formatKM(k.prodajna)} />
         </div>

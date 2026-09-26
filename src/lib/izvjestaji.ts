@@ -47,7 +47,7 @@ export function sumePrimke(primke: Array<{ stavke?: StavkaZaKalkulaciju[] }>): S
   };
 }
 
-/** Stopa RUC-a za prikaz: jedna decimala, zarez — isti zapis kao `toFixed(1)` u UlazDialogu. */
+/** Stopa RUC-a za prikaz: jedna decimala, zarez — isti zapis u Izvještajima i u UlazDialogu. */
 export function formatRucPct(rucPct: number): string {
   return rucPct.toFixed(1).replace('.', ',');
 }
