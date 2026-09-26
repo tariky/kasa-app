@@ -1,5 +1,5 @@
 import { Text } from '@react-pdf/renderer';
-import type { FirmaSettings } from '@/types';
+import type { FirmaSettings, StavkaPonude } from '@/types';
 import { formatBrojPonude } from '@/lib/ponuda';
 import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { linijaDokumenta } from '@/lib/dokumentStavke';
@@ -9,16 +9,8 @@ import { A4Dokument, DvaBloka, Izdavac, Kupac, MetaRed, Okvir, Ukupno } from './
 import { TabelaStavki, type KolonaStavke } from './pdf/TabelaStavki';
 import { datumIzBaze } from './pdf/stil';
 
-interface StavkaPonude {
-  id: number;
-  productNaziv?: string;
-  productJm?: string;
-  productSifra?: string;
-  kolicina: number;
-  cijena: number;
-  rabat: number;
-  pdvStopa: string;
-}
+/** Dio stavke iz `ponuda:get` koji PDF čita. */
+type StavkaPdf = Pick<StavkaPonude, 'id' | 'productNaziv' | 'productJm' | 'productSifra' | 'kolicina' | 'cijena' | 'rabat' | 'pdvStopa'>;
 
 export interface PonudaPdfProps {
   ponuda: {
@@ -37,7 +29,7 @@ export interface PonudaPdfProps {
     kupacAdresa?: string | null;
     kupacGrad?: string | null;
     kupacPostanskiBroj?: string | null;
-    stavke: StavkaPonude[];
+    stavke: StavkaPdf[];
   };
   firma: FirmaSettings;
   postavke: DokumentPostavke;
@@ -51,7 +43,7 @@ export function PonudaPdf({ ponuda, firma, postavke }: PonudaPdfProps) {
   const osnovica = ponuda.ukupno - pdvIznos;
 
   // Cijena je sa PDV-om; iznos reda zaokružen po redu kao na računu — kolona se zbraja u UKUPNO.
-  const kolone: KolonaStavke<StavkaPonude>[] = [
+  const kolone: KolonaStavke<StavkaPdf>[] = [
     { naslov: '#', sirina: '5%', vrijednost: (_, i) => i + 1 },
     { naslov: 'Šifra', sirina: '11%', razmak: { desno: 6 }, sifra: true, vidljiva: kol.sifra, vrijednost: si => si.productSifra ?? '' },
     { naslov: 'Opis', sirina: 'ostatak', bold: true, vrijednost: si => si.productNaziv ?? '' },

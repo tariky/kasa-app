@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { PonudaPdf } from '@/components/PonudaPdf';
 import { filtriraj, type PoljaPretrage } from '@/lib/pretraga';
-import { formatBrojPonude, efektivniStatus, danaIzmedju } from '@/lib/ponuda';
+import { formatBrojPonude, efektivniStatus, danaIzmedju, type PonudaStatus } from '@/lib/ponuda';
 import type { NacinPlacanja } from '@/lib/placanje';
 import FiskalnaNaplataDialog from '@/components/FiskalnaNaplataDialog';
 import { pdvStavke } from '@/lib/racun';
@@ -30,30 +30,12 @@ import { zadanoZaKupca, type FormatBroja } from '@/lib/dokumentPostavke';
 import { useDokumentPostavke } from '@/components/DokumentPostavkeProvider';
 import { otvoriPdf, spremiPdf, ucitajZaStampu } from '@/lib/stampa';
 import { useKupci } from '@/components/PretragaKupaca';
-import type { ProizvodPonude } from '@/types';
+import type { Ponuda, ProizvodPonude } from '@/types';
 import FakturaDialog, { type FakturaPocetno } from '@/components/FakturaDialog';
 import { otvoriFakturuZaStampu } from '@/components/stampaFakture';
 import { PonudaFormaDialog, type ZahtjevForme } from '@/components/ponude/PonudaFormaDialog';
 import { useLedgerLista } from '@/hooks/useLedgerLista';
 import { usePreciceListe } from '@/hooks/usePreciceListe';
-
-interface PonudaRow {
-  id: number;
-  broj: number;
-  godina: number;
-  kupacId: number;
-  datum: string;
-  vaziDo: string;
-  status: string;
-  napomena?: string | null;
-  ukupno: number;
-  pdvIznos: number;
-  racunId?: number | null;
-  racunBroj?: string | null;
-  kupacNaziv?: string;
-  korisnikIme?: string;
-  stavke?: any[];
-}
 
 const STATUS_META: Record<string, { label: string; dot: string; text: string }> = {
   draft: { label: 'Draft', dot: 'bg-slate-300', text: 'text-slate-500' },
@@ -98,7 +80,7 @@ function StatusDot({ status, size = 'sm', compact = false }: { status: string; s
  * lista mora nositi. Prikazuje se samo kad je blizu ili prošlo; inače bi
  * odbrojavanje uz svaki red bilo šum.
  */
-function rokOznaka(p: PonudaRow, danas: string): { text: string; cls: string } | null {
+function rokOznaka(p: Ponuda, danas: string): { text: string; cls: string } | null {
   const st = efektivniStatus(p, danas);
   if (st !== 'draft' && st !== 'poslana' && st !== 'istekla') return null;
   const dana = danaIzmedju(danas, p.vaziDo);
@@ -109,7 +91,7 @@ function rokOznaka(p: PonudaRow, danas: string): { text: string; cls: string } |
 }
 
 /** Pretraga ponuda: kupac, broj ponude u formatu iz postavki ("P-0012/2026") i ko je izdao. */
-const poljaPonude = (f: FormatBroja) => (p: PonudaRow): PoljaPretrage => ({
+const poljaPonude = (f: FormatBroja) => (p: Ponuda): PoljaPretrage => ({
   naziv: p.kupacNaziv ?? '',
   sifra: formatBrojPonude(p, f),
   dodatno: [formatBrojPonude(p, f), p.korisnikIme].join(' '),
@@ -117,8 +99,8 @@ const poljaPonude = (f: FormatBroja) => (p: PonudaRow): PoljaPretrage => ({
 
 export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
   const { postavke } = useDokumentPostavke();
-  const [ponude, setPonude] = useState<PonudaRow[]>([]);
-  const [selected, setSelected] = useState<PonudaRow | null>(null);
+  const [ponude, setPonude] = useState<Ponuda[]>([]);
+  const [selected, setSelected] = useState<Ponuda | null>(null);
   const [filter, setFilter] = useState<Filter>('sve');
   const [search, setSearch] = useState('');
   const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -169,7 +151,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
     setPonude(await window.api.getPonude());
   };
 
-  const selectPonuda = async (p: PonudaRow) => {
+  const selectPonuda = async (p: Ponuda) => {
     setMsg(null);
     setSelected(await window.api.getPonuda(p.id));
   };
@@ -199,7 +181,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
 
   const openNova = useCallback(() => setForma({ ponuda: null }), []);
 
-  const openUredi = useCallback(async (p: PonudaRow) => {
+  const openUredi = useCallback(async (p: Ponuda) => {
     const full = p.stavke ? p : await window.api.getPonuda(p.id);
     setForma({ ponuda: full });
   }, []);
@@ -220,7 +202,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
 
   // ── Akcije nad ponudom ─────────────────────────────────────
 
-  const changeStatus = async (id: number, status: string) => {
+  const changeStatus = async (id: number, status: PonudaStatus) => {
     try {
       await window.api.setPonudaStatus(id, status);
       await loadPonude();
@@ -279,17 +261,17 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
 
   // ── PDF ────────────────────────────────────────────────────
 
-  const ponudaPdf = async (p: PonudaRow) => {
+  const ponudaPdf = async (p: Ponuda) => {
     const full = p.stavke ? p : await window.api.getPonuda(p.id);
     const { firma, postavke } = await ucitajZaStampu();
     return <PonudaPdf ponuda={full as any} firma={firma} postavke={postavke} />;
   };
 
-  const handlePrintPdf = async (p: PonudaRow) => {
+  const handlePrintPdf = async (p: Ponuda) => {
     await otvoriPdf(await ponudaPdf(p));
   };
 
-  const handleExportPdf = async (p: PonudaRow) => {
+  const handleExportPdf = async (p: Ponuda) => {
     await spremiPdf(await ponudaPdf(p), `Ponuda-${p.broj}-${p.godina}.pdf`);
   };
 

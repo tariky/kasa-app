@@ -81,6 +81,26 @@ describe('ocistiGreske — omot oko pozovi (Electron preload)', () => {
     expect((e as Error).message).toBe('Nema dovoljno na stanju');
   });
 
+  test('izvorna greška ostaje kao cause', async () => {
+    const izvorna = new Error(electronOmot('order:finalize', 'Nema dovoljno na stanju'));
+    const pozovi = ocistiGreske(async () => { throw izvorna; });
+    const e = await pozovi('order:finalize').catch((x: unknown) => x);
+    expect((e as Error).cause).toBe(izvorna);
+  });
+
+  test('odbijanje koje nije Error: poruka je tekst odbijanja bez omota, a samo odbijanje je cause', async () => {
+    const tekst = "Error invoking remote method 'x:y': Error: Veza prekinuta";
+    const e = await ocistiGreske(async () => { throw tekst; })('x:y').catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(Error);
+    expect((e as Error).message).toBe('Veza prekinuta');
+    expect((e as Error).cause).toBe(tekst);
+
+    const objekat = { kod: 5 };
+    const e2 = await ocistiGreske(async () => { throw objekat; })('x:y').catch((x: unknown) => x);
+    expect((e2 as Error).message).toBe('[object Object]');
+    expect((e2 as Error).cause).toBe(objekat);
+  });
+
   test('uspješan poziv prolazi nepromijenjen, s istim kanalom i argumentima', async () => {
     const pozivi: unknown[][] = [];
     const pozovi = ocistiGreske(async (kanal, ...args) => { pozivi.push([kanal, ...args]); return { ok: 1 }; });

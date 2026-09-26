@@ -4,7 +4,7 @@ import type { Kupac } from '@/types';
 
 /**
  * Kupac na računu u formi — sva polja su tekst, prazan string = nije uneseno.
- * Isti oblik backend provjerava kao `KupacRacuna` u provjeraRacuna.ts.
+ * Backend prima isti oblik (`KupacRacuna` u provjeraRacuna.ts — svako polje može izostati).
  */
 export interface KupacRacuna {
   idBroj: string;

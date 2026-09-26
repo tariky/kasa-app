@@ -22,15 +22,14 @@ import { provjeriNacinPlacanjaSnapshota, type VrstaNezavrsenog } from '../lib/pe
 import { postaviDatumValute } from '../lib/valuta';
 import {
   savePrilogStavkeInTransaction, finalizePrilogAndPrint, oznaciPonuduFakturisanom,
-  PRILOG_SIFRA, prilogNaziv, type PrilogStavkaUnos,
+  PRILOG_SIFRA, prilogNaziv,
 } from '../lib/prilog';
 import { saveCart, listSavedCarts, deleteSavedCart } from '../lib/savedCarts';
 import { spremiSkicuFakture, listSkiceFaktura, obrisiSkicuFakture } from '../lib/fakturaSkice';
 import { validirajPin, validirajUlogu, VEZE_KORISNIKA, hesirajPin, pinZauzet } from '../lib/korisnici';
-import type { SavedCartItem } from '../lib/kosarica';
 import {
   nextBrojPonude, createPonuda, updatePonuda, setStatusPonude, deletePonuda, konvertujPonudu,
-  upisiKonverzijuPonude, type PonudaStatus,
+  upisiKonverzijuPonude,
 } from '../lib/ponuda';
 import { buildTringRacun } from '../lib/tringRacun';
 import { upisiRacun } from '../lib/racun';
@@ -52,19 +51,33 @@ import { backupInfo, backupSada, backupNakonAktivacije, registrujBackup } from '
 import { imeZaCuvanje, dozvoljeniFilteri, dozvoljenaEkstenzija } from './cuvanje';
 import { napraviSesiju, TAJNE_POSTAVKE } from './sesija';
 import Database from 'better-sqlite3';
+import type { Argumenti, Kanal, Rezultat } from './kanali';
+import type {
+  User, Product, DobavljacSifra, Dobavljac, Kupac, Primka, PrimkaStavka, Nivelacija, NivelacijaStavka,
+  Order, OrderItem, PrilogStavka, Ponuda, StavkaPonude,
+} from '../types';
 
 // Provjera sesije i uloge prije svakog handlera; postavlja je registerIpcHandlers
 // (treba joj baza da pročita trenutnog korisnika).
 let provjeriSesiju: (channel: string, args: unknown[]) => void = () => undefined;
 
-function handle<T>(channel: string, handler: (...args: any[]) => T): void {
+/**
+ * Odgovor handlera kanala `K` (kanali.ts). Gdje ugovor kaže `null`, handler smije
+ * vratiti i `undefined` (npr. `.get()` bez reda) — u ugovoru je to isto "nema vrijednosti".
+ */
+type OdgovorHandlera<K extends Kanal> = Rezultat<K> | (null extends Rezultat<K> ? undefined : never);
+
+function handle<K extends Kanal>(
+  channel: K, handler: (...args: Argumenti<K>) => OdgovorHandlera<K> | Promise<OdgovorHandlera<K>>,
+): void {
   ipcMain.handle(channel, async (_event, ...args) => {
     try {
       provjeriKanal(channel);
       provjeriSesiju(channel, args);
       // `await` je obavezan: bez njega odbijeni promise async handlera
       // promaši catch ispod i renderer dobije neobrađenu Electron grešku.
-      return await handler(...args);
+      // Argumenti su oni koje je poslao renderer — tip im daje ugovor, provjeru handler.
+      return await handler(...(args as Argumenti<K>));
     } catch (error: any) {
       console.error(`[IPC ${channel}]`, error);
       throw new Error(error.message || 'Nepoznata greška');
@@ -114,7 +127,7 @@ export function registerIpcHandlers(): void {
   });
 
   handle('user:getAll', () => {
-    return db.prepare('SELECT id, ime, uloga FROM users ORDER BY ime').all();
+    return db.prepare('SELECT id, ime, uloga FROM users ORDER BY ime').all() as User[];
   });
 
   // Admin koji je jedini admin u bazi — ne smije se obrisati ni degradirati.
@@ -124,7 +137,7 @@ export function registerIpcHandlers(): void {
     return (db.prepare("SELECT COUNT(*) AS n FROM users WHERE uloga = 'admin'").get() as { n: number }).n <= 1;
   };
 
-  handle('user:create', (data: { ime: string; pin: string; uloga: string }) => {
+  handle('user:create', (data) => {
     if (!data.ime?.trim()) throw new Error('Ime korisnika je obavezno');
     validirajPin(data.pin);
     validirajUlogu(data.uloga);
@@ -134,11 +147,11 @@ export function registerIpcHandlers(): void {
         .prepare('INSERT INTO users (ime, pin, uloga) VALUES (?, ?, ?)')
         .run(data.ime.trim(), hesirajPin(data.pin), data.uloga);
       audit('korisnik:create', { id: Number(result.lastInsertRowid), ime: data.ime.trim(), uloga: data.uloga });
-      return { id: result.lastInsertRowid };
+      return { id: Number(result.lastInsertRowid) };
     })();
   });
 
-  handle('user:update', (id: number, data: { ime?: string; pin?: string | null; uloga?: string }) => {
+  handle('user:update', (id, data) => {
     const polja: { ime?: string; pin?: string; uloga?: string } = {};
     // Audit: nova imena i uloga, a za PIN samo da je promijenjen.
     const trag: Record<string, unknown> = { id };
@@ -197,20 +210,16 @@ export function registerIpcHandlers(): void {
         ${where}
         ORDER BY p.naziv
       `)
-      .all(...(tip ? [normalizujTip(tip)] : []));
+      .all(...(tip ? [normalizujTip(tip)] : [])) as Product[];
   });
 
   handle('product:get', (id: number) => {
-    return db.prepare('SELECT * FROM products WHERE id = ?').get(id);
+    return db.prepare('SELECT * FROM products WHERE id = ?').get(id) as Product | undefined;
   });
 
   // Pravila šifarnika (validacija, brisanje, slobodna stavka): lib/katalog.ts.
 
-  handle('product:create', (data: {
-    sifra: string; naziv: string; jm?: string; cijena: number;
-    pdvStopa: string; plu?: number; barkod?: string | null; tip?: string;
-    plocaSirina?: number | null; plocaVisina?: number | null;
-  }) => {
+  handle('product:create', (data) => {
     const upis = validirajArtikal(db, data, null);
     const tip = normalizujTip(data.tip);
     const result = db
@@ -220,14 +229,10 @@ export function registerIpcHandlers(): void {
       `)
       .run(upis.sifra, upis.naziv, data.jm ?? (tip === 'usluga' ? 'usl' : 'kom'), data.cijena, data.pdvStopa,
         upis.plu ?? null, upis.barkod ?? null, tip, data.plocaSirina ?? null, data.plocaVisina ?? null);
-    return { id: result.lastInsertRowid };
+    return { id: Number(result.lastInsertRowid) };
   });
 
-  handle('product:update', (id: number, data: {
-    sifra?: string; naziv?: string; jm?: string; cijena?: number;
-    pdvStopa?: string; plu?: number; barkod?: string | null; tip?: string;
-    plocaSirina?: number | null; plocaVisina?: number | null;
-  }) => {
+  handle('product:update', (id, data) => {
     const polja = {
       ...data,
       ...validirajArtikal(db, data, id),
@@ -285,12 +290,12 @@ export function registerIpcHandlers(): void {
       FROM artikal_dobavljac_sifre ds JOIN dobavljaci d ON d.id = ds.dobavljacId
       WHERE ds.productId = ?
       ORDER BY d.naziv, ds.dobavljacId
-    `).all(productId);
+    `).all(productId) as DobavljacSifra[];
   });
 
   // Zamjenjuje sve šifre dobavljača artikla. Prazna šifra = artikal je vezan za
   // dobavljača bez šifre. Sve se provjeri prije upisa, pa greška ništa ne mijenja.
-  handle('product:setDobavljacSifre', (productId: number, lista: Array<{ dobavljacId: number; sifra?: string | null }>) => {
+  handle('product:setDobavljacSifre', (productId, lista) => {
     if (!db.prepare('SELECT 1 FROM products WHERE id = ?').get(productId)) throw new Error('Artikal ne postoji');
     const upis: Array<{ dobavljacId: number; sifra: string | null }> = [];
     for (const s of lista ?? []) {
@@ -319,42 +324,37 @@ export function registerIpcHandlers(): void {
   handle('product:findByDobavljacSifra', (dobavljacId: number, sifra: string) => {
     const s = sifra?.trim();
     if (!s) return null;
-    return db.prepare(`
+    return (db.prepare(`
       SELECT p.*, ${zaliha.STANJE_SQL} AS stanje
       FROM artikal_dobavljac_sifre ds JOIN products p ON p.id = ds.productId
       WHERE ds.dobavljacId = ? AND ds.sifra = ?
-    `).get(dobavljacId, s) ?? null;
+    `).get(dobavljacId, s) as Product | undefined) ?? null;
   });
 
   handle('dobavljac:getSifre', (dobavljacId: number) => {
     return db.prepare(
       'SELECT productId, sifra FROM artikal_dobavljac_sifre WHERE dobavljacId = ? AND sifra IS NOT NULL ORDER BY sifra'
-    ).all(dobavljacId);
+    ).all(dobavljacId) as Array<{ productId: number; sifra: string }>;
   });
 
   // Slobodna stavka na kasi: skriveni artikal po nazivu, stopi i JM (lib/katalog.ts).
-  handle('product:slobodan', (data: { naziv?: string; cijena?: number; pdvStopa?: string; jm?: string }) =>
-    db.transaction(() => slobodnaStavka(db, data, audit))());
+  handle('product:slobodan', (data) => db.transaction(() => slobodnaStavka(db, data, audit))());
 
   // ─── Dobavljači ─────────────────────────────────────────
 
   handle('dobavljac:getAll', () => {
-    return db.prepare('SELECT * FROM dobavljaci ORDER BY naziv').all();
+    return db.prepare('SELECT * FROM dobavljaci ORDER BY naziv').all() as Dobavljac[];
   });
 
-  handle('dobavljac:create', (data: {
-    naziv: string; idBroj?: string; pdvBroj?: string; adresa?: string; kontakt?: string;
-  }) => {
+  handle('dobavljac:create', (data) => {
     const upis = validirajDobavljaca(data, null);
     const result = db
       .prepare('INSERT INTO dobavljaci (naziv, idBroj, pdvBroj, adresa, kontakt) VALUES (?, ?, ?, ?, ?)')
       .run(upis.naziv, data.idBroj ?? null, data.pdvBroj ?? null, data.adresa ?? null, data.kontakt ?? null);
-    return { id: result.lastInsertRowid };
+    return { id: Number(result.lastInsertRowid) };
   });
 
-  handle('dobavljac:update', (id: number, data: {
-    naziv?: string; idBroj?: string; pdvBroj?: string; adresa?: string; kontakt?: string;
-  }) => {
+  handle('dobavljac:update', (id, data) => {
     return azuriraj(db, 'dobavljaci', id, { ...data, ...validirajDobavljaca(data, id) }, KOLONE_DOBAVLJACA);
   });
 
@@ -377,27 +377,19 @@ export function registerIpcHandlers(): void {
   // ─── Kupci ──────────────────────────────────────────────
 
   handle('kupac:getAll', () => {
-    return db.prepare('SELECT * FROM kupci ORDER BY naziv').all();
+    return db.prepare('SELECT * FROM kupci ORDER BY naziv').all() as Kupac[];
   });
 
-  handle('kupac:create', (data: {
-    naziv: string; idBroj: string; pdvBroj?: string; adresa?: string;
-    postanskiBroj?: string; grad?: string; kontakt?: string;
-    rokPlacanjaDana?: number | null; nacinPlacanja?: string | null; rabat?: number | null;
-  }) => {
+  handle('kupac:create', (data) => {
     const upis = validirajKupca(db, data, null);
     const result = db
       .prepare('INSERT INTO kupci (naziv, idBroj, pdvBroj, adresa, postanskiBroj, grad, kontakt, rokPlacanjaDana, nacinPlacanja, rabat) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
       .run(upis.naziv, upis.idBroj, data.pdvBroj ?? null, data.adresa ?? null, data.postanskiBroj ?? null, data.grad ?? null, data.kontakt ?? null,
         upis.rokPlacanjaDana ?? null, upis.nacinPlacanja ?? null, upis.rabat ?? null);
-    return { id: result.lastInsertRowid };
+    return { id: Number(result.lastInsertRowid) };
   });
 
-  handle('kupac:update', (id: number, data: {
-    naziv?: string; idBroj?: string; pdvBroj?: string; adresa?: string;
-    postanskiBroj?: string; grad?: string; kontakt?: string;
-    rokPlacanjaDana?: number | null; nacinPlacanja?: string | null; rabat?: number | null;
-  }) => {
+  handle('kupac:update', (id, data) => {
     return azuriraj(db, 'kupci', id, { ...data, ...validirajKupca(db, data, id) }, KOLONE_KUPCA);
   });
 
@@ -420,24 +412,25 @@ export function registerIpcHandlers(): void {
   // ─── Primke ──────────────────────────────────────────────
 
   handle('primka:getAll', () => {
-    return db.prepare('SELECT * FROM primke ORDER BY datum DESC').all();
+    return db.prepare('SELECT * FROM primke ORDER BY datum DESC').all() as Primka[];
   });
 
   handle('primka:get', (id: number) => {
-    const primka = db.prepare('SELECT * FROM primke WHERE id = ?').get(id) as any;
+    const primka = db.prepare('SELECT * FROM primke WHERE id = ?').get(id) as Primka | undefined;
     if (!primka) throw new Error('Primka ne postoji');
 
-    primka.stavke = db
+    const stavke = db
       .prepare(`
         SELECT ps.*, p.naziv AS productNaziv, p.jm AS productJm, p.sifra AS productSifra
         FROM primka_stavke ps
         LEFT JOIN products p ON p.id = ps.productId
         WHERE ps.primkaId = ?
       `)
-      .all(id);
+      .all(id) as PrimkaStavka[];
+    primka.stavke = stavke;
     // Stavke čiju je cijenu poslije ove primke mijenjalo nešto drugo: izmjena
     // njihove cijene na primci ne mijenja cijenu u prodaji (ekran to prikazuje).
-    for (const s of primka.stavke) s.cijenaKasnijeMijenjana = cijenaKasnijeMijenjana(db, id, s.productId);
+    for (const s of stavke) s.cijenaKasnijeMijenjana = cijenaKasnijeMijenjana(db, id, s.productId);
 
     return primka;
   });
@@ -477,7 +470,7 @@ export function registerIpcHandlers(): void {
         LEFT JOIN primke p ON p.id = n.primkaId
         WHERE date(n.datum) BETWEEN date(?) AND date(?)
         ORDER BY n.datum DESC
-      `).all(from, to);
+      `).all(from, to) as Nivelacija[];
     }
     return db.prepare(`
       SELECT n.*,
@@ -487,7 +480,7 @@ export function registerIpcHandlers(): void {
       FROM nivelacije n
       LEFT JOIN primke p ON p.id = n.primkaId
       ORDER BY n.datum DESC
-    `).all();
+    `).all() as Nivelacija[];
   });
 
   handle('nivelacija:get', (id: number) => {
@@ -496,7 +489,7 @@ export function registerIpcHandlers(): void {
       FROM nivelacije n
       LEFT JOIN primke p ON p.id = n.primkaId
       WHERE n.id = ?
-    `).get(id) as any;
+    `).get(id) as Nivelacija | undefined;
     if (!niv) throw new Error('Nivelacija ne postoji');
 
     niv.stavke = db.prepare(`
@@ -504,7 +497,7 @@ export function registerIpcHandlers(): void {
       FROM nivelacija_stavke ns
       LEFT JOIN products p ON p.id = ns.productId
       WHERE ns.nivelacijaId = ?
-    `).all(id);
+    `).all(id) as NivelacijaStavka[];
 
     return niv;
   });
@@ -526,7 +519,7 @@ export function registerIpcHandlers(): void {
         LEFT JOIN kupci k ON k.idBroj = o.kupacIdBroj
         ORDER BY o.createdAt DESC
       `)
-      .all();
+      .all() as Order[];
   });
 
   handle('order:get', (id: number) => {
@@ -538,7 +531,7 @@ export function registerIpcHandlers(): void {
         LEFT JOIN kupci k ON k.idBroj = o.kupacIdBroj
         WHERE o.id = ?
       `)
-      .get(id) as any;
+      .get(id) as Order | undefined;
 
     if (!order) throw new Error('Račun ne postoji');
 
@@ -549,7 +542,7 @@ export function registerIpcHandlers(): void {
         LEFT JOIN products p ON p.id = oi.productId
         WHERE oi.orderId = ?
       `)
-      .all(id);
+      .all(id) as OrderItem[];
 
     // Prilog račun nema order_items — prikaz i kopija računa dobiju zbirnu stavku.
     if (order.prilogBroj != null) {
@@ -567,7 +560,7 @@ export function registerIpcHandlers(): void {
   // Stavke, iznosi i plaćanje se provjeravaju kao na kasi (pripremiRacun), ali
   // stopa i cijena stavke smiju odstupati od današnjeg artikla — prepisuje se
   // stari isječak.
-  handle('order:createManual', (unos: any) => {
+  handle('order:createManual', (unos) => {
     const korisnikId = korisnik().id;
     const r = pripremiRacun(db, unos, { stopaArtikla: false });
     const broj = typeof unos.brojFiskalnogRacuna === 'string' ? unos.brojFiskalnogRacuna.trim() : '';
@@ -616,14 +609,7 @@ export function registerIpcHandlers(): void {
 
   // Račun po prilogu: jedna zbirna stavka na fiskalnom računu, stvarne stavke
   // se dodjeljuju naknadno. Orkestracija živi u lib/prilog.ts (testabilna).
-  handle('order:finalizePrilog', async (unos: {
-    iznos?: number; nacinPlacanja: string;
-    kupac?: { naziv?: string; idBroj?: string; adresa?: string; grad?: string; postanskiBroj?: string };
-    stavke?: PrilogStavkaUnos[];
-    prilogOpis?: string; prilogVeza?: string;
-    datumValute?: string | null; napomena?: string | null; ponudaId?: number | null;
-    skicaId?: number | null;
-  }) => {
+  handle('order:finalizePrilog', async (unos) => {
     const data = { ...unos, korisnikId: korisnik().id };
     return finalizePrilogAndPrint({ db, uredjaj: uredjaj(), transaction: transakcija }, data);
   });
@@ -651,10 +637,10 @@ export function registerIpcHandlers(): void {
       LEFT JOIN products p ON p.id = ps.productId
       WHERE ps.orderId = ?
       ORDER BY ps.id
-    `).all(orderId);
+    `).all(orderId) as PrilogStavka[];
   });
 
-  handle('prilog:saveStavke', (orderId: number, stavke: PrilogStavkaUnos[]) => {
+  handle('prilog:saveStavke', (orderId, stavke) => {
     db.transaction(() => savePrilogStavkeInTransaction(db, orderId, stavke))();
     return { success: true };
   });
@@ -665,9 +651,7 @@ export function registerIpcHandlers(): void {
 
   // Orkestracija (štampa → atomični upis) živi u lib/refund.ts da bi bila
   // testabilna nad mock fiskalnim serverom, bez Electron ovisnosti.
-  handle('order:refundAndPrint', async (data: {
-    id: number; brojReklamacije?: string; dozvoliPolog?: boolean; adminPin?: string;
-  }) => {
+  handle('order:refundAndPrint', async (data) => {
     const k = korisnik();
     // Admin PIN (kasa.requirePinRefund) je provjeren prije handlera, u sesiji.
     const odobrioAdminId = sesija.odobrioAdmin(data);
@@ -721,7 +705,7 @@ export function registerIpcHandlers(): void {
     }));
   });
 
-  handle('pending:resolve', (data: { id: number; brojFiskalnogRacuna: string; createdAt: string }) => {
+  handle('pending:resolve', (data) => {
     if (!data.brojFiskalnogRacuna?.trim()) throw new Error('Fiskalni broj je obavezan');
     if (!data.createdAt?.trim()) throw new Error('Datum računa je obavezan');
 
@@ -844,7 +828,7 @@ export function registerIpcHandlers(): void {
       LEFT JOIN users u ON u.id = po.korisnikId
       LEFT JOIN orders o ON o.id = po.racunId
       ORDER BY po.godina DESC, po.broj DESC
-    `).all();
+    `).all() as Ponuda[];
   });
 
   handle('ponuda:get', (id: number) => {
@@ -857,7 +841,7 @@ export function registerIpcHandlers(): void {
       LEFT JOIN users u ON u.id = po.korisnikId
       LEFT JOIN orders o ON o.id = po.racunId
       WHERE po.id = ?
-    `).get(id) as any;
+    `).get(id) as Ponuda | undefined;
     if (!ponuda) throw new Error('Ponuda ne postoji');
 
     ponuda.stavke = db.prepare(`
@@ -865,7 +849,7 @@ export function registerIpcHandlers(): void {
       FROM ponuda_stavke ps
       LEFT JOIN products p ON p.id = ps.productId
       WHERE ps.ponudaId = ?
-    `).all(id);
+    `).all(id) as StavkaPonude[];
 
     return ponuda;
   });
@@ -875,25 +859,19 @@ export function registerIpcHandlers(): void {
     return { broj: nextBrojPonude(db, godina), godina };
   });
 
-  handle('ponuda:create', (unos: {
-    kupacId: number; datum?: string; vaziDo?: string; napomena?: string;
-    stavke: Array<{ productId: number; kolicina: number; cijena: number; rabat: number; pdvStopa: string }>;
-  }) => {
+  handle('ponuda:create', (unos) => {
     const data = { ...unos, korisnikId: korisnik().id };
     const tx = db.transaction(() => createPonuda(db, data));
     return tx();
   });
 
-  handle('ponuda:update', (id: number, data: {
-    kupacId?: number; datum?: string; vaziDo?: string; napomena?: string;
-    stavke: Array<{ productId: number; kolicina: number; cijena: number; rabat: number; pdvStopa: string }>;
-  }) => {
+  handle('ponuda:update', (id, data) => {
     const tx = db.transaction(() => updatePonuda(db, id, data));
     tx();
     return { success: true };
   });
 
-  handle('ponuda:setStatus', (id: number, status: PonudaStatus) => {
+  handle('ponuda:setStatus', (id, status) => {
     setStatusPonude(db, id, status);
     return { success: true };
   });
@@ -904,15 +882,15 @@ export function registerIpcHandlers(): void {
 
   // Orkestracija (štampa → atomični upis) živi u lib/ponuda.ts da bi bila
   // testabilna nad mock fiskalnim serverom, bez Electron ovisnosti.
-  handle('ponuda:konvertuj', async (unos: { id: number; nacinPlacanja: string }) => {
+  handle('ponuda:konvertuj', async (unos) => {
     const data = { ...unos, korisnikId: korisnik().id };
     return konvertujPonudu({ db, uredjaj: uredjaj(), transaction: transakcija }, data);
   });
 
   // ─── Proizvodnja ─────────────────────────────────────────
 
-  handle('nalog:getAll', (filter?: string) =>
-    listNalozi(db, filter ? { status: filter as any } : undefined));
+  handle('nalog:getAll', (filter) =>
+    listNalozi(db, filter ? { status: filter } : undefined));
 
   handle('nalog:get', (id: number) => getNalog(db, id));
 
@@ -921,7 +899,7 @@ export function registerIpcHandlers(): void {
     return { broj: nextBrojNaloga(db, godina), godina };
   });
 
-  handle('nalog:create', (unos: any) => {
+  handle('nalog:create', (unos) => {
     const data = { ...unos, korisnikId: korisnik().id };
     return db.transaction(() => createNalog(db, data))();
   });
@@ -938,22 +916,22 @@ export function registerIpcHandlers(): void {
 
   handle('nalog:proizvodiPonude', (ponudaId: number) => proizvodiPonude(db, ponudaId));
 
-  handle('nalog:setProizvodi', (id: number, proizvodi: any[]) => {
+  handle('nalog:setProizvodi', (id, proizvodi) => {
     db.transaction(() => setProizvodiNaloga(db, id, proizvodi))();
     return { success: true };
   });
 
-  handle('nalog:update', (id: number, data: any) => {
+  handle('nalog:update', (id, data) => {
     updateNalog(db, id, data);
     return { success: true };
   });
 
-  handle('nalog:replaceStavke', (id: number, stavke: any[]) => {
+  handle('nalog:replaceStavke', (id, stavke) => {
     db.transaction(() => replaceStavke(db, id, stavke))();
     return { success: true };
   });
 
-  handle('nalog:setStatus', (data: { id: number; status: 'u_izradi' | 'zavrsen' | 'vrati' }) => {
+  handle('nalog:setStatus', (data) => {
     if (data.status === 'u_izradi') setStatusNaloga(db, data.id, 'u_izradi');
     else if (data.status === 'zavrsen') db.transaction(() => zavrsiNalog(db, data.id))();
     // 'vrati' smije samo admin — provjereno u sesija.ts, prije handlera.
@@ -969,14 +947,14 @@ export function registerIpcHandlers(): void {
 
   handle('nalog:kalkulacija', (id: number) => kalkulacijaNaloga(db, id));
 
-  handle('nalog:izdajRacun', async (unos: { id: number; nacinPlacanja: string }) => {
+  handle('nalog:izdajRacun', async (unos) => {
     const data = { ...unos, korisnikId: korisnik().id };
     return izdajRacunZaNalog({ db, uredjaj: uredjaj(), transaction: transakcija }, data);
   });
 
   handle('normativ:get', (productId: number) => getNormativ(db, productId));
 
-  handle('normativ:save', (productId: number, stavke: any[]) => {
+  handle('normativ:save', (productId, stavke) => {
     db.transaction(() => saveNormativ(db, productId, stavke))();
     return { success: true };
   });
@@ -998,7 +976,7 @@ export function registerIpcHandlers(): void {
     return { host: t.host, port: t.port, operatorId: t.operatorId, imaLozinku: (t.operatorPassword ?? '') !== '' };
   });
 
-  handle('settings:saveTring', (data: { host: string; port: number; operatorId: number; operatorPassword?: string | null }) => {
+  handle('settings:saveTring', (data) => {
     if (!data.host?.trim()) throw new Error('Host je obavezan');
     if (!Number.isInteger(data.port) || data.port < 1 || data.port > 65535) {
       throw new Error('Port mora biti cijeli broj između 1 i 65535');
@@ -1068,7 +1046,7 @@ export function registerIpcHandlers(): void {
 
   handle('savedCarts:list', () => listSavedCarts(db));
 
-  handle('savedCarts:save', (naziv: string, items: SavedCartItem[], ukupno: number) => {
+  handle('savedCarts:save', (naziv, items, ukupno) => {
     if (!items?.length) throw new Error('Košarica je prazna');
     return saveCart(db, naziv, items, ukupno);
   });
@@ -1090,12 +1068,7 @@ export function registerIpcHandlers(): void {
     return { success: true };
   });
 
-  handle('settings:saveFirma', (data: {
-    naziv: string; adresa: string; grad: string;
-    idBroj: string; pdvBroj: string; skladiste: string; logo: string;
-    web?: string; email?: string; logoVelicina?: number; ziroRacuniPozicija?: string;
-    bankAccounts?: Array<{ bankName: string; accountNumber: string }>;
-  }) => {
+  handle('settings:saveFirma', (data) => {
     const nove: Array<[string, string]> = [
       ['firma.naziv', data.naziv],
       ['firma.adresa', data.adresa],
@@ -1134,7 +1107,7 @@ export function registerIpcHandlers(): void {
           WHERE date(o.createdAt) BETWEEN date(?) AND date(?)
           ORDER BY o.createdAt DESC
         `)
-        .all(from, to);
+        .all(from, to) as Order[];
     }
 
     if (type === 'primke') {
@@ -1145,13 +1118,13 @@ export function registerIpcHandlers(): void {
           WHERE date(p.datum) BETWEEN date(?) AND date(?)
           ORDER BY p.datum DESC
         `)
-        .all(from, to) as any[];
+        .all(from, to) as Primka[];
 
       // Attach stavke for each primka so the UI can calculate nabavna/prodajna per-item
       for (const primka of primke) {
         primka.stavke = db
           .prepare('SELECT * FROM primka_stavke WHERE primkaId = ?')
-          .all(primka.id);
+          .all(primka.id) as PrimkaStavka[];
       }
       return primke;
     }
@@ -1174,7 +1147,7 @@ export function registerIpcHandlers(): void {
 
   // Službeni unos/iznos gotovine (polog). Logika i upis žive u lib/cash.ts da
   // budu testabilni bez Electrona.
-  handle('cash:add', (data: { tip: 'polog' | 'povrat'; iznos: number; napomena?: string }) =>
+  handle('cash:add', (data) =>
     addCashMovement({ db, uredjaj: uredjaj() }, { ...data, korisnikId: korisnik().id }));
 
   handle('cash:retry', (id: number) => retryCashMovement({ db, uredjaj: uredjaj() }, id));
@@ -1201,7 +1174,7 @@ export function registerIpcHandlers(): void {
   // Predloženo ime, filteri i odabrana putanja idu kroz pravila iz cuvanje.ts
   // (ista kao u Tauri ljusci). Svaki poziv poništava ranije odobrenje — upisiva
   // je samo putanja iz zadnjeg dijaloga; odbijeno ime ili ekstenzija = otkazano.
-  handle('dialog:saveFile', async (data: { defaultName: string; filters: Array<{ name: string; extensions: string[] }> }) => {
+  handle('dialog:saveFile', async (data) => {
     lastApprovedSavePath = null;
     const ime = imeZaCuvanje(data?.defaultName);
     if (!ime) return null;
@@ -1214,7 +1187,7 @@ export function registerIpcHandlers(): void {
     return result.filePath;
   });
 
-  handle('fs:writeFile', (data: { path: string; buffer: number[] }) => {
+  handle('fs:writeFile', (data) => {
     if (data.path !== lastApprovedSavePath) {
       throw new Error('Write path not approved by save dialog');
     }

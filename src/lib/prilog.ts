@@ -6,7 +6,7 @@ import { validanDatumValute } from './valuta';
 import { round2 } from './novac';
 import { iznosStavke, izracunajTotale, upisiRacun } from './racun';
 import { buildTringRacun } from './tringRacun';
-import { provjeriIznoseStavke, provjeriKupca } from './provjeraRacuna';
+import { provjeriIznoseStavke, provjeriKupca, type KupacRacuna } from './provjeraRacuna';
 import { provjeriNacinPlacanja } from './placanje';
 import { baciAkoCekaNezavrsen } from './pendingRacun';
 import * as zaliha from './zaliha';
@@ -217,7 +217,7 @@ export async function finalizePrilogAndPrint(
     /** Ručno ukucan iznos; ignoriše se kad su poslate stavke. */
     iznos?: number;
     nacinPlacanja: string;
-    kupac?: { naziv?: string; idBroj?: string; adresa?: string; grad?: string; postanskiBroj?: string };
+    kupac?: KupacRacuna | null;
     /** Stavke unesene odmah na kasi — iznos se računa iz njih. */
     stavke?: PrilogStavkaUnos[];
     /** Uvodni dio naziva zbirne stavke ("CNC obrada"); prazno = "Stavke". */

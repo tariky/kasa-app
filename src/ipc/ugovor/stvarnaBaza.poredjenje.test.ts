@@ -70,10 +70,11 @@ async function tsBackend(userData: string): Promise<Pozovi> {
 /** Rust backend nad kopijom, preko rustBackend.ts. */
 async function rustBackend(userData: string): Promise<{ pozovi: Pozovi; zatvori: () => Promise<void> }> {
   const { otvoriRustBackendNad } = await import('./rustBackend');
+  const { pozoviBezTipova } = await import('./backend');
   const b = await otvoriRustBackendNad(userData);
   return {
     pozovi: async (kanal, ...args) => {
-      try { return await b.call(kanal, ...args); } catch (e: any) { return { __greska: e.message }; }
+      try { return await pozoviBezTipova(b, kanal, ...args); } catch (e: any) { return { __greska: e.message }; }
     },
     zatvori: () => b.close(),
   };

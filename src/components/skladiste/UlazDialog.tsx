@@ -210,7 +210,7 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
   const payloadRef = useRef<PayloadForme | null>(payload);
   payloadRef.current = payload;
   const dohvatiPregled = useCallback((p: PayloadForme) =>
-    ('id' in p ? window.api.pregledIzmjenePrimke(p) : window.api.pregledUnosaPrimke(p)), []);
+    (p.id !== undefined ? window.api.pregledIzmjenePrimke({ ...p, id: p.id }) : window.api.pregledUnosaPrimke(p)), []);
 
   useEffect(() => {
     const p = payloadRef.current;
@@ -249,7 +249,7 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
       if (pregled.upozorenja.length > 0 && !(await potvrdi(porukaUpozorenja(pregled.upozorenja, 'izmjena')))) return;
       // Backend sprema samo ako operacija napravi tačno ovaj pregled; inače
       // ništa ne upiše i vrati novi — korisnik ga mora ponovo potvrditi.
-      const r = primka ? await window.api.updatePrimka(payload, pregled) : await window.api.createPrimka(payload, pregled);
+      const r = primka ? await window.api.updatePrimka({ ...payload, id: primka.id }, pregled) : await window.api.createPrimka(payload, pregled);
       if (odbijeno(r)) {
         setPregledCijena({ kljuc, pregled: r.pregled });
         setPotvrda({ kljuc, pregled: r.pregled, promijenjeno: true });

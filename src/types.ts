@@ -121,6 +121,24 @@ export interface OrderItem {
   productNaziv?: string;
   productJm?: string;
   productSifra?: string;
+  /** PLU artikla (`order:get`, JOIN na products). */
+  productPlu?: number | null;
+}
+
+/** Red iz `prilog:getStavke` (prilog_stavke + JOIN na products). */
+export interface PrilogStavka {
+  id: number;
+  orderId: number;
+  productId: number;
+  kolicina: number;
+  cijena: number;
+  /** Postotak; stari zapisi ga nemaju. */
+  rabat?: number | null;
+  pdvStopa: string;
+  productNaziv?: string;
+  productJm?: string;
+  productSifra?: string;
+  productTip?: string;
 }
 
 export interface Kupac {
@@ -243,6 +261,44 @@ export interface FirmaSettings {
 }
 
 export type ZiroRacuniPozicija = 'zaglavlje' | 'podnozje';
+
+/** Ponuda kako je vraćaju `ponuda:getAll` i `ponuda:get` (stavke i podaci kupca samo `ponuda:get`). */
+export interface Ponuda {
+  id: number;
+  broj: number;
+  godina: number;
+  kupacId: number;
+  datum: string;
+  vaziDo: string;
+  status: string;
+  napomena?: string | null;
+  ukupno: number;
+  pdvIznos: number;
+  racunId?: number | null;
+  racunBroj?: string | null;
+  kupacNaziv?: string;
+  korisnikIme?: string;
+  kupacIdBroj?: string | null;
+  kupacPdvBroj?: string | null;
+  kupacAdresa?: string | null;
+  kupacGrad?: string | null;
+  kupacPostanskiBroj?: string | null;
+  stavke?: StavkaPonude[];
+}
+
+/** Stavka ponude (ponuda_stavke + JOIN na products). */
+export interface StavkaPonude {
+  id: number;
+  ponudaId: number;
+  productId: number;
+  productNaziv?: string;
+  productJm?: string;
+  productSifra?: string;
+  kolicina: number;
+  cijena: number;
+  rabat: number;
+  pdvStopa: string;
+}
 
 export type NalogVrsta = 'narudzba' | 'zaliha';
 export type NalogStatus = 'otvoren' | 'u_izradi' | 'zavrsen' | 'fakturisan';

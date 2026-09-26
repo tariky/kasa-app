@@ -1,6 +1,6 @@
 // Ugovor za kanal izvoz:knjigovodja — vidi backend.ts.
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
-import { otvoriBackend, type Backend } from './backend';
+import { otvoriBackend, pozoviBezTipova, type Backend } from './backend';
 
 let b: Backend;
 
@@ -222,6 +222,6 @@ describe('izvoz:knjigovodja', () => {
     await expect(izvoz('2026-09-30', '2026-09-01')).rejects.toThrow('Neispravan period');
     await expect(izvoz('2026-9-1', '2026-09-30')).rejects.toThrow('Neispravan period');
     await expect(b.call('izvoz:knjigovodja', null, '2026-09-30')).rejects.toThrow('Neispravan period');
-    await expect(b.call('izvoz:knjigovodja')).rejects.toThrow('Neispravan period');
+    await expect(pozoviBezTipova(b, 'izvoz:knjigovodja')).rejects.toThrow('Neispravan period');
   });
 });

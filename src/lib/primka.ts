@@ -33,14 +33,14 @@ export interface PrimkaDeps {
 }
 
 /** Odgovor primka:create / primka:update kad je upisano. */
-export interface SpremljenaPrimka<Id = number> {
-  id: Id;
+export interface SpremljenaPrimka {
+  id: number;
   nivelacijaCreated: boolean;
 }
 
 export interface Primke {
   /** primka:create — bez potvrde (stari klijent, skripta) sprema bez poređenja. */
-  unesi(unos: PrimkaUnos, potvrda?: unknown): SpremljenaPrimka<number | bigint> | PromijenjenoOdPregleda;
+  unesi(unos: PrimkaUnos, potvrda?: unknown): SpremljenaPrimka | PromijenjenoOdPregleda;
   /** primka:update */
   izmijeni(unos: PrimkaUnos & { id: number }, potvrda?: unknown): SpremljenaPrimka | PromijenjenoOdPregleda;
   /** primka:delete — uspjeh bez povratne vrijednosti; samo odbijanje nosi pregled. */
@@ -150,7 +150,7 @@ export function napraviPrimke({ db, audit, transaction }: PrimkaDeps): Primke {
     zapisiPromjeneCijena(db, 'primka', primkaId, [...nivelacija, ...bezZaliha]);
     auditCijenaPrimke(cijenePrije, 'primka', primkaId);
 
-    return { id: primkaId, nivelacijaCreated: nivelacija.length > 0 };
+    return { id: Number(primkaId), nivelacijaCreated: nivelacija.length > 0 };
   }
 
   /** Rust `izmijeni_primku`. */

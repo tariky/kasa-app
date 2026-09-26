@@ -403,7 +403,8 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
       }
 
       // Siguran neuspjeh (uređaj odbio) ili odbijen poziv prije štampe — korpa ostaje za novi pokušaj.
-      if (ishod.vrsta === 'greska' || !res) {
+      // (`!res.success` je ovdje isto što i 'greska' — samo suzi tip odgovora na uspjeh.)
+      if (ishod.vrsta === 'greska' || !res || !res.success) {
         setMessage({ type: 'error', text: `${res ? 'Greška pri štampanju' : 'Greška'}: ${ishod.poruka}` });
         return;
       }
