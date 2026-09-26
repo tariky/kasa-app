@@ -251,6 +251,16 @@ test('migracije su idempotentne — ponovljeni uvoz iste baze ne puca', () => {
   db.close();
 });
 
+test('kupci dobijaju kolone za zadane vrijednosti dokumenata', () => {
+  const db = new Database(':memory:');
+  db.exec(LEGACY_SCHEMA);
+  runMigrations(db as Db);
+  const cols = (db.prepare('PRAGMA table_info(kupci)').all() as { name: string }[]).map(c => c.name);
+  expect(cols).toEqual(expect.arrayContaining(['rokPlacanjaDana', 'nacinPlacanja', 'rabat']));
+  runMigrations(db as Db); // idempotentno
+  db.close();
+});
+
 test('aktuelna baza prolazi kroz migracije bez promjena', () => {
   const db: Db = new Database(':memory:');
   openAsCurrentVersion(db);

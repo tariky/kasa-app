@@ -65,6 +65,20 @@ pub const POSTAVKE_ZA_ADMINA: &[&str] = &[
     "ui.skala",
     // LicencaGrupa
     "ui.showGenerator",
+    // Postavke › Dokumenti (i nastavak numeracije iz starog programa) — isto što i
+    // KLJUCEVI_DOKUMENATA u src/lib/dokumentPostavke.ts; ugovorni test ih provjerava sve.
+    "dokumenti.faktura.rokDana", "dokumenti.faktura.nacinPlacanja", "dokumenti.faktura.napomena",
+    "dokumenti.ponuda.vaziDana", "dokumenti.ponuda.uslovi", "dokumenti.ponuda.nacinPlacanja", "dokumenti.ponuda.prefiks",
+    "dokumenti.ponuda.cifara", "dokumenti.ponuda.nastavakBroj", "dokumenti.ponuda.nastavakGodina",
+    "dokumenti.nalog.prefiks", "dokumenti.nalog.nastavakBroj", "dokumenti.nalog.nastavakGodina",
+    "dokumenti.podnozje", "dokumenti.pecat", "dokumenti.pecatVelicina",
+    "dokumenti.kolone.sifra", "dokumenti.kolone.jm",
+    "dokumenti.potpis.faktura.lijevo", "dokumenti.potpis.faktura.desno",
+    "dokumenti.potpis.ponuda.lijevo", "dokumenti.potpis.ponuda.desno",
+    "dokumenti.potpis.otpremnica.lijevo", "dokumenti.potpis.otpremnica.desno",
+    "dokumenti.potpis.racun.lijevo", "dokumenti.potpis.racun.desno",
+    "dokumenti.potpis.nalog.lijevo", "dokumenti.potpis.nalog.desno",
+    "dokumenti.pecat.faktura", "dokumenti.pecat.ponuda", "dokumenti.pecat.otpremnica", "dokumenti.pecat.racun",
 ];
 
 /// Postavke koje settings:get nikad ne vraća (ide null). Stanje blokade PIN-a

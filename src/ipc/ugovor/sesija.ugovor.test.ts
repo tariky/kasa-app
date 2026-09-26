@@ -5,6 +5,7 @@ import { test, expect, describe, beforeEach, afterEach, setSystemTime } from 'bu
 import { pbkdf2Sync } from 'node:crypto';
 import { otvoriBackend, prijavi, ADMIN_PIN, type Backend } from './backend';
 import { hesirajPin, provjeriPin } from '../../lib/korisnici';
+import { KLJUCEVI_DOKUMENATA } from '../../lib/dokumentPostavke';
 
 let b: Backend;
 
@@ -448,9 +449,22 @@ describe('settings:set', () => {
     expect(broj("SELECT COUNT(*) AS n FROM settings WHERE value = 'true'")).toBe(kljucevi.length);
   });
 
+  test('postavke dokumenata: admin ih mijenja, kasir samo čita', async () => {
+    dodajKorisnika('Kasir', '1234');
+    await prijavi(b, ADMIN_PIN);
+    for (const k of KLJUCEVI_DOKUMENATA) expect(await b.call('settings:set', k, 'x')).toEqual({ success: true });
+    expect(broj("SELECT COUNT(*) AS n FROM settings WHERE key LIKE 'dokumenti.%' AND value = 'x'")).toBe(KLJUCEVI_DOKUMENATA.length);
+
+    await prijavi(b, '1234');
+    for (const k of KLJUCEVI_DOKUMENATA) {
+      await expect(b.call('settings:set', k, 'y')).rejects.toThrow(SAMO_ADMIN);
+      expect(await b.call('settings:get', k)).toBe('x');
+    }
+  });
+
   test('sve ostalo se odbija i adminu (tajne, interni ključevi, firma, tring)', async () => {
     await prijavi(b, ADMIN_PIN);
-    for (const k of ['tring.operatorPassword', 'tring.host', 'fiscal.dismissedGaps', 'firma.naziv', 'proizvodnja.enabled', 'kasa.nesto', '']) {
+    for (const k of ['tring.operatorPassword', 'tring.host', 'fiscal.dismissedGaps', 'firma.naziv', 'proizvodnja.enabled', 'kasa.nesto', 'dokumenti.nepostojeci', '']) {
       await expect(b.call('settings:set', k, 'x')).rejects.toThrow(`Postavka "${k}" se ne može mijenjati`);
     }
     expect(red("SELECT value FROM settings WHERE key = 'tring.operatorPassword'").value).toBe('0');

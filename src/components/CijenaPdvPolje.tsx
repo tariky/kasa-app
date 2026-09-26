@@ -3,6 +3,7 @@ import { DecimalInput } from '@/components/ui/decimal-input';
 import { cn, formatKM } from '@/lib/utils';
 import { round2 } from '@/lib/novac';
 import { uNetto } from '@/lib/pdvUnos';
+import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 
 interface Props {
   id?: string;
@@ -84,7 +85,7 @@ export const CijenaPdvPolje = forwardRef<HTMLInputElement, Props>(function Cijen
             vrijednost={ima ? iznos(osnovica) : '—'}
           />
           <div className="flex items-center justify-between gap-2 whitespace-nowrap pl-7 pr-2 h-6 text-slate-400">
-            <span>PDV 17 %</span>
+            <span>PDV {PDV_STOPA_E_PCT} %</span>
             <span className="font-mono tabular-nums">{ima ? `+ ${iznos(pdv)}` : '—'}</span>
           </div>
           <Red

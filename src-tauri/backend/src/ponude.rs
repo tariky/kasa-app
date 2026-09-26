@@ -9,6 +9,7 @@ use serde_json::{json, Map, Value};
 
 use crate::greska::R;
 use crate::js::{self, or, truthy};
+use crate::postavke::postavka;
 use crate::racun::{izracunaj_totale, upisi_racun};
 use crate::sql::Db;
 use crate::tring::uspjeh;
@@ -50,10 +51,28 @@ pub fn dana_izmedju(od: &str, do_: &str) -> i64 {
     }
 }
 
-/// Sljedeći redni broj ponude u godini — brojanje kreće od 1 svake godine.
+/// Najveći broj iz starog programa za godinu, ili 0 — par `nastavakNumeracije` u dokumentPostavke.ts.
+/// Važi samo kad su i broj (1–999999) i godina (2000–2999) ispravni cijeli brojevi.
+pub fn nastavak_numeracije(db: &Db, dok: &str, godina: &Value) -> R<i64> {
+    let cijeli = |v: Value, min: i64, max: i64| -> Option<i64> {
+        let t = v.as_str()?.trim();
+        if t.is_empty() || !t.chars().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        t.parse::<i64>().ok().filter(|n| (min..=max).contains(n))
+    };
+    let broj = cijeli(postavka(db, &format!("dokumenti.{dok}.nastavakBroj"))?, 1, 999_999);
+    let god = cijeli(postavka(db, &format!("dokumenti.{dok}.nastavakGodina"))?, 2000, 2999);
+    Ok(match (broj, god) {
+        (Some(b), Some(g)) if Some(g) == godina.as_i64() => b,
+        _ => 0,
+    })
+}
+
+/// Sljedeći redni broj ponude u godini — od 1, ili iza posljednjeg broja iz starog programa.
 pub fn next_broj_ponude(db: &Db, godina: &Value) -> R<i64> {
     let max = db.val("SELECT MAX(broj) AS maxBroj FROM ponude WHERE godina = ?", &[godina.clone()])?;
-    Ok(max.as_i64().unwrap_or(0) + 1)
+    Ok(max.as_i64().unwrap_or(0).max(nastavak_numeracije(db, "ponuda", godina)?) + 1)
 }
 
 /// Prikazni oblik broja ponude, npr. "3/2026".
@@ -166,7 +185,7 @@ pub fn delete_ponuda(db: &Db, id: &Value) -> R<Value> {
     }
     if let Some(nalog) = db.get("SELECT broj, godina FROM radni_nalozi WHERE ponudaId = ? ORDER BY id LIMIT 1", p![id])? {
         baci!(
-            "Ponuda je vezana za radni nalog RN-{}/{} — prvo obrišite nalog",
+            "Ponuda je vezana za radni nalog br. {}/{} — prvo obrišite nalog",
             js::to_string(&nalog["broj"]),
             js::to_string(&nalog["godina"])
         );

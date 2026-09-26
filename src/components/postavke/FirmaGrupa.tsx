@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Slider } from '@/components/ui/slider';
 import { ZaglavljePrikaz } from '@/components/ZaglavljePrikaz';
 import { ZiroRacuniPozicijaBirac } from '@/components/ZiroRacuniPozicijaBirac';
 import { LOGO_VELICINA, kontaktFirme } from '@/lib/firma';
 import { cn, porukaGreske } from '@/lib/utils';
 import type { BankAccount, FirmaSettings } from '@/types';
-import { ImagePlus, Save, X } from 'lucide-react';
+import { Save } from 'lucide-react';
 import { GrupaZaglavlje, IshodPoruka, POLJE, Polje, Sekcija, SekcijaTijelo, type Ishod } from './dijelovi';
+import { SlikaBirac, VelicinaSlike } from './SlikaBirac';
 
 const BROJ_RACUNA = 3;
 
@@ -68,15 +68,6 @@ export default function FirmaGrupa({ onSpremljeno, onIzmijenjeno }: {
       return { ...f, bankAccounts: racuni };
     });
     setIshod(null);
-  };
-
-  const handleLogo = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => postavi('logo', reader.result as string);
-    reader.readAsDataURL(file);
   };
 
   const spremi = async () => {
@@ -143,58 +134,12 @@ export default function FirmaGrupa({ onSpremljeno, onIzmijenjeno }: {
 
         <Sekcija naslov="Logo i zaglavlje" opis="Primjenjuje se na račune, fakture, ponude, otpremnice i radne naloge.">
           <SekcijaTijelo className="space-y-5">
-            <div className="flex items-center gap-4">
-              <div className={cn(
-                'w-16 h-16 flex-shrink-0 rounded-xl bg-slate-50 flex items-center justify-center overflow-hidden',
-                forma.logo ? 'border border-slate-200' : 'border border-dashed border-slate-300',
-              )}>
-                {forma.logo
-                  ? <img src={forma.logo} alt="Logo firme" className="max-w-full max-h-full object-contain" />
-                  : <ImagePlus size={20} className="text-slate-300" />}
-              </div>
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <Button asChild variant="outline" size="sm" className="h-8 gap-1.5 text-[12px] border-slate-200 cursor-pointer">
-                    <label>
-                      <ImagePlus className="h-3.5 w-3.5" />
-                      {forma.logo ? 'Zamijeni logo' : 'Dodaj logo'}
-                      <input type="file" accept="image/*" onChange={handleLogo} className="sr-only" />
-                    </label>
-                  </Button>
-                  {forma.logo && (
-                    <Button variant="ghost" size="sm" onClick={() => postavi('logo', '')}
-                      className="h-8 gap-1.5 text-[12px] text-slate-500 hover:text-rose-600 hover:bg-rose-50">
-                      <X className="h-3.5 w-3.5" />
-                      Ukloni
-                    </Button>
-                  )}
-                </div>
-                <p className="mt-1.5 text-[11.5px] text-slate-400">PNG, JPG ili SVG, najbolje kvadratni oko 200 × 200 px.</p>
-              </div>
-            </div>
+            <SlikaBirac slika={forma.logo} onChange={v => postavi('logo', v)} alt="Logo firme"
+              dodajTekst="Dodaj logo" zamijeniTekst="Zamijeni logo"
+              napomena="PNG, JPG ili SVG, najbolje kvadratni oko 200 × 200 px." />
 
-            <div className="space-y-2.5">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">Veličina loga</span>
-                <div className="flex items-center gap-2">
-                  {forma.logoVelicina !== LOGO_VELICINA.zadano && (
-                    <button type="button" onClick={() => postavi('logoVelicina', LOGO_VELICINA.zadano)}
-                      className="text-[11px] text-slate-400 hover:text-slate-700 underline-offset-2 hover:underline">
-                      Vrati zadano
-                    </button>
-                  )}
-                  <span className="font-mono text-[12px] text-slate-600 tabular-nums">{forma.logoVelicina} pt</span>
-                </div>
-              </div>
-              <Slider
-                aria-label="Veličina loga"
-                value={[forma.logoVelicina]}
-                onValueChange={([v]) => postavi('logoVelicina', v)}
-                min={LOGO_VELICINA.min}
-                max={LOGO_VELICINA.max}
-                step={2}
-              />
-            </div>
+            <VelicinaSlike naslov="Veličina loga" vrijednost={forma.logoVelicina} onChange={v => postavi('logoVelicina', v)}
+              min={LOGO_VELICINA.min} max={LOGO_VELICINA.max} zadano={LOGO_VELICINA.zadano} />
 
             <ZaglavljePrikaz
               naziv={forma.naziv}

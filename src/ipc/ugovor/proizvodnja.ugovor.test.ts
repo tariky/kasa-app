@@ -115,6 +115,38 @@ describe('nalog:nextBroj', () => {
     await narudzba(kupacId, { datum: `${GODINA - 1}-12-31` });
     expect(await b.call('nalog:nextBroj')).toEqual({ broj: 2, godina: GODINA });
   });
+
+  test('nastavak iz starog programa: sljedeći broj je iza upisanog, create ga upiše', async () => {
+    await b.call('settings:set', 'dokumenti.nalog.nastavakBroj', '12');
+    await b.call('settings:set', 'dokumenti.nalog.nastavakGodina', String(GODINA));
+    expect(await b.call('nalog:nextBroj')).toEqual({ broj: 13, godina: GODINA });
+
+    const id = await narudzba(dodajKupca());
+    expect(red('SELECT broj, godina FROM radni_nalozi WHERE id = ?', id)).toEqual({ broj: 13, godina: GODINA });
+    expect(await b.call('nalog:nextBroj')).toEqual({ broj: 14, godina: GODINA });
+  });
+
+  test('nastavak manji od najvećeg broja u bazi: broji se od najvećeg', async () => {
+    const kupacId = dodajKupca();
+    await narudzba(kupacId);
+    await narudzba(kupacId);
+    await narudzba(kupacId);
+    await b.call('settings:set', 'dokumenti.nalog.nastavakBroj', '2');
+    await b.call('settings:set', 'dokumenti.nalog.nastavakGodina', String(GODINA));
+    expect(await b.call('nalog:nextBroj')).toEqual({ broj: 4, godina: GODINA });
+  });
+
+  test('nastavak za drugu godinu ne dira tekuću', async () => {
+    await b.call('settings:set', 'dokumenti.nalog.nastavakBroj', '50');
+    await b.call('settings:set', 'dokumenti.nalog.nastavakGodina', String(GODINA - 1));
+    expect(await b.call('nalog:nextBroj')).toEqual({ broj: 1, godina: GODINA });
+    const kupacId = dodajKupca();
+    const id = await narudzba(kupacId);
+    expect(red('SELECT broj, godina FROM radni_nalozi WHERE id = ?', id)).toEqual({ broj: 1, godina: GODINA });
+    // U svojoj godini nastavak važi.
+    const stari = await narudzba(kupacId, { datum: `${GODINA - 1}-06-01` });
+    expect(red('SELECT broj, godina FROM radni_nalozi WHERE id = ?', stari)).toEqual({ broj: 51, godina: GODINA - 1 });
+  });
 });
 
 // ─── nalog:create ───────────────────────────────────────────

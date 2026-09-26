@@ -12,6 +12,7 @@ import { PretragaProizvoda } from '@/components/PretragaProizvoda';
 import { cn, formatKM, parseDecimal } from '@/lib/utils';
 import { localDateStr, prijedloziApoena, round2 } from '@/lib/novac';
 import { izracunajTotale } from '@/lib/racun';
+import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { nemaNaStanju } from '@/lib/izborArtikala';
 import {
   dodajUKosaricu, dodajSlobodnuStavku, restoreCart, postaviRabat, postaviRabatNaSve, postaviKolicinu, stavkeTekst,
@@ -20,12 +21,15 @@ import {
 import { pdf } from '@react-pdf/renderer';
 import { OtpremnicaPdf } from '@/components/OtpremnicaPdf';
 import { otvoriFakturuZaStampu } from '@/components/stampaFakture';
+import { ucitajZaStampu } from '@/lib/stampa';
 import FakturaDialog, { type SkicaFakture } from '@/components/FakturaDialog';
 import SlobodnaStavkaDialog from '@/components/kasa/SlobodnaStavkaDialog';
 import StavkeRacuna from '@/components/kasa/StavkeRacuna';
 import SpremljeneKosarice, { type SavedCartRow } from '@/components/kasa/SpremljeneKosarice';
 import type { Product, CartItem, Kupac } from '@/types';
 import { potvrdi } from '@/lib/dijalog';
+import { zadanoZaKupca, primijeniRabatKupca, formatRabat, nacinKupcaNaKasi, nacinBezKupca } from '@/lib/dokumentPostavke';
+import { useDokumentPostavke } from '@/components/DokumentPostavkeProvider';
 
 type PaymentType = 'Gotovina' | 'Kartica' | 'Virman' | 'Ček';
 const NACINI: PaymentType[] = ['Gotovina', 'Kartica', 'Virman', 'Ček'];
@@ -64,6 +68,7 @@ function uPoljuZaUnos(t: EventTarget | null): boolean {
 const poljaKupca = (k: Kupac) => ({ naziv: k.naziv, sifra: k.idBroj, dodatno: [k.adresa, k.grad].filter(Boolean).join(' ') });
 
 export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
+  const { postavke } = useDokumentPostavke();
   const [cart, setCart] = useState<CartItem[]>([]);
   const [zadnje, setZadnje] = useState<{ id: number; n: number } | null>(null);
   const [paymentType, setPaymentType] = useState<PaymentType>('Gotovina');
@@ -84,6 +89,8 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
   const [kupacGrad, setKupacGrad] = useState('');
   const [kupacPostanskiBroj, setKupacPostanskiBroj] = useState('');
   const [allKupci, setAllKupci] = useState<Kupac[] | null>(null);
+  /** Rabat kupca izabranog iz šifarnika — dobijaju ga stavke dodane poslije izbora. */
+  const [kupacRabat, setKupacRabat] = useState(0);
   const [dailyTotal, setDailyTotal] = useState<number | null>(null);
   const [allowZeroStock, setAllowZeroStock] = useState(false);
   const [kusurEnabled, setKusurEnabled] = useState(true);
@@ -99,6 +106,8 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
   const [rabatValue, setRabatValue] = useState('');
   const qtyInputRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  // Način koji je postavio izabrani kupac — kad kupac ode, vraća se na Gotovinu.
+  const nacinOdKupcaRef = useRef<PaymentType | null>(null);
 
   const fokusPretraga = useCallback(() => { setTimeout(() => searchInputRef.current?.focus(), 50); }, []);
 
@@ -114,9 +123,22 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
     setKupacAdresa(k.adresa ?? '');
     setKupacGrad(k.grad ?? '');
     setKupacPostanskiBroj(k.postanskiBroj ?? '');
+    // Na kasi važi samo kupčev način plaćanja — globalni način fakture ne mijenja Gotovinu.
+    const nacinKupca = nacinKupcaNaKasi(k);
+    const odPrethodnog = nacinOdKupcaRef.current;
+    nacinOdKupcaRef.current = nacinKupca;
+    setPaymentType(prev => nacinKupca ?? nacinBezKupca(prev, odPrethodnog));
+    const z = zadanoZaKupca(k, postavke, 'faktura');
+    setKupacRabat(z.rabat);
+    if (z.rabat > 0) {
+      setCart(prev => primijeniRabatKupca(prev, z.rabat));
+      setMessage({ type: 'success', text: `Primijenjen rabat kupca ${formatRabat(z.rabat)}` });
+    } else {
+      setMessage(m => (m?.text.startsWith('Primijenjen rabat kupca') ? null : m));
+    }
     setKupacOpen(false);
     fokusPretraga();
-  }, [fokusPretraga]);
+  }, [fokusPretraga, postavke]);
 
   const clearKupac = useCallback(() => {
     setKupacNaziv('');
@@ -124,6 +146,11 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
     setKupacAdresa('');
     setKupacGrad('');
     setKupacPostanskiBroj('');
+    // Rabat ostaje na stavkama; samo nove stavke više ne dobijaju rabat kupca.
+    setKupacRabat(0);
+    const odKupca = nacinOdKupcaRef.current;
+    nacinOdKupcaRef.current = null;
+    setPaymentType(prev => nacinBezKupca(prev, odKupca));
   }, []);
 
   // Load daily total setting + data
@@ -197,8 +224,9 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
   const addToCart = useCallback((product: Product, qty: number) => {
     const prije = cart.find(i => i.product.id === product.id)?.kolicina ?? 0;
     const next = dodajUKosaricu(cart, product, qty, allowZeroStock);
-    const poslije = next.find(i => i.product.id === product.id)?.kolicina ?? 0;
-    setCart(next);
+    const saRabatom = prije === 0 && kupacRabat > 0 ? postaviRabat(next, product.id, kupacRabat) : next;
+    const poslije = saRabatom.find(i => i.product.id === product.id)?.kolicina ?? 0;
+    setCart(saRabatom);
     setQtyProduct(null);
     if (poslije > prije) setZadnje(z => ({ id: product.id, n: (z?.n ?? 0) + 1 }));
     // Stanje je ograničilo dodavanje — kasir mora znati da nije ušlo sve što je tražio.
@@ -208,7 +236,7 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
           : `„${product.naziv}“: na stanju je ${formatQty(product.stanje ?? 0)} ${product.jm || 'kom'}, dodano ${formatQty(poslije - prije)}.` }
       : null);
     fokusPretraga();
-  }, [cart, allowZeroStock, fokusPretraga]);
+  }, [cart, allowZeroStock, kupacRabat, fokusPretraga]);
 
   // Izbor iz pretrage: "3*" daje količinu odmah; brzi sken dodaje 1; inače se pita za količinu.
   const izaberiArtikal = useCallback((product: Product, kolicina: number | null) => {
@@ -241,11 +269,12 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
   const dodajSlobodnu = useCallback((product: Product, qty: number): string | undefined => {
     const r = dodajSlobodnuStavku(cart, product, qty);
     if (r.greska) return r.greska;
-    setCart(r.cart);
+    const nova = !cart.some(i => i.product.id === product.id);
+    setCart(nova && kupacRabat > 0 ? postaviRabat(r.cart, product.id, kupacRabat) : r.cart);
     setZadnje(z => ({ id: product.id, n: (z?.n ?? 0) + 1 }));
     setMessage(null);
     zatvoriSlobodnu();
-  }, [cart, zatvoriSlobodnu]);
+  }, [cart, kupacRabat, zatvoriSlobodnu]);
 
   const closeQty = useCallback(() => {
     setQtyProduct(null);
@@ -464,8 +493,8 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
     try {
       const fullOrder = await window.api.getOrder(orderId);
       if (!fullOrder) return;
-      const firma = await window.api.getFirmaSettings();
-      const blob = await pdf(<OtpremnicaPdf order={fullOrder} firma={firma} />).toBlob();
+      const { firma, postavke } = await ucitajZaStampu();
+      const blob = await pdf(<OtpremnicaPdf order={fullOrder} firma={firma} postavke={postavke} />).toBlob();
       const url = URL.createObjectURL(blob);
       const win = window.open(url, '_blank');
       if (win) win.onafterprint = () => URL.revokeObjectURL(url);
@@ -666,7 +695,7 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
             <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 border-t border-dashed border-slate-700 pt-2.5 text-[11.5px] text-slate-400">
               <span>Osnovica</span>
               <span className="text-right font-mono tabular-nums text-slate-300">{formatKM(total - pdvAmount)}</span>
-              <span>PDV 17%</span>
+              <span>PDV {PDV_STOPA_E_PCT}%</span>
               <span className="text-right font-mono tabular-nums text-slate-300">{formatKM(pdvAmount)}</span>
               {ustedaRabat > 0 && (
                 <>

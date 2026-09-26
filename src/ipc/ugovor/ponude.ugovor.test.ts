@@ -95,6 +95,36 @@ describe('ponuda:nextBroj', () => {
     await napraviPonudu();
     expect(await b.call('ponuda:nextBroj')).toEqual({ broj: 3, godina: GODINA });
   });
+
+  test('nastavak iz starog programa: sljedeći broj je iza upisanog, create ga upiše', async () => {
+    await b.call('settings:set', 'dokumenti.ponuda.nastavakBroj', '12');
+    await b.call('settings:set', 'dokumenti.ponuda.nastavakGodina', String(GODINA));
+    expect(await b.call('ponuda:nextBroj')).toEqual({ broj: 13, godina: GODINA });
+
+    const { id } = await napraviPonudu();
+    expect(red('SELECT broj, godina FROM ponude WHERE id = ?', id)).toEqual({ broj: 13, godina: GODINA });
+    expect(await b.call('ponuda:nextBroj')).toEqual({ broj: 14, godina: GODINA });
+  });
+
+  test('nastavak manji od najvećeg broja u bazi: broji se od najvećeg', async () => {
+    await napraviPonudu();
+    await napraviPonudu();
+    await napraviPonudu();
+    await b.call('settings:set', 'dokumenti.ponuda.nastavakBroj', '2');
+    await b.call('settings:set', 'dokumenti.ponuda.nastavakGodina', String(GODINA));
+    expect(await b.call('ponuda:nextBroj')).toEqual({ broj: 4, godina: GODINA });
+  });
+
+  test('nastavak za drugu godinu ne dira tekuću', async () => {
+    await b.call('settings:set', 'dokumenti.ponuda.nastavakBroj', '50');
+    await b.call('settings:set', 'dokumenti.ponuda.nastavakGodina', String(GODINA - 1));
+    expect(await b.call('ponuda:nextBroj')).toEqual({ broj: 1, godina: GODINA });
+    const { id } = await napraviPonudu();
+    expect(red('SELECT broj, godina FROM ponude WHERE id = ?', id)).toEqual({ broj: 1, godina: GODINA });
+    // U svojoj godini nastavak važi.
+    const stara = await napraviPonudu({ datum: `${GODINA - 1}-06-01` });
+    expect(red('SELECT broj, godina FROM ponude WHERE id = ?', stara.id)).toEqual({ broj: 51, godina: GODINA - 1 });
+  });
 });
 
 // ─── ponuda:create ──────────────────────────────────────────
@@ -398,7 +428,7 @@ describe('ponuda:delete', () => {
     const nalog = await b.call('nalog:createIzPonude', id, ADMIN);
 
     await expect(b.call('ponuda:delete', id)).rejects.toThrow(
-      `Ponuda je vezana za radni nalog RN-${nalog.broj}/${nalog.godina} — prvo obrišite nalog`
+      `Ponuda je vezana za radni nalog br. ${nalog.broj}/${nalog.godina} — prvo obrišite nalog`
     );
     await expect(b.call('ponuda:delete', id)).rejects.not.toThrow('FOREIGN KEY');
     expect(broj('SELECT COUNT(*) AS n FROM ponude WHERE id = ?', id)).toBe(1);

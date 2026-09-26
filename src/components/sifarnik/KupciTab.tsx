@@ -1,12 +1,16 @@
 import { useState, useEffect, useRef } from 'react';
 import { Kupac } from '@/types';
-import { cn, porukaGreske } from '@/lib/utils';
+import { cn, porukaGreske, parseDecimal } from '@/lib/utils';
+import { NACINI_PLACANJA } from '@/lib/dokumentPostavke';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
 } from '@/components/ui/dialog';
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Key, LedgerHead } from '@/components/ui/ledger';
 import { Separator } from '@/components/ui/separator';
@@ -19,6 +23,9 @@ import { filtriraj, type PoljaPretrage } from '@/lib/pretraga';
 // ---------------------------------------------------------------------------
 // Kupac Dialog
 // ---------------------------------------------------------------------------
+
+/** Radix Select ne dozvoljava praznu vrijednost stavke — ovo znači „kao u postavkama“ (null). */
+const NACIN_GLOBALNO = '__globalno';
 
 function KupacDialog({
   open,
@@ -38,6 +45,10 @@ function KupacDialog({
   const [postanskiBroj, setPostanskiBroj] = useState('');
   const [grad, setGrad] = useState('');
   const [kontakt, setKontakt] = useState('');
+  // Zadano za dokumente; prazno = globalna postavka
+  const [rokPlacanja, setRokPlacanja] = useState('');
+  const [nacinPlacanja, setNacinPlacanja] = useState('');
+  const [rabat, setRabat] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -52,15 +63,26 @@ function KupacDialog({
         setPostanskiBroj(kupac.postanskiBroj ?? '');
         setGrad(kupac.grad ?? '');
         setKontakt(kupac.kontakt ?? '');
+        setRokPlacanja(String(kupac.rokPlacanjaDana ?? ''));
+        setNacinPlacanja(kupac.nacinPlacanja ?? '');
+        setRabat(kupac.rabat != null ? String(kupac.rabat).replace('.', ',') : '');
       } else {
         setNaziv(''); setIdBroj(''); setPdvBroj(''); setAdresa('');
         setPostanskiBroj(''); setGrad(''); setKontakt('');
+        setRokPlacanja(''); setNacinPlacanja(''); setRabat('');
       }
     }
   }, [open, kupac]);
 
   const handleSave = async () => {
     if (!naziv || !idBroj) return;
+    // Opseg provjerava backend; ovdje samo da smeće ne ode kao broj („5abc“, „1.234,5“ parseFloat bi progutao)
+    const rabatTekst = rabat.trim();
+    const rabatBroj = rabatTekst === '' ? null : parseDecimal(rabatTekst);
+    if (rabatBroj !== null && (!/^\d+([.,]\d+)?$/.test(rabatTekst) || !Number.isFinite(rabatBroj))) {
+      setError('Rabat mora biti broj, npr. 5 ili 5,5');
+      return;
+    }
     setSaving(true);
     setError('');
     try {
@@ -71,6 +93,9 @@ function KupacDialog({
         postanskiBroj: postanskiBroj || null,
         grad: grad || null,
         kontakt: kontakt || null,
+        rokPlacanjaDana: rokPlacanja.trim() === '' ? null : Number(rokPlacanja),
+        nacinPlacanja: nacinPlacanja || null,
+        rabat: rabatBroj,
       };
       if (kupac) {
         await window.api.updateKupac(kupac.id, payload);
@@ -212,6 +237,63 @@ function KupacDialog({
               onChange={(e) => setKontakt(e.target.value)}
               placeholder="Telefon, email..."
             />
+          </div>
+
+          <div className="space-y-3">
+            <div className="space-y-0.5">
+              <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                Zadano za dokumente
+              </Label>
+              <p className="text-xs text-muted-foreground">Prazno = kao u Postavkama › Dokumenti.</p>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="kup-rok" className="text-xs font-medium text-muted-foreground">
+                  Rok plaćanja (dana)
+                </Label>
+                <Input
+                  id="kup-rok"
+                  className="font-mono"
+                  value={rokPlacanja}
+                  onChange={(e) => setRokPlacanja(e.target.value.replace(/\D/g, ''))}
+                  placeholder="npr. 30"
+                  maxLength={3}
+                  inputMode="numeric"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="kup-nacin" className="text-xs font-medium text-muted-foreground">
+                  Način plaćanja
+                </Label>
+                <Select
+                  value={nacinPlacanja || NACIN_GLOBALNO}
+                  onValueChange={(v) => setNacinPlacanja(v === NACIN_GLOBALNO ? '' : v)}
+                >
+                  <SelectTrigger id="kup-nacin">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NACIN_GLOBALNO}>Kao u postavkama</SelectItem>
+                    {NACINI_PLACANJA.map((n) => (
+                      <SelectItem key={n} value={n}>{n}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="kup-rabat" className="text-xs font-medium text-muted-foreground">
+                  Rabat (%)
+                </Label>
+                <Input
+                  id="kup-rabat"
+                  className="font-mono"
+                  value={rabat}
+                  onChange={(e) => setRabat(e.target.value)}
+                  placeholder="npr. 5"
+                  inputMode="decimal"
+                />
+              </div>
+            </div>
           </div>
         </div>
 

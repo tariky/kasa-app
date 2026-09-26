@@ -88,6 +88,9 @@ export const schema = `
     postanskiBroj TEXT,
     grad TEXT,
     kontakt TEXT,
+    rokPlacanjaDana INTEGER,
+    nacinPlacanja TEXT,
+    rabat REAL,
     createdAt TEXT DEFAULT (datetime('now','localtime'))
   );
 

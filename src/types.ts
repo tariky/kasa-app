@@ -120,6 +120,7 @@ export interface OrderItem {
   pdvStopa: string;
   productNaziv?: string;
   productJm?: string;
+  productSifra?: string;
 }
 
 export interface Kupac {
@@ -131,6 +132,10 @@ export interface Kupac {
   postanskiBroj?: string;
   grad?: string;
   kontakt?: string;
+  /** Zadano za dokumente; null = globalna postavka. */
+  rokPlacanjaDana?: number | null;
+  nacinPlacanja?: string | null;
+  rabat?: number | null;
   createdAt: string;
 }
 

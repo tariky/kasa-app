@@ -2,8 +2,11 @@ import React from 'react';
 import { Document, Page, View, Text, Image, StyleSheet } from '@react-pdf/renderer';
 import { Order, BankAccount } from '@/types';
 import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
-import { POTPIS_AUTORA } from '@/lib/brend';
 import { logoVelicina, kontaktFirme } from '@/lib/firma';
+import { pecatZa, type DokumentPostavke } from '@/lib/dokumentPostavke';
+import { PotpisBlok } from './pdf/PotpisBlok';
+import { PdfPodnozje, DODATAK_PODNOZJA } from './pdf/PdfPodnozje';
+import { SifraTekst } from './pdf/SifraTekst';
 
 export interface OtpremnicaPdfProps {
   order: Order;
@@ -20,6 +23,7 @@ export interface OtpremnicaPdfProps {
     email?: string;
     logoVelicina?: number;
   };
+  postavke: DokumentPostavke;
 }
 
 const F = PDF_FONT_FAMILY;
@@ -166,52 +170,16 @@ const s = StyleSheet.create({
     lineHeight: 1.3,
   },
   colRb: { width: '7%' },
-  colArtikal: { width: '63%' },
+  colSifra: { width: '12%', paddingRight: 6 },
+  colArtikal: { flex: 1 },
   colJm: { width: '12%' },
   colKol: { width: '18%', textAlign: 'right' },
-
-  /* ── Signatures ── */
-  signaturesWrap: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 'auto',
-    paddingTop: 40,
-    paddingBottom: 20,
-  },
-  signatureBlock: {
-    width: '42%',
-  },
-  signatureLine: {
-    borderTop: '0.5pt solid #000',
-    marginBottom: 4,
-  },
-  signatureLabel: {
-    fontSize: 7,
-    fontFamily: FB,
-    fontWeight: 700,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-    color: '#000',
-    textAlign: 'center',
-  },
-
-  /* ── Footer ── */
-  footer: {
-    position: 'absolute',
-    bottom: 30,
-    left: 50,
-    right: 50,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    borderTop: '0.5pt solid #ccc',
-    paddingTop: 8,
-    fontSize: 7,
-    color: '#999',
-  },
 });
 
-export function OtpremnicaPdf({ order, firma }: OtpremnicaPdfProps) {
+export function OtpremnicaPdf({ order, firma, postavke }: OtpremnicaPdfProps) {
   const stavke = order.stavke ?? [];
+  const kol = postavke.kolone;
+  const dodatak = postavke.podnozje ? { paddingBottom: 70 + DODATAK_PODNOZJA } : {};
 
   const pad = (n: number) => String(n).padStart(2, '0');
   const fmtDate = (d: Date) => `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`;
@@ -224,7 +192,7 @@ export function OtpremnicaPdf({ order, firma }: OtpremnicaPdfProps) {
 
   return (
     <Document>
-      <Page size="A4" style={s.page}>
+      <Page size="A4" style={[s.page, dodatak]}>
 
         {/* ── Top: Logo+Firma left, title right ── */}
         <View style={s.topBar}>
@@ -292,43 +260,26 @@ export function OtpremnicaPdf({ order, firma }: OtpremnicaPdfProps) {
         <View style={s.table}>
           <View style={s.tHeaderRow}>
             <Text style={[s.tHeaderCell, s.colRb]}>#</Text>
+            {kol.sifra && <Text style={[s.tHeaderCell, s.colSifra]}>Šifra</Text>}
             <Text style={[s.tHeaderCell, s.colArtikal]}>Opis</Text>
-            <Text style={[s.tHeaderCell, s.colJm]}>JM</Text>
+            {kol.jm && <Text style={[s.tHeaderCell, s.colJm]}>JM</Text>}
             <Text style={[s.tHeaderCell, s.colKol]}>Količina</Text>
           </View>
 
           {stavke.map((si, i) => (
             <View key={si.id} style={s.tRow}>
               <Text style={[s.tCell, s.colRb]}>{i + 1}</Text>
+              {kol.sifra && <SifraTekst style={[s.tCell, s.colSifra]}>{si.productSifra ?? ''}</SifraTekst>}
               <Text style={[s.tCellBold, s.colArtikal]}>{si.productNaziv ?? ''}</Text>
-              <Text style={[s.tCell, s.colJm]}>{si.productJm ?? ''}</Text>
+              {kol.jm && <Text style={[s.tCell, s.colJm]}>{si.productJm ?? ''}</Text>}
               <Text style={[s.tCell, s.colKol]}>{si.kolicina}</Text>
             </View>
           ))}
         </View>
 
-        {/* ── Signatures ── */}
-        <View style={s.signaturesWrap} wrap={false}>
-          <View style={s.signatureBlock}>
-            <View style={s.signatureLine} />
-            <Text style={s.signatureLabel}>Robu izdao</Text>
-          </View>
-          <View style={s.signatureBlock}>
-            <View style={s.signatureLine} />
-            <Text style={s.signatureLabel}>Robu primio</Text>
-          </View>
-        </View>
+        <PotpisBlok linije={postavke.potpisi.otpremnica} pecat={pecatZa(postavke, 'otpremnica')} />
 
-        {/* ── Footer ── */}
-        <View style={s.footer} fixed>
-          <Text>{POTPIS_AUTORA}</Text>
-          <Text>{firma.naziv} · Generisano: {today}</Text>
-          <Text
-            render={({ pageNumber, totalPages }) =>
-              `${pageNumber} / ${totalPages}`
-            }
-          />
-        </View>
+        <PdfPodnozje firmaNaziv={firma.naziv} danas={today} tekst={postavke.podnozje} />
       </Page>
     </Document>
   );

@@ -3,8 +3,12 @@ import { Document, Page, View, Text, Image, StyleSheet } from '@react-pdf/render
 import { BankAccount } from '@/types';
 import { formatBrojPonude } from '@/lib/ponuda';
 import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
-import { POTPIS_AUTORA } from '@/lib/brend';
 import { logoVelicina, kontaktFirme } from '@/lib/firma';
+import { PDV_STOPA_E_PCT } from '@/lib/pdv';
+import { formatRabat, pecatZa, type DokumentPostavke } from '@/lib/dokumentPostavke';
+import { PotpisBlok } from './pdf/PotpisBlok';
+import { PdfPodnozje, DODATAK_PODNOZJA } from './pdf/PdfPodnozje';
+import { SifraTekst } from './pdf/SifraTekst';
 
 export interface PonudaPdfProps {
   ponuda: {
@@ -27,6 +31,7 @@ export interface PonudaPdfProps {
       id: number;
       productNaziv?: string;
       productJm?: string;
+      productSifra?: string;
       kolicina: number;
       cijena: number;
       rabat: number;
@@ -45,6 +50,7 @@ export interface PonudaPdfProps {
     email?: string;
     logoVelicina?: number;
   };
+  postavke: DokumentPostavke;
 }
 
 const F = PDF_FONT_FAMILY;
@@ -197,7 +203,8 @@ const s = StyleSheet.create({
     lineHeight: 1.3,
   },
   colRb: { width: '5%' },
-  colArtikal: { width: '37%' },
+  colSifra: { width: '11%', paddingRight: 6 },
+  colArtikal: { flex: 1 },
   colJm: { width: '7%' },
   colKol: { width: '9%', textAlign: 'right' },
   colCijena: { width: '14%', textAlign: 'right' },
@@ -311,49 +318,14 @@ const s = StyleSheet.create({
     color: '#000',
     letterSpacing: 0.3,
   },
-
-  /* ── Signatures ── */
-  signaturesWrap: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 'auto',
-    paddingTop: 40,
-    paddingBottom: 20,
-  },
-  signatureBlock: {
-    width: '42%',
-  },
-  signatureLine: {
-    borderTop: '0.5pt solid #000',
-    marginBottom: 4,
-  },
-  signatureLabel: {
-    fontSize: 7,
-    fontFamily: FB,
-    fontWeight: 700,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-    color: '#000',
-    textAlign: 'center',
-  },
-
-  /* ── Footer ── */
-  footer: {
-    position: 'absolute',
-    bottom: 30,
-    left: 50,
-    right: 50,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    borderTop: '0.5pt solid #ccc',
-    paddingTop: 8,
-    fontSize: 7,
-    color: '#999',
-  },
 });
 
-export function PonudaPdf({ ponuda, firma }: PonudaPdfProps) {
+export function PonudaPdf({ ponuda, firma, postavke }: PonudaPdfProps) {
   const stavke = ponuda.stavke ?? [];
+  const kol = postavke.kolone;
+  const imaRabat = stavke.some(si => si.rabat > 0);
+  const uslovi = postavke.ponuda.uslovi;
+  const dodatak = postavke.podnozje ? { paddingBottom: 70 + DODATAK_PODNOZJA } : {};
   const pdvIznos = ponuda.pdvIznos;
   const osnovica = ponuda.ukupno - pdvIznos;
 
@@ -367,7 +339,7 @@ export function PonudaPdf({ ponuda, firma }: PonudaPdfProps) {
 
   return (
     <Document>
-      <Page size="A4" style={s.page}>
+      <Page size="A4" style={[s.page, dodatak]}>
 
         {/* ── Top: Logo+Firma left, Ponuda title right ── */}
         <View style={s.topBar}>
@@ -381,7 +353,7 @@ export function PonudaPdf({ ponuda, firma }: PonudaPdfProps) {
           </View>
           <View style={s.invoiceLabel}>
             <Text style={s.invoiceTitle}>PONUDA</Text>
-            <Text style={s.invoiceNumber}>br. {formatBrojPonude(ponuda)}</Text>
+            <Text style={s.invoiceNumber}>br. {formatBrojPonude(ponuda, postavke.ponuda.broj)}</Text>
             <Text style={s.nonFiscalNote}>Ovo nije fiskalni račun</Text>
           </View>
         </View>
@@ -432,11 +404,12 @@ export function PonudaPdf({ ponuda, firma }: PonudaPdfProps) {
         <View style={s.table}>
           <View style={s.tHeaderRow}>
             <Text style={[s.tHeaderCell, s.colRb]}>#</Text>
+            {kol.sifra && <Text style={[s.tHeaderCell, s.colSifra]}>Šifra</Text>}
             <Text style={[s.tHeaderCell, s.colArtikal]}>Opis</Text>
-            <Text style={[s.tHeaderCell, s.colJm]}>JM</Text>
+            {kol.jm && <Text style={[s.tHeaderCell, s.colJm]}>JM</Text>}
             <Text style={[s.tHeaderCell, s.colKol]}>Kol.</Text>
             <Text style={[s.tHeaderCell, s.colCijena]}>Cijena</Text>
-            <Text style={[s.tHeaderCell, s.colRabat]}>Rabat</Text>
+            {imaRabat && <Text style={[s.tHeaderCell, s.colRabat]}>Rabat</Text>}
             <Text style={[s.tHeaderCell, s.colUkupno]}>Iznos</Text>
           </View>
 
@@ -445,13 +418,16 @@ export function PonudaPdf({ ponuda, firma }: PonudaPdfProps) {
             return (
               <View key={si.id} style={s.tRow}>
                 <Text style={[s.tCell, s.colRb]}>{i + 1}</Text>
+                {kol.sifra && <SifraTekst style={[s.tCell, s.colSifra]}>{si.productSifra ?? ''}</SifraTekst>}
                 <Text style={[s.tCellBold, s.colArtikal]}>{si.productNaziv ?? ''}</Text>
-                <Text style={[s.tCell, s.colJm]}>{si.productJm ?? ''}</Text>
+                {kol.jm && <Text style={[s.tCell, s.colJm]}>{si.productJm ?? ''}</Text>}
                 <Text style={[s.tCell, s.colKol]}>{si.kolicina}</Text>
                 <Text style={[s.tCell, s.colCijena]}>{formatKM(si.cijena)}</Text>
-                <Text style={[s.tCell, s.colRabat]}>
-                  {si.rabat > 0 ? `${si.rabat.toFixed(0)}%` : '—'}
-                </Text>
+                {imaRabat && (
+                  <Text style={[s.tCell, s.colRabat]}>
+                    {si.rabat > 0 ? formatRabat(si.rabat) : '—'}
+                  </Text>
+                )}
                 <Text style={[s.tCellBold, s.colUkupno]}>{formatKM(lineTotal)}</Text>
               </View>
             );
@@ -466,7 +442,7 @@ export function PonudaPdf({ ponuda, firma }: PonudaPdfProps) {
               <Text style={s.totalsValue}>{formatKM(osnovica)}</Text>
             </View>
             <View style={s.totalsRow}>
-              <Text style={s.totalsLabel}>PDV (17%)</Text>
+              <Text style={s.totalsLabel}>{`PDV (${PDV_STOPA_E_PCT}%)`}</Text>
               <Text style={s.totalsValue}>{formatKM(pdvIznos)}</Text>
             </View>
             <View style={s.totalsFinalRow}>
@@ -480,7 +456,7 @@ export function PonudaPdf({ ponuda, firma }: PonudaPdfProps) {
         <View style={s.napomenaBox}>
           <Text style={s.napomenaTitle}>Uslovi ponude</Text>
           <Text style={{ fontSize: 8.5, marginBottom: 2 }}>
-            Ponuda važi do {fmtDateStr(ponuda.vaziDo)}. Cijene su izražene u KM sa uračunatim PDV-om.
+            {`Ponuda važi do ${fmtDateStr(ponuda.vaziDo)}.${uslovi ? ` ${uslovi}` : ''}`}
           </Text>
           {ponuda.napomena ? <Text style={{ fontSize: 8.5 }}>{ponuda.napomena}</Text> : null}
         </View>
@@ -508,28 +484,9 @@ export function PonudaPdf({ ponuda, firma }: PonudaPdfProps) {
           </View>
         )}
 
-        {/* ── Signatures ── */}
-        <View style={s.signaturesWrap} wrap={false}>
-          <View style={s.signatureBlock}>
-            <View style={s.signatureLine} />
-            <Text style={s.signatureLabel}>Potpis izdavaoca</Text>
-          </View>
-          <View style={s.signatureBlock}>
-            <View style={s.signatureLine} />
-            <Text style={s.signatureLabel}>Potpis primaoca</Text>
-          </View>
-        </View>
+        <PotpisBlok linije={postavke.potpisi.ponuda} pecat={pecatZa(postavke, 'ponuda')} />
 
-        {/* ── Footer ── */}
-        <View style={s.footer} fixed>
-          <Text>{POTPIS_AUTORA}</Text>
-          <Text>{firma.naziv} · Generisano: {today}</Text>
-          <Text
-            render={({ pageNumber, totalPages }) =>
-              `${pageNumber} / ${totalPages}`
-            }
-          />
-        </View>
+        <PdfPodnozje firmaNaziv={firma.naziv} danas={today} tekst={postavke.podnozje} />
       </Page>
     </Document>
   );

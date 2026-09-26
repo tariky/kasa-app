@@ -66,6 +66,18 @@ export function runMigrations(database: Database.Database): void {
     )
   `);
 
+  // Zadane vrijednosti za dokumente po kupcu (NULL = globalna postavka)
+  const kupciCols = database.prepare("PRAGMA table_info(kupci)").all() as { name: string }[];
+  if (!kupciCols.find(c => c.name === 'rokPlacanjaDana')) {
+    database.exec("ALTER TABLE kupci ADD COLUMN rokPlacanjaDana INTEGER");
+  }
+  if (!kupciCols.find(c => c.name === 'nacinPlacanja')) {
+    database.exec("ALTER TABLE kupci ADD COLUMN nacinPlacanja TEXT");
+  }
+  if (!kupciCols.find(c => c.name === 'rabat')) {
+    database.exec("ALTER TABLE kupci ADD COLUMN rabat REAL");
+  }
+
   // Add brojFakture column to primke
   if (!primkeCols.find(c => c.name === 'brojFakture')) {
     database.exec("ALTER TABLE primke ADD COLUMN brojFakture TEXT");

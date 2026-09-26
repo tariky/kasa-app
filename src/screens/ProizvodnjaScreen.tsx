@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { RadniNalog, NalogStatus } from '@/types';
 import { formatBrojNaloga } from '@/lib/proizvodnja';
+import { useDokumentPostavke } from '@/components/DokumentPostavkeProvider';
 import { rokOznaka } from '@/lib/nalogPrikaz';
 import { localDateStr } from '@/lib/novac';
 import { cn, formatKM, formatDate } from '@/lib/utils';
@@ -61,6 +62,7 @@ const ROK_CLS = { ok: 'text-slate-400', warn: 'text-amber-600', late: 'text-rose
 export default function ProizvodnjaScreen({ uloga, initialNalogId }: {
   uloga: 'admin' | 'kasir'; initialNalogId?: number | null;
 }) {
+  const { postavke } = useDokumentPostavke();
   const [tab, setTab] = useState<Tab>('nalozi');
   const [nalozi, setNalozi] = useState<RadniNalog[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -241,7 +243,7 @@ export default function ProizvodnjaScreen({ uloga, initialNalogId }: {
                         'focus:outline focus:outline-2 focus:-outline-offset-2 focus:outline-blue-500',
                         isSel ? 'bg-blue-50/70' : 'hover:bg-slate-50')}>
                       <td className={cn(td, 'pl-6 pr-3 font-mono text-[12px] tabular-nums whitespace-nowrap',
-                        isSel ? 'font-semibold text-blue-600 shadow-[inset_3px_0_0_0_#2563eb]' : 'text-slate-400')}>{formatBrojNaloga(n)}</td>
+                        isSel ? 'font-semibold text-blue-600 shadow-[inset_3px_0_0_0_#2563eb]' : 'text-slate-400')}>{formatBrojNaloga(n, postavke.nalog.broj)}</td>
                       <td className={cn(td, 'hidden lg:table-cell px-3 text-[12px] text-slate-500 tabular-nums whitespace-nowrap')}>{formatDate(n.datum)}</td>
                       <td className={cn(td, 'px-3 max-w-0')}>
                         <span className="flex items-center gap-2 min-w-0">
@@ -298,7 +300,7 @@ export default function ProizvodnjaScreen({ uloga, initialNalogId }: {
         onClose={zatvori}
         onNavigate={otvori}
         onChanged={load}
-        onDeleted={async (n) => { setOpenId(null); setSelectedId(null); await load(); setMsg({ type: 'success', text: `Nalog ${formatBrojNaloga(n)} obrisan` }); }}
+        onDeleted={async (n) => { setOpenId(null); setSelectedId(null); await load(); setMsg({ type: 'success', text: `Nalog ${formatBrojNaloga(n, postavke.nalog.broj)} obrisan` }); }}
       />
     </div>
   );

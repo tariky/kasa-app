@@ -4,12 +4,13 @@ import { pdf } from '@react-pdf/renderer';
 import type { Order } from '@/types';
 import { cn, formatKM, formatDateTime } from '@/lib/utils';
 import { iznosStavke } from '@/lib/racun';
+import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { prilogKompletan, sumaPriloga } from '@/lib/prilog';
 import { formatDatumValute } from '@/lib/valuta';
 import { gotovinskiIznos } from '@/lib/drawer';
 import { opisPlacanja, raspodjelaPlacanja } from '@/lib/placanje';
 import { round2 } from '@/lib/novac';
-import { LOGO_VELICINA } from '@/lib/firma';
+import { ucitajZaStampu } from '@/lib/stampa';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -124,10 +125,6 @@ export function RacunDetailDialog({ orderId, redoslijed, uloga, onClose, onNavig
   const mozeUreditiFakturu = imaFakturu && !fakturaZavrsena && !refunded;
 
   // ── dokumenti ─────────────────────────────────────────
-  const loadFirma = async () => {
-    try { return await window.api.getFirmaSettings(); }
-    catch { return { naziv: '', adresa: '', grad: '', idBroj: '', pdvBroj: '', skladiste: '', web: '', email: '', logo: '', logoVelicina: LOGO_VELICINA.zadano, ziroRacuniPozicija: 'zaglavlje' as const, bankAccounts: [] }; }
-  };
   const otvoriZaStampu = (blob: Blob) => {
     const url = URL.createObjectURL(blob);
     const win = window.open(url, '_blank');
@@ -138,8 +135,14 @@ export function RacunDetailDialog({ orderId, redoslijed, uloga, onClose, onNavig
     if (!savePath) return;
     await window.api.writeFile(savePath, Array.from(new Uint8Array(await blob.arrayBuffer())) as any);
   };
-  const racunBlob = async (o: Order) => pdf(<RacunPdf order={o} firma={await loadFirma()} lang={lang} />).toBlob();
-  const otpremnicaBlob = async (o: Order) => pdf(<OtpremnicaPdf order={o} firma={await loadFirma()} />).toBlob();
+  const racunBlob = async (o: Order) => {
+    const { firma, postavke } = await ucitajZaStampu();
+    return pdf(<RacunPdf order={o} firma={firma} postavke={postavke} lang={lang} />).toBlob();
+  };
+  const otpremnicaBlob = async (o: Order) => {
+    const { firma, postavke } = await ucitajZaStampu();
+    return pdf(<OtpremnicaPdf order={o} firma={firma} postavke={postavke} />).toBlob();
+  };
 
   const stampajRacun = async () => { if (order) try { otvoriZaStampu(await racunBlob(order)); } catch (e) { greska(e, 'Štampa računa'); } };
   const spremiRacun = async () => {
@@ -172,7 +175,8 @@ export function RacunDetailDialog({ orderId, redoslijed, uloga, onClose, onNavig
         });
         return;
       }
-      otvoriZaStampu(await pdf(<PrilogPdf order={order} firma={await loadFirma()} stavke={stavke as any} />).toBlob());
+      const { firma, postavke } = await ucitajZaStampu();
+      otvoriZaStampu(await pdf(<PrilogPdf order={order} firma={firma} stavke={stavke as any} postavke={postavke} />).toBlob());
     } catch (e) { greska(e, 'Štampa fakture'); }
   };
 
@@ -445,7 +449,7 @@ export function RacunDetailDialog({ orderId, redoslijed, uloga, onClose, onNavig
                       <span className="font-mono tabular-nums text-slate-700">{formatKM(order.ukupno - order.pdvIznos)}</span>
                     </div>
                     <div className="flex items-center justify-between gap-3 text-[12px] min-h-[26px]">
-                      <span className="text-slate-500">PDV 17 %</span>
+                      <span className="text-slate-500">PDV {PDV_STOPA_E_PCT} %</span>
                       <span className="font-mono tabular-nums text-slate-700">{formatKM(order.pdvIznos)}</span>
                     </div>
                     <div className="mt-3 pt-3 border-t border-slate-200/80 flex items-baseline justify-between gap-3">

@@ -24,6 +24,8 @@ import type { Kupac, Product } from '@/types';
 import { PretragaProizvoda } from '@/components/PretragaProizvoda';
 import SlobodnaStavkaDialog from '@/components/kasa/SlobodnaStavkaDialog';
 import { localDateStr } from '@/lib/novac';
+import { useDokumentPostavke } from '@/components/DokumentPostavkeProvider';
+import { rokUIzbor, zadanoZaFakturu, primijeniRabatKupca, formatRabat } from '@/lib/dokumentPostavke';
 
 type PaymentType = 'Gotovina' | 'Kartica' | 'Virman' | 'Ček';
 type Mode = 'stavke' | 'iznos';
@@ -121,6 +123,11 @@ const plusDana = (dana: number) => {
   d.setDate(d.getDate() + dana);
   return localDateStr(d);
 };
+/** Rok u danima → stanje dijaloga: brzi izbor, ili tačan datum za ostale dane. */
+const rokIzDana = (dana: number | null): { rok: Rok; rokDatum: string } => {
+  const r = rokUIzbor(dana, ROKOVI);
+  return { rok: r.rok as Rok, rokDatum: r.rok === 'datum' && r.dana != null ? plusDana(r.dana) : '' };
+};
 const fmtDatum = (iso: string) => { const [y, m, d] = iso.split('-'); return `${d}.${m}.${y}.`; };
 /** "YYYY-MM-DD" ↔ lokalni Date, bez pomaka vremenske zone. */
 const izIso = (iso: string) => { const [y, m, d] = iso.split('-').map(Number); return new Date(y, m - 1, d); };
@@ -174,6 +181,9 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
   const [ponuda, setPonuda] = useState<PonudaVeza | null>(null);
   /** Skica iz koje je faktura nastavljena — ponovno spremanje je prepisuje. */
   const [skicaId, setSkicaId] = useState<number | null>(null);
+  /** Rabat izabranog kupca — dobija ga i svaka stavka dodana poslije izbora firme. */
+  const [rabatKupca, setRabatKupca] = useState(0);
+  const { postavke } = useDokumentPostavke();
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -186,6 +196,19 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
   const iznosRef = useRef<HTMLInputElement>(null);
   const firmaIdRef = useRef<HTMLInputElement>(null);
 
+  /** Rok i način plaćanja za firmu; stavke dobijaju rabat kupca samo na novoj fakturi. */
+  const primijeniZadano = useCallback((kupac: Kupac | undefined, izvor: 'nova' | 'ponuda') => {
+    const z = zadanoZaFakturu(kupac, postavke, izvor)!;
+    const r = rokIzDana(z.rokDana);
+    setRok(r.rok); setRokDatum(r.rokDatum);
+    setNacinPlacanja(z.nacinPlacanja);
+    if (z.rabat > 0) {
+      setStavke(prev => primijeniRabatKupca(prev, z.rabat));
+      setRabatKupca(z.rabat);
+      setObavijest(`Primijenjen rabat kupca ${formatRabat(z.rabat)}`);
+    } else setRabatKupca(0);
+  }, [postavke]);
+
   useEffect(() => {
     if (!open) return;
     let s: FakturaSkica | null = null;
@@ -195,10 +218,19 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
     const pocetniMode: Mode = s?.mode ?? 'stavke';
     setKorak(pocetnaFirma ? 'faktura' : 'firma'); setFirma(pocetnaFirma); setUredjivanje(null);
     setMode(pocetniMode); setStavke(pocetneStavke); setRucniIznos(s?.rucniIznos ?? null);
-    setNacinPlacanja(s?.nacinPlacanja ?? 'Virman');
     setOpis(s?.opis ?? PRILOG_OPIS_DEFAULT); setVeza(s?.veza ?? FAKTURA_VEZA);
-    setRok(s?.rok ?? null); setRokDatum(s?.rokDatum ?? ''); setKalendarOpen(false); setRabatSve(''); setObavijest(null); setSlobodnaOpen(false);
-    setNapomena(s ? s.napomena ?? '' : pocetno ? `Po ponudi br. ${pocetno.ponudaOznaka}` : '');
+    setKalendarOpen(false); setRabatSve(''); setObavijest(null); setSlobodnaOpen(false); setRabatKupca(0);
+    // Skica čuva sve svoje; nova faktura kreće od postavki dokumenata.
+    if (s) {
+      setNacinPlacanja(s.nacinPlacanja ?? 'Virman');
+      setRok(s.rok ?? null); setRokDatum(s.rokDatum ?? '');
+      setNapomena(s.napomena ?? '');
+    } else {
+      setNacinPlacanja(postavke.faktura.nacinPlacanja);
+      const r = rokIzDana(postavke.faktura.rokDana);
+      setRok(r.rok); setRokDatum(r.rokDatum);
+      setNapomena(pocetno ? `Po ponudi br. ${pocetno.ponudaOznaka}` : postavke.faktura.napomena);
+    }
     setPonuda(s ? s.ponuda ?? null : pocetno ? { id: pocetno.ponudaId, oznaka: pocetno.ponudaOznaka } : null);
     setSkicaId(skica?.id ?? null);
     setError(null); setBusy(false);
@@ -206,7 +238,12 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
     window.api.getFiskalnaNumeracija()
       .then(n => setPredvidjeniBroj(n.predvidjeni))
       .catch(() => setPredvidjeniBroj(null));
-    window.api.getKupci().then(setAllKupci).catch(() => setAllKupci([]));
+    // Faktura po ponudi: rok i način plaćanja kupca; rabat ne — stavke nose rabat iz ponude.
+    const izPonude = !s && pocetno ? pocetno : null;
+    window.api.getKupci().then(k => {
+      setAllKupci(k);
+      if (izPonude) primijeniZadano(k.find(x => x.idBroj === izPonude.firma.idBroj), 'ponuda');
+    }).catch(() => setAllKupci([]));
     // Stavke iz ponude ne nose stanje, a u skici je zastarjelo — dopuni ga iz kataloga za upozorenje.
     if (pocetneStavke.length) {
       window.api.getProducts().then((rows: Product[]) => {
@@ -234,10 +271,15 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
   }, []);
 
   const potvrdiFirmu = useCallback((f: Firma) => {
+    // Nova faktura uzima zadano kupca pri svakoj promjeni firme; „Zadrži“ istu firmu ne dira ništa.
+    // Firme koje nema u šifarniku dobijaju globalne postavke, bez rabata.
+    if (skicaId == null && ponuda == null && f.idBroj !== firma?.idBroj) {
+      primijeniZadano(allKupci?.find(k => k.idBroj === f.idBroj), 'nova');
+    }
     setFirma(f); setUredjivanje(null); setError(null);
     setKorak('faktura');
     fokusirajRad(mode);
-  }, [mode, fokusirajRad]);
+  }, [mode, fokusirajRad, skicaId, ponuda, firma, allKupci, primijeniZadano]);
 
   const pocniRucniUnos = (tekst: string) => {
     const cifre = /^\d+$/.test(tekst.trim());
@@ -272,12 +314,12 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
       if (existing) return prev.map(s => s.productId === p.id ? { ...s, kolicina: Math.round((s.kolicina + k) * 1000) / 1000 } : s);
       return [...prev, {
         productId: p.id, naziv: p.naziv, jm: p.jm || 'kom', sifra: p.sifra, tip: p.tip,
-        kolicina: k, cijena: p.cijena, rabat: 0, pdvStopa: p.pdvStopa,
+        kolicina: k, cijena: p.cijena, rabat: rabatKupca, pdvStopa: p.pdvStopa,
         stanje: p.tip === 'usluga' || p.slobodan ? null : p.stanje ?? null,
       }];
     });
     searchRef.current?.focus();
-  }, []);
+  }, [rabatKupca]);
 
   /** Isti rabat na sve stavke; prazno ili 0 skida rabat. */
   const primijeniRabatSve = () => {

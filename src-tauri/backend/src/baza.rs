@@ -115,6 +115,18 @@ pub fn run_migrations(db: &Db) -> R<()> {
     )",
     )?;
 
+    // Zadane vrijednosti za dokumente po kupcu (NULL = globalna postavka)
+    let kupci = kolone(db, "kupci")?;
+    if !ima(&kupci, "rokPlacanjaDana") {
+        db.exec("ALTER TABLE kupci ADD COLUMN rokPlacanjaDana INTEGER")?;
+    }
+    if !ima(&kupci, "nacinPlacanja") {
+        db.exec("ALTER TABLE kupci ADD COLUMN nacinPlacanja TEXT")?;
+    }
+    if !ima(&kupci, "rabat") {
+        db.exec("ALTER TABLE kupci ADD COLUMN rabat REAL")?;
+    }
+
     if !ima(&primke, "brojFakture") {
         db.exec("ALTER TABLE primke ADD COLUMN brojFakture TEXT")?;
     }

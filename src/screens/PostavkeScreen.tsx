@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import FirmaGrupa from '@/components/postavke/FirmaGrupa';
 import KasaGrupa from '@/components/postavke/KasaGrupa';
 import FiskalniGrupa from '@/components/postavke/FiskalniGrupa';
+import DokumentiGrupa from '@/components/postavke/DokumentiGrupa';
 import KorisniciGrupa from '@/components/postavke/KorisniciGrupa';
 import LicencaGrupa from '@/components/postavke/LicencaGrupa';
 import SistemGrupa from '@/components/postavke/SistemGrupa';
@@ -10,10 +11,10 @@ import { opisLicence } from '@/lib/licencaTipovi';
 import { cn, mnozina } from '@/lib/utils';
 import { version } from '../../package.json';
 import {
-  Building2, ScanBarcode, Printer, Users, ShieldCheck, Settings2,
+  Building2, ScanBarcode, Printer, FileText, Users, ShieldCheck, Settings2,
 } from 'lucide-react';
 
-type Grupa = 'firma' | 'kasa' | 'fiskalni' | 'korisnici' | 'licenca' | 'sistem';
+type Grupa = 'firma' | 'kasa' | 'fiskalni' | 'dokumenti' | 'korisnici' | 'licenca' | 'sistem';
 
 type Ton = 'ok' | 'upozorenje' | 'greska' | null;
 
@@ -27,6 +28,7 @@ const GRUPE: { id: Grupa; naziv: string; ikona: typeof Building2 }[] = [
   { id: 'firma', naziv: 'Firma', ikona: Building2 },
   { id: 'kasa', naziv: 'Kasa', ikona: ScanBarcode },
   { id: 'fiskalni', naziv: 'Fiskalni uređaj', ikona: Printer },
+  { id: 'dokumenti', naziv: 'Dokumenti', ikona: FileText },
   { id: 'korisnici', naziv: 'Korisnici', ikona: Users },
   { id: 'licenca', naziv: 'Licenca i moduli', ikona: ShieldCheck },
   { id: 'sistem', naziv: 'Sistem', ikona: Settings2 },
@@ -41,6 +43,7 @@ export default function PostavkeScreen() {
   // Grupa ostaje montirana kad se jednom otvori — nespremljen unos firme preživi prelazak na drugu grupu.
   const [posjecene, setPosjecene] = useState<Set<Grupa>>(() => new Set([zadnjaGrupa]));
   const [firmaIzmijenjena, setFirmaIzmijenjena] = useState(false);
+  const [dokumentiIzmijenjeno, setDokumentiIzmijenjeno] = useState(false);
   const licenca = useLicenca();
   const sadrzaj = useRef<HTMLDivElement>(null);
   const dugmad = useRef<Record<string, HTMLButtonElement | null>>({});
@@ -77,6 +80,8 @@ export default function PostavkeScreen() {
         return { tekst: 'Prodaja i unos cijena' };
       case 'fiskalni':
         return sazetak.tring ? { tekst: sazetak.tring, mono: true } : null;
+      case 'dokumenti':
+        return dokumentiIzmijenjeno ? { tekst: 'Nespremljene izmjene', ton: 'upozorenje' } : { tekst: 'Fakture, ponude, štampa' };
       case 'korisnici':
         return sazetak.korisnika == null ? null
           : { tekst: `${sazetak.korisnika} ${mnozina(sazetak.korisnika, ['korisnik', 'korisnika', 'korisnika'])}` };
@@ -151,6 +156,7 @@ export default function PostavkeScreen() {
               {g.id === 'firma' && <FirmaGrupa onSpremljeno={ucitajFirmu} onIzmijenjeno={setFirmaIzmijenjena} />}
               {g.id === 'kasa' && <KasaGrupa />}
               {g.id === 'fiskalni' && <FiskalniGrupa onSpremljeno={ucitajTring} />}
+              {g.id === 'dokumenti' && <DokumentiGrupa onIzmijenjeno={setDokumentiIzmijenjeno} />}
               {g.id === 'korisnici' && <KorisniciGrupa onPromjena={ucitajKorisnike} />}
               {g.id === 'licenca' && <LicencaGrupa />}
               {g.id === 'sistem' && <SistemGrupa />}
