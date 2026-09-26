@@ -65,9 +65,9 @@ test('usluga ne razdužuje: izlaz računa i priloga preskače uslugu, ostalo knj
   expect(stanje(db, u)).toBe(0);
 });
 
-test('usluga ne razdužuje: artikal kojeg nema u bazi se knjiži (preskače se samo poznata usluga)', () => {
-  knjizi(db, { vrsta: 'order', id: 1 }, 'izlaz', [{ productId: 404, kolicina: 2 }]);
-  expect(stanje(db, 404)).toBe(-2);
+test('usluga ne razdužuje: preskače se samo poznata usluga — artikal kojeg nema u bazi se ne preskače, upis pada na stranom ključu', () => {
+  expect(() => knjizi(db, { vrsta: 'order', id: 1 }, 'izlaz', [{ productId: 404, kolicina: 2 }])).toThrow('FOREIGN KEY constraint failed');
+  expect(kretanja()).toEqual([]);
 });
 
 test('pravilo usluge važi samo za prodaju: storno, korekcija i nalog knjiže i uslugu', () => {

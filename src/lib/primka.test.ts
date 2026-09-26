@@ -399,6 +399,8 @@ test('ručna izmjena poslije primke preuzima njenu staru cijenu i ostaje; cijena
   db.prepare('UPDATE products SET cijena = 13 WHERE id = ?').run(q);
   primke.obrisi(c);
   expect(cijena(q)).toBe(13);
+  // Cijena se ne vraća, pa nema ni traga vraćanja; promjena primke je ipak poništena (izlazi iz lanca).
+  expect(historija(q)).toEqual([{ izvor: 'primka', izvorId: c, staraCijena: 10, novaCijena: 12, ponistena: 1 }]);
 });
 
 // ── Stare primke (prije historije cijena) — stari put ─────────────────

@@ -1,8 +1,10 @@
-// Baza za lib testove: prazna SQLite baza u memoriji s produkcijskom šemom.
-// (better-sqlite3 je buildan za Electron ABI i ne učitava se pod Bun-om, pa
-// testovi koriste bun:sqlite — isti SQLite engine, isti SQL.)
+// Baza za lib testove: prazna SQLite baza u memoriji s produkcijskom šemom i
+// pragmama konekcije programa (strani ključevi uključeni, kao u getDb).
+// better-sqlite3 je buildan za Electron ABI i ne učitava se pod Bun-om, pa
+// testovi koriste bun:sqlite — isti SQLite engine, isti SQL.
 import { Database } from 'bun:sqlite';
 import { schema } from '../database/schema';
+import { podesiKonekciju } from '../database/konekcija';
 import type { SqlDb } from './sqldb';
 
 /** Baza koju poslovna logika prima kao `SqlDb`, a test koristi i kao bun:sqlite (`transaction`, `exec`). */
@@ -15,6 +17,7 @@ export interface OpcijeTestneBaze {
 
 export function testnaBaza(opcije: OpcijeTestneBaze = {}): TestnaBaza {
   const db = new Database(':memory:') as TestnaBaza;
+  podesiKonekciju({ pragma: (izraz: string) => db.prepare(`PRAGMA ${izraz}`).all() });
   db.exec(schema);
   if (opcije.kasir) db.prepare("INSERT INTO users (id, ime, pin, uloga) VALUES (1, 'Kasir', '1234', 'kasir')").run();
   return db;
