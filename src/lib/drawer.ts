@@ -3,6 +3,7 @@
  * Čista logika bez baze — dijele je main proces (cash:drawerState) i testovi.
  */
 import { round2 } from './novac';
+import { raspodjelaPlacanja } from './placanje';
 
 export interface CashMovementLike {
   tip: 'polog' | 'povrat';
@@ -23,17 +24,14 @@ export interface DrawerState {
 }
 
 /**
- * Gotovinski dio jednog računa. `nacinPlacanja` je ili plain string
- * ('Gotovina', 'Kartica'...) — tada je gotovina puni iznos ili ništa —
- * ili JSON `{gotovina, kartica, ...}` s razbijenim iznosima.
+ * Gotovinski dio jednog računa, čitan istim parserom kao izvoz knjigovođi
+ * (`raspodjelaPlacanja`): tekst ('Gotovina', 'Kartica'...) — gotovina je puni
+ * iznos ili ništa — ili JSON `{gotovina, kartica, ...}` s razbijenim iznosima.
+ * Nepoznat oblik ne nosi gotovinu (izvoz ga označi kao nepoznat).
  */
 export function gotovinskiIznos(nacinPlacanja: string, ukupno: number): number {
-  try {
-    const parsed = JSON.parse(nacinPlacanja);
-    return typeof parsed.gotovina === 'number' ? parsed.gotovina : 0;
-  } catch {
-    return nacinPlacanja === 'Gotovina' ? ukupno : 0;
-  }
+  const { iznosi, poznat } = raspodjelaPlacanja(nacinPlacanja, ukupno);
+  return poznat ? iznosi.gotovina : 0;
 }
 
 /**

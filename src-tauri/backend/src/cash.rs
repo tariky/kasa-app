@@ -10,28 +10,16 @@ use crate::greska::R;
 use crate::js::{self, round2, to_number};
 use crate::sql::Db;
 use crate::tring::{self, Odgovor};
-use crate::{baci, p, sesija, Args, Backend};
+use crate::{baci, p, provjera_racuna, sesija, Args, Backend};
 
 // ─── lib/drawer.ts ──────────────────────────────────────────
 
-/// Gotovinski dio jednog računa. `nacinPlacanja` je ili plain string
-/// ('Gotovina', 'Kartica'...) — tada je gotovina puni iznos ili ništa —
-/// ili JSON `{gotovina, kartica, ...}` s razbijenim iznosima.
+/// Gotovinski dio jednog računa, čitan istim parserom kao izvoz knjigovođi
+/// (`raspodjela_placanja`): tekst ('Gotovina', 'Kartica'...) — gotovina je puni
+/// iznos ili ništa — ili JSON `{gotovina, kartica, ...}` s razbijenim iznosima.
+/// Nepoznat oblik ne nosi gotovinu (izvoz ga označi kao nepoznat).
 pub fn gotovinski_iznos(nacin_placanja: &Value, ukupno: f64) -> f64 {
-    // JSON.parse(x) radi nad String(x); `null` iz JSON-a ili bilo šta bez
-    // `.gotovina` broja daje 0, a greška parsiranja pada na poređenje stringa.
-    let tekst = js::to_string(nacin_placanja);
-    match js::parse(&tekst) {
-        // `null.gotovina` baca u JS-u — catch grana, koja za "null" daje 0.
-        Ok(Value::Null) => 0.0,
-        Ok(parsed) => match &parsed["gotovina"] {
-            Value::Number(n) => n.as_f64().unwrap_or(0.0),
-            _ => 0.0,
-        },
-        Err(_) => {
-            if nacin_placanja.as_str() == Some("Gotovina") { ukupno } else { 0.0 }
-        }
-    }
+    provjera_racuna::raspodjela_placanja(&js::to_string(nacin_placanja), ukupno).map_or(0.0, |iznosi| iznosi[0])
 }
 
 /// `prodaje` su računi prodani u periodu (bez obzira na kasniji storno —
@@ -250,4 +238,33 @@ pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
         "cash:drawerState" => drawer_state(db),
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gotovina_iz_starih_zapisa() {
+        let g = |n: &str, ukupno: f64| gotovinski_iznos(&json!(n), ukupno);
+        assert_eq!(g("Gotovina", 25.5), 25.5);
+        assert_eq!(g("gotovina", 25.5), 25.5);
+        assert_eq!(g(" Gotovina ", 25.5), 25.5);
+        assert_eq!(g(r#"{"Gotovina":5,"kartica":3}"#, 8.0), 5.0);
+        assert_eq!(g("cek", 100.0), 0.0);
+        assert_eq!(g("Kartica", 25.5), 0.0);
+        assert_eq!(g("Bitcoin", 100.0), 0.0);
+        assert_eq!(g(r#"{"gotovina":5,"zlato":3}"#, 8.0), 0.0);
+        assert_eq!(g(r#"{"gotovina":5,"constructor":3}"#, 8.0), 0.0);
+        assert_eq!(gotovinski_iznos(&Value::Null, 8.0), 0.0);
+
+        let stanje = ocekivano_stanje(
+            &[],
+            &[json!({ "nacinPlacanja": "gotovina", "ukupno": 10 }), json!({ "nacinPlacanja": r#"{"Gotovina":5,"kartica":3}"#, "ukupno": 8 })],
+            &[json!({ "nacinPlacanja": " Gotovina ", "ukupno": 4 })],
+        );
+        assert_eq!(stanje["gotovinskiPromet"], json!(15));
+        assert_eq!(stanje["gotovinskeReklamacije"], json!(4));
+        assert_eq!(stanje["ocekivanoStanje"], json!(11));
+    }
 }

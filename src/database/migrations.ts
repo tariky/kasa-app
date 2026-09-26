@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { kanonskiNacinPlacanja, NACINI_PLACANJA } from '../lib/placanje';
 
 // Idempotentne migracije za baze iz starijih verzija programa (uključujući
 // uvezene backup-e). Pokreću se nakon `schema` pri svakom otvaranju baze.
@@ -177,4 +178,25 @@ export function runMigrations(database: Database.Database): void {
   if (historijaCols.length > 0 && !historijaCols.find(c => c.name === 'cijenaUProdaji')) {
     database.exec("ALTER TABLE cijena_historija ADD COLUMN cijenaUProdaji REAL");
   }
+
+  normalizujNacinPlacanja(database);
+}
+
+/**
+ * Stari zapisi načina plaćanja ('gotovina', ' Gotovina ', 'cek',
+ * '{"Gotovina":5}') u kanonski oblik (placanje.ts), da ladica, izvoz i ekran
+ * vide isto. Oblik koji parser ne razumije ostaje kakav jeste. Idempotentno.
+ */
+function normalizujNacinPlacanja(database: Database.Database): void {
+  const redovi = database.prepare(
+    `SELECT id, nacinPlacanja FROM orders WHERE nacinPlacanja NOT IN (${NACINI_PLACANJA.map(() => '?').join(', ')})`
+  ).all(...NACINI_PLACANJA) as Array<{ id: number; nacinPlacanja: unknown }>;
+  const upis = database.prepare('UPDATE orders SET nacinPlacanja = ? WHERE id = ?');
+  database.transaction(() => {
+    for (const r of redovi) {
+      if (typeof r.nacinPlacanja !== 'string') continue;
+      const kanonski = kanonskiNacinPlacanja(r.nacinPlacanja);
+      if (kanonski !== r.nacinPlacanja) upis.run(kanonski, r.id);
+    }
+  })();
 }
