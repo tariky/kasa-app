@@ -309,7 +309,7 @@ fn pending_resolve(b: &Backend, data: &Value) -> R<Value> {
     // Storno ne upisuje račun: nosi broj reklamacije (drugi niz, ne broj
     // računa) i nema način plaćanja.
     if vrsta != "storno" {
-        pending_racun::provjeri_nacin_placanja(&snap)?;
+        pending_racun::provjeri_nacin_placanja_snapshota(&snap)?;
         if db.ima("SELECT id FROM orders WHERE brojFiskalnogRacuna = ?", p![broj])? {
             baci!("Fiskalni račun sa tim brojem već postoji");
         }
@@ -566,8 +566,10 @@ mod tests {
             (None, Some(json!(r#"{"gotovina":5,"zlato":1}"#)), r#"{"gotovina":5,"zlato":1}"#),
             (None, Some(json!(r#"{"gotovina":0}"#)), r#"{"gotovina":0}"#),
             (None, Some(json!("")), ""),
-            (None, Some(Value::Null), "null"),
-            (None, None, "undefined"),
+            // Ruling 15: kao TS `String(nacin ?? '')` — null i nedostajući ključ su "".
+            (None, Some(Value::Null), ""),
+            (None, None, ""),
+            (None, Some(json!(5)), "5"),
             (Some("ponuda"), Some(json!("KARTICA")), "KARTICA"),
             (Some("nalog"), Some(json!("virman")), "virman"),
         ];
@@ -580,7 +582,7 @@ mod tests {
             );
         }
         assert_eq!(broj("SELECT COUNT(*) AS n FROM orders"), json!(0));
-        assert_eq!(broj("SELECT COUNT(*) AS n FROM pending_receipts"), json!(11));
+        assert_eq!(broj("SELECT COUNT(*) AS n FROM pending_receipts"), json!(12));
         assert_eq!(broj("SELECT COUNT(*) AS n FROM stock_movements"), json!(0));
 
         // Kanonski tekst i prepoznata JSON raspodjela (ključevi bez obzira na slova) prolaze.

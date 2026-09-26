@@ -2,7 +2,7 @@
 //!
 //! Evidencija gotovine (polog/povrat) ide kroz Tring UnosNovca/PovratNovca;
 //! očekivano stanje ladice koristi i storno (`order:refundAndPrint`), pa su
-//! [`drawer_state`], [`deposit_cash`] i [`device_cash_in`] izloženi za `racuni.rs`.
+//! [`drawer_state`], [`deposit_cash`] i [`device_cash_in`] izloženi za `storno.rs`.
 
 use serde_json::{json, Map, Value};
 
