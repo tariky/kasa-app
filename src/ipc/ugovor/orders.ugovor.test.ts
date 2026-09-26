@@ -897,4 +897,25 @@ describe('storno i zaliha', () => {
     expect(povrat(id)).toEqual([{ productId: p, tip: 'ulaz', kolicina: 3 }]);
     expect(stanje(p)).toBe(10);
   });
+
+  test('prodaja i storno bez datuma s papira: kretanja nose lokalno vrijeme računa i storna („Zalihe na dan")', async () => {
+    const p = dodajArtikal('Z4', 2.5, { stanje: 10 });
+    // Oba vremena piše backend (datetime('now','localtime') u svojoj zoni) — porede se međusobno.
+    const kretanje = (vrsta: string, id: number) => red(`
+      SELECT sm.tip, sm.kolicina, sm.createdAt,
+        abs(julianday(sm.createdAt) - julianday(CASE WHEN sm.tip = 'izlaz' THEN o.createdAt ELSE o.refundedAt END)) * 86400 AS razlika
+      FROM stock_movements sm JOIN orders o ON o.id = sm.referenceId
+      WHERE sm.referenceType = ? AND sm.referenceId = ?
+    `, vrsta, id);
+
+    const { id } = await b.call('order:finalize', racun([kasaStavka(p, 2, 2.5)]));
+    expect(await b.call('order:refundAndPrint', { id })).toMatchObject({ success: true });
+
+    for (const [vrsta, tip] of [['order', 'izlaz'], ['refund', 'ulaz']]) {
+      const k = kretanje(vrsta, id);
+      expect([k.tip, k.kolicina]).toEqual([tip, 2]);
+      expect(k.createdAt).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+      expect(k.razlika).toBeLessThanOrEqual(1);
+    }
+  });
 });
