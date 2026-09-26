@@ -269,12 +269,11 @@ impl Db {
 mod tests {
     use super::*;
     use crate::greska::Greska;
+    use crate::proba::baza;
 
     #[test]
     fn tx_ponisti_na_gresku_i_paniku() {
-        let dir = std::env::temp_dir().join(format!("kasa-sql-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let db = Db::aktivna(&dir.join("kasa.db"), Arc::new(Petlja::nova())).unwrap();
+        let db = baza("sql-tx");
         let broj = |db: &Db| db.val("SELECT COUNT(*) FROM saved_carts", &[]).unwrap();
 
         let r: R<()> = db.tx(|| {
@@ -294,17 +293,13 @@ mod tests {
 
         db.tx(|| db.run("INSERT INTO saved_carts (naziv, items, ukupno) VALUES ('c', '[]', 1)", &[])).unwrap();
         assert_eq!(broj(&db), serde_json::json!(1));
-        drop(db);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Pregled: operacija se izvrši, a `f` odluči da li ostaje — rezultat se
     /// vraća i kad se poništi, i u ugniježdenoj transakciji.
     #[test]
     fn tx_s_odlukom_potvrdi_ili_ponisti() {
-        let dir = std::env::temp_dir().join(format!("kasa-sql-odluka-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let db = Db::aktivna(&dir.join("kasa.db"), Arc::new(Petlja::nova())).unwrap();
+        let db = baza("sql-odluka");
         let broj = |db: &Db| db.val("SELECT COUNT(*) FROM saved_carts", &[]).unwrap();
         let upisi = |naziv: &str| db.run("INSERT INTO saved_carts (naziv, items, ukupno) VALUES (?, '[]', 1)", &[naziv.into()]);
 
@@ -323,7 +318,5 @@ mod tests {
         .unwrap();
         assert_eq!(db.all("SELECT naziv FROM saved_carts ORDER BY id", &[]).unwrap(), vec![serde_json::json!({ "naziv": "b" }), serde_json::json!({ "naziv": "d" })]);
         assert_eq!(db.petlja.transakcije.load(Ordering::SeqCst), 0);
-        drop(db);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

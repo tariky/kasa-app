@@ -92,52 +92,18 @@ pub fn stanje(db: &Db, product_id: &Value) -> R<Value> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use serde_json::{json, Value};
 
     use super::*;
-    use crate::petlja::Petlja;
+    use crate::proba::baza;
 
-    /// Aktivna baza (schema + migracije) u privremenom folderu; briše se na kraju.
-    struct Baza {
-        db: Option<Db>,
-        dir: std::path::PathBuf,
+    fn artikal(db: &Db, sifra: &str, tip: &str) -> Value {
+        let r = db.run("INSERT INTO products (sifra, naziv, cijena, pdvStopa, tip) VALUES (?, ?, 10, 'E', ?)", p![sifra, sifra, tip]).unwrap();
+        json!(r.last_insert_rowid)
     }
 
-    impl Baza {
-        fn nova(ime: &str) -> Baza {
-            let dir = std::env::temp_dir().join(format!("kasa-zaliha-{ime}-{}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&dir);
-            std::fs::create_dir_all(&dir).unwrap();
-            let db = Db::aktivna(&dir.join("kasa.db"), Arc::new(Petlja::nova())).unwrap();
-            Baza { db: Some(db), dir }
-        }
-
-        fn db(&self) -> &Db {
-            self.db.as_ref().unwrap()
-        }
-
-        fn artikal(&self, sifra: &str, tip: &str) -> Value {
-            let r = self
-                .db()
-                .run("INSERT INTO products (sifra, naziv, cijena, pdvStopa, tip) VALUES (?, ?, 10, 'E', ?)", p![sifra, sifra, tip])
-                .unwrap();
-            json!(r.last_insert_rowid)
-        }
-
-        fn kretanja(&self) -> Vec<Value> {
-            self.db()
-                .all("SELECT productId, tip, kolicina, referenceType, referenceId, createdAt FROM stock_movements ORDER BY id", p![])
-                .unwrap()
-        }
-    }
-
-    impl Drop for Baza {
-        fn drop(&mut self) {
-            drop(self.db.take());
-            let _ = std::fs::remove_dir_all(&self.dir);
-        }
+    fn kretanja(db: &Db) -> Vec<Value> {
+        db.all("SELECT productId, tip, kolicina, referenceType, referenceId, createdAt FROM stock_movements ORDER BY id", p![]).unwrap()
     }
 
     fn dok<'a>(vrsta: &'a str, id: &'a Value) -> Dokument<'a> {
@@ -146,78 +112,77 @@ mod tests {
 
     #[test]
     fn stanje_cuva_integer_i_real_zapis() {
-        let b = Baza::nova("stanje");
-        let a = b.artikal("A", "artikal");
-        assert_eq!(stanje(b.db(), &a).unwrap(), json!(0));
-        assert_eq!(stanje(b.db(), &json!(999)).unwrap(), json!(0));
-        knjizi(b.db(), dok("primka", &json!(1)), Smjer::Ulaz, [(&a, &json!(10))], &Value::Null).unwrap();
+        let db = baza("zaliha-stanje");
+        let a = artikal(&db, "A", "artikal");
+        assert_eq!(stanje(&db, &a).unwrap(), json!(0));
+        assert_eq!(stanje(&db, &json!(999)).unwrap(), json!(0));
+        knjizi(&db, dok("primka", &json!(1)), Smjer::Ulaz, [(&a, &json!(10))], &Value::Null).unwrap();
         // Zbir REAL kolone je REAL i kad je cijeli broj (JSON 10.0, ne 10).
-        assert_eq!(stanje(b.db(), &a).unwrap(), json!(10.0));
-        knjizi(b.db(), dok("order", &json!(1)), Smjer::Izlaz, [(&a, &json!(2.5))], &Value::Null).unwrap();
-        assert_eq!(stanje(b.db(), &a).unwrap(), json!(7.5));
+        assert_eq!(stanje(&db, &a).unwrap(), json!(10.0));
+        knjizi(&db, dok("order", &json!(1)), Smjer::Izlaz, [(&a, &json!(2.5))], &Value::Null).unwrap();
+        assert_eq!(stanje(&db, &a).unwrap(), json!(7.5));
         // Id kao tekst se poredi kao broj, kao u `WHERE productId = ?`.
-        assert_eq!(stanje(b.db(), &json!(a.to_string())).unwrap(), json!(7.5));
+        assert_eq!(stanje(&db, &json!(a.to_string())).unwrap(), json!(7.5));
     }
 
     #[test]
     fn knjizi_redom_s_datumom_dokumenta() {
-        let b = Baza::nova("datum");
-        let a = b.artikal("A", "artikal");
-        let m = b.artikal("M", "materijal");
+        let db = baza("zaliha-datum");
+        let a = artikal(&db, "A", "artikal");
+        let m = artikal(&db, "M", "materijal");
         let stavke = [json!({ "productId": a, "kolicina": 3 }), json!({ "productId": m, "kolicina": 1.25 })];
-        knjizi(b.db(), dok("primka", &json!(7)), Smjer::Ulaz, stavke.iter().map(|s| (&s["productId"], &s["kolicina"])), &json!("2026-03-10 00:00:00"))
+        knjizi(&db, dok("primka", &json!(7)), Smjer::Ulaz, stavke.iter().map(|s| (&s["productId"], &s["kolicina"])), &json!("2026-03-10 00:00:00"))
             .unwrap();
         assert_eq!(
-            b.kretanja(),
+            kretanja(&db),
             vec![
                 json!({ "productId": a, "tip": "ulaz", "kolicina": 3.0, "referenceType": "primka", "referenceId": 7, "createdAt": "2026-03-10 00:00:00" }),
                 json!({ "productId": m, "tip": "ulaz", "kolicina": 1.25, "referenceType": "primka", "referenceId": 7, "createdAt": "2026-03-10 00:00:00" }),
             ]
         );
         // Bez datuma: lokalno vrijeme sada, kao zadana vrijednost kolone.
-        knjizi(b.db(), dok("radni_nalog", &json!(3)), Smjer::Izlaz, [(&a, &json!(1))], &Value::Null).unwrap();
-        let danas = b.db().val("SELECT date('now','localtime')", p![]).unwrap();
-        let sada = b.kretanja()[2]["createdAt"].as_str().unwrap().to_string();
+        knjizi(&db, dok("radni_nalog", &json!(3)), Smjer::Izlaz, [(&a, &json!(1))], &Value::Null).unwrap();
+        let danas = db.val("SELECT date('now','localtime')", p![]).unwrap();
+        let sada = kretanja(&db)[2]["createdAt"].as_str().unwrap().to_string();
         assert_eq!(sada.len(), 19);
         assert_eq!(json!(&sada[..10]), danas);
     }
 
     #[test]
     fn usluga_ne_razduzuje_samo_u_prodaji() {
-        let b = Baza::nova("usluga");
-        let a = b.artikal("A", "artikal");
-        let u = b.artikal("U", "usluga");
-        let m = b.artikal("M", "materijal");
+        let db = baza("zaliha-usluga");
+        let a = artikal(&db, "A", "artikal");
+        let u = artikal(&db, "U", "usluga");
+        let m = artikal(&db, "M", "materijal");
         let jedan = json!(1);
         for vrsta in ["order", "prilog"] {
-            knjizi(b.db(), dok(vrsta, &jedan), Smjer::Izlaz, [(&a, &jedan), (&u, &jedan), (&m, &jedan)], &Value::Null).unwrap();
+            knjizi(&db, dok(vrsta, &jedan), Smjer::Izlaz, [(&a, &jedan), (&u, &jedan), (&m, &jedan)], &Value::Null).unwrap();
         }
         let vrste = |k: &[Value]| k.iter().map(|k| (k["referenceType"].clone(), k["productId"].clone())).collect::<Vec<_>>();
         assert_eq!(
-            vrste(&b.kretanja()),
+            vrste(&kretanja(&db)),
             vec![(json!("order"), a.clone()), (json!("order"), m.clone()), (json!("prilog"), a.clone()), (json!("prilog"), m.clone())]
         );
         // Storno, korekcija i nalog knjiže tačno zadano, i za uslugu.
-        let db = b.db();
         db.run("DELETE FROM stock_movements", p![]).unwrap();
-        knjizi(db, dok("refund", &jedan), Smjer::Ulaz, [(&u, &json!(2))], &Value::Null).unwrap();
-        knjizi(db, dok("adjustment", &json!(0)), Smjer::Izlaz, [(&u, &json!(0.5))], &Value::Null).unwrap();
-        knjizi(db, dok("radni_nalog", &json!(4)), Smjer::Izlaz, [(&u, &json!(0.25))], &Value::Null).unwrap();
-        assert_eq!(stanje(db, &u).unwrap(), json!(1.25));
+        knjizi(&db, dok("refund", &jedan), Smjer::Ulaz, [(&u, &json!(2))], &Value::Null).unwrap();
+        knjizi(&db, dok("adjustment", &json!(0)), Smjer::Izlaz, [(&u, &json!(0.5))], &Value::Null).unwrap();
+        knjizi(&db, dok("radni_nalog", &json!(4)), Smjer::Izlaz, [(&u, &json!(0.25))], &Value::Null).unwrap();
+        assert_eq!(stanje(&db, &u).unwrap(), json!(1.25));
     }
 
     #[test]
     fn ponisti_samo_taj_dokument() {
-        let b = Baza::nova("ponisti");
-        let a = b.artikal("A", "artikal");
+        let db = baza("zaliha-ponisti");
+        let a = artikal(&db, "A", "artikal");
         let (jedan, dva) = (json!(1), json!(2));
-        knjizi(b.db(), dok("primka", &jedan), Smjer::Ulaz, [(&a, &json!(10))], &Value::Null).unwrap();
-        knjizi(b.db(), dok("primka", &dva), Smjer::Ulaz, [(&a, &json!(5))], &Value::Null).unwrap();
-        knjizi(b.db(), dok("radni_nalog", &jedan), Smjer::Izlaz, [(&a, &json!(1))], &Value::Null).unwrap();
-        ponisti(b.db(), dok("primka", &jedan)).unwrap();
-        let ostalo: Vec<_> = b.kretanja().iter().map(|k| (k["referenceType"].clone(), k["referenceId"].clone())).collect();
+        knjizi(&db, dok("primka", &jedan), Smjer::Ulaz, [(&a, &json!(10))], &Value::Null).unwrap();
+        knjizi(&db, dok("primka", &dva), Smjer::Ulaz, [(&a, &json!(5))], &Value::Null).unwrap();
+        knjizi(&db, dok("radni_nalog", &jedan), Smjer::Izlaz, [(&a, &json!(1))], &Value::Null).unwrap();
+        ponisti(&db, dok("primka", &jedan)).unwrap();
+        let ostalo: Vec<_> = kretanja(&db).iter().map(|k| (k["referenceType"].clone(), k["referenceId"].clone())).collect();
         assert_eq!(ostalo, vec![(json!("primka"), json!(2)), (json!("radni_nalog"), json!(1))]);
-        assert_eq!(stanje(b.db(), &a).unwrap(), json!(4.0));
+        assert_eq!(stanje(&db, &a).unwrap(), json!(4.0));
     }
 
     #[test]
@@ -225,13 +190,13 @@ mod tests {
         // Jedini tekst između backtickova u zaliha.ts.
         assert_eq!(ZALIHA_TS.matches('`').count(), 2);
         assert!(stanje_sql().contains("FROM stock_movements sm WHERE sm.productId = p.id"));
-        let b = Baza::nova("sql");
-        let a = b.artikal("A", "artikal");
-        b.artikal("B", "artikal");
-        knjizi(b.db(), dok("primka", &json!(1)), Smjer::Ulaz, [(&a, &json!(4))], &Value::Null).unwrap();
-        let redovi = b.db().all(&format!("SELECT p.id, {} AS stanje FROM products p ORDER BY p.id", stanje_sql()), p![]).unwrap();
+        let db = baza("zaliha-sql");
+        let a = artikal(&db, "A", "artikal");
+        artikal(&db, "B", "artikal");
+        knjizi(&db, dok("primka", &json!(1)), Smjer::Ulaz, [(&a, &json!(4))], &Value::Null).unwrap();
+        let redovi = db.all(&format!("SELECT p.id, {} AS stanje FROM products p ORDER BY p.id", stanje_sql()), p![]).unwrap();
         for r in &redovi {
-            assert_eq!(r["stanje"], stanje(b.db(), &r["id"]).unwrap());
+            assert_eq!(r["stanje"], stanje(&db, &r["id"]).unwrap());
         }
         assert_eq!(redovi.iter().map(|r| r["stanje"].clone()).collect::<Vec<_>>(), vec![json!(4.0), json!(0)]);
     }

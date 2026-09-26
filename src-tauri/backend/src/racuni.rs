@@ -486,7 +486,7 @@ pub const KANALI: &[Kanal] = &[
 mod tests {
     use serde_json::{json, Value};
 
-    use crate::racun::tests::proba;
+    use crate::proba::proba;
 
     /// Ruling 8: pending:resolve prije ikakvog upisa provjerava način plaćanja
     /// iz snapshota — kanonski tekst s liste ili JSON raspodjela koju

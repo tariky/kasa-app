@@ -238,7 +238,7 @@ pub fn nije_zabiljezen(dokument: Odstampan, greska: &Greska) -> Greska {
 mod tests {
     use serde_json::{json, Value};
 
-    use crate::racun::tests::{proba, Proba};
+    use crate::proba::{proba, Proba};
 
     /// Po jedan dokument za svaki tok štampe.
     struct Dokumenti {

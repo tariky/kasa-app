@@ -29,6 +29,8 @@ pub mod audit;
 pub mod provjera_racuna;
 pub mod cuvanje;
 pub mod zaliha;
+#[cfg(test)]
+mod proba;
 
 // Domene (po grupama kanala)
 pub mod korisnici;

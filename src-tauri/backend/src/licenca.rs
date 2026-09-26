@@ -519,9 +519,7 @@ mod tests {
         assert_eq!(efektivni_danas("2026-12-01", Some("2026-11-25"), Some("2026-11-20")), "2026-12-01");
         assert_eq!(efektivni_danas("2026-12-01", Some("zzzz"), Some("9999")), "2026-12-01");
 
-        let dir = std::env::temp_dir().join(format!("kasa-licenca-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let db = Db::aktivna(&dir.join("kasa.db"), std::sync::Arc::new(crate::petlja::Petlja::nova())).unwrap();
+        let db = crate::proba::baza("licenca-datum");
         assert_eq!(procitaj_datum(&db).unwrap(), None);
         let racun = |manual: i64, kad: &str| {
             db.run(
@@ -541,15 +539,11 @@ mod tests {
         assert_eq!(procitaj_datum(&db).unwrap().as_deref(), Some("2026-11-21"));
         db.run("INSERT INTO cash_movements (tip, iznos, korisnikId, tringStatus, createdAt) VALUES ('polog', 1, 1, 'ok', 'smeće')", &[]).unwrap();
         assert_eq!(procitaj_datum(&db).unwrap().as_deref(), Some("2026-11-21"));
-        drop(db);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn datum_iz_baze_jednom_po_otvaranju() {
-        let dir = std::env::temp_dir().join(format!("kasa-licenca-jednom-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let db = Db::aktivna(&dir.join("kasa.db"), std::sync::Arc::new(crate::petlja::Petlja::nova())).unwrap();
+        let db = crate::proba::baza("licenca-jednom");
         let polog = |kad: &str| {
             db.run("INSERT INTO cash_movements (tip, iznos, korisnikId, tringStatus, createdAt) VALUES ('polog', 1, 1, 'ok', ?)", &[json!(kad)])
                 .unwrap();
@@ -571,8 +565,6 @@ mod tests {
         assert_eq!(d.procitaj(&db), None);
         db.exec("ALTER TABLE cm RENAME TO cash_movements").unwrap();
         assert_eq!(d.procitaj(&db).as_deref(), Some("2026-11-25"));
-        drop(db);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

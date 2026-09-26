@@ -411,7 +411,7 @@ mod tests {
     /// sesiji, prije handlera i štampe; rezultat je admin koji je odobrio.
     #[test]
     fn odobrenje_storna() {
-        let p = crate::racun::tests::proba("odobrenje-storna");
+        let p = crate::proba::proba("odobrenje-storna");
         let b = p.b();
         let kasir = Korisnik { id: 2, ime: json!("Kasir"), uloga: "kasir".into() };
         let admin = Korisnik { id: 1, ime: json!("Admin"), uloga: "admin".into() };
