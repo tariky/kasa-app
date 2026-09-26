@@ -96,6 +96,8 @@ pub struct Backend {
     pub sesija: sesija::Sesija,
     /// Najnoviji datum iz baze za licencu, jednom po otvaranju baze.
     pub datum_iz_baze: licenca::DatumIzBaze,
+    /// Dokumenti čija je štampa u toku (zaštita od dvoklika, stampa.rs).
+    u_toku: stampa::UTokuSkup,
 }
 
 impl Backend {
@@ -113,6 +115,7 @@ impl Backend {
             odobrena_putanja: Mutex::new(None),
             sesija: sesija::Sesija::default(),
             datum_iz_baze: licenca::DatumIzBaze::default(),
+            u_toku: stampa::UTokuSkup::default(),
         })
     }
 

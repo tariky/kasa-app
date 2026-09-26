@@ -12,7 +12,7 @@ use crate::ponude;
 use crate::racun::{izracunaj_totale, upisi_racun};
 use crate::skladiste::TOLERANCIJA_ZALIHE;
 use crate::sql::Db;
-use crate::stampa::{self, UToku, Uredjaj};
+use crate::stampa::{self, Odstampan, UToku, Uredjaj};
 use crate::tring::uspjeh;
 use crate::tring_racun::build_tring_racun;
 use crate::{baci, p, provjera_racuna, sesija, Args, Backend};
@@ -940,7 +940,7 @@ pub fn izdaj_racun_za_nalog(b: &Backend, kanal: &str, data: &Value) -> R<Value> 
     if nalog["status"] != "zavrsen" {
         baci!("Nalog mora biti završen prije izdavanja računa");
     }
-    let _u_toku = UToku::zauzmi("nalog", &nalog["id"], "Izdavanje računa za ovaj nalog je već u toku")?;
+    let _u_toku = UToku::zauzmi(b, "nalog", &nalog["id"], "Izdavanje računa za ovaj nalog je već u toku")?;
     // Sve što bi upis nakon štampe odbio (FK na korisnika) provjerava se prije štampe.
     let korisnik = if truthy(&data["korisnikId"]) {
         db.get("SELECT id FROM users WHERE id = ?", p![data["korisnikId"]])?
@@ -1019,10 +1019,7 @@ pub fn izdaj_racun_za_nalog(b: &Backend, kanal: &str, data: &Value) -> R<Value> 
         Ok(Some(racun_id)) => Ok(ponude::uspjesna_stampa(&json!(racun_id), &broj_fiskalnog_racuna, &result["odgovori"])),
         Ok(None) => Ok(vec_evidentiran(&broj_fiskalnog_racuna)),
         // Račun je već na papiru; pending red ostaje (rollback) za dijalog.
-        Err(e) => baci!(
-            "{}",
-            stampa::poruka_nakon_stampe(&broj_fiskalnog_racuna, "nije zabilježen u bazi", e.poruka(), "Riješite ga kroz nezavršene račune.")
-        ),
+        Err(e) => Err(stampa::nije_zabiljezen(Odstampan::Racun(&broj_fiskalnog_racuna), &e)),
     }
 }
 

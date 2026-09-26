@@ -9,7 +9,7 @@ use serde_json::{json, Map, Value};
 use crate::greska::R;
 use crate::js::{self, truthy};
 use crate::sql::Db;
-use crate::stampa::{self, Uredjaj};
+use crate::stampa::{self, Odstampan, Uredjaj};
 use crate::tring;
 use crate::sesija::{self, Korisnik};
 use crate::pending_racun::{self, preuzmi_pending_red, vec_evidentiran};
@@ -195,7 +195,10 @@ fn finalize(b: &Backend, unos: &Value) -> R<Value> {
         .collect();
     m.insert("stavke".into(), Value::from(stavke));
     let data = Value::Object(m);
+    // Sve što može pasti prije štampe (postavke uređaja, račun za uređaj) ide
+    // prije write-ahead reda — greška ovdje ne ostavlja nezavršen račun.
     let uredjaj = Uredjaj::iz_postavki(b)?;
+    let racun = tring_racun::build_tring_racun(&spoji(&data, vec![("items", data["stavke"].clone())]));
 
     // 1. Write-ahead: persist the snapshot BEFORE printing (committed immediately).
     let pending_id = db
@@ -203,7 +206,6 @@ fn finalize(b: &Backend, unos: &Value) -> R<Value> {
         .last_insert_rowid;
 
     // 2. Print.
-    let racun = tring_racun::build_tring_racun(&spoji(&data, vec![("items", data["stavke"].clone())]));
     let result = uredjaj.fiskalni("finalize", &racun);
 
     // 3b. Print failed → surely not printed: drop the pending row; unknown
@@ -215,7 +217,7 @@ fn finalize(b: &Backend, unos: &Value) -> R<Value> {
     // 3a. Print succeeded → delete pending row + create order atomically. A
     // row already resolved from the dialog meanwhile means no second order.
     let broj_fiskalnog_racuna = stampa::broj_sa_uredjaja(&result);
-    let order_id = db.tx(|| {
+    let upis = db.tx(|| {
         if !preuzmi_pending_red(db, pending_id)? {
             return Ok(None);
         }
@@ -224,9 +226,12 @@ fn finalize(b: &Backend, unos: &Value) -> R<Value> {
             &spoji(&data, vec![("brojFiskalnogRacuna", broj_fiskalnog_racuna.clone()), ("isManual", json!(0))]),
         )
         .map(Some)
-    })?;
-    let Some(order_id) = order_id else {
-        return Ok(vec_evidentiran(&broj_fiskalnog_racuna));
+    });
+    let order_id = match upis {
+        Ok(Some(id)) => id,
+        Ok(None) => return Ok(vec_evidentiran(&broj_fiskalnog_racuna)),
+        // Račun je već na papiru; pending red ostaje (rollback) za dijalog.
+        Err(e) => return Err(stampa::nije_zabiljezen(Odstampan::Racun(&broj_fiskalnog_racuna), &e)),
     };
 
     Ok(json!({ "success": true, "id": order_id, "brojFiskalnogRacuna": broj_fiskalnog_racuna, "odgovori": result["odgovori"] }))

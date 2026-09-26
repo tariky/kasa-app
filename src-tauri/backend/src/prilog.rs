@@ -11,7 +11,7 @@ use crate::pending_racun::{baci_ako_ceka_nezavrsen, preuzmi_pending_red, vec_evi
 use crate::racun::niz;
 use crate::racuni::{spoji, validan_datum_valute};
 use crate::sql::Db;
-use crate::stampa::{self, Uredjaj};
+use crate::stampa::{self, Odstampan, Uredjaj};
 use crate::{baci, fiskalni, p, provjera_racuna, racun, tring, tring_racun, Backend};
 
 /// `s.slice(0, n)` — JS broji UTF-16 jedinice.
@@ -260,7 +260,16 @@ pub fn finalize_prilog_and_print(b: &Backend, data: &Value) -> R<Value> {
     if let Some(id) = skica_id {
         snapshot.insert("skicaId".into(), json!(id));
     }
+    // Štampa u Rustu ne baca — greška veze stiže kao neuspješan odgovor, pa
+    // grana "izuzetak iz štampe → počisti write-ahead red" pada u granu ispod.
+    // Postavke uređaja i račun za uređaj idu prije write-ahead reda.
     let uredjaj = Uredjaj::iz_postavki(b)?;
+    let racun = tring_racun::build_tring_racun(&json!({
+        "ukupno": js::f(ukupno),
+        "nacinPlacanja": nacin_placanja,
+        "kupac": kupac_v,
+        "items": [stavka],
+    }));
     let pending_id = db
         .run(
             "INSERT INTO pending_receipts (korisnikId, snapshot) VALUES (?, ?)",
@@ -268,14 +277,6 @@ pub fn finalize_prilog_and_print(b: &Backend, data: &Value) -> R<Value> {
         )?
         .last_insert_rowid;
 
-    // Štampa u Rustu ne baca — greška veze stiže kao neuspješan odgovor, pa
-    // grana "izuzetak iz štampe → počisti write-ahead red" pada u granu ispod.
-    let racun = tring_racun::build_tring_racun(&json!({
-        "ukupno": js::f(ukupno),
-        "nacinPlacanja": nacin_placanja,
-        "kupac": kupac_v,
-        "items": [stavka],
-    }));
     let result = uredjaj.fiskalni("finalizePrilog", &racun);
 
     // Siguran neuspjeh briše pending red; nepoznat ishod ga ostavlja.
@@ -325,11 +326,7 @@ pub fn finalize_prilog_and_print(b: &Backend, data: &Value) -> R<Value> {
         Ok(None) => return Ok(vec_evidentiran(&broj_fiskalnog_racuna)),
         // Račun je već na papiru; pending red namjerno ostaje da se može riješiti
         // kroz pending:resolve, ali operater to mora znati odmah.
-        Err(e) => baci!(
-            "Fiskalni račun po prilogu br. {prilog_broj} (BF {}) JE odštampan, ali nije zabilježen u bazi: {}. Riješite ga kroz nezavršene račune.",
-            stampa::prikaz_broja(&broj_fiskalnog_racuna),
-            stampa::prikaz_greske(e.poruka())
-        ),
+        Err(e) => return Err(stampa::nije_zabiljezen(Odstampan::Prilog(prilog_broj, &broj_fiskalnog_racuna), &e)),
     };
 
     let mut out = Map::new();

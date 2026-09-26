@@ -8,7 +8,7 @@ use crate::js::{self, or, round2, to_number, truthy};
 use crate::pending_racun::{baci_ako_ceka_nezavrsen, preuzmi_pending_red, vec_evidentiran_storno, zapisi_pending};
 use crate::prilog::{prilog_naziv, PRILOG_SIFRA};
 use crate::sql::Db;
-use crate::stampa::{self, UToku, Uredjaj};
+use crate::stampa::{self, Odstampan, UToku, Uredjaj};
 use crate::tring::{self, Odgovor};
 use crate::{baci, cash, fiskalni, p, tring_racun, Backend};
 
@@ -88,7 +88,7 @@ pub fn refund_and_print(b: &Backend, data: &Value, korisnik_id: i64, odobrio_adm
     let db = b.baza()?;
     let id = &data["id"];
 
-    let _u_toku = UToku::zauzmi("storno", id, "Storniranje ovog računa je već u toku")?;
+    let _u_toku = UToku::zauzmi(b, "storno", id, "Storniranje ovog računa je već u toku")?;
 
     let Some(order) = db.get("SELECT * FROM orders WHERE id = ? AND status = 'completed'", p![id])? else {
         baci!("Račun ne postoji ili je već storniran");
@@ -261,11 +261,7 @@ pub fn refund_and_print(b: &Backend, data: &Value, korisnik_id: i64, odobrio_adm
         Ok(true) => {}
         Ok(false) => return Ok(vec_evidentiran_storno(&broj_reklamacije)),
         // Storno je već na papiru; pending red ostaje (rollback) za dijalog.
-        Err(e) => baci!(
-            "Reklamacija #{} JE odštampana, ali nije zabilježena u bazi: {}. Riješite je kroz nezavršene račune.",
-            stampa::prikaz_broja(&broj_reklamacije),
-            stampa::prikaz_greske(e.poruka())
-        ),
+        Err(e) => return Err(stampa::nije_zabiljezen(Odstampan::Reklamacija(&broj_reklamacije), &e)),
     }
 
     Ok(json!({

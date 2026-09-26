@@ -90,7 +90,8 @@ pub(crate) mod tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+    use std::sync::Arc;
 
     use serde_json::{json, Value};
 
@@ -106,9 +107,12 @@ pub(crate) mod tests {
     }
 
     /// Lažni fiskalni uređaj: svaki zahtjev dobije OK s BF brojem od 101 naviše.
-    fn lazi_tring() -> u16 {
+    /// Vraća port i brojač primljenih zahtjeva.
+    fn lazi_tring() -> (u16, Arc<AtomicUsize>) {
         let server = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = server.local_addr().unwrap().port();
+        let zahtjevi = Arc::new(AtomicUsize::new(0));
+        let brojac = zahtjevi.clone();
         std::thread::spawn(move || {
             let mut bf = 100;
             for veza in server.incoming() {
@@ -133,6 +137,7 @@ pub(crate) mod tests {
                         break;
                     }
                 }
+                brojac.fetch_add(1, Ordering::SeqCst);
                 bf += 1;
                 let xml = format!(
                     "<RacunOdgovor><VrstaOdgovora>OK</VrstaOdgovora><Odgovor><Naziv>BrojFiskalnogRacuna</Naziv><Vrijednost>{bf}</Vrijednost></Odgovor></RacunOdgovor>"
@@ -144,7 +149,7 @@ pub(crate) mod tests {
                 );
             }
         });
-        port
+        (port, zahtjevi)
     }
 
     /// Backend nad novom bazom u privremenom folderu: prijavljen zadani admin
@@ -152,9 +157,15 @@ pub(crate) mod tests {
     pub(crate) struct Proba {
         pub b: Option<Backend>,
         dir: PathBuf,
+        zahtjevi: Arc<AtomicUsize>,
     }
 
     impl Proba {
+        /// Koliko je zahtjeva stiglo lažnom uređaju.
+        pub fn zahtjevi(&self) -> usize {
+            self.zahtjevi.load(Ordering::SeqCst)
+        }
+
         pub fn b(&self) -> &Backend {
             self.b.as_ref().unwrap()
         }
@@ -202,9 +213,10 @@ pub(crate) mod tests {
         let b = Backend::novi(&dir, Box::new(BezDijaloga), Sat::sistemski(), false).unwrap();
         let db = b.db().unwrap();
         db.run("UPDATE settings SET value = '127.0.0.1' WHERE key = 'tring.host'", &[]).unwrap();
-        db.run("UPDATE settings SET value = ? WHERE key = 'tring.port'", &[json!(lazi_tring().to_string())]).unwrap();
+        let (port, zahtjevi) = lazi_tring();
+        db.run("UPDATE settings SET value = ? WHERE key = 'tring.port'", &[json!(port.to_string())]).unwrap();
         b.sesija.postavi(Some(1), false);
-        Proba { b: Some(b), dir }
+        Proba { b: Some(b), dir, zahtjevi }
     }
 
     const KOLONE_KUPCA: &str = "kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj";

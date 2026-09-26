@@ -10,7 +10,7 @@ use crate::js::{self, or, truthy};
 use crate::postavke::postavka;
 use crate::racun::{izracunaj_totale, upisi_racun};
 use crate::sql::Db;
-use crate::stampa::{self, UToku, Uredjaj};
+use crate::stampa::{self, Odstampan, UToku, Uredjaj};
 use crate::tring::uspjeh;
 use crate::tring_racun::build_tring_racun;
 use crate::sesija;
@@ -309,7 +309,7 @@ pub fn konvertuj_ponudu(b: &Backend, kanal: &str, data: &Value, nalog_id: Option
     let db = b.baza()?;
     let id = &data["id"];
 
-    let _u_toku = UToku::zauzmi("ponuda", id, "Konverzija ove ponude je već u toku")?;
+    let _u_toku = UToku::zauzmi(b, "ponuda", id, "Konverzija ove ponude je već u toku")?;
 
     let korisnik = if truthy(&data["korisnikId"]) {
         db.get("SELECT id FROM users WHERE id = ?", p![data["korisnikId"]])?
@@ -398,10 +398,7 @@ pub fn konvertuj_ponudu(b: &Backend, kanal: &str, data: &Value, nalog_id: Option
         Ok(Some(racun_id)) => Ok(uspjesna_stampa(&json!(racun_id), &broj_fiskalnog_racuna, &result["odgovori"])),
         Ok(None) => Ok(vec_evidentiran(&broj_fiskalnog_racuna)),
         // Račun je već na papiru; pending red ostaje (rollback) za dijalog.
-        Err(e) => baci!(
-            "{}",
-            stampa::poruka_nakon_stampe(&broj_fiskalnog_racuna, "nije zabilježen u bazi", e.poruka(), "Riješite ga kroz nezavršene račune.")
-        ),
+        Err(e) => Err(stampa::nije_zabiljezen(Odstampan::Racun(&broj_fiskalnog_racuna), &e)),
     }
 }
 
