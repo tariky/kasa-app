@@ -325,7 +325,7 @@ fn finalize_prilog_and_print(b: &Backend, data: &Value) -> R<Value> {
     let (datum_valute, napomena, ponuda_id) = provjeri_dodatke_fakture(db, data)?;
     // Faktura iz ponude čiji račun još čeka u nezavršenim bila bi drugi račun za isti posao.
     if !ponuda_id.is_null() {
-        baci_ako_ceka_nezavrsen(db, "ponudaId", &ponuda_id, "Račun po ovoj ponudi")?;
+        baci_ako_ceka_nezavrsen(db, "ponudaId", &ponuda_id, "Račun po ovoj ponudi", "prije nove štampe")?;
     }
     // Skica iz koje je faktura nastala: briše se kad račun postoji u bazi (i kad
     // se nezavršeni račun riješi kao odštampan), da se ne fiskalizuje ponovo.
@@ -552,7 +552,9 @@ fn print_reklamacija(b: &Backend, racun: &Value) -> Odgovor {
 /// Write-ahead kao order:finalize (pending_racun.rs): snapshot `vrsta:
 /// 'storno'` prije unosa novca i štampe; nepoznat ishod ostavlja red (račun
 /// ostaje 'completed' dok ga dijalog nezavršenih ne riješi).
-fn refund_and_print(b: &Backend, data: &Value, korisnik_id: i64) -> R<Value> {
+/// `odobrio_admin_id` (admin koji je odobrio storno kasira PIN-om) ide u
+/// snapshot — trag 'storno' se upisuje i kad se storno riješi iz dijaloga.
+fn refund_and_print(b: &Backend, data: &Value, korisnik_id: i64, odobrio_admin_id: &Value) -> R<Value> {
     let db = b.baza()?;
     let id = &data["id"];
     let kljuc = js::stringify(id);
@@ -564,7 +566,7 @@ fn refund_and_print(b: &Backend, data: &Value, korisnik_id: i64) -> R<Value> {
     let Some(order) = db.get("SELECT * FROM orders WHERE id = ? AND status = 'completed'", p![id])? else {
         baci!("Račun ne postoji ili je već storniran");
     };
-    baci_ako_ceka_nezavrsen(db, "orderId", &order["id"], "Storno ovog računa")?;
+    baci_ako_ceka_nezavrsen(db, "orderId", &order["id"], "Storno ovog računa", "prije nove štampe")?;
 
     let Some(broj_racuna) = fiskalni::parse_fiskalni_broj(&order["brojFiskalnogRacuna"]) else {
         let broj = if order["brojFiskalnogRacuna"].is_null() { String::new() } else { js::to_string(&order["brojFiskalnogRacuna"]) };
@@ -631,12 +633,18 @@ fn refund_and_print(b: &Backend, data: &Value, korisnik_id: i64) -> R<Value> {
         manjak_ladica = js_max(0.0, round2(js_min(potrebno_ladica, potrebno_uredjaj) - stanje_ladice));
     }
 
+    let dozvoli_polog = truthy(&data["dozvoliPolog"]);
+    // Gotovinski manjak je stvaran novac iz ladice — samo se on gura kroz
+    // override i samo se on evidentira kao polog (poznat prije štampe → snapshot).
+    let planirani_polog = if dozvoli_polog && manjak_ladica > 0.0 { manjak_ladica } else { 0.0 };
+
     refunds_in_flight().insert(kljuc.clone());
     let _u_toku = UToku(kljuc);
 
     let snapshot = json!({
         "vrsta": "storno", "orderId": order["id"], "brojRacuna": order["brojFiskalnogRacuna"],
         "korisnikId": korisnik_id, "ukupno": order["ukupno"],
+        "odobrioAdminId": odobrio_admin_id, "pologIznos": js::f(planirani_polog),
         "stavke": stavke.as_array().into_iter().flatten().map(|s| {
             // `s.naziv ?? s.productNaziv ?? ''`
             let naziv = js::nn(&s["naziv"], js::nn(&s["productNaziv"], &json!(""))).clone();
@@ -645,7 +653,6 @@ fn refund_and_print(b: &Backend, data: &Value, korisnik_id: i64) -> R<Value> {
     });
     let pending_id = zapisi_pending(db, &json!(korisnik_id), &snapshot)?;
 
-    let dozvoli_polog = truthy(&data["dozvoliPolog"]);
     let mut uneseno = 0.0;
     let mut polog_iznos = 0.0;
 
@@ -659,13 +666,11 @@ fn refund_and_print(b: &Backend, data: &Value, korisnik_id: i64) -> R<Value> {
             uneseno = samo_uredjaj;
         }
 
-        // Gotovinski manjak je stvaran novac iz ladice — samo se on gura kroz
-        // override i samo se on evidentira kao polog.
-        if dozvoli_polog && manjak_ladica > 0.0 {
+        if planirani_polog > 0.0 {
             let napomena = format!("Automatski polog za reklamaciju računa #{}", js::to_string(id));
-            cash::deposit_cash(b, manjak_ladica, &napomena, &json!(korisnik_id))?;
-            polog_iznos = manjak_ladica;
-            uneseno = round2(uneseno + manjak_ladica);
+            cash::deposit_cash(b, planirani_polog, &napomena, &json!(korisnik_id))?;
+            polog_iznos = planirani_polog;
+            uneseno = round2(uneseno + planirani_polog);
         }
 
         let mut result = print_reklamacija(b, &racun);
@@ -761,7 +766,7 @@ fn storno(b: &Backend, data: &Value) -> R<Value> {
     }
     let original = db.get("SELECT brojFiskalnogRacuna, ukupno FROM orders WHERE id = ?", p![data["id"]])?;
     b.load_tring_config()?;
-    let rezultat = refund_and_print(b, data, k.id)?;
+    let rezultat = refund_and_print(b, data, k.id, &odobrio_admin_id)?;
     if truthy(&rezultat["success"]) {
         // Storno je već odštampan i upisan — greška traga ne smije to sakriti.
         // Korisnik je onaj s početka poziva: dok se čekala štampa, neko se mogao
@@ -1037,6 +1042,19 @@ fn pending_resolve(b: &Backend, data: &Value) -> R<Value> {
             json!(proizvodnja::upisi_racun_naloga(db, &snap, &broj, &data["createdAt"], 1)?)
         } else if vrsta == "storno" {
             refund_order_in_transaction(db, &snap["orderId"], &broj, &data["createdAt"])?;
+            // Jedini trag 'storno' za ovaj storno (nepoznat ishod ga nije upisao):
+            // isti oblik kao order:refundAndPrint, pod pokretačem, uz ko je red riješio.
+            audit::zapisi(
+                db,
+                snap["korisnikId"].as_i64(),
+                "storno",
+                json!({
+                    "orderId": snap["orderId"], "brojFiskalnogRacuna": snap["brojRacuna"], "brojReklamacije": broj,
+                    "ukupno": snap["ukupno"], "odobrioAdminId": snap["odobrioAdminId"],
+                    "pologIznos": js::nn(&snap["pologIznos"], &json!(0)),
+                    "pendingId": data["id"], "rijesioKorisnikId": b.sesija.id(),
+                }),
+            )?;
             snap["orderId"].clone()
         } else {
             // Snapshot bez vrste: račun sa kase ili faktura (i sve stare baze).

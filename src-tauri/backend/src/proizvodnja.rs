@@ -465,6 +465,8 @@ pub fn update_nalog(db: &Db, id: &Value, patch: &Value) -> R<()> {
 /// Briše nalog i stavke. Samo nezavršen nalog čija ponuda nije fakturisana. U transakciji.
 pub fn delete_nalog(db: &Db, id: &Value) -> R<()> {
     let n = ucitaj_nalog_ili_baci(db, id)?;
+    // Odštampan račun bez naloga mogao bi se samo odbaciti.
+    baci_ako_ceka_nezavrsen(db, "nalogId", id, "Račun za ovaj nalog", "prije brisanja naloga")?;
     baci_ako_zakljucan(&n["status"])?;
     baci_ako_ponuda_fakturisana(db, &n["ponudaId"], "obrisati")?;
     db.run("DELETE FROM radni_nalog_stavke WHERE radniNalogId = ?", p![id])?;
@@ -789,6 +791,8 @@ pub fn vrati_u_izradu(db: &Db, id: &Value) -> R<()> {
     if n["status"] != "zavrsen" {
         baci!("Samo završen nalog se vraća u izradu");
     }
+    // Račun koji čeka u nezavršenim fakturiše završen nalog kad se riješi.
+    baci_ako_ceka_nezavrsen(db, "nalogId", id, "Račun za ovaj nalog", "prije vraćanja naloga u izradu")?;
     baci_ako_ponuda_fakturisana(db, &n["ponudaId"], "vratiti u izradu")?;
 
     let ulazi = db.all(
@@ -943,7 +947,7 @@ pub fn izdaj_racun_za_nalog(b: &Backend, kanal: &str, data: &Value) -> R<Value> 
     }
     // Štampa bez oznake plaćanja ide kao Gotovina — i u bazu se tako upisuje.
     let nacin_placanja = json!(provjera_racuna::provjeri_nacin_placanja(js::or(&data["nacinPlacanja"], &json!("Gotovina")))?);
-    baci_ako_ceka_nezavrsen(db, "nalogId", &nalog["id"], "Račun za ovaj nalog")?;
+    baci_ako_ceka_nezavrsen(db, "nalogId", &nalog["id"], "Račun za ovaj nalog", "prije nove štampe")?;
 
     let _u_toku = UToku::zauzmi(&IZDAVANJA_U_TOKU, &nalog["id"]);
 

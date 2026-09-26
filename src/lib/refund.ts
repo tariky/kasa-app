@@ -124,6 +124,8 @@ export async function refundAndPrint(
     id: number; brojReklamacije?: string; dozvoliPolog?: boolean;
     /** Ko stornira (zapis nezavršenog storna); bez njega autor računa. */
     korisnikId?: number;
+    /** Admin koji je odobrio storno kasira PIN-om — za trag 'storno' iz dijaloga. */
+    odobrioAdminId?: number | null;
   }
 ): Promise<RefundResult> {
   const { db, print, transaction } = deps;
@@ -190,11 +192,16 @@ export async function refundAndPrint(
     } catch { /* stanje ladice je informativno — ne smije oboriti storno */ }
   }
 
+  // Gotovinski manjak je stvaran novac iz ladice — samo se on gura kroz
+  // override i samo se on evidentira kao polog (poznat prije štampe → snapshot).
+  const planiraniPolog = data.dozvoliPolog && manjakLadica > 0 && deps.depositCash ? manjakLadica : 0;
+
   refundsInFlight.add(id);
   try {
     const snapshot: SnapshotStorna = {
       vrsta: 'storno', orderId: order.id, brojRacuna: order.brojFiskalnogRacuna ?? null,
       korisnikId: data.korisnikId ?? order.korisnikId, ukupno: order.ukupno,
+      odobrioAdminId: data.odobrioAdminId ?? null, pologIznos: planiraniPolog,
       stavke: stavke.map((s: any) => ({
         naziv: s.naziv ?? s.productNaziv ?? '', kolicina: s.kolicina, cijena: s.cijena, rabat: s.rabat ?? 0,
       })),
@@ -214,12 +221,10 @@ export async function refundAndPrint(
         uneseno = samoUredjaj;
       }
 
-      // Gotovinski manjak je stvaran novac iz ladice — samo se on gura kroz
-      // override i samo se on evidentira kao polog.
-      if (data.dozvoliPolog && manjakLadica > 0 && deps.depositCash) {
-        await deps.depositCash(manjakLadica, `Automatski polog za reklamaciju računa #${id}`);
-        pologIznos = manjakLadica;
-        uneseno = round2(uneseno + manjakLadica);
+      if (planiraniPolog > 0 && deps.depositCash) {
+        await deps.depositCash(planiraniPolog, `Automatski polog za reklamaciju računa #${id}`);
+        pologIznos = planiraniPolog;
+        uneseno = round2(uneseno + planiraniPolog);
       }
 
       result = await print(racun);

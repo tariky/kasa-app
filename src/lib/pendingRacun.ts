@@ -114,13 +114,20 @@ export interface SnapshotNaloga {
   stavke: SnapshotStavka[];
 }
 
-/** Storno (reklamacija) računa; stavke su samo za prikaz u dijalogu. */
+/**
+ * Storno (reklamacija) računa; stavke su samo za prikaz u dijalogu. Nosi i
+ * podatke traga 'storno' (pokretač = korisnikId, admin koji je odobrio PIN-om,
+ * polog) — trag se upisuje tek kad je storno upisan u bazu, pa i iz dijaloga.
+ */
 export interface SnapshotStorna {
   vrsta: 'storno';
   orderId: number;
   /** Fiskalni broj računa koji se stornira. */
   brojRacuna: string | null;
   korisnikId: number; ukupno: number;
+  odobrioAdminId: number | null;
+  /** Automatski polog evidentiran prije štampe (0 = bez pologa). */
+  pologIznos: number;
   stavke: Array<{ naziv: string; kolicina: number; cijena: number; rabat: number }>;
 }
 
@@ -141,13 +148,15 @@ export function zapisiPending(db: SqlDb, korisnikId: number, snapshot: object): 
 /**
  * Nova štampa dokumenta za koji postoji nerazriješen write-ahead red mogla bi
  * dati drugi fiskalni račun za isti posao — odbija se prije štampe, dok
- * operater ne riješi red (odštampan) ili ga admin ne odbaci. `kljuc` je polje
+ * operater ne riješi red (odštampan) ili ga admin ne odbaci (i nalog se tada
+ * ne vraća u izradu i ne briše — `radnja`). `kljuc` je polje
  * snapshota (i stara faktura iz ponude nosi `ponudaId`); obje strane se
  * porede kao cijeli brojevi (id iz payload-a može stići i kao tekst).
  * Rust: `baci_ako_ceka_nezavrsen`.
  */
 export function baciAkoCekaNezavrsen(
   db: SqlDb, kljuc: 'ponudaId' | 'nalogId' | 'orderId', id: number, dokument: string,
+  radnja = 'prije nove štampe',
 ): void {
   const red = db.prepare(`
     SELECT id FROM pending_receipts
@@ -156,7 +165,7 @@ export function baciAkoCekaNezavrsen(
   `).get(`$.${kljuc}`, id);
   if (red) {
     throw new Error(
-      `${dokument} čeka u nezavršenim računima (ishod štampe nije poznat) — riješite ga prije nove štampe`
+      `${dokument} čeka u nezavršenim računima (ishod štampe nije poznat) — riješite ga ${radnja}`
     );
   }
 }

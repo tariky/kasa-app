@@ -87,10 +87,11 @@ pub fn zapisi_pending(db: &Db, korisnik_id: &Value, snapshot: &Value) -> R<i64> 
 
 /// Nova štampa dokumenta za koji postoji nerazriješen write-ahead red mogla bi
 /// dati drugi fiskalni račun za isti posao — odbija se prije štampe, dok
-/// operater ne riješi red (odštampan) ili ga admin ne odbaci. `kljuc` je polje
+/// operater ne riješi red (odštampan) ili ga admin ne odbaci (i nalog se tada
+/// ne vraća u izradu i ne briše — `radnja`). `kljuc` je polje
 /// snapshota (i stara faktura iz ponude nosi `ponudaId`); obje strane se
 /// porede kao cijeli brojevi. TS: `baciAkoCekaNezavrsen`.
-pub fn baci_ako_ceka_nezavrsen(db: &Db, kljuc: &str, id: &Value, dokument: &str) -> R<()> {
+pub fn baci_ako_ceka_nezavrsen(db: &Db, kljuc: &str, id: &Value, dokument: &str, radnja: &str) -> R<()> {
     let ceka = db.ima(
         "
     SELECT id FROM pending_receipts
@@ -100,7 +101,7 @@ pub fn baci_ako_ceka_nezavrsen(db: &Db, kljuc: &str, id: &Value, dokument: &str)
         p![format!("$.{kljuc}"), id],
     )?;
     if ceka {
-        baci!("{dokument} čeka u nezavršenim računima (ishod štampe nije poznat) — riješite ga prije nove štampe");
+        baci!("{dokument} čeka u nezavršenim računima (ishod štampe nije poznat) — riješite ga {radnja}");
     }
     Ok(())
 }

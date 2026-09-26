@@ -8,8 +8,9 @@
 // red postoji, nova štampa istog dokumenta se odbija prije štampe. Snapshot
 // bez `vrsta` je običan račun (stare baze).
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
-import { otvoriBackend, type Backend } from './backend';
+import { otvoriBackend, ADMIN_PIN, type Backend } from './backend';
 import { pokreniPokvareniTring } from './laziTring';
+import { hesirajPin } from '../../lib/korisnici';
 
 let b: Backend;
 let zaustavi: (() => void) | null = null;
@@ -150,6 +151,11 @@ async function racunZaStorno(): Promise<{ id: number; p: number }> {
 }
 
 const storniraj = (id: number) => b.call('order:refundAndPrint', { id });
+
+function stornoTragovi(): Array<{ korisnikId: number | null; detalji: any }> {
+  return redovi("SELECT korisnikId, detalji FROM audit_log WHERE akcija = 'storno' ORDER BY id")
+    .map(r => ({ korisnikId: r.korisnikId, detalji: JSON.parse(r.detalji) }));
+}
 const order = (id: number) => red('SELECT status, brojReklamacije, refundedAt FROM orders WHERE id = ?', id);
 
 // ─── ponuda → račun ─────────────────────────────────────────
@@ -370,6 +376,24 @@ describe('nalog:izdajRacun — write-ahead (samostalni nalog)', () => {
     expect(await izdajNalog(drugi)).toMatchObject({ success: true });
   });
 
+  test('dok red postoji, nalog se ne vraća u izradu i ne briše', async () => {
+    const id = await zavrsenNalog();
+    await uredjajBezPotvrde();
+    await izdajNalog(id);
+
+    await expect(b.call('nalog:setStatus', { id, status: 'vrati' }))
+      .rejects.toThrow('Račun za ovaj nalog čeka u nezavršenim računima (ishod štampe nije poznat) — riješite ga prije vraćanja naloga u izradu');
+    await expect(b.call('nalog:delete', id))
+      .rejects.toThrow('Račun za ovaj nalog čeka u nezavršenim računima (ishod štampe nije poznat) — riješite ga prije brisanja naloga');
+    expect(nalog(id)).toEqual({ status: 'zavrsen', racunId: null });
+    expect(red("SELECT COUNT(*) AS n FROM stock_movements WHERE referenceType = 'radni_nalog' AND referenceId = ?", id).n).toBe(1);
+
+    // Odbačen red (nije odštampan) otključava nalog.
+    await b.call('pending:discard', await pendingId());
+    expect(await b.call('nalog:setStatus', { id, status: 'vrati' })).toEqual({ success: true });
+    expect(nalog(id).status).toBe('u_izradi');
+  });
+
   test('red riješen tokom štampe: vecEvidentiran, samo jedan račun', async () => {
     const id = await zavrsenNalog();
     const stampa = b.tring.zadrzi('/sfr');
@@ -444,6 +468,7 @@ describe('order:refundAndPrint — write-ahead', () => {
     expect(pending()).toHaveLength(1);
     expect(pending()[0]).toMatchObject({
       vrsta: 'storno', orderId: id, brojRacuna: '55', korisnikId: ADMIN, ukupno: 6,
+      odobrioAdminId: null, pologIznos: 0,
       stavke: [{ naziv: red('SELECT naziv FROM products WHERE id = ?', p).naziv, kolicina: 2, cijena: 3 }],
     });
     expect(order(id)).toEqual({ status: 'completed', brojReklamacije: null, refundedAt: null });
@@ -520,7 +545,66 @@ describe('order:refundAndPrint — write-ahead', () => {
     expect(order(id)).toEqual({ status: 'refunded', brojReklamacije: 'R-9', refundedAt: DATUM });
     expect(stanje(p)).toBe(10);
     expect(red("SELECT COUNT(*) AS n FROM stock_movements WHERE referenceType = 'refund'").n).toBe(1);
-    expect(red("SELECT COUNT(*) AS n FROM audit_log WHERE akcija = 'storno'").n).toBe(0);
+    // Tačno jedan zapis 'storno' — upisao ga je resolve, s podacima iz snapshota.
+    expect(stornoTragovi()).toEqual([{
+      korisnikId: ADMIN,
+      detalji: {
+        orderId: id, brojFiskalnogRacuna: '55', brojReklamacije: 'R-9', ukupno: 6, odobrioAdminId: null, pologIznos: 0,
+        pendingId: expect.any(Number), rijesioKorisnikId: ADMIN,
+      },
+    }]);
+  });
+
+  // Jedan storno = jedan zapis 'storno', upisan kad je storno upisan u bazu:
+  // nepoznat ishod ga ne piše (pokušaj živi u pending redu; odbacivanje piše
+  // 'pending:odbaci' s cijelim snapshotom), a resolve ga piše s pokretačem,
+  // adminom koji je odobrio PIN-om, pologom i ko je red riješio.
+  test('storno kasira uz admin PIN: trag nosi pokretača i odobrenje i kad se riješi iz nezavršenih', async () => {
+    const { id } = await racunZaStorno();
+    b.db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('kasa.requirePinRefund', 'true')").run();
+    const kasir = Number(b.db.prepare("INSERT INTO users (ime, pin, uloga) VALUES ('Kasir', ?, 'kasir')").run(hesirajPin('1357')).lastInsertRowid);
+    await b.call('user:logout');
+    await b.call('user:login', '1357');
+    await uredjajBezPotvrde();
+
+    const r = await b.call('order:refundAndPrint', { id, adminPin: ADMIN_PIN });
+
+    expect(r.ishodNepoznat).toBe(true);
+    expect(pending()[0]).toMatchObject({ vrsta: 'storno', korisnikId: kasir, odobrioAdminId: ADMIN, pologIznos: 0 });
+    expect(stornoTragovi()).toEqual([]);
+
+    await b.call('user:logout');
+    await b.call('user:login', ADMIN_PIN);
+    const pid = await pendingId();
+    await b.call('pending:resolve', { id: pid, brojFiskalnogRacuna: 'R-7', createdAt: DATUM });
+
+    expect(stornoTragovi()).toEqual([{
+      korisnikId: kasir,
+      detalji: {
+        orderId: id, brojFiskalnogRacuna: '55', brojReklamacije: 'R-7', ukupno: 6, odobrioAdminId: ADMIN, pologIznos: 0,
+        pendingId: pid, rijesioKorisnikId: ADMIN,
+      },
+    }]);
+  });
+
+  test('odbačen storno: bez zapisa storno, pending:odbaci čuva pokretača i odobrenje', async () => {
+    const { id } = await racunZaStorno();
+    await uredjajBezPotvrde();
+    await storniraj(id);
+    await b.call('pending:discard', await pendingId());
+
+    expect(stornoTragovi()).toEqual([]);
+    const trag = JSON.parse(red("SELECT detalji FROM audit_log WHERE akcija = 'pending:odbaci'").detalji);
+    expect(trag.snapshot).toMatchObject({ vrsta: 'storno', orderId: id, korisnikId: ADMIN, odobrioAdminId: null, pologIznos: 0 });
+  });
+
+  test('uspješan storno: tačno jedan zapis storno', async () => {
+    const { id } = await racunZaStorno();
+    expect(await storniraj(id)).toMatchObject({ success: true });
+    expect(stornoTragovi()).toEqual([{
+      korisnikId: ADMIN,
+      detalji: { orderId: id, brojFiskalnogRacuna: '55', brojReklamacije: 'R-1', ukupno: 6, odobrioAdminId: null, pologIznos: 0 },
+    }]);
   });
 });
 

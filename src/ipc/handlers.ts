@@ -1372,7 +1372,7 @@ export function registerIpcHandlers(): void {
           throw new Error(`Unos novca od ${iznos} KM nije prihvaćen na printeru: ${res.error || res.vrstaOdgovora}`);
         }
       },
-    }, { ...data, korisnikId: k.id });
+    }, { ...data, korisnikId: k.id, odobrioAdminId });
     if (rezultat.success) {
       // Storno je već odštampan i upisan — greška traga ne smije to sakriti.
       // Korisnik je onaj s početka poziva: dok se čekala štampa, neko se mogao
@@ -1429,6 +1429,13 @@ export function registerIpcHandlers(): void {
       } else if (vrsta === 'storno') {
         orderId = snap.orderId;
         refundOrderInTransaction(db, orderId, broj, data.createdAt);
+        // Jedini trag 'storno' za ovaj storno (nepoznat ishod ga nije upisao):
+        // isti oblik kao order:refundAndPrint, pod pokretačem, uz ko je red riješio.
+        zapisiAudit(db, snap.korisnikId ?? null, 'storno', {
+          orderId, brojFiskalnogRacuna: snap.brojRacuna ?? null, brojReklamacije: broj, ukupno: snap.ukupno ?? null,
+          odobrioAdminId: snap.odobrioAdminId ?? null, pologIznos: snap.pologIznos ?? 0,
+          pendingId: data.id, rijesioKorisnikId: prijavljeniId,
+        });
       } else {
         // Snapshot bez vrste: račun sa kase ili faktura (i sve stare baze).
         orderId = insertCompletedOrder(db, {

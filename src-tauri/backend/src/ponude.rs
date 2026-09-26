@@ -382,7 +382,7 @@ pub fn konvertuj_ponudu(b: &Backend, kanal: &str, data: &Value, nalog_id: Option
     if ponuda["status"] == "odbijena" {
         baci!("Odbijena ponuda se ne može pretvoriti u račun — ako kupac ipak prihvata, prvo promijenite status");
     }
-    baci_ako_ceka_nezavrsen(db, "ponudaId", &ponuda["id"], "Račun po ovoj ponudi")?;
+    baci_ako_ceka_nezavrsen(db, "ponudaId", &ponuda["id"], "Račun po ovoj ponudi", "prije nove štampe")?;
 
     let stavke = db.all(
         "
