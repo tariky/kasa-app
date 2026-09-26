@@ -1,5 +1,6 @@
 import type { SqlDb } from './sqldb';
 import type { NeuspjehUredjaja } from './fiskalniUredjaj';
+import { NACINI_PLACANJA, raspodjelaPlacanja } from './placanje';
 
 /**
  * Write-ahead zapis računa (pending_receipts, vidi
@@ -143,6 +144,31 @@ export function snapshotKupca(k: Partial<Record<keyof SnapshotKupac, string | nu
     naziv: k.naziv ?? null, idBroj: k.idBroj ?? null, adresa: k.adresa ?? null,
     grad: k.grad ?? null, postanskiBroj: k.postanskiBroj ?? null,
   };
+}
+
+/**
+ * Način plaćanja iz snapshota prije naknadnog upisa (pending:resolve): kanonski
+ * tekst s liste NACINI_PLACANJA ili JSON raspodjela koju čita
+ * `raspodjelaPlacanja`. Snapshot pišu provjereni putevi, ali stari red ili
+ * uvezen backup može nositi oblik koji ladica i izvoz ne znaju (odluka 4).
+ * Rust: ista provjera u pending:resolve (racuni.rs).
+ */
+export function provjeriNacinPlacanjaSnapshota(nacin: unknown): string {
+  if (typeof nacin === 'string') {
+    if ((NACINI_PLACANJA as readonly string[]).includes(nacin)) return nacin;
+    // Samo JSON objekat — tekst u drugom obliku ('gotovina') nije kanonski.
+    if (jsonObjekat(nacin) && raspodjelaPlacanja(nacin, 0).poznat) return nacin;
+  }
+  throw new Error(`Nepoznat način plaćanja: "${String(nacin ?? '')}"`);
+}
+
+function jsonObjekat(tekst: string): boolean {
+  try {
+    const json: unknown = JSON.parse(tekst);
+    return !!json && typeof json === 'object' && !Array.isArray(json);
+  } catch {
+    return false;
+  }
 }
 
 /** Write-ahead: snapshot se upiše (odmah, van transakcije) prije štampe. */

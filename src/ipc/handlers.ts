@@ -19,7 +19,7 @@ import {
   izdajRacunZaNalog, upisiRacunNaloga, getNormativ, saveNormativ, osigurajProdajnuUslugu,
 } from '../lib/proizvodnja';
 import { refundAndPrint, refundOrderInTransaction } from '../lib/refund';
-import type { VrstaNezavrsenog } from '../lib/pendingRacun';
+import { provjeriNacinPlacanjaSnapshota, type VrstaNezavrsenog } from '../lib/pendingRacun';
 import { postaviDatumValute } from '../lib/valuta';
 import {
   savePrilogStavkeInTransaction, finalizePrilogAndPrint, oznaciPonuduFakturisanom,
@@ -1054,6 +1054,8 @@ export function registerIpcHandlers(): void {
     if (vrsta !== undefined && !['ponuda', 'nalog', 'storno'].includes(vrsta)) {
       throw new Error(`Nepoznata vrsta nezavršenog zapisa: "${vrsta}"`);
     }
+    // Račun (ne storno) upisuje način plaćanja iz snapshota — samo oblik koji ladica zna.
+    if (vrsta !== 'storno') provjeriNacinPlacanjaSnapshota(snap.nacinPlacanja);
 
     // Storno nosi broj reklamacije — drugi niz, ne broj računa.
     if (vrsta !== 'storno') {
