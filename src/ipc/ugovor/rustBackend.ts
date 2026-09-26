@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Backend, OdgovoriDijaloga, OtvoreniDijalog } from './backend';
 import { pokreniLaziTring } from './laziTring';
+import { ZONA_TESTA } from './zona';
 
 const KORIJEN = path.join(__dirname, '../../..');
 const BINARIJ = process.env.KASA_RUST_BINARIJ
@@ -44,9 +45,8 @@ export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
   /** Pokrene ugovor-server nad `userData` i sačeka da javi da je spreman. */
   async function pokreni() {
     const proc = Bun.spawn([BINARIJ, userData], {
-      // bun test radi u UTC-u (ili u TZ iz okruženja); backend mora računati
-      // "danas" u istoj zoni kao test.
-      env: { ...process.env, TZ: Intl.DateTimeFormat().resolvedOptions().timeZone },
+      // Backend računa "danas" i SQLite `localtime` u istoj zoni kao test (zona.ts).
+      env: { ...process.env, TZ: ZONA_TESTA },
       stdin: 'pipe',
       stdout: 'pipe',
       stderr: process.env.KASA_UGOVOR_LOG ? 'inherit' : 'ignore',
@@ -106,7 +106,7 @@ export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
     return odgovor;
   }
 
-  return {
+  const backend: Backend = {
     db,
     tring,
     dijalog,
@@ -127,6 +127,8 @@ export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
       await ugasi(proc);
       proc = await pokreni();
     },
+    // Isti poziv; tipove argumenata i rezultata daje Backend.pozovi.
+    pozovi: (kanal, ...args) => (backend.call as unknown as (kanal: string, ...args: unknown[]) => Promise<never>)(kanal, ...args),
     async call(kanal, ...args) {
       // Date.now() prati setSystemTime iz testa — backend računa "danas" po njemu.
       const o = await zahtjev({ kanal, args, dijalog, sada: Date.now() });
@@ -141,4 +143,5 @@ export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
       rmSync(userData, { recursive: true, force: true });
     },
   };
+  return backend;
 }

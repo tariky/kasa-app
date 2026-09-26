@@ -7,6 +7,7 @@ import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
 import pristup from '../pristup.json';
 import { napraviApi } from '../api';
 import { otvoriBackend, type Backend } from './backend';
+import { primka, scenarij, spremljena, stavkaPrimke } from './scenarij';
 import { KLJUCEVI_DOKUMENATA } from '../../lib/dokumentPostavke';
 
 /** Kanali koje ima samo Electron (automatski backup, faza 4) — Rust ih nema. */
@@ -62,4 +63,22 @@ test('liste nemaju duplikata', () => {
   for (const [lista, stavke] of Object.entries(SVE_LISTE)) {
     expect({ lista, duplikati: stavke.filter((x, i) => stavke.indexOf(x) !== i) }).toEqual({ lista, duplikati: [] });
   }
+});
+
+// Electron IPC prenosi `undefined` kakav jeste (structured clone), a ugovor i
+// Rust za „nema vrijednosti" daju `null` — handler ga mora vratiti sam. JSON
+// harnessa (Backend.call) tu razliku krije, pa se handler zove direktno.
+describe.skipIf(process.env.KASA_BACKEND === 'rust')('Electron handler: nema vrijednosti je null', () => {
+  let b: Backend;
+  beforeEach(async () => { b = await otvoriBackend(); });
+  afterEach(async () => { await b.close(); });
+
+  test('product:get nepostojećeg artikla i uspješan primka:delete vraćaju null', async () => {
+    const { pozoviHandlerBezJsona } = await import('./tsBackend');
+    expect(await pozoviHandlerBezJsona('product:get', 999)).toBeNull();
+
+    const p = scenarij(b).artikal({ sifra: 'N1', cijena: 5 });
+    const { id } = spremljena(await b.pozovi('primka:create', primka('U-1', [stavkaPrimke(p, 1, 5)])));
+    expect(await pozoviHandlerBezJsona('primka:delete', id)).toBeNull();
+  });
 });

@@ -14,17 +14,36 @@ export interface LaziTring {
   zahtjevi: TringZahtjev[];
   /**
    * Sljedeći zahtjev na `putanja` dobije `Greska` u formatu uređaja
-   * (`<Greska><Broj/><Opis/></Greska>`); `broj` je TFS kod greške.
+   * (`<Greska><Broj/><Opis/></Greska>`); `broj` je TFS kod greške. Više
+   * poziva za istu putanju redaju greške za uzastopne zahtjeve.
    */
   greskaNa(putanja: string, opis: string, broj?: number): void;
   /** Putanja od sada vraća HTTP 404, kao na uređaju koji ne zna tu komandu. */
   bez(putanja: string): void;
+  /**
+   * Sljedeći uspješan odgovor na `putanja` (/sfr, /srr) nosi ovaj
+   * BrojFiskalnogRacuna umjesto sljedećeg iz brojača (brojač stoji).
+   */
+  sljedeciBroj(putanja: string, broj: string): void;
   /**
    * Sljedeći zahtjev na `putanja` čeka odgovor dok test ne pozove `pusti()`
    * (printer koji štampa) — `stigao` se ispuni kad zahtjev stigne.
    */
   zadrzi(putanja: string): { stigao: Promise<void>; pusti: () => void };
   stop(): void;
+}
+
+/** Vrijednost prvog XML taga u tijelu zahtjeva (undefined kad ga nema). */
+export function tag(xml: string, naziv: string): string | undefined {
+  return xml.match(new RegExp(`<${naziv}>([\\s\\S]*?)</${naziv}>`))?.[1];
+}
+
+/** Stavke računa ili reklamacije kako su otišle uređaju, redom. */
+export function stavkeZahtjeva(xml: string): Array<Record<'sifra' | 'naziv' | 'cijena' | 'stopa' | 'kolicina' | 'rabat', string | undefined>> {
+  return [...xml.matchAll(/<RacunStavka>([\s\S]*?)<\/RacunStavka>/g)].map(([, s]) => ({
+    sifra: tag(s, 'Sifra'), naziv: tag(s, 'Naziv'), cijena: tag(s, 'Cijena'),
+    stopa: tag(s, 'Stopa'), kolicina: tag(s, 'Kolicina'), rabat: tag(s, 'Rabat'),
+  }));
 }
 
 function ok(odgovori: Record<string, string> = {}): string {
@@ -75,7 +94,7 @@ export async function pokreniPokvareniTring(kvar: Kvar): Promise<PokvareniTring>
       }
     });
   });
-  await new Promise<void>(r => server.listen(0, '127.0.0.1', () => r()));
+  await slusaj(server);
   return {
     port: (server.address() as net.AddressInfo).port,
     primljeno: () => primljeno,
@@ -83,10 +102,21 @@ export async function pokreniPokvareniTring(kvar: Kvar): Promise<PokvareniTring>
   };
 }
 
+/** Server počne slušati na slobodnom portu; greška (npr. zauzeta adresa) odbije obećanje. */
+function slusaj(server: net.Server): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', reject);
+      resolve();
+    });
+  });
+}
+
 /** Port na kojem sigurno niko ne sluša (uređaj ugašen → veza odbijena). */
 export async function slobodanPort(): Promise<number> {
   const server = net.createServer();
-  await new Promise<void>(r => server.listen(0, '127.0.0.1', () => r()));
+  await slusaj(server);
   const port = (server.address() as net.AddressInfo).port;
   await new Promise<void>(r => server.close(() => r()));
   return port;
@@ -94,9 +124,10 @@ export async function slobodanPort(): Promise<number> {
 
 export function pokreniLaziTring(): LaziTring {
   const zahtjevi: TringZahtjev[] = [];
-  const greske = new Map<string, { opis: string; broj?: number }>();
+  const greske = new Map<string, Array<{ opis: string; broj?: number }>>();
   const nepoznate = new Set<string>();
   const zadrzani = new Map<string, { stigao: () => void; pusten: Promise<void> }>();
+  const zadaniBrojevi = new Map<string, string>();
   let racun = 100;
   let reklamacija = 0;
 
@@ -117,15 +148,16 @@ export function pokreniLaziTring(): LaziTring {
         return new Response(greska('Nepoznat endpoint'), { status: 404, headers: { 'Content-Type': 'application/xml' } });
       }
 
-      const g = greske.get(putanja);
+      const g = greske.get(putanja)?.shift();
       if (g !== undefined) {
-        greske.delete(putanja);
         return new Response(greska(g.opis, g.broj), { headers: { 'Content-Type': 'application/xml' } });
       }
 
+      const zadan = zadaniBrojevi.get(putanja);
+      zadaniBrojevi.delete(putanja);
       let xml: string;
-      if (putanja === '/sfr') xml = ok({ BrojFiskalnogRacuna: String(++racun) });
-      else if (putanja === '/srr') xml = ok({ BrojFiskalnogRacuna: `R-${++reklamacija}` });
+      if (putanja === '/sfr') xml = ok({ BrojFiskalnogRacuna: zadan ?? String(++racun) });
+      else if (putanja === '/srr') xml = ok({ BrojFiskalnogRacuna: zadan ?? `R-${++reklamacija}` });
       else xml = ok();
       return new Response(xml, { headers: { 'Content-Type': 'application/xml' } });
     },
@@ -134,8 +166,9 @@ export function pokreniLaziTring(): LaziTring {
   return {
     port: server.port!,
     zahtjevi,
-    greskaNa: (putanja, opis, broj) => { greske.set(putanja, { opis, broj }); },
+    greskaNa: (putanja, opis, broj) => { greske.set(putanja, [...(greske.get(putanja) ?? []), { opis, broj }]); },
     bez: (putanja) => { nepoznate.add(putanja); },
+    sljedeciBroj: (putanja, broj) => { zadaniBrojevi.set(putanja, broj); },
     zadrzi: (putanja) => {
       let stigao!: () => void;
       let pusti!: () => void;

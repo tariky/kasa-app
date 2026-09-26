@@ -7,16 +7,15 @@ import { generirajRacune } from './batchRacuni';
 import { buildTringRacun } from './tringRacun';
 import { izracunajTotale } from './racun';
 import * as Tring from '@/services/tring';
-import { startMockTringServer } from '@/services/tring-mock-server';
+import { pokreniMockTring } from '@/services/tring-mock-server';
 import type { Product } from '@/types';
-
-const PORT = 8099; // avoid clashing with a real/dev mock on 8085
 
 let server: Server;
 
-beforeAll(() => {
-  server = startMockTringServer(PORT, { kasnjenjeMs: 0 });
-  Tring.configure({ host: 'localhost', port: PORT });
+beforeAll(async () => {
+  const mock = await pokreniMockTring({ kasnjenjeMs: 0 });
+  server = mock.server;
+  Tring.configure({ host: 'localhost', port: mock.port });
 });
 
 afterAll(() => {
@@ -27,6 +26,19 @@ function proizvod(over: Partial<Product>): Product {
   return {
     id: 1, sifra: '001', naziv: 'Artikal', jm: 'kom', cijena: 10,
     pdvStopa: 'E', tip: 'artikal', createdAt: '', updatedAt: '', stanje: 100, ...over,
+  };
+}
+
+// Deterministički RNG (mulberry32, kao u batchRacuni.test.ts): s Math.random
+// broj računa, pa i broj expect() poziva, mijenjao se od runa do runa.
+function seededRng(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
 
@@ -43,7 +55,7 @@ const katalog: Product[] = [
 ];
 
 test('svi generisani računi se uspješno štampaju kroz mock fiskalni server', async () => {
-  const res = generirajRacune(katalog, { target: 60 });
+  const res = generirajRacune(katalog, { target: 60, rng: seededRng(1) });
   expect(res.racuni.length).toBeGreaterThan(0);
 
   const fiskalniBrojevi: string[] = [];
