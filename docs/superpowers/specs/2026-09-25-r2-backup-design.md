@@ -3,7 +3,7 @@
 **Datum:** 2026-09-25
 **Status:** Approved (brainstorming) — djelimično urađeno, vidi "Stanje implementacije"
 
-## Stanje implementacije (2026-09-25)
+## Stanje implementacije (2026-09-26)
 
 **Urađeno i provjereno na stvarnom bucketu** (`pazar-lunatik-doo`, dev licenca "Lunatik doo"):
 - `src/lib/licenca.ts` — polje `b` u tokenu, `licenca.backup = { bucket }`, `backupPodaci(token)` (samo main proces).
@@ -16,11 +16,33 @@
 - `tools/backup/backup.ts` — `kljuc`, `posalji`, `lista`, `preuzmi`, `sifruj`, `desifruj`
   (`posalji` bez argumenata radi tačno ono što treba aplikacija: licenca + baza dev aplikacije → R2).
 
+**Urađeno u aplikaciji (Electron)** — jedinični i ugovorni testovi prolaze, izgled trake i kartice provjeren
+na statičkom pregledu; klik "Backup sada" u pravom Electronu prema stvarnom R2 ostaje ručna provjera vlasnika:
+- `src/lib/backupRaspored.ts` — `sljedeciBackup`, `trajnaGreska`, `ukupniProcenat`, tipovi `BackupStanje` / `BackupInfo` / `BackupDogadjaj`.
+- `src/lib/backupTok.ts` — `napraviBackup`: tok kopija → šifrovanje → slanje, jedan backup istovremeno, stanje, događaji, `tick`.
+- `src/ipc/backup.ts` — kanali `backup:info` / `backup:sada`, događaj `backup:stanje`, VACUUM INTO preko
+  better-sqlite3, `userData/backup-stanje.json`, provjera svake minute; preload dobija opštu pretplatu na događaje.
+- `src/lib/r2.ts` — `r2Posalji` s napretkom po bajtovima i `R2Greska` sa HTTP statusom (403 `backupTok` pretvara u "R2 pristup više ne važi…").
+- `src/lib/backupTraka.ts` + `src/components/backup/BackupTraka.tsx` — linija i pilula u `MainLayout` (tekstovi, boje, trajanje).
+- `src/components/postavke/AutomatskiBackup.tsx` + `src/hooks/useBackup.ts` — kartica u Postavke → Sistem.
+- Ugovor: `src/ipc/ugovor/backup.ugovor.test.ts` protiv lažnog S3 (`src/ipc/ugovor/laziS3.ts`, `PAZAR_BACKUP_ENDPOINT`).
+
+**Odluke donesene u planu** (`docs/superpowers/plans/2026-09-25-r2-backup-aplikacija.md`):
+1. `sljedeciBackup(stanje, sada, start)` ima treći argument (start), pa pao pokušaj ima prednost (+15 min) i ništa ne ide prije `start + 1 min` — bez petlje kad backup-a nikad nije bilo.
+2. Tajmer je provjera svake minute (`setInterval` + `sljedeciBackup`) umjesto jednog dugog `setTimeout`-a — preživi spavanje laptopa i sam primijeti novu licencu (±1 min).
+3. `procenat` u događaju je unutar faze (0–100), a traka ga preslikava na ukupni (`ukupniProcenat`); Rust šalje isto.
+4. `backup:sada` čeka kraj i vraća `BackupInfo` (greška backup-a je u `info.greska`); baca samo kad backup nije u licenci.
+5. Napredak po bajtovima ide kroz `node:http(s)` PUT s `content-length` u komadima od 64 KB, jer `fetch` sa streamom šalje chunked što R2 odbija; GET i lista ostaju na `fetch`.
+6. Ugovorni harness dobija `postaviBackupLicencu(r2)` i `dogadjaji`, a backup testovi su `describe.skipIf(KASA_BACKEND === 'rust')` dok Rust ne stigne.
+7. Klik na trajnu pilulu otvara Postavke → Sistem samo za admina; kod kasira pilula nije klikabilna.
+8. `BackupTraka` na mount pita `backup:info` i odmah prikaže traku ako backup teče, a pilulu ako je trajna greška — inače čeka događaje.
+9. `backup:sada` smije samo admin, `backup:info` svaki prijavljeni korisnik.
+10. Prolazna pilula stoji gore desno i ne prima klik; trajna pilula stoji dolje desno i klikabilna je samo za admina, da ne prekriva dugmad ekrana.
+
 **Ostaje:**
-1. Electron main: raspored (`sljedeciBackup`), tok backup-a (VACUUM INTO preko better-sqlite3 → `sifrujBackup` → `r2Posalji`), `userData/backup-stanje.json`, kanali `backup:info` / `backup:sada`, događaj `backup:stanje`, opšta pretplata na događaje u preloadu.
-2. Renderer: kartica "Automatski backup" u Postavkama, `BackupTraka` u `MainLayout`.
-3. Napredak slanja po bajtovima (`r2Posalji` danas šalje cijelo tijelo odjednom, bez napretka).
-4. Tauri/Rust: isto (crates `age`, `hmac`, `aes-gcm`; `ureq`, `sha2` već postoje), ugovorni testovi protiv lažnog S3 (`PAZAR_BACKUP_ENDPOINT`), interop Rust age → JS `desifrujBackup`.
+1. Tauri/Rust: isto (crates `age`, `hmac`, `aes-gcm`; `ureq`, `sha2` već postoje), ugovorni testovi protiv lažnog S3 (`PAZAR_BACKUP_ENDPOINT`), interop Rust age → JS `desifrujBackup`.
+   Ugovor `backup.ugovor.test.ts` već postoji i čeka Rust (`describe.skipIf`); `ugovor_server.rs` treba
+   `postaviBackupLicencu` i događaje `{"dogadjaj":"backup:stanje","podaci":…}`.
 
 
 ## Problem
