@@ -1,8 +1,8 @@
 // src/components/proizvodnja/ProizvodiNaloga.tsx
-import type { ProizvodPonude } from '@/types';
+import type { ProizvodPonude, RadniNalogProizvod } from '@/types';
 import { cn } from '@/lib/utils';
 import { Eyebrow } from '@/components/ui/ledger';
-import { Check } from 'lucide-react';
+import { AlertTriangle, Check } from 'lucide-react';
 
 const broj = (n: number) => String(Math.round(n * 10000) / 10000).replace('.', ',');
 
@@ -10,9 +10,12 @@ const broj = (n: number) => String(Math.round(n * 10000) / 10000).replace('.', '
  * Izbor stavki ponude koje nalog izrađuje. Označene pri završetku naloga ulaze na
  * stanje; neoznačene su roba sa zalihe — prodaja po ponudi skida i jedne i druge.
  */
-export function ProizvodiNaloga({ linije, oznacene, onToggle, zakljucano, className }: {
+export function ProizvodiNaloga({ linije, oznacene, onToggle, zakljucano, className, neuskladjeni = [], onUkloniNeuskladjene }: {
   linije: ProizvodPonude[]; oznacene: Set<number>; onToggle: (ponudaStavkaId: number) => void;
   zakljucano?: boolean; className?: string;
+  /** Spremljeni proizvodi bez odgovarajuće stavke na ponudi (ponuda mijenjana nakon izbora). */
+  neuskladjeni?: RadniNalogProizvod[];
+  onUkloniNeuskladjene?: () => void;
 }) {
   return (
     <section aria-label="Proizvodi naloga" className={cn('space-y-2', className)}>
@@ -20,7 +23,7 @@ export function ProizvodiNaloga({ linije, oznacene, onToggle, zakljucano, classN
         <Eyebrow>Izrađuje se</Eyebrow>
         <span className="text-[11px] text-slate-400">označeno ulazi na stanje pri završetku, ostalo se prodaje sa zalihe</span>
       </div>
-      <ul className="rounded-xl border border-slate-200/80 divide-y divide-slate-100">
+      {linije.length > 0 && <ul className="rounded-xl border border-slate-200/80 divide-y divide-slate-100">
         {linije.map(l => {
           const on = oznacene.has(l.ponudaStavkaId);
           const fali = l.stanje < l.kolicina;
@@ -47,7 +50,34 @@ export function ProizvodiNaloga({ linije, oznacene, onToggle, zakljucano, classN
             </li>
           );
         })}
-      </ul>
+      </ul>}
+      {neuskladjeni.length > 0 && (
+        <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-[12px] text-amber-800">
+          <p className="flex items-start gap-2 font-medium">
+            <AlertTriangle size={13} className="mt-[2px] flex-shrink-0" />
+            Ponuda je mijenjana nakon izbora — ovi proizvodi su spremljeni na nalogu, a na ponudi ih više nema u toj količini:
+          </p>
+          <ul className="mt-1.5 ml-5 space-y-0.5">
+            {neuskladjeni.map(p => (
+              <li key={p.id} className="flex items-baseline gap-2">
+                <span className="font-medium">{p.productNaziv ?? `#${p.productId}`}</span>
+                <span className="font-mono tabular-nums">× {broj(p.kolicina)} {p.productJm ?? ''}</span>
+              </li>
+            ))}
+          </ul>
+          {!zakljucano && (
+            <div className="mt-2 ml-5 flex items-center gap-3">
+              <span className="text-[11.5px] text-amber-700">Nalog se ne može završiti dok se izbor ne uskladi. Označite stavke iznad ili</span>
+              {onUkloniNeuskladjene && (
+                <button type="button" onClick={onUkloniNeuskladjene}
+                  className="h-7 rounded-md border border-amber-300 bg-white px-2.5 text-[12px] font-medium text-amber-800 hover:bg-amber-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/60">
+                  Ukloni ih iz izbora
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </section>
   );
 }

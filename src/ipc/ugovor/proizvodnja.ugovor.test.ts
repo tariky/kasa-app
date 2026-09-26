@@ -469,6 +469,43 @@ describe('proizvodi naloga iz ponude', () => {
     expect(red('SELECT COUNT(*) AS n FROM radni_nalog_proizvodi').n).toBe(0);
   });
 
+  test('ponuda mijenjana nakon izbora: završetak se odbija dok se izbor ne uskladi', async () => {
+    const kupacId = dodajKupca();
+    const ormar = dodajProizvod('ORM', 'artikal');
+    const polica = dodajProizvod('POL', 'artikal');
+    const ponudaId = dodajPonudu(kupacId, 'prihvacena', [
+      { productId: ormar, kolicina: 2, cijena: 400 },
+      { productId: polica, kolicina: 1, cijena: 50 },
+    ]);
+    const { id } = await b.call('nalog:createIzPonude', ponudaId, [{ productId: ormar, kolicina: 2 }, { productId: polica, kolicina: 1 }]);
+    const m = dodajProizvod('M', 'materijal', { stanje: 10 });
+    await b.call('nalog:replaceStavke', id, [{ materijalId: m, kolicina: 1 }]);
+    const kretanja = () => red("SELECT COUNT(*) AS n FROM stock_movements WHERE referenceType = 'radni_nalog'").n;
+
+    // količina smanjena na ponudi
+    b.db.prepare('UPDATE ponuda_stavke SET kolicina = 1 WHERE ponudaId = ? AND productId = ?').run(ponudaId, ormar);
+    await expect(zavrsi(id)).rejects.toThrow(
+      'Ponuda je mijenjana nakon izbora proizvoda — Proizvod "Proizvod ORM": nalog izrađuje 2, a na ponudi je 1. ' +
+      'Provjerite šta nalog izrađuje pa ga ponovo završite.'
+    );
+    expect([status(id), kretanja(), stanje(ormar), stanje(m)]).toEqual(['otvoren', 0, 0, 10]);
+    expect(red('SELECT nabavnaCijena FROM radni_nalog_stavke WHERE radniNalogId = ?', id).nabavnaCijena).toBeNull();
+
+    // stavka uklonjena sa ponude (ormar je u izboru usklađen, polica ostaje u starom izboru)
+    b.db.prepare('UPDATE radni_nalog_proizvodi SET kolicina = 1 WHERE radniNalogId = ? AND productId = ?').run(id, ormar);
+    b.db.prepare('DELETE FROM ponuda_stavke WHERE ponudaId = ? AND productId = ?').run(ponudaId, polica);
+    await expect(zavrsi(id)).rejects.toThrow(
+      'Ponuda je mijenjana nakon izbora proizvoda — Proizvod "Proizvod POL" nije na ponudi naloga. ' +
+      'Provjerite šta nalog izrađuje pa ga ponovo završite.'
+    );
+    expect([status(id), kretanja(), stanje(polica)]).toEqual(['otvoren', 0, 0]);
+
+    // nakon usklađivanja izbora završetak prolazi
+    await b.call('nalog:setProizvodi', id, [{ productId: ormar, kolicina: 1 }]);
+    await zavrsi(id);
+    expect([status(id), stanje(ormar), stanje(polica), stanje(m)]).toEqual(['zavrsen', 1, 0, 9]);
+  });
+
   test('proizvod naloga iz ponude se ne briše iz šifarnika', async () => {
     const ormar = dodajProizvod('ORM', 'artikal');
     const ponudaId = dodajPonudu(dodajKupca(), 'prihvacena', [{ productId: ormar, kolicina: 1, cijena: 400 }]);

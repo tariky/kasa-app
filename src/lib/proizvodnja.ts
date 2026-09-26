@@ -220,10 +220,11 @@ export function proizvodiPonude(db: SqlDb, ponudaId: number): ProizvodPonude[] {
 }
 
 /**
- * Zamijeni proizvode naloga. Svaki mora biti artikal sa ponude naloga, a zbir
- * po artiklu ne veći od količine na ponudi. Poziva se u transakciji.
+ * Provjeri izbor proizvoda prema trenutnoj ponudi: svaki mora biti artikal sa
+ * ponude, a zbir po artiklu ne veći od količine na ponudi. Vraća redove s
+ * količinom na 4 decimale.
  */
-function upisiProizvode(db: SqlDb, nalogId: number, ponudaId: number, proizvodi: NalogProizvodInput[]): void {
+function validirajProizvode(db: SqlDb, ponudaId: number, proizvodi: NalogProizvodInput[]): NalogProizvodInput[] {
   const naPonudi = db.prepare(`
     SELECT p.naziv, p.tip, SUM(ps.kolicina) AS kolicina
     FROM ponuda_stavke ps JOIN products p ON p.id = ps.productId
@@ -245,6 +246,12 @@ function upisiProizvode(db: SqlDb, nalogId: number, ponudaId: number, proizvodi:
     zbir.set(pr.productId, ukupno);
     redovi.push({ productId: pr.productId, kolicina });
   }
+  return redovi;
+}
+
+/** Zamijeni proizvode naloga (provjereno prema ponudi). Poziva se u transakciji. */
+function upisiProizvode(db: SqlDb, nalogId: number, ponudaId: number, proizvodi: NalogProizvodInput[]): void {
+  const redovi = validirajProizvode(db, ponudaId, proizvodi);
   db.prepare('DELETE FROM radni_nalog_proizvodi WHERE radniNalogId = ?').run(nalogId);
   const ins = db.prepare('INSERT INTO radni_nalog_proizvodi (radniNalogId, productId, kolicina) VALUES (?, ?, ?)');
   for (const r of redovi) ins.run(nalogId, r.productId, r.kolicina);
@@ -545,6 +552,19 @@ export function zavrsiNalog(db: SqlDb, id: number): void {
   const stavke = db.prepare('SELECT id, materijalId, kolicina FROM radni_nalog_stavke WHERE radniNalogId = ?')
     .all(id) as Array<{ id: number; materijalId: number; kolicina: number }>;
   if (stavke.length === 0) throw new Error('Nalog nema stavki utroška');
+  const proizvodi = db.prepare('SELECT productId, kolicina FROM radni_nalog_proizvodi WHERE radniNalogId = ? ORDER BY id')
+    .all(id) as Array<{ productId: number; kolicina: number }>;
+  // Prihvaćena ponuda se i dalje može mijenjati — izbor mora odgovarati ponudi
+  // kakva je sada, inače bi na stanje ušlo ono što se neće prodati.
+  if (proizvodi.length > 0 && n.ponudaId) {
+    try {
+      validirajProizvode(db, n.ponudaId, proizvodi);
+    } catch (err: any) {
+      throw new Error(
+        `Ponuda je mijenjana nakon izbora proizvoda — ${err?.message}. Provjerite šta nalog izrađuje pa ga ponovo završite.`
+      );
+    }
+  }
 
   const izlaz = db.prepare(
     "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'izlaz', ?, 'radni_nalog', ?)"
@@ -560,8 +580,6 @@ export function zavrsiNalog(db: SqlDb, id: number): void {
   if (n.vrsta === 'zaliha' && n.productId) {
     ulaz.run(n.productId, n.kolicina, id);
   }
-  const proizvodi = db.prepare('SELECT productId, kolicina FROM radni_nalog_proizvodi WHERE radniNalogId = ? ORDER BY id')
-    .all(id) as Array<{ productId: number; kolicina: number }>;
   for (const p of proizvodi) ulaz.run(p.productId, p.kolicina, id);
   db.prepare("UPDATE radni_nalozi SET status = 'zavrsen', zavrsenAt = datetime('now','localtime') WHERE id = ?").run(id);
 }

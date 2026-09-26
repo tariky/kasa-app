@@ -291,9 +291,10 @@ pub fn proizvodi_ponude(db: &Db, ponuda_id: &Value) -> R<Vec<Value>> {
     Ok(redovi)
 }
 
-/// Zamijeni proizvode naloga. Svaki mora biti artikal sa ponude naloga, a zbir
-/// po artiklu ne veći od količine na ponudi. Poziva se u transakciji.
-fn upisi_proizvode(db: &Db, nalog_id: &Value, ponuda_id: &Value, proizvodi: &[Value]) -> R<()> {
+/// Provjeri izbor proizvoda prema trenutnoj ponudi: svaki mora biti artikal sa
+/// ponude, a zbir po artiklu ne veći od količine na ponudi. Vraća redove s
+/// količinom na 4 decimale.
+fn validiraj_proizvode(db: &Db, ponuda_id: &Value, proizvodi: &[Value]) -> R<Vec<(Value, f64)>> {
     let mut zbir: HashMap<String, f64> = HashMap::new();
     let mut redovi: Vec<(Value, f64)> = Vec::new();
     for pr in proizvodi {
@@ -338,6 +339,12 @@ fn upisi_proizvode(db: &Db, nalog_id: &Value, ponuda_id: &Value, proizvodi: &[Va
         zbir.insert(kljuc, ukupno);
         redovi.push((pr["productId"].clone(), kolicina));
     }
+    Ok(redovi)
+}
+
+/// Zamijeni proizvode naloga (provjereno prema ponudi). Poziva se u transakciji.
+fn upisi_proizvode(db: &Db, nalog_id: &Value, ponuda_id: &Value, proizvodi: &[Value]) -> R<()> {
+    let redovi = validiraj_proizvode(db, ponuda_id, proizvodi)?;
     db.run("DELETE FROM radni_nalog_proizvodi WHERE radniNalogId = ?", p![nalog_id])?;
     for (product_id, kolicina) in redovi {
         db.run(
@@ -730,6 +737,17 @@ pub fn zavrsi_nalog(db: &Db, id: &Value) -> R<()> {
     if stavke.is_empty() {
         baci!("Nalog nema stavki utroška");
     }
+    let proizvodi = db.all("SELECT productId, kolicina FROM radni_nalog_proizvodi WHERE radniNalogId = ? ORDER BY id", p![id])?;
+    // Prihvaćena ponuda se i dalje može mijenjati — izbor mora odgovarati ponudi
+    // kakva je sada, inače bi na stanje ušlo ono što se neće prodati.
+    if !proizvodi.is_empty() && truthy(&n["ponudaId"]) {
+        if let Err(e) = validiraj_proizvode(db, &n["ponudaId"], &proizvodi) {
+            baci!(
+                "Ponuda je mijenjana nakon izbora proizvoda — {}. Provjerite šta nalog izrađuje pa ga ponovo završite.",
+                e.poruka()
+            );
+        }
+    }
 
     for s in &stavke {
         db.run(
@@ -750,7 +768,6 @@ pub fn zavrsi_nalog(db: &Db, id: &Value) -> R<()> {
     if n["vrsta"] == "zaliha" && truthy(&n["productId"]) {
         ulaz(&n["productId"], &n["kolicina"])?;
     }
-    let proizvodi = db.all("SELECT productId, kolicina FROM radni_nalog_proizvodi WHERE radniNalogId = ? ORDER BY id", p![id])?;
     for pr in &proizvodi {
         ulaz(&pr["productId"], &pr["kolicina"])?;
     }

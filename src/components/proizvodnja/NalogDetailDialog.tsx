@@ -6,7 +6,7 @@ import type { Kalkulacija } from '@/lib/proizvodnja';
 import { formatBrojNaloga } from '@/lib/proizvodnja';
 import { formatBrojPonude } from '@/lib/ponuda';
 import { useDokumentPostavke } from '@/components/DokumentPostavkeProvider';
-import { rokOznaka, oznaceneStavke, proizvodiIzIzbora } from '@/lib/nalogPrikaz';
+import { rokOznaka, uskladiIzbor, proizvodiIzIzbora } from '@/lib/nalogPrikaz';
 import { localDateStr } from '@/lib/novac';
 import { cn, formatKM, formatDate } from '@/lib/utils';
 import { ucitajZaStampu } from '@/lib/stampa';
@@ -75,13 +75,17 @@ export function NalogDetailDialog({ nalogId, redoslijed, uloga, onClose, onNavig
   }, [nalogId, load, onChanged]);
 
   const uredivo = !!nalog && (nalog.status === 'otvoren' || nalog.status === 'u_izradi');
-  const oznaceniProizvodi = useMemo(() => oznaceneStavke(linijePonude, nalog?.proizvodi ?? []), [linijePonude, nalog]);
-  const promijeniProizvod = async (ponudaStavkaId: number) => {
+  // Spremljeni izbor prema ponudi kakva je sada; neusklađeni redovi se prikazuju posebno.
+  const izbor = useMemo(() => uskladiIzbor(linijePonude, nalog?.proizvodi ?? []), [linijePonude, nalog]);
+  const spremiIzbor = async (oznacene: Set<number>) => {
     if (!nalog || !uredivo) return;
-    const oznacene = new Set(oznaceniProizvodi);
-    if (oznacene.has(ponudaStavkaId)) oznacene.delete(ponudaStavkaId); else oznacene.add(ponudaStavkaId);
     try { await window.api.setNalogProizvodi(nalog.id, proizvodiIzIzbora(linijePonude, oznacene)); await reload(); }
     catch (e) { greska(e); }
+  };
+  const promijeniProizvod = (ponudaStavkaId: number) => {
+    const oznacene = new Set(izbor.oznacene);
+    if (oznacene.has(ponudaStavkaId)) oznacene.delete(ponudaStavkaId); else oznacene.add(ponudaStavkaId);
+    spremiIzbor(oznacene);
   };
   useEffect(() => { if (!uredivo) setStavkeDirty(false); }, [uredivo]);
 
@@ -259,8 +263,9 @@ export function NalogDetailDialog({ nalogId, redoslijed, uloga, onClose, onNavig
                       {nalog.napomena && <Fact label="Napomena" className="col-span-2 md:col-span-4"><span className="text-slate-600">{nalog.napomena}</span></Fact>}
                     </div>
 
-                    {nalog.ponudaId != null && linijePonude.length > 0 && (
-                      <ProizvodiNaloga linije={linijePonude} oznacene={oznaceniProizvodi} onToggle={promijeniProizvod} zakljucano={!uredivo} />
+                    {nalog.ponudaId != null && (linijePonude.length > 0 || izbor.neuskladjeni.length > 0) && (
+                      <ProizvodiNaloga linije={linijePonude} oznacene={izbor.oznacene} onToggle={promijeniProizvod} zakljucano={!uredivo}
+                        neuskladjeni={izbor.neuskladjeni} onUkloniNeuskladjene={() => spremiIzbor(izbor.oznacene)} />
                     )}
 
                     <StavkeUtroska

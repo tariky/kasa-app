@@ -45,20 +45,23 @@ export function zadaniIzbor(linije: ProizvodPonude[]): Set<number> {
 }
 
 /**
- * Stavke ponude koje odgovaraju spremljenom izboru naloga: svaki proizvod označi
- * jednu stavku istog artikla — prvo onu s istom količinom, inače prvu slobodnu.
+ * Spremljeni izbor naloga prema trenutnim stavkama ponude: proizvod označi stavku
+ * istog artikla i iste količine. Proizvod bez takve stavke (ponuda je mijenjana
+ * nakon izbora) ostaje neusklađen i prikazuje se posebno — završetak ga odbija.
  */
-export function oznaceneStavke(linije: StavkaPonude[], proizvodi: Array<{ productId: number; kolicina: number }>): Set<number> {
+export function uskladiIzbor<P extends { productId: number; kolicina: number }>(
+  linije: StavkaPonude[], proizvodi: P[]
+): { oznacene: Set<number>; neuskladjeni: P[] } {
   const slobodne = [...linije];
-  const out = new Set<number>();
+  const oznacene = new Set<number>();
+  const neuskladjeni: P[] = [];
   for (const p of proizvodi) {
-    let i = slobodne.findIndex(l => l.productId === p.productId && Math.abs(l.kolicina - p.kolicina) < 1e-9);
-    if (i < 0) i = slobodne.findIndex(l => l.productId === p.productId);
-    if (i < 0) continue;
-    out.add(slobodne[i].ponudaStavkaId);
+    const i = slobodne.findIndex(l => l.productId === p.productId && Math.abs(l.kolicina - p.kolicina) < 1e-9);
+    if (i < 0) { neuskladjeni.push(p); continue; }
+    oznacene.add(slobodne[i].ponudaStavkaId);
     slobodne.splice(i, 1);
   }
-  return out;
+  return { oznacene, neuskladjeni };
 }
 
 /** Izbor za backend: po jedan proizvod za svaku označenu stavku, redom ponude. */

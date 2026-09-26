@@ -679,6 +679,21 @@ test('setProizvodiNaloga: zamjenjuje izbor dok nalog nije završen; validacije',
   expect(() => setProizvodiNaloga(db, r.id, [])).toThrow('Nalog je završen i ne može se mijenjati');
 });
 
+test('završetak odbija izbor proizvoda koji više ne odgovara ponudi; ništa se ne knjiži', () => {
+  const k = dodajKupca(db);
+  const kuh = dodajArtikal(db, 'KUH', 1000);
+  const iv = dodajMaterijal(db, 'IV');
+  const ponudaId = ponudaSaStavkama(k, 'prihvacena', [[kuh, 2, 1000]]);
+  const r = createNalogIzPonude(db, ponudaId, 1, [{ productId: kuh, kolicina: 2 }]);
+  replaceStavke(db, r.id, [{ materijalId: iv, kolicina: 1 }]);
+  db.prepare('DELETE FROM ponuda_stavke WHERE ponudaId = ?').run(ponudaId);
+
+  expect(() => db.transaction(() => zavrsiNalog(db, r.id))())
+    .toThrow('Ponuda je mijenjana nakon izbora proizvoda — Proizvod "Proizvod KUH" nije na ponudi naloga. Provjerite šta nalog izrađuje pa ga ponovo završite.');
+  expect(getNalog(db, r.id).status).toBe('otvoren');
+  expect(db.prepare('SELECT COUNT(*) AS c FROM stock_movements WHERE referenceType = ?').get('radni_nalog')).toEqual({ c: 0 });
+});
+
 test('brisanje naloga iz ponude briše i izbor proizvoda; proizvod naloga se ne briše iz šifarnika', () => {
   const k = dodajKupca(db);
   const kuh = dodajArtikal(db, 'KUH', 1000);
