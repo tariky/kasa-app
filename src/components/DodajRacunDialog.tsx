@@ -16,7 +16,7 @@ import { iznosStavke } from '@/lib/racun';
 import { uPayload } from '@/lib/stavkeDokumenta';
 import { useStavkeDokumenta } from '@/hooks/useStavkeDokumenta';
 import { cn, formatKM } from '@/lib/utils';
-import { localDateStr } from '@/lib/novac';
+import { localDateTimeInput } from '@/lib/novac';
 import { NACINI_PLACANJA, type NacinPlacanja } from '@/lib/placanje';
 import { IKONA_PLACANJA } from '@/components/NacinPlacanjaBirac';
 import { Eyebrow } from '@/components/ui/ledger';
@@ -35,15 +35,9 @@ interface Props {
   prefillBroj?: string;
 }
 
-function nowLocalInput(): string {
-  const d = new Date();
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${localDateStr(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
 export default function DodajRacunDialog({ open, onOpenChange, onSaved, prefillBroj }: Props) {
   const [brojFiskalnog, setBrojFiskalnog] = useState('');
-  const [datum, setDatum] = useState(nowLocalInput());
+  const [datum, setDatum] = useState(localDateTimeInput);
   const [nacinPlacanja, setNacinPlacanja] = useState<NacinPlacanja>('Gotovina');
   const {
     stavke, postavi: setStavke, dodaj: addProduct, izmijeni: updateStavka, ukloni: removeStavka, totali: { ukupno, pdvIznos },
@@ -69,7 +63,7 @@ export default function DodajRacunDialog({ open, onOpenChange, onSaved, prefillB
   };
 
   const reset = () => {
-    setBrojFiskalnog(''); setDatum(nowLocalInput()); setNacinPlacanja('Gotovina');
+    setBrojFiskalnog(''); setDatum(localDateTimeInput()); setNacinPlacanja('Gotovina');
     setStavke([]);
     setKupacOpen(false);
     setKupacIzSifarnika(false);

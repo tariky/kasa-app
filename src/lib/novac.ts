@@ -33,3 +33,9 @@ export function localDateStr(d: Date = new Date()): string {
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
+
+/** Lokalni datum i vrijeme do minute, "YYYY-MM-DDTHH:MM" — vrijednost polja datuma i vremena. */
+export function localDateTimeInput(d: Date = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${localDateStr(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
