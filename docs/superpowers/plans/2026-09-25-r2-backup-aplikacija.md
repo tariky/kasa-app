@@ -68,18 +68,20 @@
 | `src/ipc/ugovor/backup.ugovor.test.ts` (novi) | ugovor `backup:*` |
 | `src/lib/backupTraka.ts` (novi, +test) | čisto: događaj/info → šta traka prikazuje |
 | `src/components/backup/BackupTraka.tsx` (novi) | traka + pilula |
-| `src/components/backup/BackupKartica.tsx` (novi) | kartica u Postavkama |
+| `src/components/postavke/AutomatskiBackup.tsx` (novi) | sekcija u Postavke → Sistem |
 | `src/hooks/useBackup.ts` (novi) | info + pretplata na događaje |
-| `src/components/MainLayout.tsx`, `src/screens/PostavkeScreen.tsx` | ugradnja |
+| `src/components/MainLayout.tsx`, `src/screens/PostavkeScreen.tsx`, `src/components/postavke/SistemGrupa.tsx` | ugradnja |
+| `src/ipc/sesija.ts`, `src/ipc/ugovor/sesija.ugovor.test.ts` | `backup:sada` samo admin; lista kanala |
 
 ---
 
-### Task 0: Grana
+### Task 0: Worktree
 
-Radni direktorij ima necommitan R2 rad iz prethodne sesije (licenca, r2, backupFajl, generator…) plus izmjene drugih sesija (PonudeScreen, NalogDetailDialog, RacunDetailDialog…). **Pitati korisnika prije izvršenja:** da li prvo commitati R2 rad na novu granu `feat/r2-backup` (samo R2 fajlove, ne tuđe izmjene), pa ovaj plan nastaviti na njoj.
+R2 osnova je na mainu (snapshot `8f3de6a`), osim `src/lib/backupKljuc.ts` koji je **namjerno necommitan (repo je javan)** i nikad se ne commita. U glavnom direktoriju radi paralelna sesija — ovaj plan se izvršava u zasebnom worktreeu.
 
-- [ ] **Step 1:** `git switch -c feat/r2-backup`
-- [ ] **Step 2 (po odgovoru korisnika):** commit R2 fajlova navedenih u "Stanje implementacije" spec-a.
+- [ ] **Step 1:** `git worktree add ../kasa-app-r2 -b feat/r2-backup-aplikacija main`
+- [ ] **Step 2:** `cp src/lib/backupKljuc.ts ../kasa-app-r2/src/lib/backupKljuc.ts` (ostaje untracked — nikad `git add` ovog fajla; commitati uvijek imenovane fajlove, ne `git add -A`).
+- [ ] **Step 3:** u worktreeu `bun install`, pa `bun test` — zabilježiti polazno stanje (koliko testova, da li nešto već pada).
 
 ---
 
@@ -1187,6 +1189,14 @@ export function zaustaviRaspored(): void {
   });
 ```
 
+- [ ] **Step 6b: Sesija i lista kanala** (od 2026-09-26 svaki kanal prolazi `provjeriPristup` iz `src/ipc/sesija.ts`):
+  - `backup:info` traži prijavu (svaki prijavljeni — `BackupTraka` radi i kasiru); ne ide u `KANALI_BEZ_PRIJAVE`.
+  - `backup:sada` je administratorski: dodati u `ADMIN_KANALI` u `src/ipc/sesija.ts` (uz `db:backup`). Prvi backup nakon `licenca:aktiviraj` ide interno, bez kanala, pa radi i bez prijave.
+  - `src/ipc/ugovor/sesija.ugovor.test.ts`: u `SVI_KANALI` dodati `...(process.env.KASA_BACKEND === 'rust' ? [] : ['backup:info', 'backup:sada'])` s komentarom `// Rust: faza 4 (automatski backup)`; u tamošnji `ADMIN_KANALI` isto za `'backup:sada'`.
+  - U `backup.ugovor.test.ts` dodati test: kasir (`dodajKorisnika` + `prijavi` kao u `audit.ugovor.test.ts`) dobija `backup:info`, a `backup:sada` odbija porukom `PORUKA_SAMO_ADMIN`.
+  - `otvoriBackend()` se od sada sam prijavi kao admin — backup testovi to koriste bez izmjena.
+  - `tsBackend.ts` ima `kanali()` i `ponovoPokreni()` — `registrujBackup()` se zove iz `registerIpcHandlers`, pa `ponovoPokreni` pravi novi motor (očekivano).
+
 - [ ] **Step 7:** `bun test src/ipc/ugovor/backup.ugovor.test.ts` → PASS. Zatim cijeli ugovor i sve ostalo: `bun test` → PASS (ništa staro ne pada zbog novog `BrowserWindow` mocka ili `registrujBackup`).
 - [ ] **Step 8:** `bun run test:rust` → PASS (backup testovi preskočeni, ostalo kao prije). Ako cargo build traje predugo ili nema toolchaina, javiti — ne preskakati tiho.
 - [ ] **Step 9: Commit**
@@ -1410,15 +1420,17 @@ git commit -m "feat(backup): prikaz trake napretka (tekstovi, boje, trajanje)"
 
 ---
 
-### Task 8: `BackupTraka` u `MainLayout` i kartica u Postavkama
+### Task 8: `BackupTraka` u `MainLayout` i sekcija u Postavkama
+
+(Usklađeno s mainom od 2026-09-26: Postavke su grupe — `src/components/postavke/*Grupa.tsx` sa zajedničkim `Sekcija`/`Red`/`SekcijaPodnozje`/`IshodPoruka` iz `dijelovi.tsx`; `PostavkeScreen` pamti zadnju grupu u modulskoj varijabli `zadnjaGrupa`.)
 
 **Files:**
-- Create: `src/hooks/useBackup.ts`, `src/components/backup/BackupTraka.tsx`, `src/components/backup/BackupKartica.tsx`
-- Modify: `src/components/MainLayout.tsx`, `src/screens/PostavkeScreen.tsx`
+- Create: `src/hooks/useBackup.ts`, `src/components/backup/BackupTraka.tsx`, `src/components/postavke/AutomatskiBackup.tsx`
+- Modify: `src/components/postavke/SistemGrupa.tsx`, `src/screens/PostavkeScreen.tsx`, `src/components/MainLayout.tsx`
 
 **Interfaces:**
-- Consumes: `window.api.getBackupInfo/backupSada/onBackupStanje` (Task 6), `prikazIzDogadjaja`, `prikazIzInfo`, `vrijemeHHMM` (Task 7).
-- Produces: `useBackupInfo(): { info: BackupInfo | null; osvjezi(): void }`; `<BackupTraka onOtvoriPostavke?: () => void />`; `<BackupKartica />`; `PostavkeScreen` prop `pocetniTab?: 'korisnici' | 'fiskalni' | 'firma' | 'sistem'`.
+- Consumes: `window.api.getBackupInfo/backupSada/onBackupStanje` (Task 6), `prikazIzDogadjaja`, `prikazIzInfo` (Task 7).
+- Produces: `useBackupInfo(): { info: BackupInfo | null; osvjezi(): void }`; `<BackupTraka onOtvoriPostavke?: () => void />`; `<AutomatskiBackup />`; `otvoriPostavkeGrupu(g: Grupa): void` (izvoz iz `PostavkeScreen.tsx`).
 
 UI nema jedinične testove u ovom repou; logika je u Task 7. Provjera je `tsc` + screenshot (Task 9).
 
@@ -1434,8 +1446,7 @@ export function useBackupInfo(): { info: BackupInfo | null; osvjezi: () => void 
   const osvjezi = useCallback(() => { window.api.getBackupInfo().then(setInfo).catch(() => {}); }, []);
   useEffect(() => {
     osvjezi();
-    const odjavi = window.api.onBackupStanje(d => { if (!('faza' in d)) osvjezi(); });
-    return odjavi;
+    return window.api.onBackupStanje(d => { if (!('faza' in d)) osvjezi(); });
   }, [osvjezi]);
   return { info, osvjezi };
 }
@@ -1503,13 +1514,15 @@ export default function BackupTraka({ onOtvoriPostavke }: { onOtvoriPostavke?: (
 }
 ```
 
-- [ ] **Step 3: `src/components/backup/BackupKartica.tsx`** (isti okvir kao `LicencaKartica`)
+- [ ] **Step 3: `src/components/postavke/AutomatskiBackup.tsx`** (isti jezik kao `Backup()` u `SistemGrupa.tsx`)
 
 ```tsx
 import { useState } from 'react';
 import { CloudUpload, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useBackupInfo } from '@/hooks/useBackup';
+import { porukaGreske } from '@/lib/utils';
+import { IshodPoruka, Red, Sekcija, SekcijaPodnozje, SekcijaTijelo, type Ishod } from './dijelovi';
 
 function datumVrijeme(iso?: string): string {
   if (!iso) return '—';
@@ -1518,20 +1531,31 @@ function datumVrijeme(iso?: string): string {
   return `${dv(d.getDate())}.${dv(d.getMonth() + 1)}.${d.getFullYear()}. u ${dv(d.getHours())}:${dv(d.getMinutes())}`;
 }
 
-/** Kartica "Automatski backup" u Postavke → Sistem. */
-export default function BackupKartica() {
+/** Sekcija "Automatski backup" u Postavke → Sistem. */
+export default function AutomatskiBackup() {
   const { info, osvjezi } = useBackupInfo();
   const [radi, setRadi] = useState(false);
-  const [greska, setGreska] = useState('');
+  const [ishod, setIshod] = useState<Ishod>(null);
   if (!info) return null;
+
+  if (!info.aktivan) {
+    return (
+      <Sekcija naslov="Automatski backup" opis="Šifrovana kopija baze u oblaku svaka 3 sata.">
+        <SekcijaTijelo>
+          <p className="text-[12px] text-slate-500">Automatski backup nije uključen u licencu</p>
+        </SekcijaTijelo>
+      </Sekcija>
+    );
+  }
 
   const sada = async () => {
     setRadi(true);
-    setGreska('');
+    setIshod(null);
     try {
-      await window.api.backupSada();
-    } catch (e) {
-      setGreska((e as Error).message);
+      const i = await window.api.backupSada();
+      setIshod(i.greska ? { ok: false, tekst: i.greska } : { ok: true, tekst: 'Backup spremljen.' });
+    } catch (err) {
+      setIshod({ ok: false, tekst: porukaGreske(err) });
     } finally {
       setRadi(false);
       osvjezi();
@@ -1540,70 +1564,58 @@ export default function BackupKartica() {
   const uToku = radi || info.uToku;
 
   return (
-    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm shadow-slate-200/50 overflow-hidden">
-      <div className="px-6 py-4 border-b border-slate-100">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-sky-50 text-sky-500 flex items-center justify-center">
-            <CloudUpload size={20} />
-          </div>
-          <div>
-            <h3 className="text-[15px] font-semibold text-slate-800">Automatski backup</h3>
-            <p className="text-[12px] text-slate-400 mt-0.5">
-              {info.aktivan ? 'Šifrovana kopija baze ide u oblak svaka 3 sata' : 'Automatski backup nije uključen u licencu'}
-            </p>
-          </div>
-        </div>
-      </div>
-      {info.aktivan && (
-        <div className="px-6 py-5 space-y-4">
-          <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5 text-[13px]">
-            <dt className="text-slate-400">Bucket</dt>
-            <dd className="text-slate-800 font-mono select-text">{info.bucket}</dd>
-            <dt className="text-slate-400">Zadnji uspješan</dt>
-            <dd className="text-slate-800">{datumVrijeme(info.zadnjiUspjeh)}</dd>
-            <dt className="text-slate-400">Sljedeći</dt>
-            <dd className="text-slate-800">{uToku ? 'u toku…' : datumVrijeme(info.sljedeci)}</dd>
-            {info.greska && (
-              <>
-                <dt className="text-slate-400">Zadnja greška</dt>
-                <dd className="text-amber-700 select-text">{info.greska}</dd>
-              </>
-            )}
-          </dl>
-          {greska && <p className="text-[13px] text-red-600">{greska}</p>}
-          <Button onClick={sada} disabled={uToku} variant="outline" className="h-9 gap-2 text-[13px] border-slate-200">
-            {uToku ? <Loader2 size={14} className="animate-spin" /> : <CloudUpload size={14} />}
-            Backup sada
-          </Button>
-        </div>
+    <Sekcija naslov="Automatski backup" opis="Šifrovana kopija baze u oblaku svaka 3 sata.">
+      <Red naslov="Bucket"><span className="font-mono text-[12px] text-slate-700 select-text">{info.bucket}</span></Red>
+      <Red naslov="Zadnji uspješan"><span className="text-[12px] text-slate-700">{datumVrijeme(info.zadnjiUspjeh)}</span></Red>
+      <Red naslov="Sljedeći"><span className="text-[12px] text-slate-700">{uToku ? 'u toku…' : datumVrijeme(info.sljedeci)}</span></Red>
+      {info.greska && (
+        <Red naslov="Zadnja greška" opis={<span className="text-amber-700 select-text">{info.greska}</span>}>
+          <span className="text-[12px] text-slate-500">{datumVrijeme(info.greskaOd)}</span>
+        </Red>
       )}
-    </div>
+      <SekcijaPodnozje>
+        <Button onClick={sada} disabled={uToku} variant="outline" size="sm" className="h-8 gap-1.5 text-[12px] border-slate-200">
+          {uToku ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CloudUpload className="h-3.5 w-3.5" />}
+          Backup sada
+        </Button>
+        <IshodPoruka ishod={ishod} className="ml-2 flex-1 min-w-[200px]" />
+      </SekcijaPodnozje>
+    </Sekcija>
   );
 }
 ```
 
-- [ ] **Step 4: `MainLayout.tsx`**
-- import `BackupTraka from '@/components/backup/BackupTraka'`
-- state za tab Postavki: `const [postavkeTab, setPostavkeTab] = useState<'sistem' | undefined>(undefined);`
-- odmah iza `<LicencaTraka info={licenca} />`:
-```tsx
-        <BackupTraka
-          onOtvoriPostavke={user.uloga === 'admin' ? () => { setPostavkeTab('sistem'); setScreen('postavke'); } : undefined}
-        />
+- [ ] **Step 4: `SistemGrupa.tsx`** — import `AutomatskiBackup from './AutomatskiBackup'`; u listi sekcija odmah iznad `<Backup />` dodati `<AutomatskiBackup />`; opis grupe: `"Prikaz na ovom računaru, backup baze podataka i podaci o programu."`
+
+- [ ] **Step 5: `PostavkeScreen.tsx`** — izvesti otvaranje grupe spolja:
+```ts
+/** Otvara Postavke na grupi `g` (npr. klik na pilulu backup-a). */
+export function otvoriPostavkeGrupu(g: Grupa): void {
+  zadnjaGrupa = g;
+  window.dispatchEvent(new CustomEvent('ui:postavkeGrupa', { detail: g }));
+}
 ```
-- `{screen === 'postavke' && <PostavkeScreen key={postavkeTab} pocetniTab={postavkeTab} />}`
-- u postojećem mjestu gdje se `setScreen` zove iz navigacije, resetovati `setPostavkeTab(undefined)` (da ručni ulazak u Postavke otvori `korisnici` kao i do sad).
+(`Grupa` tip izvesti: `export type Grupa = …`.) U komponenti, uz ostale efekte:
+```ts
+  useEffect(() => {
+    const na = (e: Event) => setGrupa((e as CustomEvent<Grupa>).detail);
+    window.addEventListener('ui:postavkeGrupa', na);
+    return () => window.removeEventListener('ui:postavkeGrupa', na);
+  }, []);
+```
 
-- [ ] **Step 5: `PostavkeScreen.tsx`**
-- `export default function PostavkeScreen({ pocetniTab }: { pocetniTab?: SettingsTab } = {})`
-- `useState<SettingsTab>(pocetniTab ?? 'korisnici')`
-- import `BackupKartica`; u tabu `sistem` odmah ispod `<LicencaKartica />` dodati `<BackupKartica />` (isti razmak/omotač kao `LicencaKartica`).
+- [ ] **Step 6: `MainLayout.tsx`** — import `BackupTraka` i `{ otvoriPostavkeGrupu }` iz `@/screens/PostavkeScreen`; odmah iza `<LicencaTraka info={licenca} />`:
+```tsx
+          <BackupTraka
+            onOtvoriPostavke={user.uloga === 'admin' ? () => { otvoriPostavkeGrupu('sistem'); setScreen('postavke'); } : undefined}
+          />
+```
 
-- [ ] **Step 6:** `bunx tsc --noEmit -p .` bez novih grešaka; `bun test` → PASS.
-- [ ] **Step 7: Commit**
+- [ ] **Step 7:** `bunx tsc --noEmit -p .` bez novih grešaka; `bun test` → PASS.
+- [ ] **Step 8: Commit**
 ```bash
-git add src/hooks/useBackup.ts src/components/backup src/components/MainLayout.tsx src/screens/PostavkeScreen.tsx
-git commit -m "feat(backup): traka napretka i kartica Automatski backup u Postavkama"
+git add src/hooks/useBackup.ts src/components/backup src/components/postavke/AutomatskiBackup.tsx src/components/postavke/SistemGrupa.tsx src/screens/PostavkeScreen.tsx src/components/MainLayout.tsx
+git commit -m "feat(backup): traka napretka i sekcija Automatski backup u Postavkama"
 ```
 
 ---
