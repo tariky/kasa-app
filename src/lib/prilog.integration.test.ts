@@ -5,7 +5,7 @@ import { test, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { Server } from 'node:http';
 import * as Tring from '@/services/tring';
-import { startMockTringServer } from '@/services/tring-mock-server';
+import { pokreniMockTring } from '@/services/tring-mock-server';
 import { schema } from '@/database/schema';
 import type { SqlDb } from './sqldb';
 import {
@@ -17,14 +17,13 @@ import { uredjajIzFunkcija, type TringFunkcije } from './fiskalniUredjaj';
 import { postaviZadnjiFiskalniBroj, predvidjeniFiskalniBroj } from './fiskalni';
 import { stanje } from './zaliha';
 
-const PORT = 8098; // 8085 dev, 8097 refund, 8099 batch
-
 let server: Server;
 let db: SqlDb & Database;
 
-beforeAll(() => {
-  server = startMockTringServer(PORT, { kasnjenjeMs: 0 });
-  Tring.configure({ host: 'localhost', port: PORT });
+beforeAll(async () => {
+  const mock = await pokreniMockTring({ kasnjenjeMs: 0 });
+  server = mock.server;
+  Tring.configure({ host: 'localhost', port: mock.port });
 });
 
 afterAll(() => {

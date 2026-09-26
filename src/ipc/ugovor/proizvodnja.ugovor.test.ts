@@ -1,6 +1,7 @@
 // Ugovor za kanale nalog:* i normativ:* (proizvodnja) — vidi backend.ts.
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
 import { otvoriBackend, ADMIN_PIN, type Backend } from './backend';
+import { sekundiOdSada } from './zona';
 import { hesirajPin } from '../../lib/korisnici';
 
 let b: Backend;
@@ -692,7 +693,7 @@ describe('nalog:setStatus', () => {
 
     await zavrsi(id);
 
-    // Oba vremena piše backend (datetime('now','localtime') u svojoj zoni) — porede se međusobno.
+    // Kretanja nose vrijeme završetka naloga, a to je lokalno vrijeme sada (zona.ts).
     const k = redovi(`
       SELECT sm.tip, sm.createdAt, abs(julianday(sm.createdAt) - julianday(rn.zavrsenAt)) * 86400 AS razlika
       FROM stock_movements sm JOIN radni_nalozi rn ON rn.id = sm.referenceId
@@ -702,6 +703,7 @@ describe('nalog:setStatus', () => {
     for (const r of k) {
       expect(r.createdAt).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
       expect(r.razlika).toBeLessThanOrEqual(1);
+      expect(sekundiOdSada(r.createdAt)).toBeLessThanOrEqual(5);
     }
   });
 

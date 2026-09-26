@@ -5,16 +5,16 @@
 import { test, expect, beforeAll, afterAll } from 'bun:test';
 import type { Server } from 'node:http';
 import * as Tring from '@/services/tring';
-import { startMockTringServer } from '@/services/tring-mock-server';
+import { pokreniMockTring } from '@/services/tring-mock-server';
 import { buildTringRacun, buildTringReklamacija } from '@/lib/tringRacun';
 
-const PORT = 8096; // ne sudara se s ostalim testovima (8097, 8099)
 let server: Server;
 const log = console.log;
 
-beforeAll(() => {
-  server = startMockTringServer(PORT, { kasnjenjeMs: 0 });
-  Tring.configure({ host: 'localhost', port: PORT });
+beforeAll(async () => {
+  const mock = await pokreniMockTring({ kasnjenjeMs: 0 });
+  server = mock.server;
+  Tring.configure({ host: 'localhost', port: mock.port });
   // Dnevnik (getLogs) nosi poslani XML; ispis u konzolu koji ga prati se utiša.
   Tring.setLoggingEnabled(true);
   console.log = () => undefined;

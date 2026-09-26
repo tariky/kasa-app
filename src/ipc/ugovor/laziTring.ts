@@ -75,7 +75,7 @@ export async function pokreniPokvareniTring(kvar: Kvar): Promise<PokvareniTring>
       }
     });
   });
-  await new Promise<void>(r => server.listen(0, '127.0.0.1', () => r()));
+  await slusaj(server);
   return {
     port: (server.address() as net.AddressInfo).port,
     primljeno: () => primljeno,
@@ -83,10 +83,21 @@ export async function pokreniPokvareniTring(kvar: Kvar): Promise<PokvareniTring>
   };
 }
 
+/** Server počne slušati na slobodnom portu; greška (npr. zauzeta adresa) odbije obećanje. */
+function slusaj(server: net.Server): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', reject);
+      resolve();
+    });
+  });
+}
+
 /** Port na kojem sigurno niko ne sluša (uređaj ugašen → veza odbijena). */
 export async function slobodanPort(): Promise<number> {
   const server = net.createServer();
-  await new Promise<void>(r => server.listen(0, '127.0.0.1', () => r()));
+  await slusaj(server);
   const port = (server.address() as net.AddressInfo).port;
   await new Promise<void>(r => server.close(() => r()));
   return port;

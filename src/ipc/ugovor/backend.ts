@@ -6,6 +6,7 @@
 // Izbor implementacije: KASA_BACKEND=ts (podrazumijevano) ili KASA_BACKEND=rust
 // (src-tauri/backend, `bun run test:rust`).
 import type { Database } from 'bun:sqlite';
+import './zona';
 import type { LaziTring } from './laziTring';
 import type { Argumenti, Kanal } from '../kanali';
 import { hesirajPin } from '../../lib/korisnici';

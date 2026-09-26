@@ -2,6 +2,7 @@
 // Run standalone: bun run src/services/tring-mock-server.ts
 
 import * as http from "node:http";
+import type { AddressInfo } from "node:net";
 
 const DEFAULT_PORT = 8085;
 const PRINT_DELAY_MS = 2500; // Simulate real printer delay
@@ -257,11 +258,27 @@ export function startMockTringServer(port: number = DEFAULT_PORT, opts: { kasnje
 
   server.listen(port, () => {
     console.log(
-      `[mock-tring] Tring.Fiscal.Server mock running on http://localhost:${port}`
+      `[mock-tring] Tring.Fiscal.Server mock running on http://localhost:${(server.address() as AddressInfo).port}`
     );
   });
 
   return server;
+}
+
+/**
+ * Mock za testove na slobodnom portu (0): vrati se tek kad server sluša, a
+ * greška pri pokretanju odbije obećanje. Fiksni portovi su se sudarali kad
+ * se dva runa testova puste u isto vrijeme.
+ */
+export function pokreniMockTring(opts: { kasnjenjeMs?: number } = {}): Promise<{ server: http.Server; port: number }> {
+  const server = startMockTringServer(0, opts);
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.once("listening", () => {
+      server.off("error", reject);
+      resolve({ server, port: (server.address() as AddressInfo).port });
+    });
+  });
 }
 
 // Run standalone

@@ -2,6 +2,7 @@
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
 import { otvoriBackend, type Backend } from './backend';
 import { pokreniPokvareniTring, slobodanPort, type Kvar } from './laziTring';
+import { sekundiOdSada } from './zona';
 import { izracunajTotale } from '../../lib/racun';
 
 let b: Backend;
@@ -900,7 +901,7 @@ describe('storno i zaliha', () => {
 
   test('prodaja i storno bez datuma s papira: kretanja nose lokalno vrijeme računa i storna („Zalihe na dan")', async () => {
     const p = dodajArtikal('Z4', 2.5, { stanje: 10 });
-    // Oba vremena piše backend (datetime('now','localtime') u svojoj zoni) — porede se međusobno.
+    // Kretanja nose vrijeme računa i storna, a to je lokalno vrijeme sada (zona.ts).
     const kretanje = (vrsta: string, id: number) => red(`
       SELECT sm.tip, sm.kolicina, sm.createdAt,
         abs(julianday(sm.createdAt) - julianday(CASE WHEN sm.tip = 'izlaz' THEN o.createdAt ELSE o.refundedAt END)) * 86400 AS razlika
@@ -916,6 +917,7 @@ describe('storno i zaliha', () => {
       expect([k.tip, k.kolicina]).toEqual([tip, 2]);
       expect(k.createdAt).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
       expect(k.razlika).toBeLessThanOrEqual(1);
+      expect(sekundiOdSada(k.createdAt)).toBeLessThanOrEqual(5);
     }
   });
 });

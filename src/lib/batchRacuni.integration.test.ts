@@ -7,16 +7,15 @@ import { generirajRacune } from './batchRacuni';
 import { buildTringRacun } from './tringRacun';
 import { izracunajTotale } from './racun';
 import * as Tring from '@/services/tring';
-import { startMockTringServer } from '@/services/tring-mock-server';
+import { pokreniMockTring } from '@/services/tring-mock-server';
 import type { Product } from '@/types';
-
-const PORT = 8099; // avoid clashing with a real/dev mock on 8085
 
 let server: Server;
 
-beforeAll(() => {
-  server = startMockTringServer(PORT, { kasnjenjeMs: 0 });
-  Tring.configure({ host: 'localhost', port: PORT });
+beforeAll(async () => {
+  const mock = await pokreniMockTring({ kasnjenjeMs: 0 });
+  server = mock.server;
+  Tring.configure({ host: 'localhost', port: mock.port });
 });
 
 afterAll(() => {
