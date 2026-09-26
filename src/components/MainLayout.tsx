@@ -50,7 +50,8 @@ function BackupUpozorenje({ tekst, otvoren, onOtvori }: { tekst: string; otvoren
   const sadrzaj = (
     <>
       <CloudOff size={18} strokeWidth={1.5} className="shrink-0" />
-      <span className={cn('transition-opacity duration-150', otvoren ? 'opacity-100' : 'opacity-0')}>{tekst}</span>
+      {/* Puni tekst je u `title`; u sidebar (224 px) staje samo kraći. */}
+      <span className={cn('min-w-0 truncate transition-opacity duration-150', otvoren ? 'opacity-100' : 'opacity-0')}>Nema backup-a 24 h</span>
     </>
   );
   return (
