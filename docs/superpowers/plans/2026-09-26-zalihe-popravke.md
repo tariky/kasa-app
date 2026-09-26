@@ -183,3 +183,18 @@ Rust `ponude.rs`, `proizvodnja.rs`, `racuni.rs`, testovi (ugovor ponude/proizvod
    (ponuda → `konvertovana` + račun; nalog → račun + `fakturisan`; storno → `refunded` +
    povrat zalihe po Task 3.4), ili odbacuje. Dok postoji nerazriješen pending red za istu
    ponudu/nalog/račun, nova štampa za isti dokument se odbija.
+
+## Otvoreno nakon izvršenja (follow-up, sitno — završni review: „može čekati")
+
+- `ureq = "3"` suziti na `"~3.4"` (Rust koristi `unversioned` connector API; Cargo.lock drži 3.4.2).
+- Nalog: „Preračunaj po normativu" su dva IPC poziva (ponovno Spremi oporavlja); brzi klikovi na izbor proizvoda
+  mogu se pregaziti (onemogućiti listu dok se sprema); greška u PonudeScreen zatvara dijalog izbora; StavkeUtroska
+  mapira n-ti red na n-tu stavku kalkulacije (samo prikaz); tekst „ne može se završiti" kad je količina na ponudi
+  povećana (backend dozvoljava).
+- Primka: dvostruka potvrda (dijalog + `potvrdi`) kad ima i nivelacije i upozorenja; `potvrdi` tekst s tačkom
+  umjesto zareza; `kolicinaTekst` duplira `kol`.
+- Računi: korpa se gubi nakon nepoznatog ishoda ako admin kasnije odbaci red (snapshot je ima); skica ostaje ako
+  admin odbaci red tokom štampe koja uspije; Generator validacijske greške označava kao `nepoznat`; DNS se u Rustu
+  razrješava dvaput; ponovljeni inline `DELETE FROM pending_receipts` (helper); `ishodNepoznat` kopija u
+  `pendingRacun.ts`; storno pri razrješenju ne provjerava jedinstvenost `brojReklamacije`; `no-explicit-any` u
+  `refund.ts`; testovi: DB greška nakon štampe čuva red, izuzetak `deviceCashIn` briše red storna.
