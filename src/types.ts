@@ -291,6 +291,32 @@ export interface RadniNalog {
   ponudaBroj?: number | null;
   ponudaGodina?: number | null;
   stavke?: RadniNalogStavka[];
+  /** Nalog iz ponude: stavke ponude koje nalog izrađuje (samo `nalog:get`). */
+  proizvodi?: RadniNalogProizvod[];
+}
+
+/** Proizvod koji nalog iz ponude izrađuje — pri završetku ulazi na stanje. */
+export interface RadniNalogProizvod {
+  id: number;
+  radniNalogId: number;
+  productId: number;
+  kolicina: number;
+  productNaziv?: string | null;
+  productSifra?: string | null;
+  productJm?: string | null;
+}
+
+/** Stavka ponude koju nalog može izrađivati (artikal — ne usluga ni materijal). */
+export interface ProizvodPonude {
+  ponudaStavkaId: number;
+  productId: number;
+  naziv: string;
+  sifra: string;
+  jm: string;
+  kolicina: number;
+  stanje: number;
+  /** Zadani izbor: artikla nema dovoljno na zalihi, pa se izrađuje. */
+  zadano: boolean;
 }
 
 export interface NormativStavka {

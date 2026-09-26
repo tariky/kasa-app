@@ -95,7 +95,7 @@ const ADDED_COLUMNS: Array<[string, string]> = [
 ];
 const ADDED_TABLES = [
   'dobavljaci', 'kupci', 'pending_receipts', 'prilog_stavke',
-  'normativi', 'radni_nalozi', 'radni_nalog_stavke', 'cijena_historija',
+  'normativi', 'radni_nalozi', 'radni_nalog_stavke', 'radni_nalog_proizvodi', 'cijena_historija',
 ];
 
 function columns(db: Db, table: string): Set<string> {

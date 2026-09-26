@@ -100,8 +100,10 @@ interface Window {
     getNalog: (id: number) => Promise<import('@/types').RadniNalog>;
     getNextBrojNaloga: () => Promise<{ broj: number; godina: number }>;
     createNalog: (data: any) => Promise<{ id: number; broj: number; godina: number }>;
-    createNalogIzPonude: (ponudaId: number) => Promise<{ id: number; broj: number; godina: number }>;
+    createNalogIzPonude: (ponudaId: number, proizvodi?: Array<{ productId: number; kolicina: number }>) => Promise<{ id: number; broj: number; godina: number }>;
     getNalogZaPonudu: (ponudaId: number) => Promise<{ id: number; broj: number; godina: number } | null>;
+    getProizvodiPonude: (ponudaId: number) => Promise<import('@/types').ProizvodPonude[]>;
+    setNalogProizvodi: (id: number, proizvodi: Array<{ productId: number; kolicina: number }>) => Promise<{ success: boolean }>;
     updateNalog: (id: number, data: any) => Promise<{ success: boolean }>;
     saveNalogStavke: (id: number, stavke: Array<{ materijalId: number; kolicina: number; napomena?: string | null }>) => Promise<{ success: boolean }>;
     setNalogStatus: (data: { id: number; status: 'u_izradi' | 'zavrsen' | 'vrati' }) => Promise<{ success: boolean }>;

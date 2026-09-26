@@ -7,7 +7,8 @@ import {
   nextBrojNaloga, formatBrojNaloga, createNalog, createNalogIzPonude, updateNalog,
   replaceStavke, getNalog, listNalozi, deleteNalog, getNormativ, saveNormativ, nalogZaPonudu,
   getProsjecnaNabavna, kalkulacija, kalkulacijaNaloga, setStatusNaloga, zavrsiNalog, vratiUIzradu, fakturisiNalog,
-  izdajRacunZaNalog, osigurajProdajnuUslugu, PRODAJNA_USLUGA, jeArtikalUProizvodnji,
+  izdajRacunZaNalog, osigurajProdajnuUslugu, PRODAJNA_USLUGA, jeArtikalUProizvodnji, stavkeIzNormativa,
+  proizvodiPonude, setProizvodiNaloga,
 } from './proizvodnja';
 import { getProductStock } from './skladiste';
 
@@ -562,4 +563,248 @@ test('artikal u normativu ili na nalogu se ne smije obrisati', () => {
   expect(jeArtikalUProizvodnji(db, kant)).toBe(true);   // stavka naloga
   expect(jeArtikalUProizvodnji(db, art)).toBe(true);    // proizvod naloga
   expect(jeArtikalUProizvodnji(db, slobodan)).toBe(false);
+});
+
+// ── zaliha: nalog iz ponude, vraćanje u izradu ───────────
+
+let brojPonude = 0;
+function ponudaSaStavkama(k: number, status: string, stavke: Array<[number, number, number]>): number {
+  const ukupno = stavke.reduce((s, [, kol, c]) => s + kol * c, 0);
+  const r = db.prepare(`INSERT INTO ponude (broj, godina, kupacId, korisnikId, datum, vaziDo, status, ukupno, pdvIznos)
+    VALUES (?, 2026, ?, 1, '2026-09-01', '2026-09-09', ?, ?, 0)`).run(++brojPonude, k, status, ukupno);
+  const id = Number(r.lastInsertRowid);
+  for (const [productId, kol, c] of stavke) {
+    db.prepare("INSERT INTO ponuda_stavke (ponudaId, productId, kolicina, cijena, rabat, pdvStopa) VALUES (?, ?, ?, ?, 0, 'E')").run(id, productId, kol, c);
+  }
+  return id;
+}
+function dodajUslugu(db: SqlDb, sifra: string): number {
+  const r = db.prepare("INSERT INTO products (sifra, naziv, jm, cijena, pdvStopa, tip) VALUES (?, ?, 'kom', 50, 'E', 'usluga')")
+    .run(sifra, `Usluga ${sifra}`);
+  return Number(r.lastInsertRowid);
+}
+
+test('proizvodiPonude: samo artikli ponude, sa stanjem; zadano se izrađuje ono čega nema dovoljno', () => {
+  const k = dodajKupca(db);
+  const kuh = dodajArtikal(db, 'KUH', 1000);
+  const sud = dodajArtikal(db, 'SUD', 150);
+  const mont = dodajUslugu(db, 'MONT');
+  const ploca = dodajMaterijal(db, 'PL');
+  primka(db, sud, 1, 100);
+  const ponudaId = ponudaSaStavkama(k, 'prihvacena', [[kuh, 2, 1000], [mont, 1, 200], [sud, 1, 150], [ploca, 3, 10], [sud, 2, 150]]);
+  const redovi = proizvodiPonude(db, ponudaId);
+  expect(redovi.map(r => [r.productId, r.naziv, r.kolicina, r.stanje, r.zadano])).toEqual([
+    [kuh, 'Proizvod KUH', 2, 0, true],
+    [sud, 'Proizvod SUD', 1, 1, false],
+    [sud, 'Proizvod SUD', 2, 1, true],
+  ]);
+  expect(redovi[0]).toMatchObject({ sifra: 'KUH', jm: 'kom' });
+  expect(typeof redovi[0].ponudaStavkaId).toBe('number');
+});
+
+test('nalog iz ponude: završetak uvodi samo proizvode naloga; račun skida sve (izrađeno 0, roba sa zalihe skinuta)', async () => {
+  const k = dodajKupca(db);
+  const kuh = dodajArtikal(db, 'KUH', 1000);
+  const sud = dodajArtikal(db, 'SUD', 150);
+  const mont = dodajUslugu(db, 'MONT');
+  const ploca = dodajMaterijal(db, 'PL');
+  const iv = dodajMaterijal(db, 'IV');
+  primka(db, sud, 5, 100);
+  const ponudaId = ponudaSaStavkama(k, 'prihvacena', [[kuh, 2, 1000], [mont, 1, 200], [sud, 1, 150], [ploca, 3, 10]]);
+  const r = createNalogIzPonude(db, ponudaId, 1); // zadani izbor: kuhinja (nema je), sudopera je na zalihi
+  expect(getNalog(db, r.id).proizvodi!.map(p => [p.productId, p.kolicina, p.productNaziv])).toEqual([[kuh, 2, 'Proizvod KUH']]);
+  replaceStavke(db, r.id, [{ materijalId: iv, kolicina: 1 }]);
+
+  zavrsiNalog(db, r.id);
+  const mv = db.prepare("SELECT productId, tip, kolicina FROM stock_movements WHERE referenceType = 'radni_nalog' AND referenceId = ? ORDER BY id")
+    .all(r.id);
+  expect(mv).toEqual([
+    { productId: iv, tip: 'izlaz', kolicina: 1 },
+    { productId: kuh, tip: 'ulaz', kolicina: 2 },
+  ]);
+
+  const { print } = printOk('93');
+  expect((await izdajRacunZaNalog(deps(print), { id: r.id, korisnikId: 1, nacinPlacanja: 'Gotovina' })).success).toBe(true);
+  expect(getProductStock(db, kuh)).toBe(0);
+  expect(getProductStock(db, sud)).toBe(4);
+  expect(getProductStock(db, ploca)).toBe(-3);
+  expect(getProductStock(db, mont)).toBe(0);
+});
+
+test('nalog iz ponude s izričitim izborom; prazan izbor i stari nalog bez proizvoda ne uvode ništa', () => {
+  const k = dodajKupca(db);
+  const kuh = dodajArtikal(db, 'KUH', 1000);
+  const sud = dodajArtikal(db, 'SUD', 150);
+  const iv = dodajMaterijal(db, 'IV');
+  const izbor = createNalogIzPonude(db, ponudaSaStavkama(k, 'prihvacena', [[kuh, 2, 1000], [sud, 1, 150]]), 1,
+    [{ productId: sud, kolicina: 1 }, { productId: kuh, kolicina: 1.00004 }]);
+  expect(getNalog(db, izbor.id).proizvodi!.map(p => [p.productId, p.kolicina])).toEqual([[sud, 1], [kuh, 1]]);
+  const prazan = createNalogIzPonude(db, ponudaSaStavkama(k, 'prihvacena', [[kuh, 2, 1000]]), 1, []);
+  expect(getNalog(db, prazan.id).proizvodi).toEqual([]);
+  for (const id of [izbor.id, prazan.id]) {
+    replaceStavke(db, id, [{ materijalId: iv, kolicina: 1 }]);
+    zavrsiNalog(db, id);
+  }
+  expect(getProductStock(db, sud)).toBe(1);
+  expect(getProductStock(db, kuh)).toBe(1);
+});
+
+test('setProizvodiNaloga: zamjenjuje izbor dok nalog nije završen; validacije', () => {
+  const k = dodajKupca(db);
+  const kuh = dodajArtikal(db, 'KUH', 1000);
+  const drugi = dodajArtikal(db, 'DRUGI', 10);
+  const mont = dodajUslugu(db, 'MONT');
+  const ploca = dodajMaterijal(db, 'PL');
+  const iv = dodajMaterijal(db, 'IV');
+  const ponudaId = ponudaSaStavkama(k, 'prihvacena', [[kuh, 1, 1000], [kuh, 1, 900], [mont, 1, 200], [ploca, 3, 10]]);
+  const r = createNalogIzPonude(db, ponudaId, 1, []);
+
+  setProizvodiNaloga(db, r.id, [{ productId: kuh, kolicina: 1 }, { productId: kuh, kolicina: 1 }]);
+  expect(getNalog(db, r.id).proizvodi!.map(p => [p.productId, p.kolicina])).toEqual([[kuh, 1], [kuh, 1]]);
+
+  expect(() => setProizvodiNaloga(db, r.id, [{ productId: kuh, kolicina: 2.5 }]))
+    .toThrow('Proizvod "Proizvod KUH": nalog izrađuje 2.5, a na ponudi je 2');
+  expect(() => setProizvodiNaloga(db, r.id, [{ productId: drugi, kolicina: 1 }])).toThrow('Proizvod "Proizvod DRUGI" nije na ponudi naloga');
+  expect(() => setProizvodiNaloga(db, r.id, [{ productId: 999, kolicina: 1 }])).toThrow('Proizvod "#999" nije na ponudi naloga');
+  expect(() => setProizvodiNaloga(db, r.id, [{ productId: mont, kolicina: 1 }])).toThrow('"Usluga MONT" je usluga i ne izrađuje se po nalogu');
+  expect(() => setProizvodiNaloga(db, r.id, [{ productId: ploca, kolicina: 1 }])).toThrow('"Materijal PL" je materijal i ne izrađuje se po nalogu');
+  expect(() => setProizvodiNaloga(db, r.id, [{ productId: kuh, kolicina: 0 }])).toThrow('Količina proizvoda mora biti veća od nule');
+  expect(getNalog(db, r.id).proizvodi!.length).toBe(2); // greška ne dira postojeći izbor
+
+  const samostalni = createNalog(db, { vrsta: 'narudzba', korisnikId: 1, kupacId: k, opis: 'X' });
+  expect(() => setProizvodiNaloga(db, samostalni.id, [])).toThrow('Proizvodi se biraju samo za nalog iz ponude');
+
+  replaceStavke(db, r.id, [{ materijalId: iv, kolicina: 1 }]);
+  zavrsiNalog(db, r.id);
+  expect(() => setProizvodiNaloga(db, r.id, [])).toThrow('Nalog je završen i ne može se mijenjati');
+});
+
+test('brisanje naloga iz ponude briše i izbor proizvoda; proizvod naloga se ne briše iz šifarnika', () => {
+  const k = dodajKupca(db);
+  const kuh = dodajArtikal(db, 'KUH', 1000);
+  const r = createNalogIzPonude(db, ponudaSaStavkama(k, 'prihvacena', [[kuh, 1, 1000]]), 1);
+  expect(jeArtikalUProizvodnji(db, kuh)).toBe(true);
+  deleteNalog(db, r.id);
+  expect(db.prepare('SELECT COUNT(*) AS c FROM radni_nalog_proizvodi').get()).toEqual({ c: 0 });
+});
+
+test('ponuda fakturisana prije završetka naloga: nakon završetka stanje artikla je isto (0)', async () => {
+  const k = dodajKupca(db);
+  const kuh = dodajArtikal(db, 'KUH', 1000);
+  const iv = dodajMaterijal(db, 'IV');
+  const ponudaId = ponudaSaStavkama(k, 'prihvacena', [[kuh, 1, 1000]]);
+  const r = createNalogIzPonude(db, ponudaId, 1);
+  replaceStavke(db, r.id, [{ materijalId: iv, kolicina: 1 }]);
+
+  const { print } = printOk('50');
+  expect((await konvertujPonudu(deps(print), { id: ponudaId, korisnikId: 1, nacinPlacanja: 'Gotovina' })).success).toBe(true);
+  expect(getProductStock(db, kuh)).toBe(-1);
+  zavrsiNalog(db, r.id);
+  expect(getProductStock(db, kuh)).toBe(0);
+});
+
+test('samostalni nalog po narudžbi ne uvodi ništa na stanje', () => {
+  const k = dodajKupca(db);
+  const iv = dodajMaterijal(db, 'IV');
+  const r = createNalog(db, { vrsta: 'narudzba', korisnikId: 1, kupacId: k, opis: 'X', dogovorenaCijena: 100 });
+  replaceStavke(db, r.id, [{ materijalId: iv, kolicina: 1 }]);
+  zavrsiNalog(db, r.id);
+  expect(db.prepare("SELECT COUNT(*) AS c FROM stock_movements WHERE tip = 'ulaz' AND referenceType = 'radni_nalog'").get()).toEqual({ c: 0 });
+});
+
+test('vraćanje u izradu naloga iz ponude briše i ulaz proizvoda naloga', () => {
+  const k = dodajKupca(db);
+  const kuh = dodajArtikal(db, 'KUH', 1000);
+  const iv = dodajMaterijal(db, 'IV');
+  const r = createNalogIzPonude(db, ponudaSaStavkama(k, 'prihvacena', [[kuh, 2, 1000]]), 1);
+  replaceStavke(db, r.id, [{ materijalId: iv, kolicina: 1 }]);
+  zavrsiNalog(db, r.id);
+  vratiUIzradu(db, r.id);
+  expect(getProductStock(db, kuh)).toBe(0);
+  expect(getProductStock(db, iv)).toBe(0);
+  expect(db.prepare("SELECT COUNT(*) AS c FROM stock_movements WHERE referenceType = 'radni_nalog'").get()).toEqual({ c: 0 });
+});
+
+test('proizvod naloga koji je već prodan: nalog se ne vraća u izradu, knjiženja ostaju', () => {
+  const art = dodajArtikal(db, 'LINA');
+  const iv = dodajMaterijal(db, 'IV');
+  const r = createNalog(db, { vrsta: 'zaliha', korisnikId: 1, productId: art, kolicina: 4 });
+  replaceStavke(db, r.id, [{ materijalId: iv, kolicina: 2 }]);
+  zavrsiNalog(db, r.id);
+  db.prepare("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'izlaz', 1, 'order', 1)").run(art);
+
+  expect(() => vratiUIzradu(db, r.id))
+    .toThrow('Proizvod "Proizvod LINA" je već prodan/izdat — nalog se ne može vratiti u izradu (na stanju 3, nalog je uveo 4)');
+  expect(getNalog(db, r.id).status).toBe('zavrsen');
+  expect(getProductStock(db, art)).toBe(3);
+  expect(getProductStock(db, iv)).toBe(-2);
+});
+
+test('vraćanje u izradu je dozvoljeno kad na stanju ima bar koliko je nalog uveo (i uz toleranciju)', () => {
+  const art = dodajArtikal(db, 'LINA');
+  const iv = dodajMaterijal(db, 'IV');
+  db.prepare("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'ulaz', 0.1, 'test', 0)").run(art);
+  db.prepare("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'ulaz', 0.2, 'test', 0)").run(art);
+  const r = createNalog(db, { vrsta: 'zaliha', korisnikId: 1, productId: art, kolicina: 2 });
+  replaceStavke(db, r.id, [{ materijalId: iv, kolicina: 1 }]);
+  zavrsiNalog(db, r.id);
+  // prodano 0,3 (ono što je bilo i prije naloga) — ostaje tačno onoliko koliko je nalog uveo
+  db.prepare("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'izlaz', 0.3, 'order', 1)").run(art);
+  vratiUIzradu(db, r.id);
+  expect(getNalog(db, r.id).status).toBe('u_izradi');
+});
+
+test('nalog čija je ponuda već fakturisana ne može se vratiti u izradu ni obrisati', async () => {
+  const k = dodajKupca(db);
+  const kuh = dodajArtikal(db, 'KUH', 1000);
+  const iv = dodajMaterijal(db, 'IV');
+  const p1 = ponudaSaStavkama(k, 'prihvacena', [[kuh, 1, 1000]]);
+  const zavrsen = createNalogIzPonude(db, p1, 1);
+  replaceStavke(db, zavrsen.id, [{ materijalId: iv, kolicina: 1 }]);
+  zavrsiNalog(db, zavrsen.id);
+  const p2 = ponudaSaStavkama(k, 'prihvacena', [[kuh, 1, 1000]]);
+  const otvoren = createNalogIzPonude(db, p2, 1);
+
+  const { print } = printOk('50');
+  await konvertujPonudu(deps(print), { id: p1, korisnikId: 1, nacinPlacanja: 'Gotovina' });
+  await konvertujPonudu(deps(print), { id: p2, korisnikId: 1, nacinPlacanja: 'Gotovina' });
+
+  expect(() => vratiUIzradu(db, zavrsen.id)).toThrow('Ponuda ovog naloga je već fakturisana — nalog se ne može vratiti u izradu');
+  expect(() => deleteNalog(db, otvoren.id)).toThrow('Ponuda ovog naloga je već fakturisana — nalog se ne može obrisati');
+  expect(getNalog(db, zavrsen.id).status).toBe('zavrsen');
+  expect(getNalog(db, otvoren.id).status).toBe('otvoren');
+});
+
+test('kalkulacija: upozorenje o stanju sabira isti materijal na više stavki', () => {
+  const k = kalkulacija(
+    { vrsta: 'narudzba', kolicina: 1, dogovorenaCijena: 117, trosakRada: 0, status: 'u_izradi' },
+    [
+      { id: 1, radniNalogId: 1, materijalId: 1, kolicina: 3, nabavnaCijena: null, naziv: 'IV', trenutnaCijena: 0, stanje: 5 } as any,
+      { id: 2, radniNalogId: 1, materijalId: 2, kolicina: 1, nabavnaCijena: null, naziv: 'Kant', trenutnaCijena: 1, stanje: 5 } as any,
+      { id: 3, radniNalogId: 1, materijalId: 1, kolicina: 3, nabavnaCijena: null, naziv: 'IV', trenutnaCijena: 0, stanje: 5 } as any,
+    ]
+  );
+  expect(k.upozorenja).toEqual(['IV: nema nabavne cijene (nema primke)', 'IV: utrošak 6 prelazi stanje 5']);
+  expect(k.stavke.map(s => s.kolicina)).toEqual([3, 1, 3]);
+});
+
+test('kalkulacija: zbir koji tačno pokriva stanje ne upozorava (bez greške zaokruživanja)', () => {
+  const k = kalkulacija(
+    { vrsta: 'narudzba', kolicina: 1, dogovorenaCijena: 117, trosakRada: 0, status: 'otvoren' },
+    [
+      { id: 1, radniNalogId: 1, materijalId: 1, kolicina: 0.1, nabavnaCijena: null, naziv: 'IV', trenutnaCijena: 1, stanje: 0.3 } as any,
+      { id: 2, radniNalogId: 1, materijalId: 1, kolicina: 0.2, nabavnaCijena: null, naziv: 'IV', trenutnaCijena: 1, stanje: 0.3 } as any,
+    ]
+  );
+  expect(k.upozorenja).toEqual([]);
+});
+
+test('stavkeIzNormativa: normativ × količina na 4 decimale, s napomenom', () => {
+  expect(stavkeIzNormativa([
+    { materijalId: 3, kolicina: 1.25, napomena: 'korpus' },
+    { materijalId: 4, kolicina: 0.33333 },
+  ], 3)).toEqual([
+    { materijalId: 3, kolicina: 3.75, napomena: 'korpus' },
+    { materijalId: 4, kolicina: 1, napomena: null },
+  ]);
 });

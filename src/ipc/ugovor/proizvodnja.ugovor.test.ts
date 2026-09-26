@@ -355,6 +355,128 @@ describe('nalog:zaPonudu', () => {
   });
 });
 
+// ─── nalog:proizvodiPonude / nalog:setProizvodi ─────────────
+
+describe('proizvodi naloga iz ponude', () => {
+  test('nalog:proizvodiPonude: artikli ponude (bez usluga i materijala) sa stanjem i zadanim izborom', async () => {
+    const kupacId = dodajKupca();
+    const ormar = dodajProizvod('ORM', 'artikal');
+    const sudopera = dodajProizvod('SUD', 'artikal', { jm: 'kom', stanje: 1 });
+    const mont = dodajProizvod('MONT', 'usluga');
+    const ploca = dodajProizvod('PL', 'materijal');
+    const ponudaId = dodajPonudu(kupacId, 'prihvacena', [
+      { productId: ormar, kolicina: 2, cijena: 400 },
+      { productId: mont, kolicina: 1, cijena: 100 },
+      { productId: sudopera, kolicina: 1, cijena: 150 },
+      { productId: ploca, kolicina: 3, cijena: 10 },
+      { productId: sudopera, kolicina: 2, cijena: 150 },
+    ]);
+    const stavke = redovi('SELECT id FROM ponuda_stavke WHERE ponudaId = ? ORDER BY id', ponudaId).map(r => r.id);
+
+    expect(await b.call('nalog:proizvodiPonude', ponudaId)).toEqual([
+      { ponudaStavkaId: stavke[0], productId: ormar, naziv: 'Proizvod ORM', sifra: 'ORM', jm: 'kom', kolicina: 2, stanje: 0, zadano: true },
+      { ponudaStavkaId: stavke[2], productId: sudopera, naziv: 'Proizvod SUD', sifra: 'SUD', jm: 'kom', kolicina: 1, stanje: 1, zadano: false },
+      { ponudaStavkaId: stavke[4], productId: sudopera, naziv: 'Proizvod SUD', sifra: 'SUD', jm: 'kom', kolicina: 2, stanje: 1, zadano: true },
+    ]);
+    expect(await b.call('nalog:proizvodiPonude', 999)).toEqual([]);
+  });
+
+  test('createIzPonude: izričit izbor (količina na 4 decimale), prazan izbor, a bez niza (stari korisnikId) zadani', async () => {
+    const kupacId = dodajKupca();
+    const ormar = dodajProizvod('ORM', 'artikal');
+    const sudopera = dodajProizvod('SUD', 'artikal', { stanje: 5 });
+    const stavke = [{ productId: ormar, kolicina: 2, cijena: 400 }, { productId: sudopera, kolicina: 1, cijena: 150 }];
+    const proizvodi = async (id: number) =>
+      (await b.call('nalog:get', id)).proizvodi.map((p: any) => [p.productId, p.kolicina, p.productNaziv, p.productSifra, p.productJm]);
+
+    const izricit = await b.call('nalog:createIzPonude', dodajPonudu(kupacId, 'prihvacena', stavke), [
+      { productId: sudopera, kolicina: 1 }, { productId: ormar, kolicina: 1.00004 },
+    ]);
+    expect(await proizvodi(izricit.id)).toEqual([[sudopera, 1, 'Proizvod SUD', 'SUD', 'kom'], [ormar, 1, 'Proizvod ORM', 'ORM', 'kom']]);
+    const prazan = await b.call('nalog:createIzPonude', dodajPonudu(kupacId, 'prihvacena', stavke), []);
+    expect(await proizvodi(prazan.id)).toEqual([]);
+    const zadani = await b.call('nalog:createIzPonude', dodajPonudu(kupacId, 'prihvacena', stavke), ADMIN);
+    expect(await proizvodi(zadani.id)).toEqual([[ormar, 2, 'Proizvod ORM', 'ORM', 'kom']]);
+    const bez = await b.call('nalog:createIzPonude', dodajPonudu(kupacId, 'prihvacena', stavke));
+    expect(await proizvodi(bez.id)).toEqual([[ormar, 2, 'Proizvod ORM', 'ORM', 'kom']]);
+
+    // samostalni nalog nema proizvoda
+    expect((await b.call('nalog:get', await narudzba(kupacId))).proizvodi).toEqual([]);
+  });
+
+  test('createIzPonude: neispravan izbor odbija cijeli nalog', async () => {
+    const kupacId = dodajKupca();
+    const ormar = dodajProizvod('ORM', 'artikal');
+    const ponudaId = dodajPonudu(kupacId, 'prihvacena', [{ productId: ormar, kolicina: 1, cijena: 400 }]);
+    await expect(b.call('nalog:createIzPonude', ponudaId, [{ productId: ormar, kolicina: 2 }]))
+      .rejects.toThrow('Proizvod "Proizvod ORM": nalog izrađuje 2, a na ponudi je 1');
+    expect(red('SELECT COUNT(*) AS n FROM radni_nalozi').n).toBe(0);
+    expect(red('SELECT COUNT(*) AS n FROM radni_nalog_proizvodi').n).toBe(0);
+  });
+
+  test('nalog:setProizvodi: zamjenjuje izbor; validacije; greška ne dira postojeći', async () => {
+    const kupacId = dodajKupca();
+    const ormar = dodajProizvod('ORM', 'artikal');
+    const drugi = dodajProizvod('DRG', 'artikal');
+    const mont = dodajProizvod('MONT', 'usluga');
+    const ploca = dodajProizvod('PL', 'materijal');
+    const ponudaId = dodajPonudu(kupacId, 'prihvacena', [
+      { productId: ormar, kolicina: 1, cijena: 400 },
+      { productId: ormar, kolicina: 1.5, cijena: 300 },
+      { productId: mont, kolicina: 1, cijena: 100 },
+      { productId: ploca, kolicina: 3, cijena: 10 },
+    ]);
+    const { id } = await b.call('nalog:createIzPonude', ponudaId, []);
+    const izbor = () => redovi('SELECT productId, kolicina FROM radni_nalog_proizvodi WHERE radniNalogId = ? ORDER BY id', id);
+
+    expect(await b.call('nalog:setProizvodi', id, [{ productId: ormar, kolicina: 1 }, { productId: ormar, kolicina: 1.5 }]))
+      .toEqual({ success: true });
+    expect(izbor()).toEqual([{ productId: ormar, kolicina: 1 }, { productId: ormar, kolicina: 1.5 }]);
+
+    const s = (proizvodi: unknown) => b.call('nalog:setProizvodi', id, proizvodi);
+    await expect(s([{ productId: ormar, kolicina: 2 }, { productId: ormar, kolicina: 0.50005 }]))
+      .rejects.toThrow('Proizvod "Proizvod ORM": nalog izrađuje 2.5001, a na ponudi je 2.5');
+    await expect(s([{ productId: drugi, kolicina: 1 }])).rejects.toThrow('Proizvod "Proizvod DRG" nije na ponudi naloga');
+    await expect(s([{ productId: 999, kolicina: 1 }])).rejects.toThrow('Proizvod "#999" nije na ponudi naloga');
+    await expect(s([{ productId: mont, kolicina: 1 }])).rejects.toThrow('"Proizvod MONT" je usluga i ne izrađuje se po nalogu');
+    await expect(s([{ productId: ploca, kolicina: 1 }])).rejects.toThrow('"Proizvod PL" je materijal i ne izrađuje se po nalogu');
+    await expect(s([{ productId: ormar, kolicina: 0 }])).rejects.toThrow('Količina proizvoda mora biti veća od nule');
+    await expect(s([{ productId: ormar, kolicina: -1 }])).rejects.toThrow('Količina proizvoda mora biti veća od nule');
+    await expect(b.call('nalog:setProizvodi', 999, [])).rejects.toThrow('Radni nalog ne postoji');
+    expect(izbor()).toEqual([{ productId: ormar, kolicina: 1 }, { productId: ormar, kolicina: 1.5 }]);
+
+    await b.call('nalog:setProizvodi', id, []);
+    expect(izbor()).toEqual([]);
+
+    const samostalni = await narudzba(kupacId);
+    await expect(b.call('nalog:setProizvodi', samostalni, [])).rejects.toThrow('Proizvodi se biraju samo za nalog iz ponude');
+  });
+
+  test('nalog:setProizvodi: u izradi se smije, nakon završetka ne; brisanje naloga briše izbor', async () => {
+    const kupacId = dodajKupca();
+    const ormar = dodajProizvod('ORM', 'artikal');
+    const ponudaId = dodajPonudu(kupacId, 'prihvacena', [{ productId: ormar, kolicina: 1, cijena: 400 }]);
+    const { id } = await b.call('nalog:createIzPonude', ponudaId, []);
+    await b.call('nalog:setStatus', { id, status: 'u_izradi', korisnikId: ADMIN });
+    await b.call('nalog:setProizvodi', id, [{ productId: ormar, kolicina: 1 }]);
+    await b.call('nalog:replaceStavke', id, [{ materijalId: dodajProizvod('M', 'materijal'), kolicina: 1 }]);
+    await zavrsi(id);
+    await expect(b.call('nalog:setProizvodi', id, [])).rejects.toThrow('Nalog je završen i ne može se mijenjati');
+    expect(stanje(ormar)).toBe(1);
+
+    await b.call('nalog:setStatus', { id, status: 'vrati', korisnikId: ADMIN });
+    await b.call('nalog:delete', id);
+    expect(red('SELECT COUNT(*) AS n FROM radni_nalog_proizvodi').n).toBe(0);
+  });
+
+  test('proizvod naloga iz ponude se ne briše iz šifarnika', async () => {
+    const ormar = dodajProizvod('ORM', 'artikal');
+    const ponudaId = dodajPonudu(dodajKupca(), 'prihvacena', [{ productId: ormar, kolicina: 1, cijena: 400 }]);
+    await b.call('nalog:createIzPonude', ponudaId, [{ productId: ormar, kolicina: 1 }]);
+    await expect(b.call('product:delete', ormar)).rejects.toThrow('Artikal se koristi u proizvodnji (normativ ili radni nalog) i ne može biti obrisan');
+  });
+});
+
 // ─── nalog:update ───────────────────────────────────────────
 
 describe('nalog:update', () => {
@@ -599,6 +721,117 @@ describe('nalog:setStatus', () => {
     expect(stanje(z.mat)).toBe(8);
   });
 
+  test('završetak naloga iz ponude: ulaz samo proizvoda naloga; račun skida i robu sa zalihe; vrati briše ulaz', async () => {
+    const kupacId = dodajKupca();
+    const ormar = dodajProizvod('ORM', 'artikal');
+    const polica = dodajProizvod('POL', 'artikal');
+    const sudopera = dodajProizvod('SUD', 'artikal', { stanje: 5 });
+    const mont = dodajProizvod('MONT', 'usluga');
+    const ploca = dodajProizvod('PL', 'materijal', { stanje: 10 });
+    const ponudaId = dodajPonudu(kupacId, 'prihvacena', [
+      { productId: ormar, kolicina: 2, cijena: 400 },
+      { productId: mont, kolicina: 1, cijena: 100 },
+      { productId: ploca, kolicina: 3, cijena: 10 },
+      { productId: polica, kolicina: 1.5, cijena: 20 },
+      { productId: sudopera, kolicina: 1, cijena: 150 },
+    ]);
+    const { id } = await b.call('nalog:createIzPonude', ponudaId, [
+      { productId: ormar, kolicina: 2 }, { productId: polica, kolicina: 1.5 },
+    ]);
+    const m = dodajProizvod('M', 'materijal', { stanje: 10 });
+    await b.call('nalog:replaceStavke', id, [{ materijalId: m, kolicina: 4 }]);
+
+    await zavrsi(id);
+    expect(redovi("SELECT productId, tip, kolicina FROM stock_movements WHERE referenceType = 'radni_nalog' AND referenceId = ? ORDER BY id", id))
+      .toEqual([
+        { productId: m, tip: 'izlaz', kolicina: 4 },
+        { productId: ormar, tip: 'ulaz', kolicina: 2 },
+        { productId: polica, tip: 'ulaz', kolicina: 1.5 },
+      ]);
+
+    await b.call('nalog:setStatus', { id, status: 'vrati', korisnikId: ADMIN });
+    expect(red("SELECT COUNT(*) AS n FROM stock_movements WHERE referenceType = 'radni_nalog'").n).toBe(0);
+    expect([stanje(ormar), stanje(polica), stanje(m)]).toEqual([0, 0, 10]);
+
+    await zavrsi(id);
+    const r = await b.call('nalog:izdajRacun', { id, korisnikId: ADMIN, nacinPlacanja: 'Gotovina' });
+    expect(r.success).toBe(true);
+    expect([stanje(ormar), stanje(polica), stanje(sudopera), stanje(ploca), stanje(mont), stanje(m)]).toEqual([0, 0, 4, 7, 0, 6]);
+  });
+
+  test('ponuda fakturisana na ekranu Ponude prije završetka naloga: nakon završetka proizvod je na 0', async () => {
+    const kupacId = dodajKupca();
+    const ormar = dodajProizvod('ORM', 'artikal');
+    const ponudaId = dodajPonudu(kupacId, 'prihvacena', [{ productId: ormar, kolicina: 2, cijena: 400 }]);
+    const { id } = await b.call('nalog:createIzPonude', ponudaId, ADMIN);
+    await b.call('nalog:replaceStavke', id, [{ materijalId: dodajProizvod('M', 'materijal'), kolicina: 1 }]);
+
+    await b.call('ponuda:konvertuj', { id: ponudaId, korisnikId: ADMIN, nacinPlacanja: 'Gotovina' });
+    expect(stanje(ormar)).toBe(-2);
+    await zavrsi(id);
+    expect(stanje(ormar)).toBe(0);
+  });
+
+  test('vrati: proizvod koji je nalog uveo je već prodan/izdat — odbija, knjiženja ostaju', async () => {
+    const stol = dodajProizvod('STOL', 'artikal');
+    const m = dodajProizvod('M', 'materijal', { stanje: 10 });
+    await b.call('normativ:save', stol, [{ materijalId: m, kolicina: 2 }]);
+    const id = await zaliha(stol, 4);
+    await zavrsi(id);
+    b.db.prepare("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'izlaz', 1.5, 'order', 1)").run(stol);
+
+    await expect(b.call('nalog:setStatus', { id, status: 'vrati', korisnikId: ADMIN }))
+      .rejects.toThrow('Proizvod "Proizvod STOL" je već prodan/izdat — nalog se ne može vratiti u izradu (na stanju 2.5, nalog je uveo 4)');
+    expect(status(id)).toBe('zavrsen');
+    expect(stanje(stol)).toBe(2.5);
+    expect(stanje(m)).toBe(2);
+    expect(red("SELECT COUNT(*) AS n FROM stock_movements WHERE referenceType = 'radni_nalog'").n).toBe(2);
+    await expect(b.call('nalog:delete', id)).rejects.toThrow('Nalog je završen i ne može se mijenjati');
+
+    // stanje iz drugih izvora pokriva ono što je nalog uveo — tada se smije vratiti
+    b.db.prepare("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'ulaz', 1.5, 'primka', 1)").run(stol);
+    await b.call('nalog:setStatus', { id, status: 'vrati', korisnikId: ADMIN });
+    expect(status(id)).toBe('u_izradi');
+    expect(stanje(stol)).toBe(0);
+  });
+
+  test('vrati: nalog iz ponude čiji je artikal prodan mimo ponude se ne vraća', async () => {
+    const kupacId = dodajKupca();
+    const ormar = dodajProizvod('ORM', 'artikal');
+    const ponudaId = dodajPonudu(kupacId, 'prihvacena', [{ productId: ormar, kolicina: 2, cijena: 400 }]);
+    const { id } = await b.call('nalog:createIzPonude', ponudaId, ADMIN);
+    await b.call('nalog:replaceStavke', id, [{ materijalId: dodajProizvod('M', 'materijal'), kolicina: 1 }]);
+    await zavrsi(id);
+    b.db.prepare("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'izlaz', 1, 'order', 1)").run(ormar);
+
+    await expect(b.call('nalog:setStatus', { id, status: 'vrati', korisnikId: ADMIN }))
+      .rejects.toThrow('Proizvod "Proizvod ORM" je već prodan/izdat — nalog se ne može vratiti u izradu (na stanju 1, nalog je uveo 2)');
+    expect(status(id)).toBe('zavrsen');
+  });
+
+  test('vrati i brisanje: nalog čija je ponuda već fakturisana na ekranu Ponude se odbija', async () => {
+    const kupacId = dodajKupca();
+    const ormar = dodajProizvod('ORM', 'artikal');
+    const p1 = dodajPonudu(kupacId, 'prihvacena', [{ productId: ormar, kolicina: 1, cijena: 100 }]);
+    const p2 = dodajPonudu(kupacId, 'prihvacena', [{ productId: ormar, kolicina: 1, cijena: 100 }]);
+    const zavrsen = (await b.call('nalog:createIzPonude', p1, ADMIN)).id;
+    const otvoren = (await b.call('nalog:createIzPonude', p2, ADMIN)).id;
+    const m = dodajProizvod('M', 'materijal', { stanje: 10 });
+    await b.call('nalog:replaceStavke', zavrsen, [{ materijalId: m, kolicina: 1 }]);
+    await b.call('nalog:replaceStavke', otvoren, [{ materijalId: m, kolicina: 1 }]);
+    await zavrsi(zavrsen);
+    await b.call('ponuda:konvertuj', { id: p1, korisnikId: ADMIN, nacinPlacanja: 'Gotovina' });
+    await b.call('ponuda:konvertuj', { id: p2, korisnikId: ADMIN, nacinPlacanja: 'Gotovina' });
+
+    await expect(b.call('nalog:setStatus', { id: zavrsen, status: 'vrati', korisnikId: ADMIN }))
+      .rejects.toThrow('Ponuda ovog naloga je već fakturisana — nalog se ne može vratiti u izradu');
+    await expect(b.call('nalog:delete', otvoren))
+      .rejects.toThrow('Ponuda ovog naloga je već fakturisana — nalog se ne može obrisati');
+    expect([status(zavrsen), status(otvoren)]).toEqual(['zavrsen', 'otvoren']);
+    expect(red('SELECT COUNT(*) AS n FROM radni_nalog_stavke WHERE radniNalogId = ?', otvoren).n).toBe(1);
+    expect(stanje(m)).toBe(9);
+  });
+
   test('nepoznat status i nepostojeći nalog', async () => {
     const id = await narudzba(dodajKupca());
     await expect(b.call('nalog:setStatus', { id, status: 'fakturisan', korisnikId: ADMIN })).rejects.toThrow('Nepoznat status');
@@ -678,6 +911,30 @@ describe('nalog:kalkulacija', () => {
     ]);
   });
 
+  test('upozorenje o stanju sabira isti materijal na više stavki (jednom po materijalu)', async () => {
+    const m = dodajProizvod('IV', 'materijal', { jm: 'm²', stanje: 5 });
+    const k2 = dodajProizvod('KT', 'materijal', { jm: 'm' });
+    primka(k2, 10, 1);
+    const id = await narudzba(dodajKupca(), { dogovorenaCijena: 50 });
+    await b.call('nalog:replaceStavke', id, [
+      { materijalId: m, kolicina: 3, napomena: '600×400' },
+      { materijalId: k2, kolicina: 2 },
+      { materijalId: m, kolicina: 3, napomena: '800×400' },
+    ]);
+
+    const k = await b.call('nalog:kalkulacija', id);
+    expect(k.stavke.map((s: any) => [s.materijalId, s.kolicina])).toEqual([[m, 3], [k2, 2], [m, 3]]);
+    expect(k.upozorenja).toEqual([
+      'Proizvod IV: nema nabavne cijene (nema primke)',
+      'Proizvod IV: utrošak 6 prelazi stanje 5',
+    ]);
+
+    await b.call('nalog:replaceStavke', id, [{ materijalId: m, kolicina: 0.1 }, { materijalId: m, kolicina: 0.2 }]);
+    b.db.prepare("DELETE FROM stock_movements WHERE productId = ?").run(m);
+    b.db.prepare("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'ulaz', 0.3, 'test', 0)").run(m);
+    expect((await b.call('nalog:kalkulacija', id)).upozorenja).toEqual(['Proizvod IV: nema nabavne cijene (nema primke)']);
+  });
+
   test('zaliha: trošak po komadu; nakon završetka cijena je zamrznuta i ne prati nove primke', async () => {
     const stol = dodajProizvod('STOL', 'artikal');
     const m = dodajProizvod('M', 'materijal');
@@ -752,9 +1009,9 @@ describe('nalog:izdajRacun', () => {
     expect(red("SELECT COUNT(*) AS n FROM products WHERE sifra = 'NAMJ'").n).toBe(1);
   });
 
-  test('nalog iz ponude: račun sa stavkama ponude, ponuda konvertovana, nalog fakturisan', async () => {
+  test('nalog iz ponude: račun sa stavkama ponude, ponuda konvertovana, nalog fakturisan; proizvod ne ode u minus', async () => {
     const kupacId = dodajKupca();
-    const ormar = dodajProizvod('ORM', 'artikal', { stanje: 5 });
+    const ormar = dodajProizvod('ORM', 'artikal');
     const mont = dodajProizvod('MONT', 'usluga');
     const ponudaId = dodajPonudu(kupacId, 'prihvacena', [
       { productId: ormar, kolicina: 2, cijena: 400 },
@@ -764,6 +1021,7 @@ describe('nalog:izdajRacun', () => {
     const m = dodajProizvod('M', 'materijal');
     await b.call('nalog:replaceStavke', id, [{ materijalId: m, kolicina: 1 }]);
     await zavrsi(id);
+    expect(stanje(ormar)).toBe(2);
 
     const r = await b.call('nalog:izdajRacun', { id, korisnikId: ADMIN, nacinPlacanja: 'Gotovina' });
     expect(typeof r.racunId).toBe('number');
@@ -776,7 +1034,8 @@ describe('nalog:izdajRacun', () => {
       .toEqual({ ukupno: 900, brojFiskalnogRacuna: '101', kupacNaziv: 'Kupac d.o.o.' });
     expect(redovi('SELECT productId, kolicina, cijena FROM order_items WHERE orderId = ? ORDER BY id', r.racunId))
       .toEqual([{ productId: ormar, kolicina: 2, cijena: 400 }, { productId: mont, kolicina: 1, cijena: 100 }]);
-    expect(stanje(ormar)).toBe(3);
+    expect(stanje(ormar)).toBe(0);
+    expect(stanje(mont)).toBe(0);
     expect(red('SELECT status, racunId FROM ponude WHERE id = ?', ponudaId)).toEqual({ status: 'konvertovana', racunId: r.racunId });
     expect(red('SELECT status, racunId FROM radni_nalozi WHERE id = ?', id)).toEqual({ status: 'fakturisan', racunId: r.racunId });
   });

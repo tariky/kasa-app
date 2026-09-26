@@ -129,7 +129,7 @@ const BLOKIRANI_KANALI = new Set([
   'primka:create', 'primka:update',
   'product:adjustStock',
   'ponuda:create', 'ponuda:update', 'ponuda:konvertuj',
-  'nalog:create', 'nalog:createIzPonude', 'nalog:update', 'nalog:replaceStavke',
+  'nalog:create', 'nalog:createIzPonude', 'nalog:update', 'nalog:replaceStavke', 'nalog:setProizvodi',
   'nalog:setStatus', 'nalog:izdajRacun',
 ]);
 

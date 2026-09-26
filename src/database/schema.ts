@@ -318,6 +318,17 @@ export const schema = `
     FOREIGN KEY (materijalId) REFERENCES products(id)
   );
 
+  -- Stavke ponude koje nalog iz ponude izrađuje: pri završetku ulaze na stanje.
+  -- Ostali artikli ponude su roba sa zalihe — prodaja ih samo skida.
+  CREATE TABLE IF NOT EXISTS radni_nalog_proizvodi (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    radniNalogId INTEGER NOT NULL,
+    productId INTEGER NOT NULL,
+    kolicina REAL NOT NULL,
+    FOREIGN KEY (radniNalogId) REFERENCES radni_nalozi(id),
+    FOREIGN KEY (productId) REFERENCES products(id)
+  );
+
   -- Trag osjetljivih radnji (storno, korekcije, postavke, korisnici, uvoz baze).
   -- Samo upis: nema kanala za izmjenu ni brisanje. korisnikId je iz sesije i
   -- namjerno bez stranog ključa — brisanje korisnika ne smije brisati trag.
@@ -344,6 +355,7 @@ export const schema = `
   CREATE INDEX IF NOT EXISTS idx_nivelacija_stavke_nivelacijaId ON nivelacija_stavke(nivelacijaId);
   CREATE INDEX IF NOT EXISTS idx_prilog_stavke_orderId ON prilog_stavke(orderId);
   CREATE INDEX IF NOT EXISTS idx_radni_nalog_stavke_nalogId ON radni_nalog_stavke(radniNalogId);
+  CREATE INDEX IF NOT EXISTS idx_radni_nalog_proizvodi_nalogId ON radni_nalog_proizvodi(radniNalogId);
   CREATE INDEX IF NOT EXISTS idx_radni_nalozi_status ON radni_nalozi(status);
   CREATE INDEX IF NOT EXISTS idx_normativi_productId ON normativi(productId);
 `;

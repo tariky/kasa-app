@@ -20,6 +20,7 @@
     "nalog:createIzPonude": ["ponude", "proizvodnja"],
     "nalog:update": ["proizvodnja"],
     "nalog:replaceStavke": ["proizvodnja"],
+    "nalog:setProizvodi": ["proizvodnja"],
     "nalog:setStatus": ["proizvodnja"],
     "nalog:delete": ["proizvodnja"],
     "nalog:izdajRacun": ["proizvodnja"],

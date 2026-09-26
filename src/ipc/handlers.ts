@@ -17,6 +17,7 @@ import {
 import type { PregledCijenaUlaza, PromijenjenoOdPregleda } from '../types';
 import {
   jeArtikalUProizvodnji, nextBrojNaloga, createNalog, createNalogIzPonude, nalogZaPonudu, updateNalog, replaceStavke,
+  proizvodiPonude, setProizvodiNaloga,
   getNalog, listNalozi, deleteNalog, kalkulacijaNaloga, setStatusNaloga, zavrsiNalog, vratiUIzradu,
   izdajRacunZaNalog, getNormativ, saveNormativ, osigurajProdajnuUslugu,
 } from '../lib/proizvodnja';
@@ -1579,12 +1580,22 @@ export function registerIpcHandlers(): void {
     return db.transaction(() => createNalog(db, data))();
   });
 
-  handle('nalog:createIzPonude', (ponudaId: number) => {
+  // Drugi argument je izbor proizvoda (niz); raniji pozivi su tu slali korisnikId —
+  // to se ignoriše i važi zadani izbor.
+  handle('nalog:createIzPonude', (ponudaId: number, proizvodi?: unknown) => {
     const korisnikId = korisnik().id;
-    return db.transaction(() => createNalogIzPonude(db, ponudaId, korisnikId))();
+    const izbor = Array.isArray(proizvodi) ? proizvodi : undefined;
+    return db.transaction(() => createNalogIzPonude(db, ponudaId, korisnikId, izbor))();
   });
 
   handle('nalog:zaPonudu', (ponudaId: number) => nalogZaPonudu(db, ponudaId));
+
+  handle('nalog:proizvodiPonude', (ponudaId: number) => proizvodiPonude(db, ponudaId));
+
+  handle('nalog:setProizvodi', (id: number, proizvodi: any[]) => {
+    db.transaction(() => setProizvodiNaloga(db, id, proizvodi))();
+    return { success: true };
+  });
 
   handle('nalog:update', (id: number, data: any) => {
     updateNalog(db, id, data);

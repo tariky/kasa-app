@@ -76,7 +76,7 @@ const SVI_KANALI = [
   'pending:list', 'pending:resolve', 'pending:discard', 'order:getFiscalGaps', 'order:dismissFiscalGap',
   'ponuda:getAll', 'ponuda:get', 'ponuda:nextBroj', 'ponuda:create', 'ponuda:update', 'ponuda:setStatus', 'ponuda:delete', 'ponuda:konvertuj',
   'nalog:getAll', 'nalog:get', 'nalog:nextBroj', 'nalog:create', 'nalog:createIzPonude', 'nalog:zaPonudu', 'nalog:update',
-  'nalog:replaceStavke', 'nalog:setStatus', 'nalog:delete', 'nalog:kalkulacija', 'nalog:izdajRacun',
+  'nalog:proizvodiPonude', 'nalog:setProizvodi', 'nalog:replaceStavke', 'nalog:setStatus', 'nalog:delete', 'nalog:kalkulacija', 'nalog:izdajRacun',
   'normativ:get', 'normativ:save', 'proizvodnja:setEnabled',
   'settings:getTring', 'settings:saveTring', 'settings:getFirma', 'settings:get', 'settings:set', 'settings:saveFirma',
   'savedCarts:list', 'savedCarts:save', 'savedCarts:delete', 'fakturaSkice:list', 'fakturaSkice:save', 'fakturaSkice:delete',

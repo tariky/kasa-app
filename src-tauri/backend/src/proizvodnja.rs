@@ -1,6 +1,6 @@
 //! Kanali `nalog:*`, `normativ:*` (handlers.ts) i logika iz `lib/proizvodnja.ts`.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Mutex;
 
 use regex::Regex;
@@ -22,6 +22,9 @@ pub const PRODAJNA_USLUGA_NAZIV: &str = "Namještaj po mjeri";
 fn round4(n: f64) -> f64 {
     js::js_round(n * 10000.0) / 10000.0
 }
+
+/// Tolerancija pri poređenju količina (SUM kretanja nosi grešku zaokruživanja).
+const TOLERANCIJA_KOLICINE: f64 = 1e-9;
 
 /// `Number(datum.slice(0, 4))` kao JSON broj (NaN → null, kako ga SQLite veže).
 fn godina_iz_datuma(datum: &str) -> Value {
@@ -109,6 +112,18 @@ fn ucitaj_nalog_ili_baci(db: &Db, id: &Value) -> R<Value> {
 fn baci_ako_zakljucan(status: &Value) -> R<()> {
     if status == "zavrsen" || status == "fakturisan" {
         baci!("Nalog je završen i ne može se mijenjati");
+    }
+    Ok(())
+}
+
+/// Ponuda fakturisana mimo naloga (ekran Ponude) — utrošak materijala pripada
+/// fakturisanom poslu pa se nalog ne smije ni vratiti u izradu ni obrisati.
+fn baci_ako_ponuda_fakturisana(db: &Db, ponuda_id: &Value, radnja: &str) -> R<()> {
+    if !truthy(ponuda_id) {
+        return Ok(());
+    }
+    if db.val("SELECT status FROM ponude WHERE id = ?", p![ponuda_id])? == "konvertovana" {
+        baci!("Ponuda ovog naloga je već fakturisana — nalog se ne može {radnja}");
     }
     Ok(())
 }
@@ -204,25 +219,17 @@ pub fn create_nalog(db: &Db, input: &Value, danas: &str) -> R<Value> {
     if zaliha {
         let normativ = get_normativ(db, &input["productId"])?;
         if !normativ.is_empty() {
-            let stavke: Vec<Value> = normativ
-                .iter()
-                .map(|n| {
-                    json!({
-                        "materijalId": n["materijalId"],
-                        "kolicina": js::f(round4(to_number(&n["kolicina"]) * kolicina)),
-                        "napomena": n["napomena"],
-                    })
-                })
-                .collect();
-            upisi_stavke(db, &id, &stavke)?;
+            upisi_stavke(db, &id, &stavke_iz_normativa(&normativ, kolicina))?;
         }
     }
 
     Ok(json!({ "id": id, "broj": broj, "godina": godina }))
 }
 
-/// Nalog iz prihvaćene ponude: kupac, opis (nazivi stavki) i cijena sa ponude. U transakciji.
-pub fn create_nalog_iz_ponude(db: &Db, ponuda_id: &Value, korisnik_id: &Value, danas: &str) -> R<Value> {
+/// Nalog iz prihvaćene ponude: kupac, opis (nazivi stavki) i cijena sa ponude, te
+/// stavke ponude koje nalog izrađuje. Bez izbora (`proizvodi` nije niz) važi
+/// zadani iz `proizvodi_ponude`. U transakciji.
+pub fn create_nalog_iz_ponude(db: &Db, ponuda_id: &Value, korisnik_id: &Value, proizvodi: &Value, danas: &str) -> R<Value> {
     let Some(ponuda) = db.get("SELECT id, kupacId, status, ukupno FROM ponude WHERE id = ?", p![ponuda_id])? else {
         baci!("Ponuda ne postoji");
     };
@@ -243,14 +250,113 @@ pub fn create_nalog_iz_ponude(db: &Db, ponuda_id: &Value, korisnik_id: &Value, d
     let opis = nazivi.iter().map(|n| &n["naziv"]).filter(|n| truthy(n)).map(js::to_string).collect::<Vec<_>>().join(", ");
     let opis = if opis.is_empty() { format!("Ponuda {}", js::to_string(ponuda_id)) } else { opis };
 
-    create_nalog(
+    let r = create_nalog(
         db,
         &json!({
             "vrsta": "narudzba", "korisnikId": korisnik_id, "kupacId": ponuda["kupacId"], "ponudaId": ponuda_id, "opis": opis,
             "dogovorenaCijena": ponuda["ukupno"],
         }),
         danas,
-    )
+    )?;
+    let izbor: Vec<Value> = match proizvodi.as_array() {
+        Some(a) => a.clone(),
+        None => proizvodi_ponude(db, ponuda_id)?
+            .into_iter()
+            .filter(|p| p["zadano"] == true)
+            .map(|p| json!({ "productId": p["productId"], "kolicina": p["kolicina"] }))
+            .collect(),
+    };
+    upisi_proizvode(db, &r["id"], ponuda_id, &izbor)?;
+    Ok(r)
+}
+
+/// Stavke ponude koje nalog može izrađivati — artikli, ne usluge ni materijal —
+/// s trenutnim stanjem. Zadano se izrađuje ono čega nema dovoljno na zalihi.
+pub fn proizvodi_ponude(db: &Db, ponuda_id: &Value) -> R<Vec<Value>> {
+    let mut redovi = db.all(
+        "
+    SELECT ps.id AS ponudaStavkaId, ps.productId, p.naziv, p.sifra, p.jm, ps.kolicina
+    FROM ponuda_stavke ps JOIN products p ON p.id = ps.productId
+    WHERE ps.ponudaId = ? AND p.tip NOT IN ('usluga', 'materijal')
+    ORDER BY ps.id
+  ",
+        p![ponuda_id],
+    )?;
+    for r in &mut redovi {
+        let stanje = stanje_artikla(db, &r["productId"])?;
+        let zadano = to_number(&stanje) < to_number(&r["kolicina"]) - TOLERANCIJA_KOLICINE;
+        r["stanje"] = stanje;
+        r["zadano"] = json!(zadano);
+    }
+    Ok(redovi)
+}
+
+/// Zamijeni proizvode naloga. Svaki mora biti artikal sa ponude naloga, a zbir
+/// po artiklu ne veći od količine na ponudi. Poziva se u transakciji.
+fn upisi_proizvode(db: &Db, nalog_id: &Value, ponuda_id: &Value, proizvodi: &[Value]) -> R<()> {
+    let mut zbir: HashMap<String, f64> = HashMap::new();
+    let mut redovi: Vec<(Value, f64)> = Vec::new();
+    for pr in proizvodi {
+        let s = db
+            .get(
+                "
+    SELECT p.naziv, p.tip, SUM(ps.kolicina) AS kolicina
+    FROM ponuda_stavke ps JOIN products p ON p.id = ps.productId
+    WHERE ps.ponudaId = ? AND ps.productId = ?
+  ",
+                p![ponuda_id, pr["productId"]],
+            )?
+            .unwrap_or(Value::Null);
+        let naziv = if !s["naziv"].is_null() {
+            js::to_string(&s["naziv"])
+        } else {
+            match product_tip(db, &pr["productId"])? {
+                Some(p) if !p["naziv"].is_null() => js::to_string(&p["naziv"]),
+                _ => format!("#{}", js::to_string(&pr["productId"])),
+            }
+        };
+        if s["kolicina"].is_null() {
+            baci!("Proizvod \"{naziv}\" nije na ponudi naloga");
+        }
+        if s["tip"] == "usluga" || s["tip"] == "materijal" {
+            baci!("\"{naziv}\" je {} i ne izrađuje se po nalogu", js::to_string(&s["tip"]));
+        }
+        let kolicina = round4(to_number(&pr["kolicina"]));
+        if !(kolicina > 0.0) {
+            baci!("Količina proizvoda mora biti veća od nule");
+        }
+        let kljuc = js::stringify(&pr["productId"]);
+        let ukupno = round4(zbir.get(&kljuc).copied().unwrap_or(0.0) + kolicina);
+        let na_ponudi = to_number(&s["kolicina"]);
+        if ukupno > na_ponudi + TOLERANCIJA_KOLICINE {
+            baci!(
+                "Proizvod \"{naziv}\": nalog izrađuje {}, a na ponudi je {}",
+                js::num_str(ukupno),
+                js::num_str(round4(na_ponudi))
+            );
+        }
+        zbir.insert(kljuc, ukupno);
+        redovi.push((pr["productId"].clone(), kolicina));
+    }
+    db.run("DELETE FROM radni_nalog_proizvodi WHERE radniNalogId = ?", p![nalog_id])?;
+    for (product_id, kolicina) in redovi {
+        db.run(
+            "INSERT INTO radni_nalog_proizvodi (radniNalogId, productId, kolicina) VALUES (?, ?, ?)",
+            p![nalog_id, product_id, js::f(kolicina)],
+        )?;
+    }
+    Ok(())
+}
+
+/// Izbor proizvoda naloga iz ponude — samo dok nalog nije završen. U transakciji.
+pub fn set_proizvodi_naloga(db: &Db, id: &Value, proizvodi: &Value) -> R<()> {
+    let n = ucitaj_nalog_ili_baci(db, id)?;
+    baci_ako_zakljucan(&n["status"])?;
+    if !truthy(&n["ponudaId"]) {
+        baci!("Proizvodi se biraju samo za nalog iz ponude");
+    }
+    let proizvodi = niz(proizvodi, "proizvodi")?;
+    upisi_proizvode(db, id, &n["ponudaId"], proizvodi)
 }
 
 /// `{ id, broj, godina }` naloga za ponudu ili `null`.
@@ -346,11 +452,13 @@ pub fn update_nalog(db: &Db, id: &Value, patch: &Value) -> R<()> {
     Ok(())
 }
 
-/// Briše nalog i stavke. Samo nezavršen nalog. U transakciji.
+/// Briše nalog i stavke. Samo nezavršen nalog čija ponuda nije fakturisana. U transakciji.
 pub fn delete_nalog(db: &Db, id: &Value) -> R<()> {
     let n = ucitaj_nalog_ili_baci(db, id)?;
     baci_ako_zakljucan(&n["status"])?;
+    baci_ako_ponuda_fakturisana(db, &n["ponudaId"], "obrisati")?;
     db.run("DELETE FROM radni_nalog_stavke WHERE radniNalogId = ?", p![id])?;
+    db.run("DELETE FROM radni_nalog_proizvodi WHERE radniNalogId = ?", p![id])?;
     db.run("DELETE FROM radni_nalozi WHERE id = ?", p![id])?;
     Ok(())
 }
@@ -362,9 +470,10 @@ pub fn je_artikal_u_proizvodnji(db: &Db, product_id: &Value) -> R<bool> {
     SELECT 1 AS x FROM normativi WHERE materijalId = ? OR productId = ?
     UNION ALL SELECT 1 FROM radni_nalog_stavke WHERE materijalId = ?
     UNION ALL SELECT 1 FROM radni_nalozi WHERE productId = ?
+    UNION ALL SELECT 1 FROM radni_nalog_proizvodi WHERE productId = ?
     LIMIT 1
   ",
-        p![product_id, product_id, product_id, product_id],
+        p![product_id, product_id, product_id, product_id, product_id],
     )
 }
 
@@ -404,11 +513,23 @@ pub fn get_nalog_stavke(db: &Db, id: &Value) -> R<Vec<Value>> {
     Ok(stavke)
 }
 
+pub fn get_nalog_proizvodi(db: &Db, id: &Value) -> R<Vec<Value>> {
+    db.all(
+        "
+    SELECT rp.*, p.naziv AS productNaziv, p.sifra AS productSifra, p.jm AS productJm
+    FROM radni_nalog_proizvodi rp LEFT JOIN products p ON p.id = rp.productId
+    WHERE rp.radniNalogId = ? ORDER BY rp.id
+  ",
+        p![id],
+    )
+}
+
 pub fn get_nalog(db: &Db, id: &Value) -> R<Value> {
     let Some(mut n) = db.get(&format!("{NALOG_SELECT} WHERE rn.id = ?"), p![id])? else {
         baci!("Radni nalog ne postoji");
     };
     n["stavke"] = Value::from(get_nalog_stavke(db, id)?);
+    n["proizvodi"] = Value::from(get_nalog_proizvodi(db, id)?);
     Ok(n)
 }
 
@@ -426,6 +547,20 @@ pub fn list_nalozi(db: &Db, filter: &Value) -> R<Value> {
 }
 
 // ── normativi ────────────────────────────────────────────
+
+/// Stavke utroška za nalog od `kolicina` komada: normativ × količina, na 4 decimale.
+fn stavke_iz_normativa(normativ: &[Value], kolicina: f64) -> Vec<Value> {
+    normativ
+        .iter()
+        .map(|n| {
+            json!({
+                "materijalId": n["materijalId"],
+                "kolicina": js::f(round4(to_number(&n["kolicina"]) * kolicina)),
+                "napomena": n["napomena"],
+            })
+        })
+        .collect()
+}
 
 pub fn get_normativ(db: &Db, product_id: &Value) -> R<Vec<Value>> {
     db.all(
@@ -489,6 +624,14 @@ pub fn kalkulacija(nalog: &Value, stavke: &[Value]) -> Value {
     let mut upozorenja: Vec<Value> = Vec::new();
     let otvoren = nalog["status"] == "otvoren" || nalog["status"] == "u_izradi";
 
+    // Isti materijal može biti na više stavki (npr. ploča u dvije dimenzije) — stanje
+    // pokriva njihov zbir, pa se upozorava jednom po materijalu.
+    let mut zbir: HashMap<String, f64> = HashMap::new();
+    for s in stavke {
+        *zbir.entry(js::stringify(&s["materijalId"])).or_insert(0.0) += to_number(&s["kolicina"]);
+    }
+    let mut upozoren: HashSet<String> = HashSet::new();
+
     let ks: Vec<Value> = stavke
         .iter()
         .map(|s| {
@@ -502,15 +645,20 @@ pub fn kalkulacija(nalog: &Value, stavke: &[Value]) -> Value {
             let zamrznuto = !s["nabavnaCijena"].is_null();
             let cijena = if zamrznuto { &s["nabavnaCijena"] } else { &s["trenutnaCijena"] };
             let stanje = &js::nn(&s["stanje"], &json!(0)).clone();
-            if to_number(cijena) <= 0.0 {
-                upozorenja.push(json!(format!("{naziv}: nema nabavne cijene (nema primke)")));
-            }
-            if otvoren && to_number(&s["kolicina"]) > to_number(stanje) {
-                upozorenja.push(json!(format!(
-                    "{naziv}: utrošak {} prelazi stanje {}",
-                    js::to_string(&s["kolicina"]),
-                    js::to_string(stanje)
-                )));
+            let kljuc = js::stringify(&s["materijalId"]);
+            if !upozoren.contains(&kljuc) {
+                let utrosak = round4(zbir[&kljuc]);
+                upozoren.insert(kljuc);
+                if to_number(cijena) <= 0.0 {
+                    upozorenja.push(json!(format!("{naziv}: nema nabavne cijene (nema primke)")));
+                }
+                if otvoren && utrosak > to_number(stanje) + TOLERANCIJA_KOLICINE {
+                    upozorenja.push(json!(format!(
+                        "{naziv}: utrošak {} prelazi stanje {}",
+                        js::num_str(utrosak),
+                        js::to_string(stanje)
+                    )));
+                }
             }
             json!({
                 "materijalId": s["materijalId"], "naziv": naziv, "jm": js::nn(&s["materijalJm"], &json!("")),
@@ -569,8 +717,10 @@ pub fn set_status_naloga(db: &Db, id: &Value, status: &str) -> R<()> {
 }
 
 /// Završetak: izlaz materijala po stavkama (zamrzne prosječnu nabavnu), a za
-/// zalihu i ulaz gotovog proizvoda. Negativno stanje ne blokira — ploča se
-/// često potroši prije nego što se primka unese. U transakciji.
+/// zalihu i ulaz gotovog proizvoda. Nalog iz ponude uvodi na stanje proizvode
+/// koje izrađuje (radni_nalog_proizvodi) — prodaja po ponudi ih skida, prije ili
+/// poslije završetka, kao i robu sa zalihe. Negativno stanje ne blokira — ploča
+/// se često potroši prije nego što se primka unese. U transakciji.
 pub fn zavrsi_nalog(db: &Db, id: &Value) -> R<()> {
     let n = ucitaj_nalog_ili_baci(db, id)?;
     if n["status"] != "otvoren" && n["status"] != "u_izradi" {
@@ -591,17 +741,26 @@ pub fn zavrsi_nalog(db: &Db, id: &Value) -> R<()> {
             p![s["materijalId"], s["kolicina"], id],
         )?;
     }
-    if n["vrsta"] == "zaliha" && truthy(&n["productId"]) {
+    let ulaz = |product_id: &Value, kolicina: &Value| {
         db.run(
             "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'ulaz', ?, 'radni_nalog', ?)",
-            p![n["productId"], n["kolicina"], id],
-        )?;
+            p![product_id, kolicina, id],
+        )
+    };
+    if n["vrsta"] == "zaliha" && truthy(&n["productId"]) {
+        ulaz(&n["productId"], &n["kolicina"])?;
+    }
+    let proizvodi = db.all("SELECT productId, kolicina FROM radni_nalog_proizvodi WHERE radniNalogId = ? ORDER BY id", p![id])?;
+    for pr in &proizvodi {
+        ulaz(&pr["productId"], &pr["kolicina"])?;
     }
     db.run("UPDATE radni_nalozi SET status = 'zavrsen', zavrsenAt = datetime('now','localtime') WHERE id = ?", p![id])?;
     Ok(())
 }
 
-/// Poništi knjiženja završetka i otključaj nalog. Fakturisan nalog se ne vraća. U transakciji.
+/// Poništi knjiženja završetka i otključaj nalog. Fakturisan nalog (ili nalog
+/// čija je ponuda fakturisana) se ne vraća, kao ni nalog čiji je proizvod već
+/// prodan/izdat — brisanje ulaza bi ostavilo stanje u minusu. U transakciji.
 pub fn vrati_u_izradu(db: &Db, id: &Value) -> R<()> {
     let n = ucitaj_nalog_ili_baci(db, id)?;
     if n["status"] == "fakturisan" {
@@ -609,6 +768,29 @@ pub fn vrati_u_izradu(db: &Db, id: &Value) -> R<()> {
     }
     if n["status"] != "zavrsen" {
         baci!("Samo završen nalog se vraća u izradu");
+    }
+    baci_ako_ponuda_fakturisana(db, &n["ponudaId"], "vratiti u izradu")?;
+
+    let ulazi = db.all(
+        "
+    SELECT sm.productId, SUM(sm.kolicina) AS kolicina, p.naziv
+    FROM stock_movements sm LEFT JOIN products p ON p.id = sm.productId
+    WHERE sm.referenceType = 'radni_nalog' AND sm.referenceId = ? AND sm.tip = 'ulaz'
+    GROUP BY sm.productId ORDER BY MIN(sm.id)
+  ",
+        p![id],
+    )?;
+    for u in &ulazi {
+        let stanje = to_number(&stanje_artikla(db, &u["productId"])?);
+        let kolicina = to_number(&u["kolicina"]);
+        if stanje < kolicina - TOLERANCIJA_KOLICINE {
+            let naziv = if u["naziv"].is_null() { format!("#{}", js::to_string(&u["productId"])) } else { js::to_string(&u["naziv"]) };
+            baci!(
+                "Proizvod \"{naziv}\" je već prodan/izdat — nalog se ne može vratiti u izradu (na stanju {}, nalog je uveo {})",
+                js::num_str(round4(stanje)),
+                js::num_str(round4(kolicina))
+            );
+        }
     }
     db.run("DELETE FROM stock_movements WHERE referenceType = 'radni_nalog' AND referenceId = ?", p![id])?;
     db.run("UPDATE radni_nalog_stavke SET nabavnaCijena = NULL WHERE radniNalogId = ?", p![id])?;
@@ -818,11 +1000,15 @@ pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
             let danas = b.sat.danas();
             db.tx(|| create_nalog(db, &data, &danas))
         }),
+        // Drugi argument je izbor proizvoda (niz); raniji pozivi su tu slali
+        // korisnikId — to se ignoriše i važi zadani izbor.
         "nalog:createIzPonude" => sesija::korisnik(b).and_then(|k| {
             let danas = b.sat.danas();
-            db.tx(|| create_nalog_iz_ponude(db, &a[0], &json!(k.id), &danas))
+            db.tx(|| create_nalog_iz_ponude(db, &a[0], &json!(k.id), &a[1], &danas))
         }),
         "nalog:zaPonudu" => nalog_za_ponudu(db, &a[0]),
+        "nalog:proizvodiPonude" => proizvodi_ponude(db, &a[0]).map(Value::from),
+        "nalog:setProizvodi" => ok(db.tx(|| set_proizvodi_naloga(db, &a[0], &a[1]))),
         "nalog:update" => ok(update_nalog(db, &a[0], &a[1])),
         "nalog:replaceStavke" => ok(db.tx(|| replace_stavke(db, &a[0], &a[1]))),
         "nalog:setStatus" => set_status(b, &a[0]),
