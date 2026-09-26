@@ -12,6 +12,8 @@ import pristup from './pristup.json';
 export const PORUKA_NISTE_PRIJAVLJENI = 'Niste prijavljeni';
 export const PORUKA_SAMO_ADMIN = 'Ovu radnju može izvršiti samo administrator';
 export const PORUKA_ZADANI_PIN = 'Prije rada promijenite zadani PIN 0000';
+/** Storno kasira uz kasa.requirePinRefund bez odobrenja za payload koji je stigao handleru. */
+export const PORUKA_BEZ_ODOBRENJA = 'Reklamacija traži PIN administratora — odobrenje ovog poziva nije pronađeno';
 
 /** Jedini kanali (uz KANALI_BEZ_PRIJAVE) dok prijavljeni korisnik još ima zadani PIN. */
 export const KANALI_SA_ZADANIM_PINOM: ReadonlySet<string> = new Set(pristup.kanaliSaZadanimPinom);
@@ -270,7 +272,9 @@ export interface Sesija {
   /**
    * Admin koji je PIN-om odobrio storno ovog poziva: `unos` je payload
    * order:refundAndPrint koji je prošao provjeriPristup. null = nije trebalo
-   * odobrenje (admin ili isključena postavka).
+   * odobrenje (admin ili isključena postavka). Kad je trebalo, a za ovaj
+   * payload ga nema, baca `PORUKA_BEZ_ODOBRENJA` — storno kasira nikad bez
+   * odobrioca. Rust: `sesija::odobrio_admin`.
    */
   odobrioAdmin(unos: unknown): number | null;
 }
@@ -376,7 +380,14 @@ export function napraviSesiju(db: BazaSesije, sat: () => number = () => Date.now
     },
 
     odobrioAdmin(unos) {
-      return jeObjekat(unos) ? odobrenja.get(unos) ?? null : null;
+      const id = jeObjekat(unos) ? odobrenja.get(unos) : undefined;
+      if (id !== undefined) return id;
+      // Fail-closed: kasir uz uključen PIN je prošao odobriStorno, pa odobrenje
+      // mora postojati — nema ga samo ako payload nije onaj koji je provjeren.
+      if (trenutni()?.uloga !== 'admin' && procitajPostavku(db, 'kasa.requirePinRefund') === 'true') {
+        throw new Error(PORUKA_BEZ_ODOBRENJA);
+      }
+      return null;
     },
   };
 }

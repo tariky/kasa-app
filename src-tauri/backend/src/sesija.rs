@@ -22,6 +22,8 @@ use crate::{korisnici, p, postavke, Backend};
 pub const PORUKA_NISTE_PRIJAVLJENI: &str = "Niste prijavljeni";
 pub const PORUKA_SAMO_ADMIN: &str = "Ovu radnju može izvršiti samo administrator";
 pub const PORUKA_ZADANI_PIN: &str = "Prije rada promijenite zadani PIN 0000";
+/// Storno kasira uz `kasa.requirePinRefund` bez odobrenja koje je stiglo handleru.
+pub const PORUKA_BEZ_ODOBRENJA: &str = "Reklamacija traži PIN administratora — odobrenje ovog poziva nije pronađeno";
 
 /// Korisnik kako ga vide kanali — nikad s PIN-om ni hešom.
 #[derive(Debug, Clone)]
@@ -179,6 +181,17 @@ pub fn odobri_storno(b: &Backend, unos: &Value, k: &Korisnik) -> R<Option<i64>> 
         return Err(Greska("Reklamacija traži PIN administratora".into()));
     }
     Ok(Some(provjeri_admin_pin(b, &unos["adminPin"])?.id))
+}
+
+/// Admin koji je odobrio storno ovog poziva (`odobri_storno` → `Args`), u
+/// handleru. `None` = nije trebalo (admin ili isključena postavka); kad je
+/// trebalo, a odobrenja nema (handler pozvan mimo provjere sesije), greška —
+/// storno kasira nikad bez odobrioca. TS: `sesija.odobrioAdmin`.
+pub fn odobrio_admin(b: &Backend, k: &Korisnik, odobrio_admin_id: Option<i64>) -> R<Option<i64>> {
+    if odobrio_admin_id.is_none() && !k.je_admin() && postavke::procitaj(b.db(), "kasa.requirePinRefund")? == "true" {
+        return Err(Greska(PORUKA_BEZ_ODOBRENJA.into()));
+    }
+    Ok(odobrio_admin_id)
 }
 
 fn provjeri_upis_postavke(kljuc: &Value, korisnik: &Korisnik) -> R<()> {

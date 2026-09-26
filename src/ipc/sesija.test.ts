@@ -3,7 +3,7 @@ import { testnaBaza, type TestnaBaza } from '../lib/testnaBaza';
 import { hesirajPin, provjeriPin } from '../lib/korisnici';
 import {
   OgranicenjePokusaja, OgranicenjePromjenaPina, provjeriPristup, porukaBlokade, napraviSesiju, KLJUC_BLOKADE,
-  PORUKA_NISTE_PRIJAVLJENI, PORUKA_SAMO_ADMIN, PORUKA_ZADANI_PIN,
+  PORUKA_NISTE_PRIJAVLJENI, PORUKA_SAMO_ADMIN, PORUKA_ZADANI_PIN, PORUKA_BEZ_ODOBRENJA,
 } from './sesija';
 
 const ADMIN = { id: 1, ime: 'Admin', uloga: 'admin' as const };
@@ -325,8 +325,21 @@ describe('napraviSesiju', () => {
       const unos = { id: 1, adminPin: '1111' };
       s.provjeriPristup('order:refundAndPrint', [unos]);
       expect(s.odobrioAdmin(unos)).toBe(admin);
-      // Odobrenje važi samo za payload poziva koji je prošao provjeru.
-      expect(s.odobrioAdmin({ ...unos })).toBeNull();
+    });
+
+    // Odobrenje važi samo za payload poziva koji je prošao provjeru. Handler
+    // koji ga ne nađe (payload kopiran između sesije i handlera) ne smije
+    // stornirati bez odobrioca — baca, ne vraća null kao „nije trebalo".
+    test('kasiru bez odobrenja za ovaj payload handler baca', () => {
+      postavi('kasa.requirePinRefund', 'true');
+      const s = nova();
+      s.prijavi('1234');
+      const unos = { id: 1, adminPin: '1111' };
+      s.provjeriPristup('order:refundAndPrint', [unos]);
+      for (const kopija of [{ ...unos }, { id: 1 }, null, undefined]) {
+        expect(greska(() => s.odobrioAdmin(kopija))).toBe(PORUKA_BEZ_ODOBRENJA);
+      }
+      expect(s.odobrioAdmin(unos)).toBe(admin);
     });
 
     test('admin ne treba PIN; bez postavke ni kasir — tada nema odobrenja', () => {

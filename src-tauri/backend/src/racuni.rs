@@ -201,10 +201,11 @@ fn finalize(b: &Backend, unos: &Value) -> R<Value> {
 
 /// `order:refundAndPrint`. Admin PIN (`kasa.requirePinRefund`) je provjeren
 /// prije handlera, u sesiji (`sesija::odobri_storno`): `odobrio_admin_id`.
+/// Odobrenje koje je trebalo, a nije stiglo, baca (`sesija::odobrio_admin`).
 fn storno(b: &Backend, data: &Value, odobrio_admin_id: Option<i64>) -> R<Value> {
     let db = b.db();
     let k = sesija::korisnik(b)?;
-    let odobrio_admin_id = json!(odobrio_admin_id);
+    let odobrio_admin_id = json!(sesija::odobrio_admin(b, &k, odobrio_admin_id)?);
     let original = db.get("SELECT brojFiskalnogRacuna, ukupno FROM orders WHERE id = ?", p![data["id"]])?;
     let rezultat = refund_and_print(b, data, k.id, &odobrio_admin_id)?;
     if truthy(&rezultat["success"]) {
@@ -461,6 +462,45 @@ mod tests {
     use serde_json::{json, Value};
 
     use crate::proba::proba;
+    use crate::{postavke, sesija};
+
+    /// Storno kasira uz kasa.requirePinRefund bez odobrenja (handler pozvan
+    /// mimo provjere sesije) baca prije štampe, ne stornira bez odobrioca.
+    /// TS: `sesija.odobrioAdmin` (sesija.test.ts).
+    #[test]
+    fn storno_kasira_bez_odobrenja_baca() {
+        let p = proba("storno-bez-odobrenja");
+        let a = p.artikal("A1", "artikal");
+        let racun = p.run(
+            "INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, status)
+             VALUES (1, 5, 0.73, 'Gotovina', '55', 'completed')",
+            &[],
+        );
+        p.run(
+            "INSERT INTO order_items (orderId, productId, kolicina, cijena, rabat, pdvStopa) VALUES (?, ?, 1, 5, 0, 'E')",
+            &[json!(racun), json!(a)],
+        );
+        let kasir = p.run("INSERT INTO users (ime, pin, uloga) VALUES ('Kasir', 'hes-kasira', 'kasir')", &[]);
+        postavke::upisi(p.b().db(), "kasa.requirePinRefund", "true").unwrap();
+        p.b().sesija.postavi(Some(kasir), false);
+        let unos = json!({ "id": racun });
+
+        assert_eq!(
+            super::storno(p.b(), &unos, None).map_err(|g| g.0),
+            Err(sesija::PORUKA_BEZ_ODOBRENJA.to_string())
+        );
+        assert_eq!(p.zahtjevi(), 0);
+        assert_eq!(p.all("SELECT COUNT(*) AS n FROM pending_receipts")[0]["n"], json!(0));
+        assert_eq!(p.all(&format!("SELECT status FROM orders WHERE id = {racun}"))[0]["status"], json!("completed"));
+
+        // S odobrenjem (admin 1) storno prolazi; admin i isključena postavka ne traže odobrenje.
+        assert_eq!(super::storno(p.b(), &unos, Some(1)).unwrap()["success"], json!(true));
+        p.b().sesija.postavi(Some(1), false);
+        assert_eq!(sesija::odobrio_admin(p.b(), &sesija::korisnik(p.b()).unwrap(), None).map_err(|g| g.0), Ok(None));
+        p.b().sesija.postavi(Some(kasir), false);
+        postavke::upisi(p.b().db(), "kasa.requirePinRefund", "false").unwrap();
+        assert_eq!(sesija::odobrio_admin(p.b(), &sesija::korisnik(p.b()).unwrap(), None).map_err(|g| g.0), Ok(None));
+    }
 
     /// pending:resolve prije ikakvog upisa provjerava način plaćanja
     /// iz snapshota — kanonski tekst s liste ili JSON raspodjela koju

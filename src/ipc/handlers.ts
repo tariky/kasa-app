@@ -654,7 +654,8 @@ export function registerIpcHandlers(): void {
   // testabilna nad mock fiskalnim serverom, bez Electron ovisnosti.
   handle('order:refundAndPrint', async (data) => {
     const k = korisnik();
-    // Admin PIN (kasa.requirePinRefund) je provjeren prije handlera, u sesiji.
+    // Admin PIN (kasa.requirePinRefund) je provjeren prije handlera, u sesiji;
+    // odobrenje koje je tada trebalo, a ovdje ga nema, baca (fail-closed).
     const odobrioAdminId = sesija.odobrioAdmin(data);
     const original = db.prepare('SELECT brojFiskalnogRacuna, ukupno FROM orders WHERE id = ?').get(data?.id) as
       { brojFiskalnogRacuna: string | null; ukupno: number } | undefined;
