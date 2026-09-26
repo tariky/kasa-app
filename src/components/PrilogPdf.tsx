@@ -1,16 +1,17 @@
 import { Document, Page, View, Text, Image, StyleSheet } from '@react-pdf/renderer';
 import { Order, BankAccount } from '@/types';
 import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
-import { POTPIS_AUTORA } from '@/lib/brend';
 import { formatRabat, pecatZa, type DokumentPostavke } from '@/lib/dokumentPostavke';
 import { PotpisBlok } from './pdf/PotpisBlok';
-import { PdfPodnozje, PodnozjeTekst, DODATAK_PODNOZJA } from './pdf/PdfPodnozje';
-import { iznosStavke, pdvStavke } from '@/lib/racun';
+import { PdfPodnozje, DODATAK_PODNOZJA } from './pdf/PdfPodnozje';
+import { ZiroRacuniRedovi, ZiroRacuniTraka, PODNOZJE_S_RACUNIMA } from './pdf/ZiroRacuni';
+import { izracunajTotale } from '@/lib/racun';
+import { linijaDokumenta } from '@/lib/dokumentStavke';
 import { round2 } from '@/lib/novac';
-import { PDV_FAKTOR_E, PDV_STOPA_E_PCT } from '@/lib/pdv';
+import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { prilogNaziv } from '@/lib/prilog';
 import { formatDatumValute } from '@/lib/valuta';
-import { logoVelicina, kontaktFirme, ziroRacuniPozicija } from '@/lib/firma';
+import { logoVelicina, kontaktFirme, mjestoZiroRacuna } from '@/lib/firma';
 import { SifraTekst } from './pdf/SifraTekst';
 
 /** Red iz `prilog:getStavke` (prilog_stavke + JOIN na products). */
@@ -71,9 +72,6 @@ const s = StyleSheet.create({
   },
 
   dividerThick: { borderBottom: '2pt solid #000', marginBottom: 20 },
-
-  /* ── Žiro računi: sporedan podatak uz firmu, ne zaslužuje vlastiti blok ── */
-  bankLine: { fontSize: 7.5, color: '#555', marginTop: 1 },
 
   /* ── Two-column info ── */
   infoRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 24 },
@@ -151,20 +149,6 @@ const s = StyleSheet.create({
   vezaKey: { width: 78, fontSize: 7.5, color: '#000' },
   vezaValue: { fontSize: 7.5, color: '#000' },
   vezaNota: { fontSize: 7, color: '#000', marginTop: 4, lineHeight: 1.4 },
-
-  /* ── Žiro računi u podnožju: zrcali debelu liniju zaglavlja i nosi se na svakoj
-     stranici, pa kupac broj za uplatu nađe na istom mjestu kao na memorandumu. ── */
-  pagePodnozje: { paddingBottom: 118 },
-  podnozje: { position: 'absolute', bottom: 30, left: 50, right: 50 },
-  bankaTraka: {
-    flexDirection: 'row', alignItems: 'flex-start',
-    borderTop: '1pt solid #000', paddingTop: 7, marginBottom: 10,
-  },
-  bankaNaslov: { width: 78, fontSize: 7.5, fontFamily: FB, fontWeight: 700, paddingTop: 0.5 },
-  bankaKolona: { flex: 1, paddingLeft: 9, borderLeft: '0.5pt solid #ccc' },
-  bankaNaziv: { fontSize: 7, color: '#555', marginBottom: 2 },
-  bankaBroj: { fontSize: 9.5, fontFamily: FB, fontWeight: 700, letterSpacing: 0.4 },
-  podnozjeMeta: { flexDirection: 'row', justifyContent: 'space-between', fontSize: 7, color: '#999' },
 });
 
 /**
@@ -180,27 +164,21 @@ export function PrilogPdf({ order, firma, stavke, postavke }: PrilogPdfProps) {
   const today = fmtDate(new Date());
   const datumValute = formatDatumValute(order.datumValute);
   const hasKupac = order.kupacNaziv || order.kupacIdBroj;
-  const racuniDolje = ziroRacuniPozicija(firma) === 'podnozje' && firma.bankAccounts.length > 0;
+  const racuni = mjestoZiroRacuna(firma);
   const kol = postavke.kolone;
-  const dodatak = postavke.podnozje ? { paddingBottom: (racuniDolje ? 118 : 70) + DODATAK_PODNOZJA } : {};
+  const dno = racuni === 'podnozje' ? PODNOZJE_S_RACUNIMA : 70;
+  const dodatak = { paddingBottom: dno + (postavke.podnozje ? DODATAK_PODNOZJA : 0) };
 
   // Cijene u sistemu su sa uračunatim PDV-om; za fakturni prikaz se jedinična
   // cijena bez PDV-a izlučuje iz bruto cijene po stopi stavke.
-  const linije = stavke.map(si => ({
-    ...si,
-    rabat: si.rabat ?? 0,
-    cijenaBezPdv: si.pdvStopa === 'E' ? round2(si.cijena / PDV_FAKTOR_E) : round2(si.cijena),
-    iznos: iznosStavke({ cijena: si.cijena, kolicina: si.kolicina, rabat: si.rabat ?? 0, pdvStopa: si.pdvStopa }),
-    pdv: pdvStavke({ cijena: si.cijena, kolicina: si.kolicina, rabat: si.rabat ?? 0, pdvStopa: si.pdvStopa }),
-  }));
+  const linije = stavke.map(si => ({ ...si, rabat: si.rabat ?? 0, ...linijaDokumenta(si) }));
   const imaRabat = linije.some(l => l.rabat > 0);
-  const ukupno = round2(linije.reduce((sum, l) => sum + l.iznos, 0));
-  const pdvIznos = round2(linije.reduce((sum, l) => sum + l.pdv, 0));
+  const { ukupno, pdvIznos } = izracunajTotale(linije);
   const osnovica = round2(ukupno - pdvIznos);
 
   return (
     <Document>
-      <Page size="A4" style={[s.page, racuniDolje ? s.pagePodnozje : {}, dodatak]}>
+      <Page size="A4" style={[s.page, dodatak]}>
 
         {/* ── Top: Logo+Firma left, title right ── */}
         <View style={s.topBar}>
@@ -210,9 +188,7 @@ export function PrilogPdf({ order, firma, stavke, postavke }: PrilogPdfProps) {
               <Text style={s.firmaNaziv}>{firma.naziv}</Text>
               <Text style={s.firmaLine}>{firma.adresa}, {firma.grad}</Text>
               {kontaktFirme(firma) ? <Text style={s.firmaLine}>{kontaktFirme(firma)}</Text> : null}
-              {!racuniDolje && firma.bankAccounts.map((b, i) => (
-                <Text key={i} style={s.bankLine}>{b.bankName}: {b.accountNumber}</Text>
-              ))}
+              {racuni === 'zaglavlje' && <ZiroRacuniRedovi racuni={firma.bankAccounts} />}
             </View>
           </View>
           <View style={s.docLabel}>
@@ -352,28 +328,12 @@ export function PrilogPdf({ order, firma, stavke, postavke }: PrilogPdfProps) {
 
         <PotpisBlok linije={postavke.potpisi.faktura} pecat={pecatZa(postavke, 'faktura')} />
 
-        {/* ── Footer ── */}
-        {racuniDolje ? (
-          <View style={s.podnozje} fixed>
-            <View style={s.bankaTraka}>
-              <Text style={s.bankaNaslov}>Žiro računi</Text>
-              {firma.bankAccounts.map((b, i) => (
-                <View key={i} style={s.bankaKolona}>
-                  <Text style={s.bankaNaziv}>{b.bankName || '—'}</Text>
-                  <Text style={s.bankaBroj}>{b.accountNumber || '—'}</Text>
-                </View>
-              ))}
-            </View>
-            <PodnozjeTekst tekst={postavke.podnozje} />
-            <View style={s.podnozjeMeta}>
-              <Text>{POTPIS_AUTORA}</Text>
-              <Text>{firma.naziv} · Generisano: {today}</Text>
-              <Text render={({ pageNumber, totalPages }) => `${pageNumber} / ${totalPages}`} />
-            </View>
-          </View>
-        ) : (
-          <PdfPodnozje firmaNaziv={firma.naziv} danas={today} tekst={postavke.podnozje} />
-        )}
+        <PdfPodnozje
+          firmaNaziv={firma.naziv}
+          danas={today}
+          tekst={postavke.podnozje}
+          iznad={racuni === 'podnozje' ? <ZiroRacuniTraka racuni={firma.bankAccounts} /> : undefined}
+        />
       </Page>
     </Document>
   );

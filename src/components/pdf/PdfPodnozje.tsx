@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { View, Text, StyleSheet } from '@react-pdf/renderer';
 import { POTPIS_AUTORA } from '@/lib/brend';
 
@@ -10,6 +11,8 @@ const s = StyleSheet.create({
     borderTop: '0.5pt solid #ccc', paddingTop: 8, fontSize: 7, color: '#999',
   },
   tekst: { fontSize: 6.5, color: '#555', lineHeight: 1.35, marginBottom: 4, maxLines: 4, textOverflow: 'ellipsis' },
+  // Traka iznad (npr. žiro računi) nosi svoju liniju — tanka linija podnožja tada otpada.
+  saTrakom: { borderTopWidth: 0, paddingTop: 0 },
   red: { flexDirection: 'row', justifyContent: 'space-between' },
 });
 
@@ -18,12 +21,16 @@ export function PodnozjeTekst({ tekst }: { tekst?: string }) {
   return tekst ? <Text style={s.tekst}>{tekst}</Text> : null;
 }
 
-/** Podnožje na svakoj stranici: tekst firme (ako postoji), pa autor · firma · datum · stranica. */
-export function PdfPodnozje({ firmaNaziv, danas, tekst, potpisAutora = POTPIS_AUTORA, generisano = 'Generisano' }: {
-  firmaNaziv: string; danas: string; tekst?: string; potpisAutora?: string; generisano?: string;
+/**
+ * Podnožje na svakoj stranici: traka `iznad` (ako je ima), tekst firme (ako postoji),
+ * pa autor · firma · datum · stranica.
+ */
+export function PdfPodnozje({ firmaNaziv, danas, tekst, potpisAutora = POTPIS_AUTORA, generisano = 'Generisano', iznad }: {
+  firmaNaziv: string; danas: string; tekst?: string; potpisAutora?: string; generisano?: string; iznad?: ReactNode;
 }) {
   return (
-    <View style={s.footer} fixed>
+    <View style={[s.footer, iznad ? s.saTrakom : {}]} fixed>
+      {iznad}
       <PodnozjeTekst tekst={tekst} />
       <View style={s.red}>
         <Text>{potpisAutora}</Text>

@@ -89,6 +89,16 @@ for (const [ime, postavke] of [['zadano', ZADANE_DOKUMENT_POSTAVKE], ['sve uklju
   });
 }
 
+// Žiro računi po postavci firme na svim dokumentima prema kupcu (i kad ih nema).
+for (const firma of [{ ...FIRMA, ziroRacuniPozicija: 'podnozje' as const }, { ...FIRMA, ziroRacuniPozicija: 'podnozje' as const, bankAccounts: [] }]) {
+  test(`račun, ponuda i otpremnica: žiro računi u podnožju (${firma.bankAccounts.length} računa)`, async () => {
+    await renderuj(<RacunPdf order={ORDER} firma={firma} postavke={SVE_UKLJUCENO} />);
+    await renderuj(<RacunPdf order={ORDER} firma={firma} postavke={SVE_UKLJUCENO} lang="en" />);
+    await renderuj(<OtpremnicaPdf order={ORDER} firma={firma} postavke={ZADANE_DOKUMENT_POSTAVKE} />);
+    await renderuj(<PonudaPdf ponuda={PONUDA} firma={firma} postavke={SVE_UKLJUCENO} />);
+  });
+}
+
 const PONUDA: any = {
   id: 1, broj: 3, godina: 2026, datum: '2026-09-25', vaziDo: '2026-10-03', napomena: 'Isporuka 5 dana',
   ukupno: 22.82, pdvIznos: 3.32, korisnikIme: 'Admin', kupacNaziv: 'Kupac',

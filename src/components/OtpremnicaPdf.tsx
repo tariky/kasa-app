@@ -2,10 +2,11 @@ import React from 'react';
 import { Document, Page, View, Text, Image, StyleSheet } from '@react-pdf/renderer';
 import { Order, BankAccount } from '@/types';
 import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
-import { logoVelicina, kontaktFirme } from '@/lib/firma';
+import { logoVelicina, kontaktFirme, mjestoZiroRacuna } from '@/lib/firma';
 import { pecatZa, type DokumentPostavke } from '@/lib/dokumentPostavke';
 import { PotpisBlok } from './pdf/PotpisBlok';
 import { PdfPodnozje, DODATAK_PODNOZJA } from './pdf/PdfPodnozje';
+import { ZiroRacuniRedovi, ZiroRacuniTraka, PODNOZJE_S_RACUNIMA } from './pdf/ZiroRacuni';
 import { SifraTekst } from './pdf/SifraTekst';
 
 export interface OtpremnicaPdfProps {
@@ -22,6 +23,7 @@ export interface OtpremnicaPdfProps {
     web?: string;
     email?: string;
     logoVelicina?: number;
+    ziroRacuniPozicija?: string;
   };
   postavke: DokumentPostavke;
 }
@@ -179,7 +181,9 @@ const s = StyleSheet.create({
 export function OtpremnicaPdf({ order, firma, postavke }: OtpremnicaPdfProps) {
   const stavke = order.stavke ?? [];
   const kol = postavke.kolone;
-  const dodatak = postavke.podnozje ? { paddingBottom: 70 + DODATAK_PODNOZJA } : {};
+  const racuni = mjestoZiroRacuna(firma);
+  const dno = racuni === 'podnozje' ? PODNOZJE_S_RACUNIMA : 70;
+  const dodatak = { paddingBottom: dno + (postavke.podnozje ? DODATAK_PODNOZJA : 0) };
 
   const pad = (n: number) => String(n).padStart(2, '0');
   const fmtDate = (d: Date) => `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`;
@@ -202,6 +206,7 @@ export function OtpremnicaPdf({ order, firma, postavke }: OtpremnicaPdfProps) {
               <Text style={s.firmaNaziv}>{firma.naziv}</Text>
               <Text style={s.firmaLine}>{firma.adresa}, {firma.grad}</Text>
               {kontaktFirme(firma) ? <Text style={s.firmaLine}>{kontaktFirme(firma)}</Text> : null}
+              {racuni === 'zaglavlje' && <ZiroRacuniRedovi racuni={firma.bankAccounts} />}
             </View>
           </View>
           <View style={s.docLabel}>
@@ -279,7 +284,12 @@ export function OtpremnicaPdf({ order, firma, postavke }: OtpremnicaPdfProps) {
 
         <PotpisBlok linije={postavke.potpisi.otpremnica} pecat={pecatZa(postavke, 'otpremnica')} />
 
-        <PdfPodnozje firmaNaziv={firma.naziv} danas={today} tekst={postavke.podnozje} />
+        <PdfPodnozje
+          firmaNaziv={firma.naziv}
+          danas={today}
+          tekst={postavke.podnozje}
+          iznad={racuni === 'podnozje' ? <ZiroRacuniTraka racuni={firma.bankAccounts} /> : undefined}
+        />
       </Page>
     </Document>
   );

@@ -3,15 +3,15 @@ import { Document, Page, View, Text, Image, StyleSheet } from '@react-pdf/render
 import { Order, BankAccount } from '@/types';
 import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
 import { POTPIS_AUTORA, POTPIS_AUTORA_EN } from '@/lib/brend';
-import { pdvStavke, iznosStavke } from '@/lib/racun';
+import { linijaDokumenta } from '@/lib/dokumentStavke';
 import { opisPlacanja } from '@/lib/placanje';
-import { uNetto } from '@/lib/pdvUnos';
 import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { formatDatumValute } from '@/lib/valuta';
-import { logoVelicina, kontaktFirme } from '@/lib/firma';
+import { logoVelicina, kontaktFirme, mjestoZiroRacuna } from '@/lib/firma';
 import { formatRabat, pecatZa, type DokumentPostavke } from '@/lib/dokumentPostavke';
 import { PotpisBlok } from './pdf/PotpisBlok';
 import { PdfPodnozje, DODATAK_PODNOZJA } from './pdf/PdfPodnozje';
+import { ZiroRacuniRedovi, ZiroRacuniTraka, PODNOZJE_S_RACUNIMA } from './pdf/ZiroRacuni';
 import { SifraTekst } from './pdf/SifraTekst';
 
 export type InvoiceLang = 'bs' | 'en';
@@ -30,6 +30,7 @@ export interface RacunPdfProps {
     web?: string;
     email?: string;
     logoVelicina?: number;
+    ziroRacuniPozicija?: string;
   };
   lang?: InvoiceLang;
   postavke: DokumentPostavke;
@@ -322,58 +323,6 @@ const s = StyleSheet.create({
     letterSpacing: 1,
     marginBottom: 3,
   },
-
-  /* ── Bank accounts ── */
-  bankAccountsWrap: {
-    marginTop: 18,
-    backgroundColor: '#f5f5f5',
-    borderLeft: '2pt solid #000',
-    padding: 10,
-  },
-  bankAccountsLabel: {
-    fontSize: 7,
-    fontFamily: FB,
-    fontWeight: 700,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-    color: '#000',
-    marginBottom: 6,
-  },
-  bankAccountRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingVertical: 3,
-  },
-  bankAccountRowPrimary: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingVertical: 4,
-    borderBottom: '0.5pt solid #ccc',
-    marginBottom: 2,
-  },
-  bankName: {
-    fontSize: 8.5,
-    color: '#000',
-  },
-  bankNumber: {
-    fontSize: 8.5,
-    fontFamily: FB,
-    fontWeight: 700,
-    color: '#000',
-  },
-  bankNamePrimary: {
-    fontSize: 9.5,
-    fontFamily: FB,
-    fontWeight: 700,
-    color: '#000',
-  },
-  bankNumberPrimary: {
-    fontSize: 9.5,
-    fontFamily: FB,
-    fontWeight: 700,
-    color: '#000',
-    letterSpacing: 0.3,
-  },
 });
 
 export function RacunPdf({ order, firma, lang = 'bs', postavke }: RacunPdfProps) {
@@ -381,7 +330,9 @@ export function RacunPdf({ order, firma, lang = 'bs', postavke }: RacunPdfProps)
   const stavke = order.stavke ?? [];
   const kol = postavke.kolone;
   const imaRabat = stavke.some(si => si.rabat > 0);
-  const dodatak = postavke.podnozje ? { paddingBottom: 70 + DODATAK_PODNOZJA } : {};
+  const racuni = mjestoZiroRacuna(firma);
+  const dno = racuni === 'podnozje' ? PODNOZJE_S_RACUNIMA : 70;
+  const dodatak = { paddingBottom: dno + (postavke.podnozje ? DODATAK_PODNOZJA : 0) };
   // Engleski potpisi ostaju fiksni prijevodi — nazivi iz postavki su na bosanskom.
   const potpisi = lang === 'en' ? { lijevo: t.signatureIssuer, desno: t.signatureRecipient } : postavke.potpisi.racun;
 
@@ -417,6 +368,7 @@ export function RacunPdf({ order, firma, lang = 'bs', postavke }: RacunPdfProps)
               <Text style={s.firmaNaziv}>{firma.naziv}</Text>
               <Text style={s.firmaLine}>{firma.adresa}, {firma.grad}</Text>
               {kontaktFirme(firma) ? <Text style={s.firmaLine}>{kontaktFirme(firma)}</Text> : null}
+              {racuni === 'zaglavlje' && <ZiroRacuniRedovi racuni={firma.bankAccounts} />}
             </View>
           </View>
           <View style={s.invoiceLabel}>
@@ -499,10 +451,7 @@ export function RacunPdf({ order, firma, lang = 'bs', postavke }: RacunPdfProps)
           {stavke.map((si, i) => {
             // Jedinična cijena se prikazuje bez PDV-a (u bazi je bruto), a
             // iznos stavke sa PDV-om — tako se kolona Iznos zbraja u UKUPNO.
-            const stopa = si.pdvStopa === 'E' ? 'E' : 'K';
-            const cijenaBezPdv = uNetto(si.cijena, stopa);
-            const linePdv = pdvStavke(si);
-            const lineTotal = iznosStavke(si);
+            const { cijenaBezPdv, pdv: linePdv, iznos: lineTotal } = linijaDokumenta(si);
             return (
               <View key={si.id} style={s.tRow}>
                 <Text style={[s.tCell, s.colRb]}>{i + 1}</Text>
@@ -543,29 +492,6 @@ export function RacunPdf({ order, firma, lang = 'bs', postavke }: RacunPdfProps)
           </View>
         </View>
 
-        {/* ── Bank accounts ── */}
-        {firma.bankAccounts.length > 0 && (
-          <View style={s.bankAccountsWrap}>
-            <Text style={s.bankAccountsLabel}>{t.bankAccounts}</Text>
-            {firma.bankAccounts.map((b, i) => {
-              const isPrimary = i === 0;
-              return (
-                <View
-                  key={i}
-                  style={isPrimary ? s.bankAccountRowPrimary : s.bankAccountRow}
-                >
-                  <Text style={isPrimary ? s.bankNamePrimary : s.bankName}>
-                    {b.bankName}
-                  </Text>
-                  <Text style={isPrimary ? s.bankNumberPrimary : s.bankNumber}>
-                    {b.accountNumber}
-                  </Text>
-                </View>
-              );
-            })}
-          </View>
-        )}
-
         {/* ── Reklamacija ── */}
         {order.brojReklamacije && (
           <View style={s.reklamacijaBox}>
@@ -582,6 +508,7 @@ export function RacunPdf({ order, firma, lang = 'bs', postavke }: RacunPdfProps)
           tekst={postavke.podnozje}
           potpisAutora={lang === 'en' ? POTPIS_AUTORA_EN : POTPIS_AUTORA}
           generisano={t.generated}
+          iznad={racuni === 'podnozje' ? <ZiroRacuniTraka racuni={firma.bankAccounts} naslov={t.bankAccounts} /> : undefined}
         />
       </Page>
     </Document>

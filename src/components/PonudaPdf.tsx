@@ -3,11 +3,13 @@ import { Document, Page, View, Text, Image, StyleSheet } from '@react-pdf/render
 import { BankAccount } from '@/types';
 import { formatBrojPonude } from '@/lib/ponuda';
 import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
-import { logoVelicina, kontaktFirme } from '@/lib/firma';
+import { logoVelicina, kontaktFirme, mjestoZiroRacuna } from '@/lib/firma';
 import { PDV_STOPA_E_PCT } from '@/lib/pdv';
+import { linijaDokumenta } from '@/lib/dokumentStavke';
 import { formatRabat, pecatZa, type DokumentPostavke } from '@/lib/dokumentPostavke';
 import { PotpisBlok } from './pdf/PotpisBlok';
 import { PdfPodnozje, DODATAK_PODNOZJA } from './pdf/PdfPodnozje';
+import { ZiroRacuniRedovi, ZiroRacuniTraka, PODNOZJE_S_RACUNIMA } from './pdf/ZiroRacuni';
 import { SifraTekst } from './pdf/SifraTekst';
 
 export interface PonudaPdfProps {
@@ -35,6 +37,7 @@ export interface PonudaPdfProps {
       kolicina: number;
       cijena: number;
       rabat: number;
+      pdvStopa: string;
     }>;
   };
   firma: {
@@ -49,6 +52,7 @@ export interface PonudaPdfProps {
     web?: string;
     email?: string;
     logoVelicina?: number;
+    ziroRacuniPozicija?: string;
   };
   postavke: DokumentPostavke;
 }
@@ -266,58 +270,6 @@ const s = StyleSheet.create({
     letterSpacing: 1,
     marginBottom: 3,
   },
-
-  /* ── Bank accounts ── */
-  bankAccountsWrap: {
-    marginTop: 18,
-    backgroundColor: '#f5f5f5',
-    borderLeft: '2pt solid #000',
-    padding: 10,
-  },
-  bankAccountsLabel: {
-    fontSize: 7,
-    fontFamily: FB,
-    fontWeight: 700,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-    color: '#000',
-    marginBottom: 6,
-  },
-  bankAccountRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingVertical: 3,
-  },
-  bankAccountRowPrimary: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingVertical: 4,
-    borderBottom: '0.5pt solid #ccc',
-    marginBottom: 2,
-  },
-  bankName: {
-    fontSize: 8.5,
-    color: '#000',
-  },
-  bankNumber: {
-    fontSize: 8.5,
-    fontFamily: FB,
-    fontWeight: 700,
-    color: '#000',
-  },
-  bankNamePrimary: {
-    fontSize: 9.5,
-    fontFamily: FB,
-    fontWeight: 700,
-    color: '#000',
-  },
-  bankNumberPrimary: {
-    fontSize: 9.5,
-    fontFamily: FB,
-    fontWeight: 700,
-    color: '#000',
-    letterSpacing: 0.3,
-  },
 });
 
 export function PonudaPdf({ ponuda, firma, postavke }: PonudaPdfProps) {
@@ -325,7 +277,9 @@ export function PonudaPdf({ ponuda, firma, postavke }: PonudaPdfProps) {
   const kol = postavke.kolone;
   const imaRabat = stavke.some(si => si.rabat > 0);
   const uslovi = postavke.ponuda.uslovi;
-  const dodatak = postavke.podnozje ? { paddingBottom: 70 + DODATAK_PODNOZJA } : {};
+  const racuni = mjestoZiroRacuna(firma);
+  const dno = racuni === 'podnozje' ? PODNOZJE_S_RACUNIMA : 70;
+  const dodatak = { paddingBottom: dno + (postavke.podnozje ? DODATAK_PODNOZJA : 0) };
   const pdvIznos = ponuda.pdvIznos;
   const osnovica = ponuda.ukupno - pdvIznos;
 
@@ -349,6 +303,7 @@ export function PonudaPdf({ ponuda, firma, postavke }: PonudaPdfProps) {
               <Text style={s.firmaNaziv}>{firma.naziv}</Text>
               <Text style={s.firmaLine}>{firma.adresa}, {firma.grad}</Text>
               {kontaktFirme(firma) ? <Text style={s.firmaLine}>{kontaktFirme(firma)}</Text> : null}
+              {racuni === 'zaglavlje' && <ZiroRacuniRedovi racuni={firma.bankAccounts} />}
             </View>
           </View>
           <View style={s.invoiceLabel}>
@@ -414,7 +369,8 @@ export function PonudaPdf({ ponuda, firma, postavke }: PonudaPdfProps) {
           </View>
 
           {stavke.map((si, i) => {
-            const lineTotal = si.cijena * si.kolicina * (1 - si.rabat / 100);
+            // Iznos reda zaokružen po redu kao na računu — kolona se zbraja u UKUPNO.
+            const lineTotal = linijaDokumenta(si).iznos;
             return (
               <View key={si.id} style={s.tRow}>
                 <Text style={[s.tCell, s.colRb]}>{i + 1}</Text>
@@ -461,32 +417,14 @@ export function PonudaPdf({ ponuda, firma, postavke }: PonudaPdfProps) {
           {ponuda.napomena ? <Text style={{ fontSize: 8.5 }}>{ponuda.napomena}</Text> : null}
         </View>
 
-        {/* ── Bank accounts ── */}
-        {firma.bankAccounts.length > 0 && (
-          <View style={s.bankAccountsWrap}>
-            <Text style={s.bankAccountsLabel}>Žiro računi</Text>
-            {firma.bankAccounts.map((b, i) => {
-              const isPrimary = i === 0;
-              return (
-                <View
-                  key={i}
-                  style={isPrimary ? s.bankAccountRowPrimary : s.bankAccountRow}
-                >
-                  <Text style={isPrimary ? s.bankNamePrimary : s.bankName}>
-                    {b.bankName}
-                  </Text>
-                  <Text style={isPrimary ? s.bankNumberPrimary : s.bankNumber}>
-                    {b.accountNumber}
-                  </Text>
-                </View>
-              );
-            })}
-          </View>
-        )}
-
         <PotpisBlok linije={postavke.potpisi.ponuda} pecat={pecatZa(postavke, 'ponuda')} />
 
-        <PdfPodnozje firmaNaziv={firma.naziv} danas={today} tekst={postavke.podnozje} />
+        <PdfPodnozje
+          firmaNaziv={firma.naziv}
+          danas={today}
+          tekst={postavke.podnozje}
+          iznad={racuni === 'podnozje' ? <ZiroRacuniTraka racuni={firma.bankAccounts} /> : undefined}
+        />
       </Page>
     </Document>
   );
