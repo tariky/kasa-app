@@ -181,6 +181,14 @@ export function ishodNepoznat(r: TringResponse | null | undefined): boolean {
   return !!r && !r.success && r.ishodNepoznat === true;
 }
 
+/**
+ * XML zahtjeva za ispis u konzolu: lozinka operatera (/inicijalizacija) se ne
+ * ispisuje. Lozinka u XML-u prolazi kroz escape, pa u njoj nema `<`.
+ */
+export function bezLozinke(xml: string): string {
+  return xml.replace(/<Lozinka>[^<]*<\/Lozinka>/g, '<Lozinka>***</Lozinka>');
+}
+
 function postXml(urlPath: string, body: string): Promise<TringResponse> {
   const host = config.host ?? DEFAULT_HOST;
   const port = config.port ?? DEFAULT_PORT;
@@ -205,7 +213,7 @@ function postXml(urlPath: string, body: string): Promise<TringResponse> {
       });
       // Jedino mjesto ispisa u konzolu (dev.logging) — pozivaoci ne loguju.
       if (loggingEnabled) {
-        console.log(`[Tring] POST ${urlPath} (${durationMs} ms) zahtjev: ${body} odgovor: ${JSON.stringify(result)}`);
+        console.log(`[Tring] POST ${urlPath} (${durationMs} ms) zahtjev: ${bezLozinke(body)} odgovor: ${JSON.stringify(result)}`);
       }
       resolve(result);
     };

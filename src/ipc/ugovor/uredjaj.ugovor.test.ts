@@ -227,7 +227,7 @@ describe('tring:getLogs / tring:clearLogs', () => {
   test('uz dev.logging bilježi zahtjev i odgovor; clearLogs prazni log', async () => {
     postavka('dev.logging', 'true');
     const log = console.log;
-    console.log = () => undefined; // handler uz dev.logging ispisuje svaki odgovor
+    console.log = () => undefined; // uz dev.logging svaki zahtjev ide i u konzolu
     try {
       await provjeriLogove();
     } finally {
