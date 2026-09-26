@@ -4,7 +4,7 @@ import path from 'node:path';
 import { schema } from './schema';
 import { runMigrations } from './migrations';
 import { podesiKonekciju } from './konekcija';
-import { hesirajStarePinove, osigurajZadanogAdmina } from '../lib/korisnici';
+import { osigurajZadanogAdmina } from '../lib/korisnici';
 
 let db: Database.Database | null = null;
 
@@ -18,10 +18,9 @@ export function getDb(): Database.Database {
 
   db.exec(schema);
 
-  // Migrations for existing databases
+  // Migracije za baze iz starijih verzija (migracije.json) — uključujući
+  // heširanje PIN-ova koji su bili čist tekst.
   runMigrations(db);
-  // PIN-ovi iz starijih verzija (i uvezenih backup-a) su bili čist tekst.
-  hesirajStarePinove(db);
 
   seedDefaults(db);
 

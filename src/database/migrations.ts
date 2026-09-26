@@ -1,185 +1,46 @@
 import type Database from 'better-sqlite3';
 import { kanonskiNacinPlacanja, NACINI_PLACANJA } from '../lib/placanje';
+import { hesirajStarePinove } from '../lib/korisnici';
+import migracije from './migracije.json';
+
+/**
+ * Korak iz migracije.json — isti fajl čita Rust backend (baza.rs), pa su
+ * migracije i njihov redoslijed isti u oba. SQL korak se izvrši kad tabeli
+ * nedostaje `kolona` (bez nje uvijek: CREATE … IF NOT EXISTS), a
+ * `samoAkoTabelaPostoji` ga preskače kad tabele nema. Korak `kod` je migracija
+ * koja nije čist SQL (čita podatke): funkcija iz KOD_MIGRACIJA. `opis` je komentar.
+ */
+export type KorakMigracije =
+  | { tabela: string; kolona?: string; sql: string[]; samoAkoTabelaPostoji?: boolean; opis?: string }
+  | { kod: string; opis?: string };
+
+export const KORACI_MIGRACIJA = migracije as KorakMigracije[];
+
+/** Koraci koji nisu čist SQL: ime iz migracije.json → funkcija (Rust: `KOD_MIGRACIJA` u baza.rs). */
+export const KOD_MIGRACIJA: ReadonlyMap<string, (database: Database.Database) => void> = new Map([
+  ['normalizujNacinPlacanja', normalizujNacinPlacanja],
+  ['hesirajStarePinove', (database: Database.Database) => { hesirajStarePinove(database); }],
+]);
 
 // Idempotentne migracije za baze iz starijih verzija programa (uključujući
 // uvezene backup-e). Pokreću se nakon `schema` pri svakom otvaranju baze.
 export function runMigrations(database: Database.Database): void {
-  // primka_stavke migrations
-  const stavkeCols = database.prepare("PRAGMA table_info(primka_stavke)").all() as { name: string }[];
-  if (!stavkeCols.find(c => c.name === 'nabavnaCijena')) {
-    database.exec("ALTER TABLE primka_stavke ADD COLUMN nabavnaCijena REAL NOT NULL DEFAULT 0");
+  for (const korak of KORACI_MIGRACIJA) {
+    if ('kod' in korak) {
+      const migracija = KOD_MIGRACIJA.get(korak.kod);
+      if (!migracija) throw new Error(`Nepoznat korak migracije: ${korak.kod}`);
+      migracija(database);
+    } else if (trebaIzvrsiti(database, korak)) {
+      for (const sql of korak.sql) database.exec(sql);
+    }
   }
-  if (!stavkeCols.find(c => c.name === 'rabat')) {
-    database.exec("ALTER TABLE primka_stavke ADD COLUMN rabat REAL NOT NULL DEFAULT 0");
-  }
-  if (!stavkeCols.find(c => c.name === 'zavisniTroskovi')) {
-    database.exec("ALTER TABLE primka_stavke ADD COLUMN zavisniTroskovi REAL NOT NULL DEFAULT 0");
-  }
-  // Stara prodajna cijena artikla bez zalihe (primka je mijenja bez nivelacije).
-  // Postojeće stavke ostaju NULL — za njih se cijena pri brisanju ne vraća.
-  if (!stavkeCols.find(c => c.name === 'staraCijena')) {
-    database.exec("ALTER TABLE primka_stavke ADD COLUMN staraCijena REAL");
-  }
+}
 
-  // primke header migrations — dobavljač fields
-  const primkeCols = database.prepare("PRAGMA table_info(primke)").all() as { name: string }[];
-  if (!primkeCols.find(c => c.name === 'dobavljacNaziv')) {
-    database.exec("ALTER TABLE primke ADD COLUMN dobavljacNaziv TEXT");
-  }
-  if (!primkeCols.find(c => c.name === 'dobavljacId')) {
-    database.exec("ALTER TABLE primke ADD COLUMN dobavljacId TEXT");
-  }
-  if (!primkeCols.find(c => c.name === 'dobavljacAdresa')) {
-    database.exec("ALTER TABLE primke ADD COLUMN dobavljacAdresa TEXT");
-  }
-
-  // Create dobavljaci table if missing (for existing DBs)
-  database.exec(`
-    CREATE TABLE IF NOT EXISTS dobavljaci (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      naziv TEXT NOT NULL,
-      idBroj TEXT,
-      pdvBroj TEXT,
-      adresa TEXT,
-      kontakt TEXT,
-      createdAt TEXT DEFAULT (datetime('now','localtime'))
-    )
-  `);
-
-  // Add tip column to products (artikal vs usluga)
-  const productCols = database.prepare("PRAGMA table_info(products)").all() as { name: string }[];
-  if (!productCols.find(c => c.name === 'tip')) {
-    database.exec("ALTER TABLE products ADD COLUMN tip TEXT NOT NULL DEFAULT 'artikal'");
-  }
-
-  // Create kupci table if missing
-  database.exec(`
-    CREATE TABLE IF NOT EXISTS kupci (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      naziv TEXT NOT NULL,
-      idBroj TEXT NOT NULL,
-      pdvBroj TEXT,
-      adresa TEXT,
-      postanskiBroj TEXT,
-      grad TEXT,
-      kontakt TEXT,
-      createdAt TEXT DEFAULT (datetime('now','localtime'))
-    )
-  `);
-
-  // Zadane vrijednosti za dokumente po kupcu (NULL = globalna postavka)
-  const kupciCols = database.prepare("PRAGMA table_info(kupci)").all() as { name: string }[];
-  if (!kupciCols.find(c => c.name === 'rokPlacanjaDana')) {
-    database.exec("ALTER TABLE kupci ADD COLUMN rokPlacanjaDana INTEGER");
-  }
-  if (!kupciCols.find(c => c.name === 'nacinPlacanja')) {
-    database.exec("ALTER TABLE kupci ADD COLUMN nacinPlacanja TEXT");
-  }
-  if (!kupciCols.find(c => c.name === 'rabat')) {
-    database.exec("ALTER TABLE kupci ADD COLUMN rabat REAL");
-  }
-
-  // Add brojFakture column to primke
-  if (!primkeCols.find(c => c.name === 'brojFakture')) {
-    database.exec("ALTER TABLE primke ADD COLUMN brojFakture TEXT");
-  }
-
-  // Add kupac columns to orders
-  const orderCols = database.prepare("PRAGMA table_info(orders)").all() as { name: string }[];
-  if (!orderCols.find(c => c.name === 'kupacNaziv')) {
-    database.exec("ALTER TABLE orders ADD COLUMN kupacNaziv TEXT");
-    database.exec("ALTER TABLE orders ADD COLUMN kupacIdBroj TEXT");
-    database.exec("ALTER TABLE orders ADD COLUMN kupacAdresa TEXT");
-    database.exec("ALTER TABLE orders ADD COLUMN kupacGrad TEXT");
-    database.exec("ALTER TABLE orders ADD COLUMN kupacPostanskiBroj TEXT");
-  }
-
-  if (!orderCols.find(c => c.name === 'isManual')) {
-    database.exec("ALTER TABLE orders ADD COLUMN isManual INTEGER NOT NULL DEFAULT 0");
-  }
-
-  if (!orderCols.find(c => c.name === 'refundedAt')) {
-    database.exec("ALTER TABLE orders ADD COLUMN refundedAt TEXT");
-  }
-
-  // Račun po prilogu: interni broj priloga (NULL = običan račun)
-  if (!orderCols.find(c => c.name === 'prilogBroj')) {
-    database.exec("ALTER TABLE orders ADD COLUMN prilogBroj INTEGER");
-  }
-
-  // Naziv zbirne stavke priloga kako je otišao na fiskalni uređaj
-  // (NULL = stari računi, naziv se rekonstruiše iz zadanih dijelova).
-  if (!orderCols.find(c => c.name === 'prilogNaziv')) {
-    database.exec("ALTER TABLE orders ADD COLUMN prilogNaziv TEXT");
-  }
-
-  // Datum valute (rok plaćanja) — upisuje se naknadno, nakon izdavanja računa.
-  if (!orderCols.find(c => c.name === 'datumValute')) {
-    database.exec("ALTER TABLE orders ADD COLUMN datumValute TEXT");
-  }
-
-  // Stavke priloga (specifikacija uz fiskalni račun)
-  database.exec(`
-    CREATE TABLE IF NOT EXISTS prilog_stavke (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      orderId INTEGER NOT NULL,
-      productId INTEGER NOT NULL,
-      kolicina REAL NOT NULL,
-      cijena REAL NOT NULL,
-      pdvStopa TEXT NOT NULL,
-      FOREIGN KEY (orderId) REFERENCES orders(id),
-      FOREIGN KEY (productId) REFERENCES products(id)
-    )
-  `);
-  database.exec('CREATE INDEX IF NOT EXISTS idx_prilog_stavke_orderId ON prilog_stavke(orderId)');
-
-  // Rabat po stavci fakture (postotak, kao na order_items)
-  const prilogCols = database.prepare("PRAGMA table_info(prilog_stavke)").all() as Array<{ name: string }>;
-  if (!prilogCols.find(c => c.name === 'rabat')) {
-    database.exec("ALTER TABLE prilog_stavke ADD COLUMN rabat REAL NOT NULL DEFAULT 0");
-  }
-
-  // Napomena ispod stavki fakture
-  if (!orderCols.find(c => c.name === 'napomena')) {
-    database.exec("ALTER TABLE orders ADD COLUMN napomena TEXT");
-  }
-
-  // Create pending_receipts table if missing (write-ahead intent log)
-  database.exec(`
-    CREATE TABLE IF NOT EXISTS pending_receipts (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      korisnikId INTEGER NOT NULL,
-      snapshot TEXT NOT NULL,
-      createdAt TEXT DEFAULT (datetime('now','localtime')),
-      FOREIGN KEY (korisnikId) REFERENCES users(id)
-    )
-  `);
-
-  // Proizvodnja: dimenzija ploče (mm) na materijalu u m² — kom ↔ m² preračun.
-  const productCols2 = database.prepare("PRAGMA table_info(products)").all() as { name: string }[];
-  if (!productCols2.find(c => c.name === 'plocaSirina')) {
-    database.exec("ALTER TABLE products ADD COLUMN plocaSirina INTEGER");
-  }
-  if (!productCols2.find(c => c.name === 'plocaVisina')) {
-    database.exec("ALTER TABLE products ADD COLUMN plocaVisina INTEGER");
-  }
-  // Slobodna stavka na kasi: skriveni artikal bez šifarnika (product:slobodan).
-  if (!productCols2.find(c => c.name === 'slobodan')) {
-    database.exec("ALTER TABLE products ADD COLUMN slobodan INTEGER NOT NULL DEFAULT 0");
-  }
-
-  // Historija cijena je samo-dodavanje za izvoz: poništena promjena se označi
-  // (ne briše), a cijena iz prodaje ostaje zapamćena kad se lanac ispravi.
-  // (Bez tabele nema šta dorađivati — schema je pravi s novim kolonama.)
-  const historijaCols = database.prepare("PRAGMA table_info(cijena_historija)").all() as { name: string }[];
-  if (historijaCols.length > 0 && !historijaCols.find(c => c.name === 'ponistena')) {
-    database.exec("ALTER TABLE cijena_historija ADD COLUMN ponistena INTEGER NOT NULL DEFAULT 0");
-  }
-  if (historijaCols.length > 0 && !historijaCols.find(c => c.name === 'cijenaUProdaji')) {
-    database.exec("ALTER TABLE cijena_historija ADD COLUMN cijenaUProdaji REAL");
-  }
-
-  normalizujNacinPlacanja(database);
+function trebaIzvrsiti(database: Database.Database, korak: Exclude<KorakMigracije, { kod: string }>): boolean {
+  if (korak.kolona === undefined && !korak.samoAkoTabelaPostoji) return true;
+  const kolone = (database.prepare(`PRAGMA table_info(${korak.tabela})`).all() as { name: string }[]).map(c => c.name);
+  if (korak.samoAkoTabelaPostoji && kolone.length === 0) return false;
+  return korak.kolona === undefined || !kolone.includes(korak.kolona);
 }
 
 /**

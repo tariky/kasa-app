@@ -3,7 +3,7 @@
 // Binarij se gradi prije testova (`bun run test:rust`); ovdje se samo provjeri
 // da postoji.
 import { Database } from 'bun:sqlite';
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Backend, OdgovoriDijaloga, OtvoreniDijalog } from './backend';
@@ -22,8 +22,11 @@ interface Odgovor {
   dogadjaj?: string;
 }
 
-export async function otvoriRustBackend(): Promise<Backend> {
-  return otvoriRustBackendNad(mkdtempSync(path.join(tmpdir(), 'kasa-ugovor-rs-')));
+/** `baza`: postojeći fajl baze koji se kopira kao kasa.db prije otvaranja (vidi OpcijeBackenda). */
+export async function otvoriRustBackend(baza?: string): Promise<Backend> {
+  const userData = mkdtempSync(path.join(tmpdir(), 'kasa-ugovor-rs-'));
+  if (baza) copyFileSync(baza, path.join(userData, 'kasa.db'));
+  return otvoriRustBackendNad(userData);
 }
 
 /** Rust backend nad postojećim folderom (npr. kopija stvarne baze); `close` ga briše. */

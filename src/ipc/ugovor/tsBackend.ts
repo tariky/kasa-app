@@ -3,7 +3,7 @@
 // Electron ABI), a licenca je otključana — ona ima svoje testove.
 import { mock } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Backend, OdgovoriDijaloga, OtvoreniDijalog } from './backend';
@@ -61,7 +61,8 @@ mock.module(path.join(__dirname, '../licenca.ts'), () => ({
   backupPristup: () => backupR2,
 }));
 
-export async function otvoriTsBackend(): Promise<Backend> {
+/** `baza`: postojeći fajl baze koji se kopira kao kasa.db prije otvaranja (vidi OpcijeBackenda). */
+export async function otvoriTsBackend(baza?: string): Promise<Backend> {
   // Dinamički, da bi mockovi iznad bili postavljeni prije učitavanja handlera.
   const { registerIpcHandlers } = await import('../handlers');
   const { closeDb } = await import('../../database/db');
@@ -75,6 +76,7 @@ export async function otvoriTsBackend(): Promise<Backend> {
   userData = mkdtempSync(path.join(tmpdir(), 'kasa-ugovor-'));
   const radniFolder = path.join(userData, 'radni');
   mkdirSync(radniFolder);
+  if (baza) copyFileSync(baza, path.join(userData, 'kasa.db'));
   registerIpcHandlers();
 
   const db = new Database(path.join(userData, 'kasa.db'), { strict: true });
