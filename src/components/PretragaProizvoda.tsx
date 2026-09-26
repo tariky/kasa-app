@@ -3,7 +3,7 @@ import type { Product, ProductTip } from '@/types';
 import { PretragaStavki, type PretragaStavkiProps } from '@/components/ui/pretraga-stavki';
 import { jePloca } from '@/lib/ploca';
 import { poljaProizvoda } from '@/lib/pretraga';
-import { cn, formatKM } from '@/lib/utils';
+import { cn, formatKM, formatKolicina } from '@/lib/utils';
 
 const TIP_GRUPA: Record<ProductTip, string> = { artikal: 'Artikli', usluga: 'Usluge', materijal: 'Materijali' };
 const TIP_RED: Record<ProductTip, number> = { artikal: 0, usluga: 1, materijal: 2 };
@@ -32,8 +32,6 @@ function useKatalog(ukljuceno: boolean) {
   }, [ukljuceno]);
   return katalog;
 }
-
-const fmtKol = (n: number) => String(Math.round(n * 1000) / 1000).replace('.', ',');
 
 type Proslijedi = Omit<PretragaStavkiProps<Product>, 'stavke' | 'polja' | 'kljuc' | 'meta' | 'oznaka' | 'grupa'>;
 
@@ -87,7 +85,7 @@ export function PretragaProizvoda({ stavke, tipovi, filter, nedostupno, onOtvori
           {p.tip !== 'usluga' && p.stanje != null && (
             <span className={cn('min-w-[64px] text-right font-mono tabular-nums',
               p.stanje <= 0 ? 'text-rose-500' : p.stanje <= 3 ? 'text-amber-600' : 'text-slate-400')}>
-              {p.stanje <= 0 ? 'nema' : `${fmtKol(p.stanje)} ${p.jm}`}
+              {p.stanje <= 0 ? 'nema' : `${formatKolicina(p.stanje)} ${p.jm}`}
             </span>
           )}
           {p.cijena > 0 && (

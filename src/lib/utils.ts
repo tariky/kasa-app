@@ -10,6 +10,11 @@ export function formatKM(amount: number): string {
   return amount.toFixed(2).replace('.', ',') + ' KM';
 }
 
+/** Količina za prikaz i polje unosa: zarez, najviše 3 decimale, bez suvišnih nula. */
+export function formatKolicina(n: number): string {
+  return String(Math.round(n * 1000) / 1000).replace('.', ',');
+}
+
 /** Oblik riječi po broju: mnozina(1, ['red', 'reda', 'redova']) → 'red'; 3 → 'reda'; 5, 12 → 'redova'. */
 export function mnozina(n: number, [jedan, dva, pet]: [string, string, string]): string {
   const d = n % 10;

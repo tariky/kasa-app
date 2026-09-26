@@ -1,7 +1,7 @@
 import { useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type Ref } from 'react';
 import * as PopoverPrimitive from '@radix-ui/react-popover';
 import { Search, X, Plus } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { cn, formatKolicina } from '@/lib/utils';
 import { Key, mod } from '@/components/ui/ledger';
 import { parsirajUpit, pretrazi, type Pogodak, type PoljaPretrage } from '@/lib/pretraga';
 
@@ -74,8 +74,6 @@ const citajNedavno = (k?: string): string[] => {
 const pisiNedavno = (k: string, ids: string[]) => {
   try { localStorage.setItem(`pretraga.nedavno.${k}`, JSON.stringify(ids)); } catch { /* bez pamćenja */ }
 };
-
-const fmtKol = (n: number) => String(Math.round(n * 1000) / 1000).replace('.', ',');
 
 /**
  * Univerzalna pretraga za unos stavki (artikli, usluge, materijali). Fokus otvara listu
@@ -313,7 +311,7 @@ export function PretragaStavki<T extends object>(props: PretragaStavkiProps<T>) 
           <div className={cn('flex items-center gap-1', sm ? 'pr-1' : lg ? 'pr-2.5' : 'pr-1.5')}>
             {kolicina != null && (
               <span className="inline-flex h-5 items-center rounded-md bg-blue-50 px-1.5 font-mono text-[11px] font-semibold tabular-nums text-blue-700 animate-in zoom-in-75 fade-in-0 duration-150">
-                × {fmtKol(kolicina)}
+                × {formatKolicina(kolicina)}
               </span>
             )}
             {tekst && (
