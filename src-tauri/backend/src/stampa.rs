@@ -142,9 +142,10 @@ pub struct UToku<'a> {
 
 impl<'a> UToku<'a> {
     /// Zauzme dokument `id` vrste `vrsta` (ponuda, nalog, storno); kad je
-    /// njegova štampa već u toku, greška s porukom `poruka`.
+    /// njegova štampa već u toku, greška s porukom `poruka`. Ključ je JS
+    /// template `${vrsta}:${id}` kao TS `uToku` — id 5 i "5" su isti dokument.
     pub fn zauzmi(b: &'a Backend, vrsta: &str, id: &Value, poruka: &str) -> R<UToku<'a>> {
-        let kljuc = format!("{vrsta}:{}", js::stringify(id));
+        let kljuc = format!("{vrsta}:{}", js::to_string(id));
         if !b.u_toku.zakljucaj().insert(kljuc.clone()) {
             return Err(Greska::nova(poruka));
         }
@@ -399,6 +400,25 @@ mod tests {
 
     fn pending(p: &Proba) -> Value {
         p.all("SELECT COUNT(*) AS n FROM pending_receipts")[0]["n"].clone()
+    }
+
+    /// Ključ „u toku" je JS template `${vrsta}:${id}` kao TS `uToku`: id 5 i
+    /// "5" su isti dokument, a ključ je `ponuda:5`, ne `ponuda:"5"`.
+    #[test]
+    fn u_toku_kljuc_kao_js_template() {
+        let p = proba("u-toku-kljuc");
+        let greska = |r: R<UToku>| r.err().map(|e| e.0);
+        let prvi = UToku::zauzmi(p.b(), "ponuda", &json!("5"), "Konverzija ove ponude je već u toku").unwrap();
+        assert_eq!(prvi.kljuc, "ponuda:5");
+        assert_eq!(
+            greska(UToku::zauzmi(p.b(), "ponuda", &json!(5), "Konverzija ove ponude je već u toku")),
+            Some("Konverzija ove ponude je već u toku".to_string())
+        );
+        // Drugi dokument i druga vrsta s istim id-em nisu zauzeti.
+        assert!(UToku::zauzmi(p.b(), "ponuda", &json!(6), "x").is_ok());
+        assert!(UToku::zauzmi(p.b(), "nalog", &json!(5), "x").is_ok());
+        drop(prvi);
+        assert!(UToku::zauzmi(p.b(), "ponuda", &json!(5), "x").is_ok());
     }
 
     /// Write-ahead red se upisuje tek kad je prošlo sve što može pasti prije
