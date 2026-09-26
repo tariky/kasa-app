@@ -4,14 +4,16 @@ import { OProgramuKartica } from '@/components/OProgramu';
 import { cn, porukaGreske } from '@/lib/utils';
 import { SKALA_KLJUC, SKALE, procitajSkalu, primijeniSkalu, skalaPodrzana } from '@/lib/skala';
 import { Download, Upload } from 'lucide-react';
+import AutomatskiBackup from './AutomatskiBackup';
 import { GrupaZaglavlje, IshodPoruka, Red, Sekcija, SekcijaPodnozje, SekcijaTijelo, type Ishod } from './dijelovi';
 
 export default function SistemGrupa() {
   return (
     <div className="pb-6">
-      <GrupaZaglavlje naslov="Sistem" opis="Prikaz na ovom računaru, kopija baze podataka i podaci o programu." />
+      <GrupaZaglavlje naslov="Sistem" opis="Prikaz na ovom računaru, backup baze podataka i podaci o programu." />
       <div className="space-y-4">
         {skalaPodrzana() && <Prikaz />}
+        <AutomatskiBackup />
         <Backup />
         <OProgramuKartica />
       </div>

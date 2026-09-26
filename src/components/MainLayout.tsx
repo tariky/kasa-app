@@ -10,7 +10,7 @@ import SifarnikScreen from '@/screens/SifarnikScreen';
 import NarudzbeScreen from '@/screens/NarudzbeScreen';
 import PonudeScreen from '@/screens/PonudeScreen';
 import IzvjestajiScreen from '@/screens/IzvjestajiScreen';
-import PostavkeScreen from '@/screens/PostavkeScreen';
+import PostavkeScreen, { otvoriPostavkeGrupu } from '@/screens/PostavkeScreen';
 import GeneratorScreen from '@/screens/GeneratorScreen';
 import ProizvodnjaScreen from '@/screens/ProizvodnjaScreen';
 import PendingRacuniDialog from '@/components/PendingRacuniDialog';
@@ -18,6 +18,7 @@ import PologPrompt from '@/components/PologPrompt';
 import { useModuli } from '@/hooks/useModuli';
 import type { Modul } from '@/lib/moduli';
 import LicencaTraka from '@/components/licenca/LicencaTraka';
+import BackupTraka from '@/components/backup/BackupTraka';
 import { DokumentPostavkeProvider } from '@/components/DokumentPostavkeProvider';
 import type { LicencaInfo } from '@/lib/licencaTipovi';
 import { cn } from '@/lib/utils';
@@ -184,6 +185,9 @@ export default function MainLayout({ user, licenca, onLogout }: Props) {
         {/* Main content */}
         <main className="relative z-0 isolate flex-1 overflow-hidden flex flex-col">
           <LicencaTraka info={licenca} />
+          <BackupTraka
+            onOtvoriPostavke={user.uloga === 'admin' ? () => { otvoriPostavkeGrupu('sistem'); setScreen('postavke'); } : undefined}
+          />
           {/* Na širokim ekranima sadržaj ostaje centriran u ograničenoj širini
               (1440px + 64px sidebar = 1504px), a sa strane ostaje pozadina. */}
           <div className="flex-1 min-h-0 overflow-hidden bg-slate-100">
