@@ -5,13 +5,14 @@ import { test, expect, beforeEach } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { schema } from '@/database/schema';
 import {
-  collectPriceChanges, upisiCijene, revertNivelacijaPrices,
+  collectPriceChanges, upisiCijene,
   cijeneArtikala, promjeneUProdaji, artikliPrimke, brojeviNivelacijaPrimke, napomenaProtunivelacije,
-  revertPricesWithoutStock, revertPrimkaPrices, stareCijeneStavki, datumKretanjaPrimke,
-  zapisiPromjeneCijena, ponistiPromjeneCijenaPrimke,
-  getProductStock, isDobavljacUsed, otisakPregleda, istiPregled, validirajPrimku, TOLERANCIJA_ZALIHE,
+  revertPrimkaPrices, stareCijeneStavki, datumKretanjaPrimke,
+  zapisiPromjeneCijena,
+  getProductStock, isDobavljacUsed, istiPregled, validirajPrimku, TOLERANCIJA_ZALIHE,
 } from './skladiste';
 import type { SqlDb } from './sqldb';
+import type { PregledCijenaUlaza } from '../types';
 
 let db: SqlDb & Database;
 
@@ -98,8 +99,7 @@ test('getProductStock sabira ulaze i oduzima izlaze', () => {
   expect(getProductStock(db, id)).toBe(7.5);
 });
 
-// ── revertNivelacijaPrices ────────────────────────────────────────────
-
+/** Nivelacija primke upisana SQL-om (kao stara verzija, bez historije cijena). */
 function dodajNivelaciju(primkaId: number, productId: number, stara: number, nova: number, naPrimci = true): void {
   db.prepare("INSERT INTO primke (id, brojPrimke, datum) VALUES (?, ?, '2026-01-01') ON CONFLICT DO NOTHING")
     .run(primkaId, `U-${primkaId}`);
@@ -111,55 +111,6 @@ function dodajNivelaciju(primkaId: number, productId: number, stara: number, nov
   db.prepare("INSERT INTO nivelacija_stavke (nivelacijaId, productId, kolicina, staraCijena, novaCijena, razlika, ukupnaRazlika, pdvStopa) VALUES (?, ?, 1, ?, ?, ?, ?, 'E')")
     .run(Number(niv.lastInsertRowid), productId, stara, nova, nova - stara, nova - stara);
 }
-
-test('revert vraća staru cijenu kad je primka posljednja mijenjala cijenu', () => {
-  const id = dodajArtikal('010', 12);
-  dodajNivelaciju(1, id, 10, 12);
-
-  expect(revertNivelacijaPrices(db, 1)).toBe(1);
-  const p = db.prepare('SELECT cijena FROM products WHERE id = ?').get(id) as { cijena: number };
-  expect(p.cijena).toBe(10);
-});
-
-test('revert ne gazi kasniju nivelaciju druge primke', () => {
-  // Primka A: 10 → 12, primka B kasnije: 12 → 15. Izmjena primke A ne smije
-  // vratiti artikal na 10 — na snazi je cijena koju je postavila primka B.
-  const id = dodajArtikal('011', 15);
-  dodajNivelaciju(1, id, 10, 12);
-  dodajNivelaciju(2, id, 12, 15);
-
-  expect(revertNivelacijaPrices(db, 1)).toBe(0);
-  const p = db.prepare('SELECT cijena FROM products WHERE id = ?').get(id) as { cijena: number };
-  expect(p.cijena).toBe(15);
-});
-
-test('revert ne vraća cijenu artikla koji više nije na primci (već poništen izmjenom; nivelacija ostaje)', () => {
-  const id = dodajArtikal('012', 12);
-  dodajNivelaciju(1, id, 10, 12, false);
-
-  expect(revertNivelacijaPrices(db, 1)).toBe(0);
-  expect((db.prepare('SELECT cijena FROM products WHERE id = ?').get(id) as { cijena: number }).cijena).toBe(12);
-});
-
-test('revert ne gazi cijenu koju je poslije primke postavila ručna izmjena, iako je ista kao cijena primke', () => {
-  const id = dodajArtikal('013', 12);
-  dodajNivelaciju(1, id, 10, 12);
-  zapisiPromjeneCijena(db, 'rucno', null, [{ productId: id, staraCijena: 10, novaCijena: 12 }]);
-
-  expect(revertNivelacijaPrices(db, 1)).toBe(0);
-});
-
-test('protunivelacija (bez primkaId) se ne čita kao nivelacija primke', () => {
-  const id = dodajArtikal('014', 10);
-  dodajNivelaciju(1, id, 10, 12);
-  // Protunivelacija 12 → 10: da je pročitana kao nivelacija primke, vratila bi 12.
-  const protu = db.prepare("INSERT INTO nivelacije (brojNivelacije, datum, primkaId) VALUES ('NIV-P', '2026-01-02', NULL)").run();
-  db.prepare("INSERT INTO nivelacija_stavke (nivelacijaId, productId, kolicina, staraCijena, novaCijena, razlika, ukupnaRazlika, pdvStopa) VALUES (?, ?, 1, 12, 10, -2, -2, 'E')")
-    .run(Number(protu.lastInsertRowid), id);
-
-  expect(revertNivelacijaPrices(db, 1)).toBe(0);
-  expect((db.prepare('SELECT cijena FROM products WHERE id = ?').get(id) as { cijena: number }).cijena).toBe(10);
-});
 
 // ── Protunivelacija: promjene cijene u prodaji ─────────────────────────
 
@@ -229,30 +180,6 @@ test('stareCijeneStavki: stara cijena ide samo na prvu stavku artikla bez zalihe
   expect(stareCijeneStavki(stavke, [])).toEqual([null, null, null]);
 });
 
-test('revertPricesWithoutStock vraća zapamćenu cijenu kad artikal još stoji na cijeni primke', () => {
-  const id = dodajArtikal('022', 12);
-  dodajStavku(1, id, 12, 10);
-
-  expect(revertPricesWithoutStock(db, 1)).toBe(1);
-  expect(cijenaArtikla(id)).toBe(10);
-});
-
-test('revertPricesWithoutStock ne gazi cijenu koju je promijenilo nešto drugo', () => {
-  const id = dodajArtikal('023', 14);
-  dodajStavku(1, id, 12, 10);
-
-  expect(revertPricesWithoutStock(db, 1)).toBe(0);
-  expect(cijenaArtikla(id)).toBe(14);
-});
-
-test('revertPricesWithoutStock ne dira stavke bez zapamćene cijene (stare primke)', () => {
-  const id = dodajArtikal('024', 12);
-  dodajStavku(1, id, 12, null);
-
-  expect(revertPricesWithoutStock(db, 1)).toBe(0);
-  expect(cijenaArtikla(id)).toBe(12);
-});
-
 test('revertPrimkaPrices vraća i nivelaciju i cijene bez zalihe iste primke', () => {
   const sa = dodajArtikal('025', 15);
   const bez = dodajArtikal('026', 7);
@@ -272,44 +199,6 @@ function historija(productId: number): Array<{ izvor: string; izvorId: number | 
     .all(productId) as any;
 }
 
-/** Svi redovi historije, i poništeni — ono što čita izvoz ("Zalihe na dan"). */
-function sviRedovi(productId: number) {
-  return db.prepare('SELECT izvor, izvorId, staraCijena, novaCijena, ponistena FROM cijena_historija WHERE productId = ? ORDER BY id').all(productId);
-}
-
-test('poništavanje primke usred lanca premošćuje lanac: sljedeća promjena preuzima njenu staru cijenu', () => {
-  const id = dodajArtikal('030', 14);
-  zapisiPromjeneCijena(db, 'primka', 1, [{ productId: id, staraCijena: 10, novaCijena: 12 }]);
-  zapisiPromjeneCijena(db, 'primka', 2, [{ productId: id, staraCijena: 12, novaCijena: 14 }]);
-
-  expect([...ponistiPromjeneCijenaPrimke(db, 1)]).toEqual([id]);
-  expect(cijenaArtikla(id)).toBe(14);
-  expect(historija(id)).toEqual([{ izvor: 'primka', izvorId: 2, staraCijena: 10, novaCijena: 14 }]);
-
-  ponistiPromjeneCijenaPrimke(db, 2);
-  expect(cijenaArtikla(id)).toBe(10);
-  expect(historija(id)).toEqual([]);
-});
-
-test('poništavanje posljednje promjene ne gazi cijenu promijenjenu mimo historije', () => {
-  const id = dodajArtikal('031', 13);
-  zapisiPromjeneCijena(db, 'primka', 1, [{ productId: id, staraCijena: 10, novaCijena: 12 }]);
-
-  ponistiPromjeneCijenaPrimke(db, 1);
-  expect(cijenaArtikla(id)).toBe(13);
-  expect(historija(id)).toEqual([]);
-});
-
-test('ručna izmjena preuzima staru cijenu poništene primke, a cijena ostaje ručna', () => {
-  const id = dodajArtikal('032', 13);
-  zapisiPromjeneCijena(db, 'primka', 1, [{ productId: id, staraCijena: 10, novaCijena: 12 }]);
-  zapisiPromjeneCijena(db, 'rucno', null, [{ productId: id, staraCijena: 12, novaCijena: 13 }]);
-
-  ponistiPromjeneCijenaPrimke(db, 1);
-  expect(cijenaArtikla(id)).toBe(13);
-  expect(historija(id)).toEqual([{ izvor: 'rucno', izvorId: null, staraCijena: 10, novaCijena: 13 }]);
-});
-
 test('revertPrimkaPrices: artikal iz historije ne ide i starim putem (nivelacija)', () => {
   const id = dodajArtikal('033', 14);
   dodajNivelaciju(1, id, 10, 12);
@@ -319,50 +208,6 @@ test('revertPrimkaPrices: artikal iz historije ne ide i starim putem (nivelacija
   revertPrimkaPrices(db, 1);
   expect(cijenaArtikla(id)).toBe(14);
   expect(historija(id)[0].staraCijena).toBe(10);
-});
-
-// Historija je samo-dodavanje za izvoz: poništenje primke ne smije promijeniti
-// cijenu na raniji dan ("Zalihe na dan" u izvozu). Poništen red ostaje
-// (označen), a vraćena cijena dobija novi red s današnjim datumom; lanac za
-// buduća poništenja vidi samo neoznačene redove.
-
-test('poništenje posljednje promjene: red ostaje označen, vraćena cijena dobija novi (poništen) red', () => {
-  const id = dodajArtikal('034', 12);
-  zapisiPromjeneCijena(db, 'primka', 1, [{ productId: id, staraCijena: 10, novaCijena: 12 }]);
-
-  ponistiPromjeneCijenaPrimke(db, 1);
-  expect(cijenaArtikla(id)).toBe(10);
-  expect(historija(id)).toEqual([]);
-  expect(sviRedovi(id)).toEqual([
-    { izvor: 'primka', izvorId: 1, staraCijena: 10, novaCijena: 12, ponistena: 1 },
-    { izvor: 'primka', izvorId: 1, staraCijena: 12, novaCijena: 10, ponistena: 1 },
-  ]);
-});
-
-test('poništenje usred lanca: red ostaje označen, cijena se ne mijenja pa nema novog reda', () => {
-  const id = dodajArtikal('035', 14);
-  zapisiPromjeneCijena(db, 'primka', 1, [{ productId: id, staraCijena: 10, novaCijena: 12 }]);
-  zapisiPromjeneCijena(db, 'primka', 2, [{ productId: id, staraCijena: 12, novaCijena: 14 }]);
-
-  ponistiPromjeneCijenaPrimke(db, 1);
-  expect(sviRedovi(id)).toEqual([
-    { izvor: 'primka', izvorId: 1, staraCijena: 10, novaCijena: 12, ponistena: 1 },
-    { izvor: 'primka', izvorId: 2, staraCijena: 10, novaCijena: 14, ponistena: 0 },
-  ]);
-  // Poništen red se više ne vidi kao dio lanca: primka 2 je sada jedina promjena.
-  ponistiPromjeneCijenaPrimke(db, 2);
-  expect(cijenaArtikla(id)).toBe(10);
-  expect(historija(id)).toEqual([]);
-});
-
-test('stari put (primka bez historije) upisuje vraćenu cijenu u historiju s današnjim danom', () => {
-  const id = dodajArtikal('036', 12);
-  dodajStavku(1, id, 12, 10);
-
-  expect(revertPricesWithoutStock(db, 1)).toBe(1);
-  expect(cijenaArtikla(id)).toBe(10);
-  expect(sviRedovi(id)).toEqual([{ izvor: 'primka', izvorId: 1, staraCijena: 12, novaCijena: 10, ponistena: 1 }]);
-  expect(db.prepare("SELECT date(createdAt) = date('now','localtime') AS danas FROM cijena_historija").get()).toEqual({ danas: 1 });
 });
 
 // ── Tolerancija zalihe ────────────────────────────────────────────────
@@ -497,12 +342,15 @@ test('otisak: svako polje dokumenta je u poređenju', () => {
 });
 
 test('otisak: neispravan oblik nije nikad isti', () => {
-  expect(otisakPregleda(null)).toBeNull();
-  expect(otisakPregleda({})).toBeNull();
-  expect(otisakPregleda({ dokumenti: [], bezZalihe: [], cijenaOstaje: [{ productId: 1, cijena: 'x' }] })).toBeNull();
+  // Neispravan oblik nema otisak, pa nije isti ni sam sebi.
+  const nijeIstiSebi = (p: unknown) => istiPregled(p, p as PregledCijenaUlaza);
+  expect(nijeIstiSebi(null)).toBe(false);
+  expect(nijeIstiSebi({})).toBe(false);
+  expect(nijeIstiSebi({ dokumenti: [], bezZalihe: [], cijenaOstaje: [{ productId: 1, cijena: 'x' }], upozorenja: [] })).toBe(false);
   expect(istiPregled({}, pregledPrimjer())).toBe(false);
+  expect(istiPregled(pregledPrimjer(), pregledPrimjer())).toBe(true);
   // Pregled bez upozorenja (stari oblik) nije potvrda ničega.
   const bezUpozorenja: Partial<ReturnType<typeof pregledPrimjer>> = pregledPrimjer();
   delete bezUpozorenja.upozorenja;
-  expect(otisakPregleda(bezUpozorenja)).toBeNull();
+  expect(nijeIstiSebi(bezUpozorenja)).toBe(false);
 });

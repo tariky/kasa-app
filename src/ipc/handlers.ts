@@ -9,12 +9,9 @@ import {
 } from '../lib/fiskalni';
 import { round2, localDateStr } from '../lib/novac';
 import {
-  collectPriceChanges, upisiCijene, revertPrimkaPrices, zapisiPromjeneCijena, stareCijeneStavki, datumKretanjaPrimke, validirajPrimku,
-  isDobavljacUsed, pripremiIzmjenuPrimke, stareCijeneIzmjene, cijenaKasnijeMijenjana, type PriceChange,
-  artikliPrimke, cijeneArtikala, promjeneUProdaji, brojeviNivelacijaPrimke, napomenaProtunivelacije,
-  pocetakPregleda, rezultatPregleda, cijeneKojeOstaju, istiPregled, TOLERANCIJA_ZALIHE,
+  zapisiPromjeneCijena, isDobavljacUsed, cijenaKasnijeMijenjana, TOLERANCIJA_ZALIHE,
 } from '../lib/skladiste';
-import type { PregledCijenaUlaza, PromijenjenoOdPregleda } from '../types';
+import { napraviPrimke } from '../lib/primka';
 import {
   jeArtikalUProizvodnji, nextBrojNaloga, createNalog, createNalogIzPonude, nalogZaPonudu, updateNalog, replaceStavke,
   proizvodiPonude, setProizvodiNaloga,
@@ -71,13 +68,6 @@ function handle<T>(channel: string, handler: (...args: any[]) => T): void {
       throw new Error(error.message || 'Nepoznata greška');
     }
   });
-}
-
-/** Primka kako je šalje ekran ulaza (primka:create, primka:update i njihov pregled). */
-interface PrimkaUnos {
-  brojPrimke: string; datum?: string; napomena?: string; brojFakture?: string;
-  dobavljacNaziv?: string; dobavljacId?: string; dobavljacAdresa?: string;
-  stavke: Array<{ productId: number; kolicina: number; cijena: number; nabavnaCijena: number; rabat: number; zavisniTroskovi?: number; pdvStopa: string }>;
 }
 
 // Insert a completed order + items + stock movements from a snapshot-shaped payload.
@@ -832,231 +822,17 @@ export function registerIpcHandlers(): void {
     return `${prefix}${String(next).padStart(3, '0')}`;
   });
 
-  // Tijela create/update/delete bez transakcije: prava operacija ih pokrene u
-  // transakciji, a pregled (primka:pregled*) u transakciji koju poništi — ista
-  // logika, pa najava na ekranu ne može odstupiti od onoga što spremanje uradi.
-  /**
-   * Trag svake promjene cijene u šifarniku od snimka `prije` (cijeneArtikala) —
-   * primka je mijenja nivelacijom, bez zalihe direktno, a brisanje je vraća.
-   * U pregledu (poništena transakcija) nestaje zajedno s ostalim.
-   */
-  function auditCijenaPrimke(prije: Map<number, number>, izvor: string, primkaId: number | bigint) {
-    const sada = cijeneArtikala(db, prije.keys());
-    for (const [productId, staraCijena] of prije) {
-      const novaCijena = sada.get(productId);
-      if (novaCijena !== undefined && novaCijena !== staraCijena) {
-        audit('artikal:cijena', { productId, staraCijena, novaCijena, izvor, primkaId: Number(primkaId) });
-      }
-    }
-  }
+  // Unos, izmjena i brisanje primke s pregledom promjena cijena — lib/primka.ts
+  // (transakcije i poništavanje pregleda su u modulu; Rust skladiste.rs).
+  const primke = napraviPrimke({ db, audit, transaction: fn => db.transaction(fn) });
 
-  function unesiPrimku(data: PrimkaUnos) {
-    const brojPrimke = validirajPrimku(db, data);
-    const cijenePrije = cijeneArtikala(db, data.stavke.map(s => s.productId));
-    const datum = data.datum || localDateStr();
-    const result = db
-      .prepare('INSERT INTO primke (brojPrimke, datum, dobavljacNaziv, dobavljacId, dobavljacAdresa, napomena, brojFakture) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(brojPrimke, datum, data.dobavljacNaziv ?? null, data.dobavljacId ?? null, data.dobavljacAdresa ?? null, data.napomena ?? null, data.brojFakture ?? null);
-
-    const primkaId = result.lastInsertRowid;
-
-    const insertStavka = db.prepare(
-      'INSERT INTO primka_stavke (primkaId, productId, kolicina, cijena, nabavnaCijena, rabat, zavisniTroskovi, pdvStopa, staraCijena) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-    );
-    const insertStock = db.prepare(
-      "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId, createdAt) VALUES (?, 'ulaz', ?, 'primka', ?, ?)"
-    );
-
-    // Collect price diffs BEFORE inserting stock (so stock reflects pre-delivery state)
-    const { nivelacija, bezZaliha } = collectPriceChanges(db, data.stavke);
-
-    // Now insert stavke and stock movements. Artiklima bez zalihe stavka
-    // pamti staru cijenu (nema nivelacije) da je update/delete može vratiti.
-    const stareCijene = stareCijeneStavki(data.stavke, bezZaliha);
-    // Ulaz na zalihu nosi datum primke; nivelacija ostaje s današnjim datumom.
-    const datumUlaza = datumKretanjaPrimke(datum);
-    data.stavke.forEach((stavka, i) => {
-      insertStavka.run(primkaId, stavka.productId, stavka.kolicina, stavka.cijena, stavka.nabavnaCijena, stavka.rabat, stavka.zavisniTroskovi ?? 0, stavka.pdvStopa, stareCijene[i]);
-      insertStock.run(stavka.productId, stavka.kolicina, primkaId, datumUlaza);
-    });
-
-    upisiCijene(db, [...nivelacija, ...bezZaliha]);
-    createNivelacija(primkaId, nivelacija, null);
-    zapisiPromjeneCijena(db, 'primka', primkaId, [...nivelacija, ...bezZaliha]);
-    auditCijenaPrimke(cijenePrije, 'primka', primkaId);
-
-    return { id: primkaId, nivelacijaCreated: nivelacija.length > 0 };
-  }
-
-  function izmijeniPrimku(data: PrimkaUnos & { id: number }) {
-    const brojPrimke = validirajPrimku(db, data, data.id);
-    const datum = data.datum || localDateStr();
-
-    db.prepare('UPDATE primke SET brojPrimke = ?, datum = ?, dobavljacNaziv = ?, dobavljacId = ?, dobavljacAdresa = ?, napomena = ?, brojFakture = ? WHERE id = ?')
-      .run(brojPrimke, datum, data.dobavljacNaziv ?? null, data.dobavljacId ?? null, data.dobavljacAdresa ?? null, data.napomena ?? null, data.brojFakture ?? null, data.id);
-
-    // Cijene u prodaji prije izmjene — nivelacije (i protunivelacije) idu od njih.
-    const prije = cijeneArtikala(db, [...artikliPrimke(db, data.id), ...data.stavke.map(s => s.productId)]);
-
-    // Cijene se diraju samo za artikle kojima je korisnik promijenio prodajnu
-    // cijenu (ili ih dodao/uklonio) — vidi pripremiIzmjenuPrimke. Ostalima
-    // ostaju cijena, historija i nivelacija; izmjena količine, datuma ili
-    // dobavljača ne smije ponovo nametnuti cijenu ove primke. Postojeće
-    // nivelacije se nikad ne brišu.
-    const izmjena = pripremiIzmjenuPrimke(db, data.id, data.stavke);
-
-    // Delete old stavke and stock movements
-    db.prepare('DELETE FROM primka_stavke WHERE primkaId = ?').run(data.id);
-    db.prepare("DELETE FROM stock_movements WHERE referenceType = 'primka' AND referenceId = ?").run(data.id);
-
-    const insertStavka = db.prepare(
-      'INSERT INTO primka_stavke (primkaId, productId, kolicina, cijena, nabavnaCijena, rabat, zavisniTroskovi, pdvStopa, staraCijena) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-    );
-    const insertStock = db.prepare(
-      "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId, createdAt) VALUES (?, 'ulaz', ?, 'primka', ?, ?)"
-    );
-
-    // Collect price diffs BEFORE inserting stock — samo za dodane artikle i
-    // promijenjene cijene koje ova primka i dalje određuje.
-    const { nivelacija, bezZaliha } = collectPriceChanges(db, data.stavke.filter(s => izmjena.kreiraj.has(s.productId)));
-
-    upisiCijene(db, [...nivelacija, ...bezZaliha]);
-    zapisiPromjeneCijena(db, 'primka', data.id, [...nivelacija, ...bezZaliha]);
-
-    // Dokumenti: sve što se u prodaji promijenilo, od cijene koja je bila u
-    // prodaji do nove, na zalihi bez robe iz ove primke (ulaz još nije upisan).
-    // Nova cijena ove primke → njena nivelacija (npr. 12 → 15; stara 10 → 12
-    // ostaje). Vraćena cijena (uklonjena stavka, cijena vraćena na staru) →
-    // protunivelacija bez veze na primku, da je stari put poništavanja iz
-    // nivelacija primke nikad ne pročita kao njenu.
-    const odPrimke = new Set([...nivelacija, ...bezZaliha].map(c => c.productId));
-    const promjene = promjeneUProdaji(db, prije);
-    const noveCijene = promjene.filter(c => odPrimke.has(c.productId));
-    const vraceneCijene = promjene.filter(c => !odPrimke.has(c.productId));
-    createNivelacija(data.id, noveCijene, `Izmjena primke ${brojPrimke}`);
-    createNivelacija(null, vraceneCijene, napomenaProtunivelacije(
-      `Izmjena primke ${brojPrimke}: poništenje cijene`, brojeviNivelacijaPrimke(db, data.id, vraceneCijene.map(c => c.productId))
-    ));
-
-    // Now insert stavke and stock movements. Artiklima bez zalihe stavka
-    // pamti staru cijenu (nema nivelacije) da je update/delete može vratiti;
-    // zadržane promjene zadržavaju svoju zapamćenu cijenu.
-    const stareCijene = stareCijeneIzmjene(data.stavke, bezZaliha, izmjena.zadrzaneStareCijene);
-    // Ulaz na zalihu nosi datum primke; nivelacija ostaje s današnjim datumom.
-    const datumUlaza = datumKretanjaPrimke(datum);
-    data.stavke.forEach((stavka, i) => {
-      insertStavka.run(data.id, stavka.productId, stavka.kolicina, stavka.cijena, stavka.nabavnaCijena, stavka.rabat, stavka.zavisniTroskovi ?? 0, stavka.pdvStopa, stareCijene[i]);
-      insertStock.run(stavka.productId, stavka.kolicina, data.id, datumUlaza);
-    });
-
-    auditCijenaPrimke(prije, 'primka:izmjena', data.id);
-
-    return { id: data.id, nivelacijaCreated: promjene.length > 0 };
-  }
-
-  function obrisiPrimku(id: number) {
-    const primka = db.prepare('SELECT brojPrimke FROM primke WHERE id = ?').get(id) as { brojPrimke: string } | undefined;
-    if (!primka) return;
-
-    // Vrati cijene koje je ova primka promijenila (historija, stari put iz
-    // nivelacije, zapamćene cijene artikala bez zalihe — isto pravilo kao
-    // primka:update).
-    const prije = cijeneArtikala(db, artikliPrimke(db, id));
-    revertPrimkaPrices(db, id);
-
-    db.prepare('DELETE FROM primka_stavke WHERE primkaId = ?').run(id);
-    db.prepare("DELETE FROM stock_movements WHERE referenceType = 'primka' AND referenceId = ?").run(id);
-
-    // Nivelacije primke su dokumenti po kojima se prodavalo i ostaju. Vraćena
-    // cijena u prodaji se dokumentuje protunivelacijom s današnjim datumom,
-    // na zalihi POSLIJE uklanjanja ulaza: poništena primka robu nije ni
-    // unijela, a cijena se mijenja na robi koja ostaje u prodavnici (isto
-    // kao pri unosu primke, gdje nivelacija ide na zalihu prije ulaza).
-    const vracene = promjeneUProdaji(db, prije);
-    const nivelacijePrimke = db.prepare('SELECT id, napomena FROM nivelacije WHERE primkaId = ? ORDER BY id').all(id) as Array<{ id: number; napomena: string | null }>;
-    const ponistene = new Set(brojeviNivelacijaPrimke(db, id, vracene.map(c => c.productId)));
-    const brojProtu = createNivelacija(null, vracene, napomenaProtunivelacije(`Poništenje primke ${primka.brojPrimke}`, [...ponistene]));
-
-    // Veza na primku (FK) se prekida, a trag ostaje u napomeni.
-    const odvoji = db.prepare('UPDATE nivelacije SET primkaId = NULL, napomena = ? WHERE id = ?');
-    const brojNiv = db.prepare('SELECT brojNivelacije FROM nivelacije WHERE id = ?');
-    for (const n of nivelacijePrimke) {
-      const broj = (brojNiv.get(n.id) as { brojNivelacije: string }).brojNivelacije;
-      const trag = `Primka ${primka.brojPrimke} obrisana` + (brojProtu && ponistene.has(broj) ? `; cijena vraćena nivelacijom ${brojProtu}` : '');
-      odvoji.run(n.napomena ? `${n.napomena}; ${trag}` : trag, n.id);
-    }
-
-    db.prepare('DELETE FROM primke WHERE id = ?').run(id);
-    auditCijenaPrimke(prije, 'primka:brisanje', id);
-  }
-
-  /**
-   * Pokrene operaciju u transakciji i pročita šta je napravila s cijenama
-   * (nivelacije i promjene cijena, vidi rezultatPregleda). `zadrzi` nad tim
-   * pregledom odluči: true → transakcija se potvrdi; false → rollback, u bazi
-   * ne ostaje ništa — ni dokumenti, ni historija, ni zaliha, ni brojači
-   * (sqlite_sequence, broj nivelacije). Greška operacije (validacija) ide
-   * pozivaocu kao i bez pregleda. `primkaId` (izmjena, brisanje): pregled
-   * nosi i upozorenja za zalihu njenih artikala.
-   */
-  function sPregledom<T>(
-    operacija: () => T,
-    cijenaOstaje: () => PregledCijenaUlaza['cijenaOstaje'],
-    zadrzi: (pregled: PregledCijenaUlaza) => boolean,
-    primkaId?: number,
-  ): { pregled: PregledCijenaUlaza; upisano: true; rezultat: T } | { pregled: PregledCijenaUlaza; upisano: false } {
-    const PONISTI = new Error('pregled: poništi');
-    let ishod: ReturnType<typeof sPregledom<T>> | undefined;
-    try {
-      db.transaction(() => {
-        const pocetak = pocetakPregleda(db, primkaId);
-        const ostaje = cijenaOstaje();
-        const rezultat = operacija();
-        const pregled = rezultatPregleda(db, pocetak, ostaje);
-        if (zadrzi(pregled)) { ishod = { pregled, upisano: true, rezultat }; return; }
-        ishod = { pregled, upisano: false };
-        throw PONISTI;
-      })();
-    } catch (e) {
-      if (e !== PONISTI) throw e;
-    }
-    return ishod!;
-  }
-
-  const bezCijenaKojeOstaju = () => [];
-  const ostajuPriIzmjeni = (data: PrimkaUnos & { id: number }) => () => cijeneKojeOstaju(db, data.id, data.stavke ?? []);
-
-  /**
-   * Spremanje/brisanje ulaza. Ekran šalje pregled koji je korisnik potvrdio;
-   * operacija se izvrši i u ISTOJ transakciji uporedi s njim (istiPregled). Ako
-   * se stanje u međuvremenu promijenilo (prodaja, druga primka, ručna cijena,
-   * ponoć, tuđa nivelacija uzela broj), ništa se ne upisuje i vraća se
-   * { promijenjeno: true, pregled } s novim pregledom za ponovnu potvrdu.
-   * Bez potvrde (stari klijent, skripta) operacija se izvrši bez poređenja.
-   */
-  function spremiPotvrdjeno<T>(operacija: () => T, cijenaOstaje: () => PregledCijenaUlaza['cijenaOstaje'], potvrda: unknown, primkaId?: number): T | PromijenjenoOdPregleda {
-    if (potvrda === undefined || potvrda === null) return db.transaction(operacija)();
-    const ishod = sPregledom(operacija, cijenaOstaje, pregled => istiPregled(potvrda, pregled), primkaId);
-    return ishod.upisano ? ishod.rezultat : { promijenjeno: true, pregled: ishod.pregled };
-  }
-
-  handle('primka:create', (data: PrimkaUnos, potvrda?: unknown) =>
-    spremiPotvrdjeno(() => unesiPrimku(data), bezCijenaKojeOstaju, potvrda));
-  handle('primka:update', (data: PrimkaUnos & { id: number }, potvrda?: unknown) =>
-    spremiPotvrdjeno(() => izmijeniPrimku(data), ostajuPriIzmjeni(data), potvrda, data.id));
-  // Uspjeh bez povratne vrijednosti (kao i prije); samo odbijanje nosi pregled.
-  handle('primka:delete', (id: number, potvrda?: unknown) => {
-    const r = spremiPotvrdjeno(() => { obrisiPrimku(id); }, bezCijenaKojeOstaju, potvrda, id);
-    return r ?? undefined;
-  });
-
-  // Pregled promjena cijena prije spremanja/brisanja — ista operacija, uvijek
-  // poništena; ništa ne upisuje, pa nije u licencnoj blokadi.
-  const bezUpisa = (operacija: () => unknown, cijenaOstaje: () => PregledCijenaUlaza['cijenaOstaje'] = bezCijenaKojeOstaju, primkaId?: number) =>
-    sPregledom(operacija, cijenaOstaje, () => false, primkaId).pregled;
-  handle('primka:pregledUnosa', (data: PrimkaUnos) => bezUpisa(() => unesiPrimku(data)));
-  handle('primka:pregledIzmjene', (data: PrimkaUnos & { id: number }) => bezUpisa(() => izmijeniPrimku(data), ostajuPriIzmjeni(data), data.id));
-  handle('primka:pregledBrisanja', (id: number) => bezUpisa(() => obrisiPrimku(id), bezCijenaKojeOstaju, id));
+  handle('primka:create', (data, potvrda) => primke.unesi(data, potvrda));
+  handle('primka:update', (data, potvrda) => primke.izmijeni(data, potvrda));
+  handle('primka:delete', (id, potvrda) => primke.obrisi(id, potvrda));
+  // Pregled ništa ne upisuje, pa nije u licencnoj blokadi.
+  handle('primka:pregledUnosa', data => primke.pregledUnosa(data));
+  handle('primka:pregledIzmjene', data => primke.pregledIzmjene(data));
+  handle('primka:pregledBrisanja', id => primke.pregledBrisanja(id));
 
   // ─── Nivelacije ──────────────────────────────────────────
 
@@ -1823,48 +1599,6 @@ export function registerIpcHandlers(): void {
 
   // Izvoz za knjigovođu: sirovi redovi za period, obračun je u rendereru.
   handle('izvoz:knjigovodja', (od: string, doDatum: string) => dohvatiKnjigovodja(db, od, doDatum));
-
-  // ─── Nivelacija Helpers ─────────────────────────────────
-
-  function getNextBrojNivelacije(): string {
-    const year = new Date().getFullYear();
-    const prefix = `NIV-${year}-`;
-    const row = db.prepare(
-      "SELECT MAX(CAST(SUBSTR(brojNivelacije, ?) AS INTEGER)) AS maxNum FROM nivelacije WHERE brojNivelacije LIKE ?"
-    ).get(prefix.length + 1, `${prefix}%`) as { maxNum: number | null } | undefined;
-    const next = (row?.maxNum ?? 0) + 1;
-    return `${prefix}${String(next).padStart(3, '0')}`;
-  }
-
-  /**
-   * Upiše nivelaciju (dokument) s današnjim datumom i sljedećim brojem; cijene
-   * u šifarniku upisuje pozivalac. `primkaId` null = protunivelacija (nije
-   * nivelacija primke — stari put poništavanja je ne čita). Vraća broj, ili
-   * null kad nema stavki.
-   */
-  function createNivelacija(primkaId: number | bigint | null, priceDiffs: PriceChange[], napomena: string | null): string | null {
-    if (priceDiffs.length === 0) return null;
-
-    const brojNivelacije = getNextBrojNivelacije();
-    const datum = localDateStr();
-
-    const nivResult = db.prepare(
-      'INSERT INTO nivelacije (brojNivelacije, datum, primkaId, napomena) VALUES (?, ?, ?, ?)'
-    ).run(brojNivelacije, datum, primkaId, napomena);
-
-    const nivelacijaId = nivResult.lastInsertRowid;
-
-    const insertStavka = db.prepare(
-      'INSERT INTO nivelacija_stavke (nivelacijaId, productId, kolicina, staraCijena, novaCijena, razlika, ukupnaRazlika, pdvStopa) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-    );
-
-    for (const d of priceDiffs) {
-      const razlika = d.novaCijena - d.staraCijena;
-      const ukupnaRazlika = razlika * d.kolicina;
-      insertStavka.run(nivelacijaId, d.productId, d.kolicina, d.staraCijena, d.novaCijena, razlika, ukupnaRazlika, d.pdvStopa);
-    }
-    return brojNivelacije;
-  }
 
   // ─── Tring ──────────────────────────────────────────────
 
