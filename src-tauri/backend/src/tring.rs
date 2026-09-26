@@ -9,6 +9,8 @@ use std::net::ToSocketAddrs;
 use std::time::{Duration, Instant};
 
 use regex::Regex;
+use ureq::unversioned::resolver::DefaultResolver;
+use ureq::unversioned::transport::{ConnectionDetails, Connector, DefaultConnector, Transport};
 use serde_json::{json, Map, Value};
 
 use crate::js::{self, to_string};
@@ -63,21 +65,41 @@ pub fn ishod_nepoznat(o: &Odgovor) -> bool {
     !uspjeh(o) && o["ishodNepoznat"] == Value::Bool(true)
 }
 
-/// Greške veze kod kojih zahtjev sigurno nije stigao do uređaja (veza nije ni
-/// uspostavljena) — račun nije odštampan. Svaka druga greška nakon što je
-/// zahtjev krenuo (timeout, prekid veze, neparsiran odgovor) znači da je
-/// uređaj možda štampao. TS: `NIJE_POSLANO` u services/tring.ts.
-fn nije_poslano(e: &ureq::Error) -> bool {
-    match e {
-        ureq::Error::HostNotFound | ureq::Error::ConnectionFailed | ureq::Error::BadUri(_) => true,
-        // Veza nije uspostavljena u roku (ureq i OS-ov TimedOut pri povezivanju
-        // prijavljuje kao Connect; Global bi značio da je istekao ukupni rok).
-        ureq::Error::Timeout(ureq::Timeout::Resolve | ureq::Timeout::Connect) => true,
-        ureq::Error::Io(io) => matches!(
-            io.kind(),
-            ErrorKind::ConnectionRefused | ErrorKind::HostUnreachable | ErrorKind::NetworkUnreachable | ErrorKind::AddrNotAvailable
-        ),
-        _ => false,
+/// Da li greška znači da zahtjev sigurno nije stigao do uređaja — račun nije
+/// odštampan. `spojeno`: TCP veza je bila uspostavljena (konektor je vratio
+/// vezu). Prije toga zahtjev nije ni krenuo, pa je svaka greška (odbijena
+/// veza, DNS, HostUnreachable, isteklo povezivanje) siguran neuspjeh. Poslije
+/// toga je svaka io greška — i HostUnreachable/NetworkUnreachable kad LAN
+/// pukne dok se čeka odgovor — nepoznat ishod: uređaj je možda štampao.
+/// TS: `greskaZahtjevaNepoznata` / `NIJE_POSLANO` u services/tring.ts.
+fn nije_poslano(e: &ureq::Error, spojeno: bool) -> bool {
+    !spojeno
+        || matches!(
+            e,
+            ureq::Error::HostNotFound
+                | ureq::Error::ConnectionFailed
+                | ureq::Error::BadUri(_)
+                | ureq::Error::Timeout(ureq::Timeout::Resolve | ureq::Timeout::Connect)
+        )
+}
+
+/// Standardni ureq konektor koji bilježi da je TCP veza uspostavljena — od
+/// tog trenutka zahtjev može stići do uređaja (`nije_poslano`).
+#[derive(Debug)]
+struct PratiVezu {
+    inner: DefaultConnector,
+    spojeno: Arc<AtomicBool>,
+}
+
+impl Connector<()> for PratiVezu {
+    type Out = Box<dyn Transport>;
+
+    fn connect(&self, details: &ConnectionDetails, chained: Option<()>) -> Result<Option<Self::Out>, ureq::Error> {
+        let veza = self.inner.connect(details, chained)?;
+        if veza.is_some() {
+            self.spojeno.store(true, Ordering::SeqCst);
+        }
+        Ok(veza)
     }
 }
 
@@ -181,14 +203,16 @@ impl Tring {
         let start = Instant::now();
         let url = format!("http://{}:{}{}", url_host(&host), port, url_path);
 
-        let agent: ureq::Agent = ureq::Agent::config_builder()
+        let config = ureq::Agent::config_builder()
             .timeout_global(Some(Duration::from_millis(self.timeout_ms.load(Ordering::SeqCst))))
             .timeout_connect(Some(Duration::from_millis(self.connect_timeout_ms.load(Ordering::SeqCst))))
             .http_status_as_error(false)
             // Node `http` ne gleda HTTP(S)_PROXY; uređaj je na localhostu/LAN-u.
             .proxy(None)
-            .build()
-            .into();
+            .build();
+        let spojeno = Arc::new(AtomicBool::new(false));
+        let konektor = PratiVezu { inner: DefaultConnector::new(), spojeno: Arc::clone(&spojeno) };
+        let agent = ureq::Agent::with_parts(config, konektor, DefaultResolver::default());
 
         let odmor = self.petlja.odmor();
         // Uz grešku ide i da li je zahtjev sigurno ostao neposlan.
@@ -204,7 +228,7 @@ impl Tring {
                     Ok((status, xml))
                 })
                 .map_err(|e| {
-                    let neposlan = nije_poslano(&e);
+                    let neposlan = nije_poslano(&e, spojeno.load(Ordering::SeqCst));
                     (e, neposlan)
                 }),
         };
@@ -852,6 +876,32 @@ mod tests {
         assert!(!uspjeh(&r));
         assert!(!ishod_nepoznat(&r), "{r}");
         assert!(pocetak.elapsed() < Duration::from_secs(2), "{:?}", pocetak.elapsed());
+    }
+
+    /// Greška mreže nakon što je veza uspostavljena (LAN pukne dok se čeka
+    /// odgovor → HostUnreachable) ne znači "nije odštampano". Nije je moguće
+    /// pouzdano izazvati u testu, pa se provjerava klasifikacija. TS: describe
+    /// 'klasifikacija greške zahtjeva' u services/tring.ishod.test.ts.
+    #[test]
+    fn ishod_greska_mreze_poslije_povezivanja_je_nepoznata() {
+        let io = |k: ErrorKind| ureq::Error::Io(std::io::Error::from(k));
+        let mrezne = [
+            ErrorKind::ConnectionRefused,
+            ErrorKind::HostUnreachable,
+            ErrorKind::NetworkUnreachable,
+            ErrorKind::AddrNotAvailable,
+        ];
+        for k in mrezne {
+            assert!(nije_poslano(&io(k), false), "{k:?} prije povezivanja");
+            assert!(!nije_poslano(&io(k), true), "{k:?} poslije povezivanja");
+        }
+        for k in [ErrorKind::ConnectionReset, ErrorKind::BrokenPipe, ErrorKind::TimedOut] {
+            assert!(!nije_poslano(&io(k), true), "{k:?}");
+        }
+        assert!(!nije_poslano(&ureq::Error::Timeout(ureq::Timeout::Global), true));
+        // Prije povezivanja zahtjev sigurno nije krenuo.
+        assert!(nije_poslano(&ureq::Error::Timeout(ureq::Timeout::Connect), false));
+        assert!(nije_poslano(&ureq::Error::HostNotFound, false));
     }
 
     #[test]
