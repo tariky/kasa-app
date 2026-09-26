@@ -8,6 +8,26 @@ export type Pozovi = (kanal: string, ...args: unknown[]) => Promise<any>;
 /** Pretplata na događaj backenda (Electron `ipcRenderer.on`, Tauri `listen`); vraća odjavu. */
 export type NaDogadjaj = (ime: string, cb: (podaci: unknown) => void) => () => void;
 
+/**
+ * Electron `ipcRenderer.invoke` umota grešku handlera u
+ * "Error invoking remote method '<kanal>': Error: <poruka>". Ostaje samo poruka
+ * backenda — ista koju pod Tauri-jem daje Rust (vidi src/ipc/ugovor).
+ */
+export function ocistiPorukuIpc(poruka: string): string {
+  return poruka.replace(/^Error invoking remote method '[^']*':\s*(Error:\s*)?/, '');
+}
+
+/** `pozovi` čije odbijanje nosi poruku bez Electron omota (preload). */
+export function ocistiGreske(pozovi: Pozovi): Pozovi {
+  return async (kanal, ...args) => {
+    try {
+      return await pozovi(kanal, ...args);
+    } catch (e) {
+      throw new Error(ocistiPorukuIpc(e instanceof Error ? e.message : String(e)));
+    }
+  };
+}
+
 export function napraviApi(pozovi: Pozovi, naDogadjaj: NaDogadjaj) {
   return {
     // Licenca

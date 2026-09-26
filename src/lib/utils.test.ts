@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test';
-import { parseDecimal, mnozina } from './utils';
+import { parseDecimal, mnozina, porukaGreske } from './utils';
 
 test('parsira tačku kao decimalni separator', () => {
   expect(parseDecimal('12.50')).toBe(12.5);
@@ -35,4 +35,11 @@ test('mnozina bira oblik po broju', () => {
   ]);
   expect(r(1)).toBe('račun');
   expect(r(3)).toBe('računa');
+});
+
+test('porukaGreske: poruka bez Electron omota, i za ne-Error vrijednosti', () => {
+  expect(porukaGreske(new Error("Error invoking remote method 'order:finalize': Error: Račun ne postoji"))).toBe('Račun ne postoji');
+  expect(porukaGreske(new Error('Račun ne postoji'))).toBe('Račun ne postoji');
+  expect(porukaGreske('tekst')).toBe('tekst');
+  expect(porukaGreske(undefined)).toBe('Nepoznata greška');
 });

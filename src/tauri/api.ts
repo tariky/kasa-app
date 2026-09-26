@@ -12,6 +12,8 @@ if (!('api' in window) && '__TAURI_INTERNALS__' in window) {
       // backend redom kojim su poslani (kao ipcRenderer.invoke).
       const odgovor = new Channel<{ ok?: unknown; greska?: string }>();
       odgovor.onmessage = (o) => {
+        // `greska` je samo poruka backenda (bez Electron omota) — ista kao
+        // poslije `ocistiPorukuIpc` u preloadu, pa UI vidi isti tekst.
         if (o.greska !== undefined) reject(new Error(o.greska));
         else resolve(o.ok ?? null);
       };
