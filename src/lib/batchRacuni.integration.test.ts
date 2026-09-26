@@ -15,7 +15,7 @@ const PORT = 8099; // avoid clashing with a real/dev mock on 8085
 let server: Server;
 
 beforeAll(() => {
-  server = startMockTringServer(PORT);
+  server = startMockTringServer(PORT, { kasnjenjeMs: 0 });
   Tring.configure({ host: 'localhost', port: PORT });
 });
 
@@ -43,8 +43,6 @@ const katalog: Product[] = [
 ];
 
 test('svi generisani računi se uspješno štampaju kroz mock fiskalni server', async () => {
-  // Mock server delays each print ~2.5s (real printer sim), so keep the batch
-  // small enough to finish within the timeout.
   const res = generirajRacune(katalog, { target: 60 });
   expect(res.racuni.length).toBeGreaterThan(0);
 

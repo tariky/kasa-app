@@ -223,7 +223,11 @@ function handleRequest(
   }
 }
 
-export function startMockTringServer(port: number = DEFAULT_PORT): http.Server {
+/**
+ * `kasnjenjeMs` zamijeni simulirano kašnjenje štampača za sve komande
+ * (testovi daju 0); bez njega 2,5 s za račun i reklamaciju, 300 ms ostalo.
+ */
+export function startMockTringServer(port: number = DEFAULT_PORT, opts: { kasnjenjeMs?: number } = {}): http.Server {
   const server = http.createServer((req, res) => {
     if (req.method !== "POST") {
       res.writeHead(405, { "Content-Type": "application/xml" });
@@ -239,7 +243,7 @@ export function startMockTringServer(port: number = DEFAULT_PORT): http.Server {
 
       // Simulate printer delay for receipt/refund endpoints
       const path = (req.url ?? "/").split("?")[0];
-      const delay = ["/sfr", "/srr"].includes(path) ? PRINT_DELAY_MS : 300;
+      const delay = opts.kasnjenjeMs ?? (["/sfr", "/srr"].includes(path) ? PRINT_DELAY_MS : 300);
 
       setTimeout(() => {
         res.writeHead(status, {
