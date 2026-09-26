@@ -23,7 +23,9 @@ import { filtriraj, type PoljaPretrage } from '@/lib/pretraga';
 import { formatBrojPonude, efektivniStatus, plusDana, danaIzmedju } from '@/lib/ponuda';
 import type { NacinPlacanja } from '@/lib/placanje';
 import FiskalnaNaplataDialog from '@/components/FiskalnaNaplataDialog';
-import { izracunajTotale, pdvStavke } from '@/lib/racun';
+import { pdvStavke } from '@/lib/racun';
+import { izReda, uPayload } from '@/lib/stavkeDokumenta';
+import { useStavkeDokumenta } from '@/hooks/useStavkeDokumenta';
 import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { localDateStr } from '@/lib/novac';
 import { cn, formatKM, formatDate } from '@/lib/utils';
@@ -62,16 +64,6 @@ interface PonudaRow {
   kupacNaziv?: string;
   korisnikIme?: string;
   stavke?: any[];
-}
-
-interface FormStavka {
-  productId: number;
-  naziv: string;
-  jm: string;
-  kolicina: number;
-  cijena: number;
-  rabat: number;
-  pdvStopa: string;
 }
 
 const STATUS_META: Record<string, { label: string; dot: string; text: string }> = {
@@ -150,7 +142,9 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
   const [datum, setDatum] = useState('');
   const [vaziDo, setVaziDo] = useState('');
   const [napomena, setNapomena] = useState('');
-  const [stavke, setStavke] = useState<FormStavka[]>([]);
+  const {
+    stavke, postavi: postaviStavke, dodaj: dodajStavku, izmijeni: izmijeniStavku, ukloni: ukloniStavku, totali: formTotali,
+  } = useStavkeDokumenta();
   const [formError, setFormError] = useState('');
   const [formInfo, setFormInfo] = useState('');
   /** Rabat izabranog kupca — dobijaju ga stavke dodane poslije izbora. */
@@ -226,11 +220,6 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
     return c;
   }, [trazene, danas]);
 
-  const formTotali = useMemo(
-    () => izracunajTotale(stavke.map(s => ({ cijena: s.cijena || 0, kolicina: s.kolicina || 0, rabat: s.rabat || 0, pdvStopa: s.pdvStopa }))),
-    [stavke]
-  );
-
   // ── Forma ──────────────────────────────────────────────────
 
   /** Rok važenja u danima — izveden iz para datuma, ne drži se posebno. */
@@ -252,7 +241,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
     setDatum(danasnji);
     setVaziDo(plusDana(danasnji, postavke.ponuda.vaziDana));
     setNapomena('');
-    setStavke([]);
+    postaviStavke([]);
     setFormError('');
     setFormInfo('');
     setRabatKupca(0);
@@ -267,15 +256,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
     setDatum(full.datum);
     setVaziDo(full.vaziDo);
     setNapomena(full.napomena || '');
-    setStavke((full.stavke || []).map((s: any) => ({
-      productId: s.productId,
-      naziv: s.productNaziv || `#${s.productId}`,
-      jm: s.productJm || 'kom',
-      kolicina: s.kolicina,
-      cijena: s.cijena,
-      rabat: s.rabat || 0,
-      pdvStopa: s.pdvStopa,
-    })));
+    postaviStavke((full.stavke || []).map(izReda));
     setFormError('');
     // Spremljena ponuda se ne preračunava dok korisnik ne promijeni kupca.
     setFormInfo('');
@@ -290,7 +271,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
     const r = kupci.find(k => String(k.id) === novi)?.rabat ?? 0;
     setRabatKupca(r);
     if (r > 0) {
-      setStavke(prev => primijeniRabatKupca(prev, r));
+      postaviStavke(prev => primijeniRabatKupca(prev, r));
       setFormError('');
       setFormInfo(`Primijenjen rabat kupca ${formatRabat(r)}`);
     } else setFormInfo('');
@@ -303,19 +284,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
     setKonvertujOpen(true);
   }, [selected, kupci, postavke]);
 
-  const addStavka = (p: Product, kol: number | null) => {
-    const k = kol ?? 1;
-    setStavke(prev => {
-      const existing = prev.find(s => s.productId === p.id);
-      if (existing) {
-        return prev.map(s => s.productId === p.id ? { ...s, kolicina: Math.round((s.kolicina + k) * 1000) / 1000 } : s);
-      }
-      return [...prev, {
-        productId: p.id, naziv: p.naziv, jm: p.jm || 'kom',
-        kolicina: k, cijena: p.cijena, rabat: rabatKupca, pdvStopa: p.pdvStopa,
-      }];
-    });
-  };
+  const addStavka = (p: Product, kol: number | null) => dodajStavku(p, kol, { rabat: rabatKupca });
 
   const savePonuda = async () => {
     setFormError('');
@@ -331,10 +300,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
         datum,
         vaziDo,
         napomena: napomena.trim() || undefined,
-        stavke: stavke.map(s => ({
-          productId: s.productId, kolicina: s.kolicina, cijena: s.cijena,
-          rabat: s.rabat || 0, pdvStopa: s.pdvStopa,
-        })),
+        stavke: uPayload(stavke),
       };
       if (editId != null) {
         await window.api.updatePonuda(editId, payload);
@@ -404,11 +370,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
           naziv: p.kupacNaziv ?? '', idBroj: p.kupacIdBroj ?? '', adresa: p.kupacAdresa ?? '',
           grad: p.kupacGrad ?? '', postanskiBroj: p.kupacPostanskiBroj ?? '',
         },
-        stavke: (p.stavke ?? []).map((s: any) => ({
-          productId: s.productId, naziv: s.productNaziv ?? `#${s.productId}`, jm: s.productJm || 'kom',
-          sifra: s.productSifra ?? '', tip: 'artikal', kolicina: s.kolicina, cijena: s.cijena,
-          rabat: s.rabat ?? 0, pdvStopa: s.pdvStopa, stanje: null,
-        })),
+        stavke: (p.stavke ?? []).map(izReda),
       });
       setFakturaOpen(true);
     } catch (err: any) {
@@ -1044,7 +1006,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
                       <div className="w-16">
                         <DecimalInput
                           value={s.kolicina}
-                          onValueChange={(_, v) => setStavke(prev => prev.map((x, xi) => xi === i ? { ...x, kolicina: isNaN(v) ? 0 : v } : x))}
+                          onValueChange={(_, v) => izmijeniStavku(s.productId, { kolicina: isNaN(v) ? 0 : v })}
                           maxDecimals={3}
                           className="h-7 text-[12px] text-right font-mono"
                           title="Količina"
@@ -1053,7 +1015,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
                       <div className="w-20">
                         <DecimalInput
                           value={s.cijena}
-                          onValueChange={(_, v) => setStavke(prev => prev.map((x, xi) => xi === i ? { ...x, cijena: isNaN(v) ? NaN : v } : x))}
+                          onValueChange={(_, v) => izmijeniStavku(s.productId, { cijena: isNaN(v) ? NaN : v })}
                           className="h-7 text-[12px] text-right font-mono"
                           title="Cijena"
                         />
@@ -1061,7 +1023,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
                       <div className="w-14">
                         <DecimalInput
                           value={s.rabat}
-                          onValueChange={(_, v) => setStavke(prev => prev.map((x, xi) => xi === i ? { ...x, rabat: isNaN(v) ? 0 : Math.min(100, v) } : x))}
+                          onValueChange={(_, v) => izmijeniStavku(s.productId, { rabat: isNaN(v) ? 0 : Math.min(100, v) })}
                           className="h-7 text-[12px] text-right font-mono"
                           title="Rabat %"
                         />
@@ -1075,7 +1037,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
                           : '—'}
                       </span>
                       <button
-                        onClick={() => setStavke(prev => prev.filter((_, xi) => xi !== i))}
+                        onClick={() => ukloniStavku(s.productId)}
                         title={`Ukloni ${s.naziv}`}
                         aria-label={`Ukloni ${s.naziv}`}
                         className="text-slate-300 hover:text-rose-500 transition-colors flex-shrink-0"
@@ -1087,7 +1049,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
                   <div className="flex items-center justify-between px-3 py-2 bg-slate-50/50">
                     <span className="text-[11px] text-slate-400">Ukupno</span>
                     <span className="text-[13px] font-mono font-bold text-slate-800 tabular-nums">
-                      {formatKM(isNaN(formTotali.ukupno) ? 0 : formTotali.ukupno)}
+                      {formatKM(formTotali.ukupno)}
                     </span>
                   </div>
                 </div>

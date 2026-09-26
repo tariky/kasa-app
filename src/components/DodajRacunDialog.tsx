@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
@@ -11,8 +11,10 @@ import {
   Trash2,
   ChevronRight, Building2, AlertTriangle, PackageOpen, CornerDownLeft, X,
 } from 'lucide-react';
-import { Kupac, Product } from '@/types';
-import { izracunajTotale, iznosStavke } from '@/lib/racun';
+import { Kupac } from '@/types';
+import { iznosStavke } from '@/lib/racun';
+import { uPayload } from '@/lib/stavkeDokumenta';
+import { useStavkeDokumenta } from '@/hooks/useStavkeDokumenta';
 import { cn, formatKM } from '@/lib/utils';
 import { localDateStr } from '@/lib/novac';
 import { NACINI_PLACANJA, type NacinPlacanja } from '@/lib/placanje';
@@ -20,13 +22,6 @@ import { IKONA_PLACANJA } from '@/components/NacinPlacanjaBirac';
 import { Eyebrow } from '@/components/ui/ledger';
 import { PretragaProizvoda } from '@/components/PretragaProizvoda';
 import { PretragaStavki } from '@/components/ui/pretraga-stavki';
-
-interface StavkaUnos {
-  product: Product;
-  kolicina: number;
-  rabat: number;
-  cijena: number;
-}
 
 /** Kolone reda stavke — isti raster za zaglavlje i za redove. */
 const GRID = 'grid grid-cols-[minmax(0,1fr)_74px_96px_74px_100px_30px] gap-2 items-center';
@@ -50,7 +45,9 @@ export default function DodajRacunDialog({ open, onOpenChange, onSaved, prefillB
   const [brojFiskalnog, setBrojFiskalnog] = useState('');
   const [datum, setDatum] = useState(nowLocalInput());
   const [nacinPlacanja, setNacinPlacanja] = useState<NacinPlacanja>('Gotovina');
-  const [stavke, setStavke] = useState<StavkaUnos[]>([]);
+  const {
+    stavke, postavi: setStavke, dodaj: addProduct, izmijeni: updateStavka, ukloni: removeStavka, totali: { ukupno, pdvIznos },
+  } = useStavkeDokumenta();
   const [kupacOpen, setKupacOpen] = useState(false);
   const [allKupci, setAllKupci] = useState<Kupac[] | null>(null);
   const [kupacIzSifarnika, setKupacIzSifarnika] = useState(false);
@@ -71,27 +68,6 @@ export default function DodajRacunDialog({ open, onOpenChange, onSaved, prefillB
     if (!kupacOpen) return;
     window.api.getKupci().then(setAllKupci).catch(() => setAllKupci([]));
   }, [kupacOpen]);
-
-  const { ukupno, pdvIznos } = useMemo(
-    () => izracunajTotale(stavke.map(s => ({
-      cijena: s.cijena, kolicina: s.kolicina, rabat: s.rabat, pdvStopa: s.product.pdvStopa,
-    }))),
-    [stavke]
-  );
-
-  const addProduct = (p: Product, kol: number | null) => {
-    const k = kol ?? 1;
-    setStavke(prev => {
-      const existing = prev.find(s => s.product.id === p.id);
-      if (existing) return prev.map(s => s.product.id === p.id ? { ...s, kolicina: Math.round((s.kolicina + k) * 1000) / 1000 } : s);
-      return [...prev, { product: p, kolicina: k, rabat: 0, cijena: p.cijena }];
-    });
-  };
-
-  const updateStavka = (id: number, patch: Partial<StavkaUnos>) => {
-    setStavke(prev => prev.map(s => s.product.id === id ? { ...s, ...patch } : s));
-  };
-  const removeStavka = (id: number) => setStavke(prev => prev.filter(s => s.product.id !== id));
 
   const pickKupac = (k: Kupac) => {
     setKupacIdBroj(k.idBroj || '');
@@ -133,9 +109,7 @@ export default function DodajRacunDialog({ open, onOpenChange, onSaved, prefillB
       await window.api.createManualOrder({
         ukupno, pdvIznos, nacinPlacanja,
         brojFiskalnogRacuna: brojFiskalnog.trim(), createdAt, kupac,
-        stavke: stavke.map(s => ({
-          productId: s.product.id, kolicina: s.kolicina, cijena: s.cijena, rabat: s.rabat, pdvStopa: s.product.pdvStopa,
-        })),
+        stavke: uPayload(stavke),
       });
       reset();
       onOpenChange(false);
@@ -258,12 +232,12 @@ export default function DodajRacunDialog({ open, onOpenChange, onSaved, prefillB
                 </div>
                 <div className="divide-y divide-slate-100">
                   {stavke.map(s => (
-                    <div key={s.product.id} className={cn(GRID, 'px-3 py-2 hover:bg-slate-50/50 transition-colors')}>
+                    <div key={s.productId} className={cn(GRID, 'px-3 py-2 hover:bg-slate-50/50 transition-colors')}>
                       <div className="min-w-0">
-                        <p className="text-[12.5px] font-medium text-slate-700 truncate">{s.product.naziv}</p>
+                        <p className="text-[12.5px] font-medium text-slate-700 truncate">{s.naziv}</p>
                         <div className="flex items-center gap-1.5 mt-0.5">
-                          <span className="font-mono text-[10px] text-slate-400">{s.product.sifra}</span>
-                          {s.product.pdvStopa === 'K' && (
+                          <span className="font-mono text-[10px] text-slate-400">{s.sifra}</span>
+                          {s.pdvStopa === 'K' && (
                             <span className="inline-flex h-3.5 items-center rounded border border-slate-200 bg-slate-50 px-1 font-mono text-[8.5px] font-bold text-slate-500" title="Oslobođeno PDV-a">
                               K
                             </span>
@@ -273,26 +247,26 @@ export default function DodajRacunDialog({ open, onOpenChange, onSaved, prefillB
                       <DecimalInput
                         value={s.kolicina} maxDecimals={3}
                         className="h-8 text-right font-mono text-[12px] tabular-nums"
-                        onValueChange={(_, n) => updateStavka(s.product.id, { kolicina: n || 0 })}
+                        onValueChange={(_, n) => updateStavka(s.productId, { kolicina: n || 0 })}
                       />
                       <DecimalInput
                         value={s.cijena}
                         className="h-8 text-right font-mono text-[12px] tabular-nums"
-                        onValueChange={(_, n) => updateStavka(s.product.id, { cijena: n || 0 })}
+                        onValueChange={(_, n) => updateStavka(s.productId, { cijena: n || 0 })}
                       />
                       <DecimalInput
                         value={s.rabat}
                         className="h-8 text-right font-mono text-[12px] tabular-nums"
-                        onValueChange={(_, n) => updateStavka(s.product.id, { rabat: Math.min(100, n || 0) })}
+                        onValueChange={(_, n) => updateStavka(s.productId, { rabat: Math.min(100, n || 0) })}
                       />
                       <span className="text-right font-mono text-[12.5px] font-semibold text-slate-800 tabular-nums">
-                        {formatKM(iznosStavke({ cijena: s.cijena, kolicina: s.kolicina, rabat: s.rabat, pdvStopa: s.product.pdvStopa }))}
+                        {formatKM(iznosStavke({ cijena: s.cijena, kolicina: s.kolicina, rabat: s.rabat, pdvStopa: s.pdvStopa }))}
                       </span>
                       <button
                         type="button"
-                        onClick={() => removeStavka(s.product.id)}
-                        title={`Ukloni ${s.product.naziv}`}
-                        aria-label={`Ukloni ${s.product.naziv}`}
+                        onClick={() => removeStavka(s.productId)}
+                        title={`Ukloni ${s.naziv}`}
+                        aria-label={`Ukloni ${s.naziv}`}
                         className="w-7 h-7 flex items-center justify-center rounded-md text-slate-300 hover:bg-rose-50 hover:text-rose-500 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/50"
                       >
                         <Trash2 size={13} />

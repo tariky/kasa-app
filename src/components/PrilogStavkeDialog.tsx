@@ -8,24 +8,13 @@ import { Label } from '@/components/ui/label';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Trash2, Check, AlertTriangle } from 'lucide-react';
 import { PretragaProizvoda } from '@/components/PretragaProizvoda';
-import { sumaPriloga, prilogKompletan } from '@/lib/prilog';
+import { prilogKompletan } from '@/lib/prilog';
 import { iznosStavke } from '@/lib/racun';
 import { round2 } from '@/lib/novac';
+import { izReda, uPayload } from '@/lib/stavkeDokumenta';
+import { useStavkeDokumenta } from '@/hooks/useStavkeDokumenta';
 import { cn, formatKM } from '@/lib/utils';
-import type { Order, Product } from '@/types';
-
-interface StavkaRed {
-  productId: number;
-  naziv: string;
-  jm: string;
-  sifra: string;
-  tip: string;
-  kolicina: number;
-  cijena: number;
-  /** Postotak 0–100. */
-  rabat: number;
-  pdvStopa: string;
-}
+import type { Order } from '@/types';
 
 interface PrilogStavkeDialogProps {
   open: boolean;
@@ -40,7 +29,7 @@ interface PrilogStavkeDialogProps {
  * (rad u više navrata). Kad se suma poklopi, faktura je završena i više se ne mijenja.
  */
 export default function PrilogStavkeDialog({ open, onOpenChange, order, onSaved }: PrilogStavkeDialogProps) {
-  const [stavke, setStavke] = useState<StavkaRed[]>([]);
+  const { stavke, postavi: setStavke, dodaj, izmijeni: updateStavka, ukloni: removeStavka, totali } = useStavkeDokumenta();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -57,48 +46,19 @@ export default function PrilogStavkeDialog({ open, onOpenChange, order, onSaved 
         setZavrsena(rows.length > 0 && prilogKompletan(order.ukupno, rows as any));
         return rows;
       })
-      .then(rows => setStavke(rows.map((r: any) => ({
-        productId: r.productId,
-        naziv: r.productNaziv || `#${r.productId}`,
-        jm: r.productJm || 'kom',
-        sifra: r.productSifra || '',
-        tip: r.productTip || 'artikal',
-        kolicina: r.kolicina,
-        cijena: r.cijena,
-        rabat: r.rabat ?? 0,
-        pdvStopa: r.pdvStopa,
-      }))))
+      .then(rows => setStavke(rows.map(izReda)))
       .catch((err: any) => { setStavke([]); setError(err?.message || 'Greška pri čitanju stavki'); });
   }, [open, order.id]);
 
-  const suma = useMemo(() => sumaPriloga(stavke), [stavke]);
+  const suma = totali.ukupno;
   const kompletan = useMemo(() => prilogKompletan(order.ukupno, stavke), [order.ukupno, stavke]);
   const razlika = round2(suma - order.ukupno);
-
-  const addProduct = (p: Product, kol: number | null) => {
-    const k = kol ?? 1;
-    setStavke(prev => {
-      const existing = prev.find(s => s.productId === p.id);
-      if (existing) return prev.map(s => s.productId === p.id ? { ...s, kolicina: Math.round((s.kolicina + k) * 1000) / 1000 } : s);
-      return [...prev, {
-        productId: p.id, naziv: p.naziv, jm: p.jm || 'kom', sifra: p.sifra, tip: p.tip,
-        kolicina: k, cijena: p.cijena, rabat: 0, pdvStopa: p.pdvStopa,
-      }];
-    });
-  };
-
-  const updateStavka = (productId: number, patch: Partial<StavkaRed>) =>
-    setStavke(prev => prev.map(s => s.productId === productId ? { ...s, ...patch } : s));
-  const removeStavka = (productId: number) =>
-    setStavke(prev => prev.filter(s => s.productId !== productId));
 
   const handleSave = async () => {
     setError(null);
     setBusy(true);
     try {
-      await window.api.savePrilogStavke(order.id, stavke.map(s => ({
-        productId: s.productId, kolicina: s.kolicina, cijena: s.cijena, rabat: s.rabat, pdvStopa: s.pdvStopa,
-      })));
+      await window.api.savePrilogStavke(order.id, uPayload(stavke));
       onSaved();
       onOpenChange(false);
     } catch (err: any) {
@@ -126,7 +86,7 @@ export default function PrilogStavkeDialog({ open, onOpenChange, order, onSaved 
           <div>
             <Label>Dodaj stavku</Label>
             {/* Zbirna stavka je fiskalizovana sa stopom E — samo takvi proizvodi smiju u prilog. */}
-            <PretragaProizvoda tipovi={['artikal', 'usluga']} filter={p => p.pdvStopa === 'E'} onIzaberi={addProduct}
+            <PretragaProizvoda tipovi={['artikal', 'usluga']} filter={p => p.pdvStopa === 'E'} onIzaberi={dodaj}
               nedavnoKljuc="prilog" placeholder="Šifra, barkod ili naziv (samo PDV stopa E)" />
           </div>
         )}

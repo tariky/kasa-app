@@ -15,10 +15,11 @@ import {
   FileClock, CalendarDays,
 } from 'lucide-react';
 import {
-  sumaPriloga,
   PRILOG_OPIS_DEFAULT, FAKTURA_VEZA, PRILOG_OPIS_MAX, PRILOG_VEZA_MAX, FAKTURA_NAPOMENA_MAX,
 } from '@/lib/prilog';
 import { iznosStavke } from '@/lib/racun';
+import { uPayload, type StavkaDokumenta } from '@/lib/stavkeDokumenta';
+import { useStavkeDokumenta } from '@/hooks/useStavkeDokumenta';
 import { formatKM, formatKolicina, cn, mnozina, porukaGreske } from '@/lib/utils';
 import type { Kupac, Product } from '@/types';
 import { PretragaProizvoda } from '@/components/PretragaProizvoda';
@@ -59,28 +60,13 @@ const poljaKupca = (k: Kupac) => ({ naziv: k.naziv, sifra: k.idBroj, dodatno: [k
 const adresaFirme = (f: Firma) =>
   [f.adresa, [f.postanskiBroj, f.grad].filter(Boolean).join(' ')].filter(Boolean).join(', ');
 
-export interface StavkaRed {
-  productId: number;
-  naziv: string;
-  jm: string;
-  sifra: string;
-  tip: string;
-  kolicina: number;
-  cijena: number;
-  /** Postotak 0–100. */
-  rabat: number;
-  pdvStopa: string;
-  /** Stanje u trenutku dodavanja; null = nepoznato ili usluga. */
-  stanje: number | null;
-}
-
 /** Faktura po ponudi: firma i stavke dolaze popunjeni, ponuda se na kraju označi konvertovanom. */
 export interface FakturaPocetno {
   ponudaId: number;
   /** „12/2026“ — za naslov i napomenu. */
   ponudaOznaka: string;
   firma: Firma;
-  stavke: StavkaRed[];
+  stavke: StavkaDokumenta[];
 }
 
 /** Ponuda po kojoj se faktura izdaje — na kraju se označi konvertovanom. */
@@ -90,7 +76,7 @@ interface PonudaVeza { id: number; oznaka: string }
 export interface FakturaSkica {
   firma: Firma | null;
   mode: Mode;
-  stavke: StavkaRed[];
+  stavke: StavkaDokumenta[];
   rucniIznos: number | null;
   opis: string;
   veza: string;
@@ -158,7 +144,7 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
   const [allKupci, setAllKupci] = useState<Kupac[] | null>(null);
 
   const [mode, setMode] = useState<Mode>('stavke');
-  const [stavke, setStavke] = useState<StavkaRed[]>([]);
+  const { stavke, postavi: setStavke, dodaj, izmijeni: updateStavka, ukloni, totali } = useStavkeDokumenta();
   const [rucniIznos, setRucniIznos] = useState<number | null>(null);
   const [opis, setOpis] = useState(PRILOG_OPIS_DEFAULT);
   const [veza, setVeza] = useState(FAKTURA_VEZA);
@@ -252,7 +238,7 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
     // pocetno i skica se čitaju samo pri otvaranju
   }, [open]);
 
-  const sumaStavki = useMemo(() => sumaPriloga(stavke), [stavke]);
+  const sumaStavki = totali.ukupno;
   const zabranjene = useMemo(() => stavke.filter(s => nijeE(s.pdvStopa)), [stavke]);
   const datumValute = rok === null ? null : rok === 'datum' ? (rokDatum || null) : plusDana(localDateStr(), rok);
   const iznos = mode === 'stavke' ? sumaStavki : (rucniIznos ?? 0);
@@ -301,18 +287,9 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
       return;
     }
     setObavijest(null);
-    const k = kol ?? 1;
-    setStavke(prev => {
-      const existing = prev.find(s => s.productId === p.id);
-      if (existing) return prev.map(s => s.productId === p.id ? { ...s, kolicina: Math.round((s.kolicina + k) * 1000) / 1000 } : s);
-      return [...prev, {
-        productId: p.id, naziv: p.naziv, jm: p.jm || 'kom', sifra: p.sifra, tip: p.tip,
-        kolicina: k, cijena: p.cijena, rabat: rabatKupca, pdvStopa: p.pdvStopa,
-        stanje: p.tip === 'usluga' || p.slobodan ? null : p.stanje ?? null,
-      }];
-    });
+    dodaj(p, kol, { rabat: rabatKupca });
     searchRef.current?.focus();
-  }, [rabatKupca]);
+  }, [dodaj, rabatKupca]);
 
   /** Isti rabat na sve stavke; prazno ili 0 skida rabat. */
   const primijeniRabatSve = () => {
@@ -325,13 +302,11 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
     searchRef.current?.focus();
   };
 
-  const updateStavka = (productId: number, patch: Partial<StavkaRed>) =>
-    setStavke(prev => prev.map(s => s.productId === productId ? { ...s, ...patch } : s));
   /** Strelice u polju količine: ±1, sa Shiftom ±10. Ne ide ispod 1. */
-  const nudgeKolicina = (s: StavkaRed, delta: number) =>
+  const nudgeKolicina = (s: StavkaDokumenta, delta: number) =>
     updateStavka(s.productId, { kolicina: Math.max(1, Math.round((s.kolicina + delta) * 1000) / 1000) });
   const removeStavka = (productId: number) => {
-    setStavke(prev => prev.filter(s => s.productId !== productId));
+    ukloni(productId);
     searchRef.current?.focus();
   };
 
@@ -377,7 +352,7 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
       const { ishod, res } = await izvrsiFiskalno(() => window.api.finalizePrilogOrder({
         nacinPlacanja,
         ...(mode === 'stavke'
-          ? { stavke: stavke.map(s => ({ productId: s.productId, kolicina: s.kolicina, cijena: s.cijena, rabat: s.rabat, pdvStopa: s.pdvStopa })) }
+          ? { stavke: uPayload(stavke) }
           : { iznos }),
         prilogOpis: opis.trim(),
         prilogVeza: vezaZaSlanje,
