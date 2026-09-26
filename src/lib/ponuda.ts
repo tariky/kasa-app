@@ -1,5 +1,5 @@
-import type * as Tring from '@/services/tring';
 import type { SqlDb } from './sqldb';
+import type { FiskalniUredjaj, IshodUredjaja } from './fiskalniUredjaj';
 import { izracunajTotale, upisiRacun } from './racun';
 import { localDateStr } from './novac';
 import { buildTringRacun } from './tringRacun';
@@ -204,8 +204,8 @@ export function updatePonuda(
 
 export interface KonverzijaDeps {
   db: SqlDb;
-  /** Štampa fiskalni račun na uređaju. */
-  print: (racun: Tring.Racun) => Promise<Tring.TringResponse | null>;
+  /** Fiskalni uređaj (lib/fiskalniUredjaj.ts). */
+  uredjaj: Pick<FiskalniUredjaj, 'stampajRacun'>;
   /** Omotač koji izvrši callback u SQL transakciji. */
   transaction: <T>(fn: () => T) => () => T;
 }
@@ -274,7 +274,7 @@ export async function konvertujPonudu(
   data: { id: number; korisnikId: number; nacinPlacanja: string },
   opts: { nalogId?: number } = {},
 ): Promise<KonverzijaResult> {
-  const { db, print, transaction } = deps;
+  const { db, uredjaj, transaction } = deps;
   const id = data.id;
 
   if (konverzijeInFlight.has(id)) throw new Error('Konverzija ove ponude je već u toku');
@@ -334,9 +334,9 @@ export async function konvertujPonudu(
     };
     const pendingId = zapisiPending(db, data.korisnikId, snapshot);
 
-    let result: Tring.TringResponse | null;
+    let ishod: IshodUredjaja;
     try {
-      result = await print(racun);
+      ishod = await uredjaj.stampajRacun(racun);
     } catch (err) {
       // Izuzetak iz štampe — ništa nije odštampano, počisti write-ahead red.
       db.prepare('DELETE FROM pending_receipts WHERE id = ?').run(pendingId);
@@ -344,9 +344,9 @@ export async function konvertujPonudu(
     }
 
     // Siguran neuspjeh briše pending red; nepoznat ishod ga ostavlja.
-    if (!result || !result.success) return neuspjelaStampa(db, pendingId, result);
+    if (!ishod.ok) return neuspjelaStampa(db, pendingId, ishod);
 
-    const brojFiskalnogRacuna = result.odgovori?.BrojFiskalnogRacuna || null;
+    const brojFiskalnogRacuna = ishod.bf;
 
     let racunId: number | null;
     try {
@@ -364,7 +364,7 @@ export async function konvertujPonudu(
     }
     if (racunId === null) return vecEvidentiran(brojFiskalnogRacuna);
 
-    return { success: true, racunId, brojFiskalnogRacuna, odgovori: result.odgovori };
+    return { success: true, racunId, brojFiskalnogRacuna, odgovori: ishod.odgovori };
   } finally {
     konverzijeInFlight.delete(id);
   }

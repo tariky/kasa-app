@@ -3,6 +3,7 @@ import { Database } from 'bun:sqlite';
 import { schema } from '@/database/schema';
 import { refundOrderInTransaction, refundAndPrint, type RefundDeps } from './refund';
 import type { TringResponse } from '@/services/tring';
+import { uredjajIzFunkcija, type TringFunkcije } from './fiskalniUredjaj';
 import { getProductStock } from './skladiste';
 import type { SqlDb } from './sqldb';
 
@@ -163,13 +164,17 @@ test('decimalna količina se vraća u cijelosti', () => {
 // Tring odbija gotovinski storno kad u kasi nema evidentirane gotovine.
 // Operater smije pregaziti stanje: manjak se upiše kao polog pa štampa prolazi.
 
-function refundDeps(over: Partial<RefundDeps> = {}): RefundDeps {
+/** Zavisnosti storna; `print` je štampa reklamacije na lažnom uređaju (odgovor u obliku services/tring). */
+function refundDeps(
+  over: Partial<Omit<RefundDeps, 'uredjaj'>> & { print?: TringFunkcije['stampatiReklamiraniRacun'] } = {},
+): RefundDeps {
+  const { print = async () => ({ success: true, vrstaOdgovora: 'OK', odgovori: { BrojFiskalnogRacuna: 'R-1' } }), ...ostalo } = over;
   return {
     db,
     transaction: (fn) => db.transaction(fn),
-    print: async () => ({ success: true, vrstaOdgovora: 'OK', odgovori: { BrojFiskalnogRacuna: 'R-1' } }),
+    uredjaj: uredjajIzFunkcija({ stampatiReklamiraniRacun: print }),
     drawerState: () => ({ ocekivanoStanje: 0 }),
-    ...over,
+    ...ostalo,
   };
 }
 

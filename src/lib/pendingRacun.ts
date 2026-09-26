@@ -1,5 +1,5 @@
-import type * as Tring from '@/services/tring';
 import type { SqlDb } from './sqldb';
+import type { NeuspjehUredjaja } from './fiskalniUredjaj';
 
 /**
  * Write-ahead zapis računa (pending_receipts, vidi
@@ -23,24 +23,19 @@ export interface NeuspjehStampe {
  * write-ahead red; nepoznat ishod ga ostavlja i vraća poruku koja operatera
  * šalje u dijalog nezavršenih računa.
  */
-export function neuspjelaStampa(
-  db: SqlDb, pendingId: number, result: Tring.TringResponse | null | undefined,
-): NeuspjehStampe {
-  const greska = result?.error || result?.vrstaOdgovora || 'Nepoznata greška';
-  const odgovori = result?.odgovori ?? {};
-  // Kao `ishodNepoznat` iz services/tring — bez runtime importa, jer lib/ se
-  // (preko ponuda.ts, prilog.ts, proizvodnja.ts) učitava i u rendereru.
-  if (!!result && !result.success && result.ishodNepoznat === true) {
+export function neuspjelaStampa(db: SqlDb, pendingId: number, ishod: NeuspjehUredjaja): NeuspjehStampe {
+  const odgovori = ishod.odgovori ?? {};
+  if (ishod.nepoznat) {
     return {
       success: false,
-      error: `Uređaj nije potvrdio račun (${greska}) — ishod štampe nije poznat. ` +
+      error: `Uređaj nije potvrdio račun (${ishod.greska}) — ishod štampe nije poznat. ` +
         'Provjerite da li je račun odštampan i riješite ga u dijalogu nezavršenih računa.',
       odgovori,
       ishodNepoznat: true,
     };
   }
   db.prepare('DELETE FROM pending_receipts WHERE id = ?').run(pendingId);
-  return { success: false, error: greska, odgovori };
+  return { success: false, error: ishod.greska, odgovori };
 }
 
 export function porukaVecEvidentiran(brojFiskalnogRacuna: string | null): string {

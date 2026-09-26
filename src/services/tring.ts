@@ -193,6 +193,7 @@ function postXml(urlPath: string, body: string): Promise<TringResponse> {
     const zavrsi = (result: TringResponse, responseXml: string) => {
       if (gotovo) return;
       gotovo = true;
+      const durationMs = Date.now() - startTime;
       addLog({
         method: "POST",
         path: urlPath,
@@ -200,8 +201,12 @@ function postXml(urlPath: string, body: string): Promise<TringResponse> {
         responseXml,
         statusCode: result.statusCode ?? null,
         parsed: result,
-        durationMs: Date.now() - startTime,
+        durationMs,
       });
+      // Jedino mjesto ispisa u konzolu (dev.logging) — pozivaoci ne loguju.
+      if (loggingEnabled) {
+        console.log(`[Tring] POST ${urlPath} (${durationMs} ms) zahtjev: ${body} odgovor: ${JSON.stringify(result)}`);
+      }
       resolve(result);
     };
     const neuspjeh = (error: string, nepoznat: boolean, statusCode: number | null = null): TringResponse => ({
@@ -434,7 +439,11 @@ function posalji(sastavi: () => string, posaljiTijelo: (body: string) => Promise
   try {
     body = sastavi();
   } catch (e) {
-    if (e instanceof NevaljanZahtjev) return Promise.resolve(odbijeno(e));
+    if (e instanceof NevaljanZahtjev) {
+      const r = odbijeno(e);
+      if (loggingEnabled) console.log(`[Tring] ${r.error}`);
+      return Promise.resolve(r);
+    }
     throw e;
   }
   return posaljiTijelo(body);

@@ -43,6 +43,7 @@ import { zapisiAudit, promjenePostavki } from '../lib/audit';
 import { addCashMovement, retryCashMovement, getTodayMovements, getDrawerState, getLastPologIznos } from '../lib/cash';
 import { logoVelicina, ziroRacuniPozicija } from '../lib/firma';
 import { dohvatiKnjigovodja } from '../lib/knjigovodja/podaci';
+import { procitajTringPostavke, uredjajIzPostavki } from '../lib/fiskalniUredjaj';
 import * as Tring from '../services/tring';
 import { provjeriKanal, stanjeLicence, aktivirajLicencu } from './licenca';
 import { backupInfo, backupSada, backupNakonAktivacije, registrujBackup } from './backup';
@@ -821,6 +822,9 @@ export function registerIpcHandlers(): void {
     return niv;
   });
 
+  // Fiskalni uređaj: postavke se čitaju pri svakom pozivu, dnevnik vodi services/tring.
+  const uredjaj = uredjajIzPostavki(db);
+
   // ─── Orders ──────────────────────────────────────────────
 
   handle('order:getAll', () => {
@@ -917,19 +921,15 @@ export function registerIpcHandlers(): void {
     const pendingId = pending.lastInsertRowid as number;
 
     // 2. Print.
-    loadTringConfig();
-    const racun = buildTringRacun({ ...data, items: data.stavke });
-    if (Tring.isLoggingEnabled()) console.log('[Tring] finalize request:', JSON.stringify(racun));
-    const result = await Tring.stampatiFiskalniRacun(racun);
-    if (Tring.isLoggingEnabled()) console.log('[Tring] finalize response:', JSON.stringify(result));
+    const ishod = await uredjaj.stampajRacun(buildTringRacun({ ...data, items: data.stavke }));
 
     // 3b. Print failed → surely not printed: drop the pending row; unknown
     // outcome (timeout, dropped connection): keep it for the pending dialog.
-    if (!result || !result.success) return neuspjelaStampa(db, pendingId, result);
+    if (!ishod.ok) return neuspjelaStampa(db, pendingId, ishod);
 
     // 3a. Print succeeded → delete pending row + create order atomically. A
     // row already resolved from the dialog meanwhile means no second order.
-    const brojFiskalnogRacuna = result.odgovori?.BrojFiskalnogRacuna || null;
+    const brojFiskalnogRacuna = ishod.bf;
     const finalizeTx = db.transaction(() => {
       if (!preuzmiPendingRed(db, pendingId)) return null;
       return upisiRacun(db, { ...data, brojFiskalnogRacuna, isManual: 0 });
@@ -937,7 +937,7 @@ export function registerIpcHandlers(): void {
     const orderId = finalizeTx();
     if (orderId === null) return vecEvidentiran(brojFiskalnogRacuna);
 
-    return { success: true, id: orderId, brojFiskalnogRacuna, odgovori: result.odgovori };
+    return { success: true, id: orderId, brojFiskalnogRacuna, odgovori: ishod.odgovori };
   });
 
   // Račun po prilogu: jedna zbirna stavka na fiskalnom računu, stvarne stavke
@@ -951,17 +951,7 @@ export function registerIpcHandlers(): void {
     skicaId?: number | null;
   }) => {
     const data = { ...unos, korisnikId: korisnik().id };
-    loadTringConfig();
-    return finalizePrilogAndPrint({
-      db,
-      transaction: (fn) => db.transaction(fn),
-      print: async (racun) => {
-        if (Tring.isLoggingEnabled()) console.log('[Tring] finalizePrilog request:', JSON.stringify(racun));
-        const result = await Tring.stampatiFiskalniRacun(racun);
-        if (Tring.isLoggingEnabled()) console.log('[Tring] finalizePrilog response:', JSON.stringify(result));
-        return result;
-      },
-    }, data);
+    return finalizePrilogAndPrint({ db, uredjaj, transaction: (fn) => db.transaction(fn) }, data);
   });
 
   // Fiskalni niz: račun po prilogu mora znati broj isječka prije nego ga odštampa.
@@ -1015,21 +1005,15 @@ export function registerIpcHandlers(): void {
     }
     const original = db.prepare('SELECT brojFiskalnogRacuna, ukupno FROM orders WHERE id = ?').get(data?.id) as
       { brojFiskalnogRacuna: string | null; ukupno: number } | undefined;
-    loadTringConfig();
     const rezultat = await refundAndPrint({
       db,
+      uredjaj,
       transaction: (fn) => db.transaction(fn),
-      print: async (racun) => {
-        if (Tring.isLoggingEnabled()) console.log('[Tring] refundAndPrint request:', JSON.stringify(racun));
-        const result = await Tring.stampatiReklamiraniRacun(racun);
-        if (Tring.isLoggingEnabled()) console.log('[Tring] refundAndPrint response:', JSON.stringify(result));
-        return result;
-      },
       drawerState: () => getDrawerState(db),
       // Override iz UI-ja: manjak se evidentira kao pravi polog (Tring
       // UnosNovca + cash_movements) da uređaj dozvoli gotovinski storno.
       depositCash: async (iznos, napomena) => {
-        const res = await addCashMovement(cashDeps(), {
+        const res = await addCashMovement({ db, uredjaj }, {
           tip: 'polog', iznos, korisnikId: k.id, napomena,
         });
         if (res.tringStatus === 'error') {
@@ -1038,12 +1022,8 @@ export function registerIpcHandlers(): void {
       },
       // Pokriće koje fizički ne ulazi u ladicu — samo brojač uređaja.
       deviceCashIn: async (iznos) => {
-        loadTringConfig();
-        const res = await Tring.unosNovca(iznos);
-        if (Tring.isLoggingEnabled()) console.log('[Tring] deviceCashIn:', JSON.stringify(res));
-        if (!res.success) {
-          throw new Error(`Unos novca od ${iznos} KM nije prihvaćen na printeru: ${res.error || res.vrstaOdgovora}`);
-        }
+        const res = await uredjaj.unosNovca(iznos);
+        if (!res.ok) throw new Error(`Unos novca od ${iznos} KM nije prihvaćen na printeru: ${res.greska}`);
       },
     }, { ...data, korisnikId: k.id, odobrioAdminId });
     if (rezultat.success) {
@@ -1256,17 +1236,7 @@ export function registerIpcHandlers(): void {
   // testabilna nad mock fiskalnim serverom, bez Electron ovisnosti.
   handle('ponuda:konvertuj', async (unos: { id: number; nacinPlacanja: string }) => {
     const data = { ...unos, korisnikId: korisnik().id };
-    loadTringConfig();
-    return konvertujPonudu({
-      db,
-      transaction: (fn) => db.transaction(fn),
-      print: async (racun) => {
-        if (Tring.isLoggingEnabled()) console.log('[Tring] ponuda:konvertuj request:', JSON.stringify(racun));
-        const result = await Tring.stampatiFiskalniRacun(racun);
-        if (Tring.isLoggingEnabled()) console.log('[Tring] ponuda:konvertuj response:', JSON.stringify(result));
-        return result;
-      },
-    }, data);
+    return konvertujPonudu({ db, uredjaj, transaction: (fn) => db.transaction(fn) }, data);
   });
 
   // ─── Proizvodnja ─────────────────────────────────────────
@@ -1332,17 +1302,7 @@ export function registerIpcHandlers(): void {
 
   handle('nalog:izdajRacun', async (unos: { id: number; nacinPlacanja: string }) => {
     const data = { ...unos, korisnikId: korisnik().id };
-    loadTringConfig();
-    return izdajRacunZaNalog({
-      db,
-      transaction: (fn) => db.transaction(fn),
-      print: async (racun) => {
-        if (Tring.isLoggingEnabled()) console.log('[Tring] nalog:izdajRacun request:', JSON.stringify(racun));
-        const result = await Tring.stampatiFiskalniRacun(racun);
-        if (Tring.isLoggingEnabled()) console.log('[Tring] nalog:izdajRacun response:', JSON.stringify(result));
-        return result;
-      },
-    }, data);
+    return izdajRacunZaNalog({ db, uredjaj, transaction: (fn) => db.transaction(fn) }, data);
   });
 
   handle('normativ:get', (productId: number) => getNormativ(db, productId));
@@ -1368,23 +1328,9 @@ export function registerIpcHandlers(): void {
   // ─── Settings ────────────────────────────────────────────
 
   handle('settings:getTring', () => {
-    const rows = db
-      .prepare("SELECT key, value FROM settings WHERE key LIKE 'tring.%'")
-      .all() as Array<{ key: string; value: string }>;
-
-    const settings: Record<string, any> = {};
-    for (const row of rows) {
-      const shortKey = row.key.replace('tring.', '');
-      settings[shortKey] = row.value;
-    }
-
+    const t = procitajTringPostavke(db);
     // Lozinka operatera ne izlazi iz main procesa — UI zna samo da li je upisana.
-    return {
-      host: settings.host ?? 'localhost',
-      port: parseInt(settings.port ?? '8085', 10),
-      operatorId: parseInt(settings.operatorId ?? '0', 10),
-      imaLozinku: (settings.operatorPassword ?? '') !== '',
-    };
+    return { host: t.host, port: t.port, operatorId: t.operatorId, imaLozinku: (t.operatorPassword ?? '') !== '' };
   });
 
   handle('settings:saveTring', (data: { host: string; port: number; operatorId: number; operatorPassword?: string | null }) => {
@@ -1575,78 +1521,20 @@ export function registerIpcHandlers(): void {
 
   // ─── Tring ──────────────────────────────────────────────
 
-  // Load Tring settings from DB and configure the Tring client
-  function loadTringConfig(): { operatorId: number; operatorPassword: string } {
-    const rows = db
-      .prepare("SELECT key, value FROM settings WHERE key LIKE 'tring.%'")
-      .all() as Array<{ key: string; value: string }>;
+  handle('tring:init', () => uredjaj.inicijalizacija());
 
-    const map: Record<string, string> = {};
-    for (const row of rows) {
-      map[row.key.replace('tring.', '')] = row.value;
-    }
+  handle('tring:xReport', () => uredjaj.presjekStanja());
 
-    Tring.configure({
-      host: map.host ?? 'localhost',
-      port: parseInt(map.port ?? '8085', 10),
-    });
+  handle('tring:zReport', () => uredjaj.dnevniIzvjestaj());
 
-    // Load dev logging setting
-    const devLogging = db.prepare("SELECT value FROM settings WHERE key = 'dev.logging'").get() as { value: string } | undefined;
-    Tring.setLoggingEnabled(devLogging?.value === 'true');
+  handle('tring:periodicReport', (from: string, to: string) => uredjaj.periodicniIzvjestaj(from, to));
 
-    return {
-      operatorId: parseInt(map.operatorId ?? '0', 10),
-      operatorPassword: map.operatorPassword ?? '0',
-    };
-  }
-
-  handle('tring:init', async () => {
-    const { operatorId, operatorPassword } = loadTringConfig();
-    const result = await Tring.inicijalizacija(operatorId, operatorPassword);
-    if (Tring.isLoggingEnabled()) console.log('[Tring] init:', JSON.stringify(result));
-    return result;
-  });
-
-  handle('tring:xReport', async () => {
-    loadTringConfig();
-    const result = await Tring.stampatiPresjekStanja();
-    if (Tring.isLoggingEnabled()) console.log('[Tring] xReport:', JSON.stringify(result));
-    return result;
-  });
-
-  handle('tring:zReport', async () => {
-    loadTringConfig();
-    const result = await Tring.stampatiDnevniIzvjestaj();
-    if (Tring.isLoggingEnabled()) console.log('[Tring] zReport:', JSON.stringify(result));
-    return result;
-  });
-
-  handle('tring:periodicReport', async (from: string, to: string) => {
-    loadTringConfig();
-    const result = await Tring.stampatiPeriodicniIzvjestaj(from, to);
-    if (Tring.isLoggingEnabled()) console.log('[Tring] periodicReport:', JSON.stringify(result));
-    return result;
-  });
-
-  // Službeni unos/iznos gotovine (polog). Deps obrazac kao refundAndPrint —
-  // logika i upis žive u lib/cash.ts da budu testabilni bez Electrona.
-  const cashDeps = () => {
-    loadTringConfig();
-    return {
-      db,
-      send: async (tip: 'polog' | 'povrat', iznos: number) => {
-        const result = tip === 'polog' ? await Tring.unosNovca(iznos) : await Tring.povratNovca(iznos);
-        if (Tring.isLoggingEnabled()) console.log(`[Tring] ${tip}:`, JSON.stringify(result));
-        return result;
-      },
-    };
-  };
-
+  // Službeni unos/iznos gotovine (polog). Logika i upis žive u lib/cash.ts da
+  // budu testabilni bez Electrona.
   handle('cash:add', (data: { tip: 'polog' | 'povrat'; iznos: number; napomena?: string }) =>
-    addCashMovement(cashDeps(), { ...data, korisnikId: korisnik().id }));
+    addCashMovement({ db, uredjaj }, { ...data, korisnikId: korisnik().id }));
 
-  handle('cash:retry', (id: number) => retryCashMovement(cashDeps(), id));
+  handle('cash:retry', (id: number) => retryCashMovement({ db, uredjaj }, id));
 
   handle('cash:getToday', () => getTodayMovements(db));
 

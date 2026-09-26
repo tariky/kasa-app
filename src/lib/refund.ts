@@ -1,6 +1,6 @@
-import type * as Tring from '@/services/tring';
-import { ishodNepoznat, provjeriReklamaciju } from '../services/tring';
+import { provjeriReklamaciju } from '../services/tring';
 import type { SqlDb } from './sqldb';
+import type { FiskalniUredjaj, IshodUredjaja } from './fiskalniUredjaj';
 import { parseFiskalniBroj } from './fiskalni';
 import { buildTringReklamacija } from './tringRacun';
 import { PRILOG_SIFRA, prilogNaziv } from './prilog';
@@ -54,8 +54,8 @@ export function refundOrderInTransaction(
 
 export interface RefundDeps {
   db: SqlDb;
-  /** Štampa storno na fiskalnom uređaju. */
-  print: (racun: Tring.ReklamiraniRacun) => Promise<Tring.TringResponse | null>;
+  /** Fiskalni uređaj (lib/fiskalniUredjaj.ts) — štampa storno. */
+  uredjaj: Pick<FiskalniUredjaj, 'stampajReklamaciju'>;
   /** Omotač koji izvrši callback u SQL transakciji. */
   transaction: (fn: () => void) => () => void;
   /** Očekivana gotovina u ladici; bez nje se manjak ne može izračunati. */
@@ -99,10 +99,8 @@ export interface RefundResult {
  */
 const NEDOVOLJNO_RE = /nedovoljno|nema dovoljno|insufficient|nedostaje|manjak|prazna kasa/i;
 
-function jeNedovoljnoSredstava(r: Tring.TringResponse): boolean {
-  return NEDOVOLJNO_RE.test(
-    [r.error ?? '', r.vrstaOdgovora ?? '', ...Object.values(r.odgovori ?? {})].join(' ')
-  );
+function jeNedovoljnoSredstava(r: IshodUredjaja): boolean {
+  return !r.ok && NEDOVOLJNO_RE.test([r.greska, ...Object.values(r.odgovori ?? {})].join(' '));
 }
 
 /** Računi kojima se storno trenutno štampa — zaštita od dvoklika. */
@@ -128,7 +126,7 @@ export async function refundAndPrint(
     odobrioAdminId?: number | null;
   }
 ): Promise<RefundResult> {
-  const { db, print, transaction } = deps;
+  const { db, uredjaj, transaction } = deps;
   const id = data.id;
 
   if (refundsInFlight.has(id)) throw new Error('Storniranje ovog računa je već u toku');
@@ -208,7 +206,7 @@ export async function refundAndPrint(
     };
     const pendingId = zapisiPending(db, snapshot.korisnikId, snapshot);
 
-    let result: Tring.TringResponse | null;
+    let ishod: IshodUredjaja;
     let uneseno = 0;
     let pologIznos = 0;
     try {
@@ -227,7 +225,7 @@ export async function refundAndPrint(
         uneseno = round2(uneseno + planiraniPolog);
       }
 
-      result = await print(racun);
+      ishod = await uredjaj.stampajReklamaciju(racun);
 
       // Stanje ladice je samo procjena brojača u uređaju (pologi se mogu voditi
       // i mimo aplikacije), pa ako uređaj i dalje javlja manjak — dopuni do
@@ -235,13 +233,12 @@ export async function refundAndPrint(
       // potroši, tako da brojač uređaja ne ostane napuhan. Bez pitanja kad
       // gotovinski manjak ne postoji; inače tek uz override. Nikad nakon
       // nepoznatog ishoda — storno je možda već odštampan.
-      if ((manjakLadica === 0 || data.dozvoliPolog) && result && !result.success &&
-          !ishodNepoznat(result) && jeNedovoljnoSredstava(result)) {
+      if ((manjakLadica === 0 || data.dozvoliPolog) && !ishod.ok && !ishod.nepoznat && jeNedovoljnoSredstava(ishod)) {
         const dopuna = round2(potrebnoUredjaj - uneseno);
         if (dopuna > 0 && deps.deviceCashIn) {
           await deps.deviceCashIn(dopuna);
           uneseno = round2(uneseno + dopuna);
-          result = await print(racun);
+          ishod = await uredjaj.stampajReklamaciju(racun);
         }
       }
     } catch (err) {
@@ -250,10 +247,10 @@ export async function refundAndPrint(
       throw err;
     }
 
-    if (!result || !result.success) {
+    if (!ishod.ok) {
       // Siguran neuspjeh briše pending red; nepoznat ishod ga ostavlja (bez
       // ponude pologa — storno se ne smije slati ponovo dok se ne riješi).
-      const neuspjeh = neuspjelaStampa(db, pendingId, result);
+      const neuspjeh = neuspjelaStampa(db, pendingId, ishod);
       if (neuspjeh.ishodNepoznat) return neuspjeh;
       return {
         ...neuspjeh,
@@ -261,14 +258,12 @@ export async function refundAndPrint(
         // kad uređaj i dalje traži novac a nismo ga dopunili do punog iznosa.
         nedovoljnoSredstava:
           !data.dozvoliPolog &&
-          (manjakLadica > 0 ||
-            (!!result && jeNedovoljnoSredstava(result) && uneseno < potrebnoUredjaj)),
+          (manjakLadica > 0 || (jeNedovoljnoSredstava(ishod) && uneseno < potrebnoUredjaj)),
         manjak: manjakLadica > 0 ? manjakLadica : round2(potrebnoUredjaj - uneseno),
       };
     }
 
-    const brojReklamacije =
-      data.brojReklamacije?.trim() || result.odgovori?.BrojFiskalnogRacuna || null;
+    const brojReklamacije = data.brojReklamacije?.trim() || ishod.bf;
 
     let vecUpisan = false;
     try {
@@ -286,7 +281,7 @@ export async function refundAndPrint(
     }
     if (vecUpisan) return vecEvidentiranStorno(brojReklamacije);
 
-    return { success: true, brojReklamacije, odgovori: result.odgovori, pologIznos };
+    return { success: true, brojReklamacije, odgovori: ishod.odgovori, pologIznos };
   } finally {
     refundsInFlight.delete(id);
   }

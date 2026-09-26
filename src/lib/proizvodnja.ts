@@ -7,7 +7,7 @@ import { izracunajTotale, upisiRacun } from './racun';
 import { provjeriNacinPlacanja } from './placanje';
 import { buildTringRacun } from './tringRacun';
 import { konvertujPonudu, type KonverzijaDeps, type KonverzijaResult } from './ponuda';
-import type * as Tring from '@/services/tring';
+import type { IshodUredjaja } from './fiskalniUredjaj';
 import {
   baciAkoCekaNezavrsen, neuspjelaStampa, preuzmiPendingRed, snapshotKupca, vecEvidentiran, zapisiPending,
   type SnapshotNaloga,
@@ -725,7 +725,7 @@ export async function izdajRacunZaNalog(
   deps: KonverzijaDeps,
   data: { id: number; korisnikId: number; nacinPlacanja: string }
 ): Promise<KonverzijaResult> {
-  const { db, print, transaction } = deps;
+  const { db, uredjaj, transaction } = deps;
   const nalog = getNalog(db, data.id);
   if (nalog.vrsta !== 'narudzba') throw new Error('Račun se izdaje samo za nalog po narudžbi');
   if (nalog.status !== 'zavrsen') throw new Error('Nalog mora biti završen prije izdavanja računa');
@@ -787,17 +787,17 @@ export async function izdajRacunZaNalog(
     };
     const pendingId = zapisiPending(db, data.korisnikId, snapshot);
 
-    let result: Tring.TringResponse | null;
+    let ishod: IshodUredjaja;
     try {
-      result = await print(racun);
+      ishod = await uredjaj.stampajRacun(racun);
     } catch (err) {
       // Izuzetak iz štampe — ništa nije odštampano, počisti write-ahead red.
       db.prepare('DELETE FROM pending_receipts WHERE id = ?').run(pendingId);
       throw err;
     }
     // Siguran neuspjeh briše pending red; nepoznat ishod ga ostavlja.
-    if (!result || !result.success) return neuspjelaStampa(db, pendingId, result);
-    const brojFiskalnogRacuna = result.odgovori?.BrojFiskalnogRacuna || null;
+    if (!ishod.ok) return neuspjelaStampa(db, pendingId, ishod);
+    const brojFiskalnogRacuna = ishod.bf;
 
     let racunId: number | null;
     try {
@@ -814,7 +814,7 @@ export async function izdajRacunZaNalog(
       );
     }
     if (racunId === null) return vecEvidentiran(brojFiskalnogRacuna);
-    return { success: true, racunId, brojFiskalnogRacuna, odgovori: result.odgovori };
+    return { success: true, racunId, brojFiskalnogRacuna, odgovori: ishod.odgovori };
   } finally {
     izdavanjaUToku.delete(nalog.id);
   }

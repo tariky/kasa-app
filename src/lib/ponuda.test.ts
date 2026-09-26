@@ -9,6 +9,7 @@ import {
   efektivniStatus, setStatusPonude, deletePonuda, konvertujPonudu, plusDana, danaIzmedju, DEFAULT_ROK_DANA,
 } from './ponuda';
 import type { SqlDb } from './sqldb';
+import { uredjajIzFunkcija } from './fiskalniUredjaj';
 
 let db: SqlDb & Database;
 
@@ -291,7 +292,7 @@ const printFail = async () =>
   ({ success: false, error: 'Štampač ne odgovara', odgovori: {} } as any);
 
 function deps(print: any) {
-  return { db, print, transaction: (fn: () => any) => db.transaction(fn) };
+  return { db, uredjaj: uredjajIzFunkcija({ stampatiFiskalniRacun: print }), transaction: (fn: () => any) => db.transaction(fn) };
 }
 
 test('uspješna konverzija: račun po zamrznutim cijenama, skladište razduženo, ponuda zaključana', async () => {

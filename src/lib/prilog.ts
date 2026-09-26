@@ -1,5 +1,5 @@
-import type * as Tring from '@/services/tring';
 import type { SqlDb } from './sqldb';
+import type { FiskalniUredjaj, IshodUredjaja } from './fiskalniUredjaj';
 import { parseFiskalniBroj, predvidjeniFiskalniBroj } from './fiskalni';
 import { validanDatumValute } from './valuta';
 import { round2 } from './novac';
@@ -184,8 +184,8 @@ export function oznaciPonuduFakturisanom(db: SqlDb, ponudaId: number, orderId: n
 
 export interface FinalizePrilogDeps {
   db: SqlDb;
-  /** Štampa fiskalni račun na uređaju. */
-  print: (racun: Tring.Racun) => Promise<Tring.TringResponse | null>;
+  /** Fiskalni uređaj (lib/fiskalniUredjaj.ts). */
+  uredjaj: Pick<FiskalniUredjaj, 'stampajRacun'>;
   /** Omotač koji izvrši callback u SQL transakciji. */
   transaction: (fn: () => void) => () => void;
 }
@@ -243,7 +243,7 @@ export async function finalizePrilogAndPrint(
     skicaId?: number | null;
   }
 ): Promise<FinalizePrilogResult> {
-  const { db, print, transaction } = deps;
+  const { db, uredjaj, transaction } = deps;
   if (!data.korisnikId) throw new Error('Korisnik nije prijavljen');
 
   const stavke = data.stavke ?? [];
@@ -290,9 +290,9 @@ export async function finalizePrilogAndPrint(
     .run(data.korisnikId, JSON.stringify(snapshot));
   const pendingId = pending.lastInsertRowid as number;
 
-  let result: Tring.TringResponse | null;
+  let ishod: IshodUredjaja;
   try {
-    result = await print(buildTringRacun({
+    ishod = await uredjaj.stampajRacun(buildTringRacun({
       ukupno, nacinPlacanja, kupac, items: [stavka],
     }));
   } catch (err) {
@@ -302,9 +302,9 @@ export async function finalizePrilogAndPrint(
   }
 
   // Siguran neuspjeh briše pending red; nepoznat ishod ga ostavlja.
-  if (!result || !result.success) return neuspjelaStampa(db, pendingId, result);
+  if (!ishod.ok) return neuspjelaStampa(db, pendingId, ishod);
 
-  const brojFiskalnogRacuna = result.odgovori?.BrojFiskalnogRacuna || null;
+  const brojFiskalnogRacuna = ishod.bf;
   // Faktura nosi isti broj kao fiskalni isječak uz koji ide. Kad uređaj vrati
   // broj različit od predviđenog, papir već nosi pogrešan broj u nazivu stavke —
   // faktura ide po stvarnom, a operater to mora saznati odmah.
@@ -337,5 +337,5 @@ export async function finalizePrilogAndPrint(
   }
 
   if (vecUpisan) return vecEvidentiran(brojFiskalnogRacuna);
-  return { success: true, id: orderId, prilogBroj, brojFiskalnogRacuna, upozorenje, odgovori: result.odgovori };
+  return { success: true, id: orderId, prilogBroj, brojFiskalnogRacuna, upozorenje, odgovori: ishod.odgovori };
 }
