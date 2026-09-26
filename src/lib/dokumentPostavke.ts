@@ -217,6 +217,16 @@ export function zadanoZaKupca(
   };
 }
 
+/** Način kupca na kasi: samo ispravan kupčev način — globalni fakturni način ne mijenja kasu. */
+export function nacinKupcaNaKasi(kupac: KupacZadano): NacinPlacanja | null {
+  return NACINI_PLACANJA.includes(kupac.nacinPlacanja as NacinPlacanja) ? (kupac.nacinPlacanja as NacinPlacanja) : null;
+}
+
+/** Kad kupac ode: način koji je on postavio vraća se na Gotovinu, ručni izbor kasira ostaje. */
+export function nacinBezKupca(trenutni: NacinPlacanja, odKupca: NacinPlacanja | null): NacinPlacanja {
+  return odKupca != null && trenutni === odKupca ? 'Gotovina' : trenutni;
+}
+
 /** Rok u danima → izbor u dijalogu fakture: brzi chip ako postoji, inače tačan datum. */
 export function rokUIzbor(dana: number | null, brzi: readonly number[]): { rok: number | 'datum' | null; dana: number | null } {
   if (dana == null) return { rok: null, dana: null };

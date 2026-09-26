@@ -28,7 +28,7 @@ import StavkeRacuna from '@/components/kasa/StavkeRacuna';
 import SpremljeneKosarice, { type SavedCartRow } from '@/components/kasa/SpremljeneKosarice';
 import type { Product, CartItem, Kupac } from '@/types';
 import { potvrdi } from '@/lib/dijalog';
-import { zadanoZaKupca, primijeniRabatKupca, formatRabat } from '@/lib/dokumentPostavke';
+import { zadanoZaKupca, primijeniRabatKupca, formatRabat, nacinKupcaNaKasi, nacinBezKupca } from '@/lib/dokumentPostavke';
 import { useDokumentPostavke } from '@/components/DokumentPostavkeProvider';
 
 type PaymentType = 'Gotovina' | 'Kartica' | 'Virman' | 'Ček';
@@ -106,6 +106,8 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
   const [rabatValue, setRabatValue] = useState('');
   const qtyInputRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  // Način koji je postavio izabrani kupac — kad kupac ode, vraća se na Gotovinu.
+  const nacinOdKupcaRef = useRef<PaymentType | null>(null);
 
   const fokusPretraga = useCallback(() => { setTimeout(() => searchInputRef.current?.focus(), 50); }, []);
 
@@ -122,8 +124,11 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
     setKupacGrad(k.grad ?? '');
     setKupacPostanskiBroj(k.postanskiBroj ?? '');
     // Na kasi važi samo kupčev način plaćanja — globalni način fakture ne mijenja Gotovinu.
+    const nacinKupca = nacinKupcaNaKasi(k);
+    const odPrethodnog = nacinOdKupcaRef.current;
+    nacinOdKupcaRef.current = nacinKupca;
+    setPaymentType(prev => nacinKupca ?? nacinBezKupca(prev, odPrethodnog));
     const z = zadanoZaKupca(k, postavke, 'faktura');
-    if (k.nacinPlacanja) setPaymentType(z.nacinPlacanja);
     setKupacRabat(z.rabat);
     if (z.rabat > 0) {
       setCart(prev => primijeniRabatKupca(prev, z.rabat));
@@ -143,6 +148,9 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
     setKupacPostanskiBroj('');
     // Rabat ostaje na stavkama; samo nove stavke više ne dobijaju rabat kupca.
     setKupacRabat(0);
+    const odKupca = nacinOdKupcaRef.current;
+    nacinOdKupcaRef.current = null;
+    setPaymentType(prev => nacinBezKupca(prev, odKupca));
   }, []);
 
   // Load daily total setting + data

@@ -2,6 +2,7 @@ import { test, expect, describe } from 'bun:test';
 import {
   ZADANE_DOKUMENT_POSTAVKE as Z, KLJUCEVI_DOKUMENATA, procitajDokumentPostavke, uKljuceve,
   formatBroja, zadanoZaKupca, primijeniRabatKupca, pecatZa, formatRabat, rokUIzbor, zadanoZaFakturu,
+  nacinKupcaNaKasi, nacinBezKupca,
 } from './dokumentPostavke';
 
 describe('procitajDokumentPostavke', () => {
@@ -163,6 +164,23 @@ describe('pecatZa', () => {
   test('uključen bez slike ili sa smećem → null', () => {
     expect(pecatZa(procitajDokumentPostavke({ 'dokumenti.pecat.faktura': 'true' }), 'faktura')).toBeNull();
     expect(pecatZa(procitajDokumentPostavke({ 'dokumenti.pecat': 'nije-slika', 'dokumenti.pecat.faktura': 'true' }), 'faktura')).toBeNull();
+  });
+});
+
+describe('način plaćanja kupca na kasi', () => {
+  test('samo ispravan kupčev način, bez globalnog fakturnog', () => {
+    expect(nacinKupcaNaKasi({ nacinPlacanja: 'Kartica' })).toBe('Kartica');
+    expect(nacinKupcaNaKasi({ nacinPlacanja: 'Ček' })).toBe('Ček');
+    expect(nacinKupcaNaKasi({ nacinPlacanja: null })).toBeNull();
+    expect(nacinKupcaNaKasi({})).toBeNull();
+    expect(nacinKupcaNaKasi({ nacinPlacanja: 'Bitcoin' })).toBeNull();
+    expect(nacinKupcaNaKasi({ nacinPlacanja: '' })).toBeNull();
+  });
+  test('bez kupca: kupčev način se vraća na Gotovinu, ručni izbor ostaje', () => {
+    expect(nacinBezKupca('Kartica', 'Kartica')).toBe('Gotovina');
+    expect(nacinBezKupca('Virman', 'Kartica')).toBe('Virman');
+    expect(nacinBezKupca('Kartica', null)).toBe('Kartica');
+    expect(nacinBezKupca('Gotovina', null)).toBe('Gotovina');
   });
 });
 
