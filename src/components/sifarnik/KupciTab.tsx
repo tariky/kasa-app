@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { Kupac } from '@/types';
-import { cn, porukaGreske, parseDecimal } from '@/lib/utils';
+import { cn, parseDecimal } from '@/lib/utils';
 import { NACINI_PLACANJA } from '@/lib/dokumentPostavke';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -11,14 +11,14 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Key, LedgerHead } from '@/components/ui/ledger';
+import { LedgerHead } from '@/components/ui/ledger';
 import { Separator } from '@/components/ui/separator';
 import {
-  Plus, Trash2, Search, Pencil, X, Users, Phone,
+  Trash2, Pencil, X, Users, Phone,
 } from 'lucide-react';
-import { potvrdi, obavijesti } from '@/lib/dijalog';
 import { filtriraj, type PoljaPretrage } from '@/lib/pretraga';
+import { useIpcPodaci } from '@/hooks/useIpcPodaci';
+import { SifarnikLista, PraznaLista, useObrisi } from './SifarnikLista';
 
 // ---------------------------------------------------------------------------
 // Kupac Dialog
@@ -325,17 +325,12 @@ const poljaKupca = (k: Kupac): PoljaPretrage => ({
   dodatno: [k.idBroj, k.pdvBroj, k.adresa, k.grad].join(' '),
 });
 
-export function KupciTab({
-  kupci,
-  onReload,
-}: {
-  kupci: Kupac[];
-  onReload: () => void;
-}) {
+export function KupciTab() {
+  const ucitavanje = useIpcPodaci(() => window.api.getKupci(), []);
+  const kupci = ucitavanje.podaci ?? [];
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editKupac, setEditKupac] = useState<Kupac | null>(null);
   const [search, setSearch] = useState('');
-  const searchRef = useRef<HTMLInputElement>(null);
 
   const handleNew = () => {
     setEditKupac(null);
@@ -347,130 +342,90 @@ export function KupciTab({
     setDialogOpen(true);
   };
 
-  const handleDelete = async (k: Kupac) => {
-    if (!(await potvrdi(`Obrisati kupca "${k.naziv}"?`))) return;
-    try { await window.api.deleteKupac(k.id); onReload(); }
-    catch (e) { await obavijesti(porukaGreske(e)); }
-  };
+  const handleDelete = useObrisi(
+    (k: Kupac) => `Obrisati kupca "${k.naziv}"?`,
+    async (k: Kupac) => { await window.api.deleteKupac(k.id); await ucitavanje.osvjezi(); },
+  );
 
   const filtered = filtriraj(kupci, search, poljaKupca);
-
-  // "/" pretraga, "N" novi kupac — isto kao na listi artikala.
-  useEffect(() => {
-    if (dialogOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) {
-        if (t === searchRef.current && e.key === 'Escape') { setSearch(''); t.blur(); }
-        return;
-      }
-      if (e.key === '/') { e.preventDefault(); searchRef.current?.focus(); return; }
-      if (e.key.toLowerCase() === 'n') { e.preventDefault(); handleNew(); }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [dialogOpen]);
 
   const td = 'py-2.5 border-b border-slate-100';
   const prazno = <span className="text-slate-200">—</span>;
 
   return (
-    <div className="flex flex-col h-full bg-white">
-      <div className="flex-shrink-0 flex flex-wrap items-center gap-x-3 gap-y-2 px-6 py-3 border-b border-slate-200/80">
-        <div className="relative w-full sm:w-auto sm:flex-1 sm:min-w-[220px] sm:max-w-sm">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
-          <Input
-            ref={searchRef}
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="Naziv, JIB, PDV broj, adresa ili grad…"
-            aria-label="Pretraga kupaca"
-            className="pl-9 pr-9 h-8 text-[12.5px] bg-slate-50 border-slate-200"
-          />
-          {search
-            ? <button onClick={() => setSearch('')} aria-label="Obriši pretragu" className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"><X className="h-3.5 w-3.5" /></button>
-            : <Key className="absolute right-2.5 top-1/2 -translate-y-1/2 ml-0">/</Key>}
-        </div>
-
-        <span className="text-[11.5px] text-slate-400 whitespace-nowrap">
-          {search ? <><span className="font-mono tabular-nums text-slate-600">{filtered.length}</span> od </> : 'Ukupno '}
-          <span className="font-mono tabular-nums text-slate-600">{kupci.length}</span>
-        </span>
-
-        <Button size="sm" onClick={handleNew} className="ml-auto h-8 gap-1.5 pl-3 pr-2 text-[12px]">
-          <Plus className="h-3.5 w-3.5" /> Novi kupac <Key tone="dark">N</Key>
-        </Button>
-      </div>
-
-      {filtered.length === 0 ? (
-        <div className="flex-1 flex flex-col items-center justify-center text-slate-400 select-none">
-          <div className="w-12 h-12 rounded-2xl bg-slate-50 flex items-center justify-center mb-3"><Users size={20} className="text-slate-300" /></div>
-          <p className="text-[13px] font-medium text-slate-500">{search ? 'Nema rezultata pretrage' : 'Nema kupaca'}</p>
-          {!search && <p className="text-[12px] text-slate-400 mt-0.5">Prvog kupca dodaješ tipkom <Key className="ml-0 mx-0.5">N</Key>.</p>}
-        </div>
-      ) : (
-        <ScrollArea className="flex-1">
-          <table className="w-full border-separate border-spacing-0">
-            <LedgerHead columns={[
-              { label: 'Naziv', className: 'text-left pl-6 pr-3' },
-              { label: 'ID broj', className: 'text-left px-3 w-[1%] whitespace-nowrap' },
-              { label: 'PDV broj', className: 'text-left px-3 w-[1%] whitespace-nowrap hidden xl:table-cell' },
-              { label: 'Adresa', className: 'text-left px-3 hidden lg:table-cell' },
-              { label: 'Grad', className: 'text-left px-3 w-[130px]' },
-              { label: 'Kontakt', className: 'text-left px-3 w-[170px] hidden xl:table-cell' },
-              { label: '', className: 'pr-6 pl-2 w-[1%]' },
-            ]} />
-            <tbody>
-              {filtered.map((k) => (
-                <tr
-                  key={k.id}
-                  className="group transition-colors hover:bg-slate-50 cursor-pointer"
-                  onClick={() => handleEdit(k)}
-                >
-                  <td className={cn(td, 'pl-6 pr-3 max-w-0')}>
-                    <span className="block truncate text-[12.5px] font-medium text-slate-800">{k.naziv}</span>
-                    {(k.adresa || k.kontakt) && (
-                      <span className="xl:hidden block truncate text-[11px] text-slate-400">
-                        {k.adresa && <span className="lg:hidden">{k.adresa}</span>}
-                        {k.adresa && k.kontakt && <span className="lg:hidden"> · </span>}
-                        {k.kontakt}
-                      </span>
-                    )}
-                  </td>
-                  <td className={cn(td, 'px-3 font-mono text-[12px] text-slate-400 whitespace-nowrap')}>
-                    {k.idBroj}
-                    {k.pdvBroj && <span className="xl:hidden block font-mono text-[10.5px] text-slate-400">PDV {k.pdvBroj}</span>}
-                  </td>
-                  <td className={cn(td, 'hidden xl:table-cell px-3 font-mono text-[12px] text-slate-400 whitespace-nowrap')}>{k.pdvBroj || prazno}</td>
-                  <td className={cn(td, 'hidden lg:table-cell px-3 max-w-0 truncate text-[12px] text-slate-500')}>{k.adresa || prazno}</td>
-                  <td className={cn(td, 'px-3 max-w-0 truncate text-[12px] text-slate-500')}>{k.grad || prazno}</td>
-                  <td className={cn(td, 'hidden xl:table-cell px-3 max-w-0 truncate text-[12px] text-slate-500')}>{k.kontakt || prazno}</td>
-                  <td className={cn(td, 'pr-6 pl-2 text-right')}>
-                    <div className="flex items-center justify-end gap-0.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
-                      <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-400 hover:text-slate-700" title="Uredi" aria-label={`Uredi ${k.naziv}`}
-                        onClick={(e) => { e.stopPropagation(); handleEdit(k); }}>
-                        <Pencil className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-400 hover:text-red-600 hover:bg-red-50" title="Obriši" aria-label={`Obriši ${k.naziv}`}
-                        onClick={(e) => { e.stopPropagation(); handleDelete(k); }}>
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </ScrollArea>
-      )}
+    <>
+      <SifarnikLista
+        naslov="Novi kupac"
+        placeholder="Naziv, JIB, PDV broj, adresa ili grad…"
+        oznakaPretrage="Pretraga kupaca"
+        pretraga={search}
+        onPretraga={setSearch}
+        broj={filtered.length}
+        ukupno={kupci.length}
+        onNovi={handleNew}
+        precice={!dialogOpen}
+        ucitavanje={ucitavanje}
+        prazno={<PraznaLista ikona={Users} poruka={search ? 'Nema rezultata pretrage' : 'Nema kupaca'} kakoDodati={!search && 'Prvog kupca dodaješ'} />}
+      >
+        <table className="w-full border-separate border-spacing-0">
+          <LedgerHead columns={[
+            { label: 'Naziv', className: 'text-left pl-6 pr-3' },
+            { label: 'ID broj', className: 'text-left px-3 w-[1%] whitespace-nowrap' },
+            { label: 'PDV broj', className: 'text-left px-3 w-[1%] whitespace-nowrap hidden xl:table-cell' },
+            { label: 'Adresa', className: 'text-left px-3 hidden lg:table-cell' },
+            { label: 'Grad', className: 'text-left px-3 w-[130px]' },
+            { label: 'Kontakt', className: 'text-left px-3 w-[170px] hidden xl:table-cell' },
+            { label: '', className: 'pr-6 pl-2 w-[1%]' },
+          ]} />
+          <tbody>
+            {filtered.map((k) => (
+              <tr
+                key={k.id}
+                className="group transition-colors hover:bg-slate-50 cursor-pointer"
+                onClick={() => handleEdit(k)}
+              >
+                <td className={cn(td, 'pl-6 pr-3 max-w-0')}>
+                  <span className="block truncate text-[12.5px] font-medium text-slate-800">{k.naziv}</span>
+                  {(k.adresa || k.kontakt) && (
+                    <span className="xl:hidden block truncate text-[11px] text-slate-400">
+                      {k.adresa && <span className="lg:hidden">{k.adresa}</span>}
+                      {k.adresa && k.kontakt && <span className="lg:hidden"> · </span>}
+                      {k.kontakt}
+                    </span>
+                  )}
+                </td>
+                <td className={cn(td, 'px-3 font-mono text-[12px] text-slate-400 whitespace-nowrap')}>
+                  {k.idBroj}
+                  {k.pdvBroj && <span className="xl:hidden block font-mono text-[10.5px] text-slate-400">PDV {k.pdvBroj}</span>}
+                </td>
+                <td className={cn(td, 'hidden xl:table-cell px-3 font-mono text-[12px] text-slate-400 whitespace-nowrap')}>{k.pdvBroj || prazno}</td>
+                <td className={cn(td, 'hidden lg:table-cell px-3 max-w-0 truncate text-[12px] text-slate-500')}>{k.adresa || prazno}</td>
+                <td className={cn(td, 'px-3 max-w-0 truncate text-[12px] text-slate-500')}>{k.grad || prazno}</td>
+                <td className={cn(td, 'hidden xl:table-cell px-3 max-w-0 truncate text-[12px] text-slate-500')}>{k.kontakt || prazno}</td>
+                <td className={cn(td, 'pr-6 pl-2 text-right')}>
+                  <div className="flex items-center justify-end gap-0.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
+                    <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-400 hover:text-slate-700" title="Uredi" aria-label={`Uredi ${k.naziv}`}
+                      onClick={(e) => { e.stopPropagation(); handleEdit(k); }}>
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-400 hover:text-red-600 hover:bg-red-50" title="Obriši" aria-label={`Obriši ${k.naziv}`}
+                      onClick={(e) => { e.stopPropagation(); handleDelete(k); }}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </SifarnikLista>
 
       <KupacDialog
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         kupac={editKupac}
-        onSave={onReload}
+        onSave={ucitavanje.osvjezi}
       />
-    </div>
+    </>
   );
 }

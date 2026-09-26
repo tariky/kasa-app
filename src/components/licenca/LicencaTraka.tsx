@@ -1,10 +1,11 @@
 import { cn } from '@/lib/utils';
 import { opisLicence, type LicencaInfo } from '@/lib/licencaTipovi';
-import { otvoriLicencaDialog } from '@/hooks/useLicenca';
+import { useModuliKontekst } from '@/components/ModuliProvider';
 import { AlertTriangle, Lock, KeyRound } from 'lucide-react';
 
 /** Traka iznad sadržaja kad licenca ističe, istekla je ili je nema. */
 export default function LicencaTraka({ info }: { info: LicencaInfo | null }) {
+  const { otvoriLicencaDialog } = useModuliKontekst();
   if (!info || info.stanje === 'aktivna') return null;
   const opis = opisLicence(info);
   const zakljucano = info.stanje === 'zakljucana' || info.stanje === 'nema' || info.stanje === 'neispravna';

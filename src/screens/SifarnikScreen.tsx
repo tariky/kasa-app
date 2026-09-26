@@ -1,5 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Product, Dobavljac, Kupac } from '@/types';
+import { useState, useEffect } from 'react';
 import { cn } from '@/lib/utils';
 import { KupciTab } from '@/components/sifarnik/KupciTab';
 import { DobavljaciTab } from '@/components/sifarnik/DobavljaciTab';
@@ -10,42 +9,10 @@ import { Users, Building2, Wrench, Layers } from 'lucide-react';
 
 type SifarnikTab = 'kupci' | 'dobavljaci' | 'usluge' | 'materijal';
 
+/** Šifarnik: svaki tab sam učitava svoju listu (i pokazuje grešku učitavanja). */
 export default function SifarnikScreen() {
-  const [kupci, setKupci] = useState<Kupac[]>([]);
-  const [dobavljaci, setDobavljaci] = useState<Dobavljac[]>([]);
-  const [usluge, setUsluge] = useState<Product[]>([]);
-  const [materijali, setMaterijali] = useState<Product[]>([]);
   const [activeTab, setActiveTab] = useState<SifarnikTab>('kupci');
   const proizvodnja = useProizvodnja();
-
-  const loadKupci = useCallback(async () => {
-    const data = await window.api.getKupci();
-    setKupci(data);
-  }, []);
-
-  const loadDobavljaci = useCallback(async () => {
-    const data = await window.api.getDobavljaci();
-    setDobavljaci(data);
-  }, []);
-
-  const loadUsluge = useCallback(async () => {
-    const data = await window.api.getProducts('usluga');
-    setUsluge(data);
-  }, []);
-
-  const loadMaterijali = useCallback(async () => {
-    setMaterijali(await window.api.getProducts('materijal'));
-  }, []);
-
-  useEffect(() => {
-    loadKupci();
-    loadDobavljaci();
-    loadUsluge();
-  }, [loadKupci, loadDobavljaci, loadUsluge]);
-
-  useEffect(() => {
-    if (proizvodnja) loadMaterijali();
-  }, [proizvodnja, loadMaterijali]);
 
   useEffect(() => {
     if (proizvodnja === false && activeTab === 'materijal') setActiveTab('kupci');
@@ -87,10 +54,10 @@ export default function SifarnikScreen() {
 
       {/* Content */}
       <div className="flex-1 min-h-0 overflow-hidden">
-        {activeTab === 'kupci' && <KupciTab kupci={kupci} onReload={loadKupci} />}
-        {activeTab === 'dobavljaci' && <DobavljaciTab dobavljaci={dobavljaci} onReload={loadDobavljaci} />}
-        {activeTab === 'usluge' && <UslugeTab usluge={usluge} onReload={loadUsluge} />}
-        {activeTab === 'materijal' && <MaterijalTab materijali={materijali} onReload={loadMaterijali} />}
+        {activeTab === 'kupci' && <KupciTab />}
+        {activeTab === 'dobavljaci' && <DobavljaciTab />}
+        {activeTab === 'usluge' && <UslugeTab />}
+        {activeTab === 'materijal' && <MaterijalTab />}
       </div>
     </div>
   );

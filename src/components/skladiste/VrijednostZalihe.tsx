@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { Product } from '@/types';
-import { cn, formatKM, porukaGreske } from '@/lib/utils';
+import { useMemo } from 'react';
+import { cn, formatKM } from '@/lib/utils';
 import { round2, localDateStr } from '@/lib/novac';
 import { uNetto } from '@/lib/pdvUnos';
 import { jePloca } from '@/lib/ploca';
 import { useProizvodnja } from '@/hooks/useProizvodnja';
+import { useIpcPodaci } from '@/hooks/useIpcPodaci';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { LedgerHead } from '@/components/ui/ledger';
@@ -19,26 +19,12 @@ const danas = () => localDateStr().split('-').reverse().join('.');
  */
 export function VrijednostZalihe() {
   const proizvodnja = useProizvodnja();
-  const [products, setProducts] = useState<Product[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [greska, setGreska] = useState('');
-
-  const load = useCallback(async () => {
-    if (proizvodnja === null) return;
-    setLoading(true);
-    setGreska('');
-    try {
-      const artikli = await window.api.getProducts('artikal');
-      const materijal = proizvodnja ? await window.api.getProducts('materijal') : [];
-      setProducts([...artikli, ...materijal]);
-    } catch (e) {
-      setGreska(porukaGreske(e));
-    } finally {
-      setLoading(false);
-    }
+  const { podaci, greska, ucitava: loading, osvjezi: load } = useIpcPodaci(async () => {
+    const artikli = await window.api.getProducts('artikal');
+    const materijal = proizvodnja ? await window.api.getProducts('materijal') : [];
+    return [...artikli, ...materijal];
   }, [proizvodnja]);
-
-  useEffect(() => { load(); }, [load]);
+  const products = useMemo(() => podaci ?? [], [podaci]);
 
   const r = useMemo(() => {
     const redovi = products

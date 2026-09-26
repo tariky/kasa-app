@@ -9,6 +9,8 @@ import { filtriraj, type PoljaPretrage } from '@/lib/pretraga';
 import { Key, LedgerHead, SegmentedFilter } from '@/components/ui/ledger';
 import DodajRacunDialog from '@/components/DodajRacunDialog';
 import { RacunDetailDialog } from '@/components/racuni/RacunDetailDialog';
+import { useIpcPodaci } from '@/hooks/useIpcPodaci';
+import { GreskaUcitavanja } from '@/components/GreskaUcitavanja';
 
 type Filter = 'sve' | 'aktivni' | 'storno';
 
@@ -37,30 +39,21 @@ const poljaRacuna = (o: Order): PoljaPretrage => ({
 });
 
 export default function NarudzbeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
-  const [orders, setOrders] = useState<Order[]>([]);
+  const racuni = useIpcPodaci(() => window.api.getOrders(), []);
+  const praznine = useIpcPodaci(() => window.api.getFiscalGaps(), []);
+  const orders = useMemo(() => racuni.podaci ?? [], [racuni.podaci]);
+  const gaps = praznine.podaci ?? [];
+  const loadOrders = racuni.osvjezi;
+  const loadGaps = praznine.osvjezi;
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [openId, setOpenId] = useState<number | null>(null);
   const [filter, setFilter] = useState<Filter>('sve');
   const [dodajOpen, setDodajOpen] = useState(false);
-  const [gaps, setGaps] = useState<number[]>([]);
   const [prefillBroj, setPrefillBroj] = useState<string | undefined>(undefined);
   const [search, setSearch] = useState('');
 
   const rowRefs = useRef<(HTMLTableRowElement | null)[]>([]);
   const searchRef = useRef<HTMLInputElement>(null);
-
-  const loadOrders = useCallback(async () => {
-    setOrders(await window.api.getOrders());
-  }, []);
-
-  const loadGaps = async () => {
-    setGaps(await window.api.getFiscalGaps());
-  };
-
-  useEffect(() => {
-    loadOrders();
-    loadGaps();
-  }, [loadOrders]);
 
   const isRefunded = (status: Order['status']) => status === 'refunded';
 
@@ -195,6 +188,11 @@ export default function NarudzbeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) 
         </div>
       </div>
 
+      <GreskaUcitavanja
+        greska={racuni.greska ?? praznine.greska}
+        onPonovo={() => { loadOrders(); loadGaps(); }}
+      />
+
       {gaps.length > 0 && (
         <div className="flex-shrink-0 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-amber-200 bg-amber-50/70 px-6 py-2.5">
           <div className="flex items-center gap-2">
@@ -233,7 +231,7 @@ export default function NarudzbeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) 
       )}
 
       {/* ── Lista ── */}
-      {visible.length === 0 ? (
+      {visible.length === 0 ? racuni.podaci && (
         <div className="flex-1 flex flex-col items-center justify-center text-slate-400 select-none">
           <div className="w-12 h-12 rounded-2xl bg-slate-50 flex items-center justify-center mb-3">
             <Receipt size={20} className="text-slate-300" strokeWidth={1.5} />

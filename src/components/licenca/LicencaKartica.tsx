@@ -2,7 +2,7 @@ import { Button } from '@/components/ui/button';
 import { Sekcija, SekcijaPodnozje } from '@/components/postavke/dijelovi';
 import { cn } from '@/lib/utils';
 import { opisLicence, LICENCA_KONTAKT } from '@/lib/licencaTipovi';
-import { useLicenca, otvoriLicencaDialog } from '@/hooks/useLicenca';
+import { useModuliKontekst } from '@/components/ModuliProvider';
 import { opisModula } from '@/lib/moduli';
 import { KeyRound } from 'lucide-react';
 
@@ -12,7 +12,7 @@ function datum(iso: string): string {
 
 /** Kartica "Licenca" u Postavke → Licenca i moduli. */
 export default function LicencaKartica() {
-  const info = useLicenca();
+  const { licenca: info, otvoriLicencaDialog } = useModuliKontekst();
   if (!info) return null;
   const opis = opisLicence(info);
   const licenca = 'licenca' in info ? info.licenca : null;
