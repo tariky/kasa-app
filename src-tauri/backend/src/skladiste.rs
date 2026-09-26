@@ -9,7 +9,6 @@ use crate::greska::{self, Greska, R};
 use crate::js;
 use crate::p;
 use crate::sql::Db;
-use crate::katalog::razlicito;
 use crate::zaliha::{self, Dokument, Smjer, TOLERANCIJA_ZALIHE};
 use crate::kanali::Kanal;
 use crate::{audit, baci, Backend};
@@ -40,11 +39,6 @@ fn ili_null(v: Option<&Value>) -> Value {
 /// `String(obj.k)` — nepostojeće polje je "undefined".
 fn tekst(v: Option<&Value>) -> String {
     v.map(js::to_string).unwrap_or_else(|| "undefined".into())
-}
-
-/// Niz iz vrijednosti (`data.stavke`); nije niz → prazan.
-fn niz(v: &Value) -> &[Value] {
-    v.as_array().map(|a| a.as_slice()).unwrap_or(&[])
 }
 
 /// Promjena prodajne cijene artikla (`PriceChange`).
@@ -348,7 +342,7 @@ fn audit_cijena_primke(db: &Db, korisnik: Option<i64>, prije: &Cijene, izvor: &s
     let sada = cijene_artikala(db, &ids)?;
     for (product_id, stara_cijena) in &prije.red {
         let nova = sada.red.iter().find(|(id, _)| kljuc(id) == kljuc(product_id)).map(|(_, c)| c);
-        if let Some(nova_cijena) = nova.filter(|n| razlicito(n, stara_cijena)) {
+        if let Some(nova_cijena) = nova.filter(|n| !js::jednako(n, stara_cijena)) {
             audit::zapisi(
                 db,
                 korisnik,
@@ -785,9 +779,8 @@ fn cijene_koje_ostaju(db: &Db, primka_id: &Value, nove_stavke: &[Value]) -> R<Ve
 /// ponoć — deterministično (izmjena primke ne pomjera vrijeme) i unutar dana
 /// pri poređenju stringova (`BETWEEN 'D 00:00:00' AND 'D 23:59:59'`, `LIKE 'D%'`).
 fn datum_kretanja_primke(datum: &Value) -> Value {
-    thread_local!(static DATUM: regex::Regex = regex::Regex::new(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$").unwrap());
     let s = js::to_string(datum);
-    if DATUM.with(|r| r.is_match(&s)) { Value::String(format!("{s} 00:00:00")) } else { datum.clone() }
+    if js::iso_datum(&s) { Value::String(format!("{s} 00:00:00")) } else { datum.clone() }
 }
 
 /// Zajednička validacija za primka:create i primka:update. Baca grešku sa
@@ -810,7 +803,7 @@ fn validiraj_primku(db: &Db, data: &Value, primka_id: &Value) -> R<String> {
     // Stavka: artikal koji ide na zalihu (ne usluga ni slobodna stavka s kase),
     // količina konačan broj > 0, prodajna i nabavna konačne i ≥ 0.
     let konacan = |k: &str, s: &Value| polje(s, k).and_then(Value::as_f64).filter(|x| x.is_finite());
-    for s in niz(stavke) {
+    for s in js::niz_ili_prazno(stavke) {
         let Some(a) = db.get("SELECT naziv, tip, slobodan FROM products WHERE id = ?", p![ili_null(polje(s, "productId"))])? else {
             baci!("Artikal (ID {}) ne postoji", tekst(polje(s, "productId")));
         };
@@ -956,7 +949,7 @@ fn zaglavlje(data: &Value) -> [Value; 5] {
 // logika, pa najava na ekranu ne može odstupiti od onoga što spremanje uradi.
 fn unesi_primku(db: &Db, dan: &Dan, data: &Value) -> R<Value> {
     let broj_primke = validiraj_primku(db, data, &Value::Null)?;
-    let cijene_prije = cijene_artikala(db, &niz(&data["stavke"]).iter().map(|s| ili_null(polje(s, "productId"))).collect::<Vec<_>>())?;
+    let cijene_prije = cijene_artikala(db, &js::niz_ili_prazno(&data["stavke"]).iter().map(|s| ili_null(polje(s, "productId"))).collect::<Vec<_>>())?;
     let danas = Value::from(dan.danas.clone());
     let datum = js::or(&data["datum"], &danas).clone();
     let [dn, di, da, na, bf] = zaglavlje(data);
@@ -965,7 +958,7 @@ fn unesi_primku(db: &Db, dan: &Dan, data: &Value) -> R<Value> {
         p![broj_primke, datum, dn, di, da, na, bf],
     )?;
     let primka_id = Value::from(result.last_insert_rowid);
-    let stavke = niz(&data["stavke"]);
+    let stavke = js::niz_ili_prazno(&data["stavke"]);
 
     // Collect price diffs BEFORE inserting stock (so stock reflects pre-delivery state)
     let (nivelacija, bez_zaliha) = collect_price_changes(db, stavke)?;
@@ -994,7 +987,7 @@ fn izmijeni_primku(db: &Db, dan: &Dan, data: &Value) -> R<Value> {
     let broj_primke = validiraj_primku(db, data, &id)?;
     let danas = Value::from(dan.danas.clone());
     let datum = js::or(&data["datum"], &danas).clone();
-    let stavke = niz(&data["stavke"]);
+    let stavke = js::niz_ili_prazno(&data["stavke"]);
 
     let [dn, di, da, na, bf] = zaglavlje(data);
     db.run(
@@ -1167,7 +1160,7 @@ fn bez_cijena_koje_ostaju() -> R<Vec<Value>> {
 
 /// `cijeneKojeOstaju(db, data.id, data.stavke ?? [])`
 fn ostaju_pri_izmjeni(db: &Db, data: &Value) -> R<Vec<Value>> {
-    cijene_koje_ostaju(db, &ili_null(polje(data, "id")), niz(&data["stavke"]))
+    cijene_koje_ostaju(db, &ili_null(polje(data, "id")), js::niz_ili_prazno(&data["stavke"]))
 }
 
 /// Pregled promjena cijena prije spremanja/brisanja — ista operacija, uvijek

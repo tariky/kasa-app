@@ -46,17 +46,6 @@ pub fn zabiljezi(b: &Backend, akcija: &str, detalji: Value) -> R<()> {
 /// Nova vrijednost postavke; `None` = JS `undefined` (polje nije poslano).
 pub type NovaPostavka = (String, Option<Value>);
 
-/// JS `a === b` za vrijednost postavke (tekst iz baze ili null) i novu vrijednost.
-fn isto(stara: &Value, nova: &Option<Value>) -> bool {
-    match nova {
-        None => false,
-        Some(n) => match (stara.as_f64(), n.as_f64()) {
-            (Some(x), Some(y)) => x == y,
-            _ => stara == n,
-        },
-    }
-}
-
 /// Promjene postavki za audit: samo ključevi čija se vrijednost promijenila,
 /// redom kako su dati. Za ključeve iz `bez_vrijednosti` ide samo
 /// `{ kljuc, promijenjena: true }` (lozinka, logo).
@@ -68,7 +57,8 @@ pub fn promjene_postavki(
     let mut promjene = Vec::new();
     for (kljuc, nova) in nove {
         let stara = stare(kljuc)?;
-        if isto(&stara, nova) {
+        // `stara === nova`; nova `undefined` je uvijek promjena.
+        if nova.as_ref().is_some_and(|n| js::jednako(&stara, n)) {
             continue;
         }
         let mut m = Map::new();

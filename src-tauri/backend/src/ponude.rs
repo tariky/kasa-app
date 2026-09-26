@@ -1,7 +1,6 @@
 //! Kanali `ponuda:*` (handlers.ts) i logika iz `lib/ponuda.ts`.
 
 use chrono::{Datelike, Duration, NaiveDate};
-use regex::Regex;
 use serde_json::{json, Map, Value};
 
 use crate::greska::R;
@@ -26,10 +25,8 @@ pub const DEFAULT_ROK_DANA: i64 = 8;
 /// mjesecu do 31 se (kao u V8) prelije u sljedeći mjesec, a neispravan datum
 /// daje "NaN-NaN-NaN".
 pub fn plus_dana(datum: &str, dana: i64) -> String {
-    thread_local!(static ISO: Regex = Regex::new(r"^([0-9]{4})-([0-9]{2})-([0-9]{2})$").unwrap());
-    let d = ISO.with(|re| {
-        let c = re.captures(datum)?;
-        let (g, m, d): (i32, u32, i64) = (c[1].parse().ok()?, c[2].parse().ok()?, c[3].parse().ok()?);
+    let d = js::iso_datum(datum).then_some(datum).and_then(|s| {
+        let (g, m, d): (i32, u32, i64) = (s[0..4].parse().ok()?, s[5..7].parse().ok()?, s[8..10].parse().ok()?);
         if !(1..=31).contains(&d) {
             return None;
         }
@@ -80,12 +77,6 @@ pub fn format_broj_ponude(p: &Value) -> String {
     format!("{}/{}", js::to_string(&p["broj"]), js::to_string(&p["godina"]))
 }
 
-/// `Number(datum.slice(0, 4))` kao JSON broj (NaN → null, kako ga SQLite veže).
-fn godina_iz_datuma(datum: &str) -> Value {
-    let s: String = datum.chars().take(4).collect();
-    js::f(js::to_number(&Value::String(s)))
-}
-
 fn upisi_stavke(db: &Db, id: &Value, stavke: &[Value]) -> R<()> {
     for s in stavke {
         db.run(
@@ -119,7 +110,7 @@ pub fn create_ponuda(db: &Db, data: &Value, danas: &str) -> R<Value> {
     let stavke = &provjerene_stavke(db, &data["stavke"])?;
 
     let datum = if truthy(&data["datum"]) { js::to_string(&data["datum"]) } else { danas.to_string() };
-    let godina = godina_iz_datuma(&datum);
+    let godina = js::godina_iz_datuma(&datum);
     let broj = next_broj_ponude(db, &godina)?;
     let vazi_do = if truthy(&data["vaziDo"]) { js::to_string(&data["vaziDo"]) } else { plus_dana(&datum, DEFAULT_ROK_DANA) };
     let (ukupno, pdv_iznos) = izracunaj_totale(stavke);

@@ -21,6 +21,7 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::greska::{Greska, R};
+use crate::js;
 use crate::sesija::pristup;
 use crate::sql::Db;
 use crate::kanali::Kanal;
@@ -78,11 +79,6 @@ fn potpis(s: &str) -> Option<Signature> {
     Signature::from_slice(&bajtovi).ok()
 }
 
-fn datum_ok(s: &str) -> bool {
-    thread_local!(static D: Regex = Regex::new(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$").unwrap());
-    D.with(|r| r.is_match(s))
-}
-
 /// `citajB`: bucket iz `b` kad su `c` ispravno ime i `x` string; pokvaren
 /// `b` znači "bez backup-a", ne neispravnu licencu.
 fn backup_bucket(b: &Value) -> Option<&str> {
@@ -100,8 +96,8 @@ pub fn procitaj_licencu(token: &str) -> Option<Value> {
     let bajtovi = base64url(dijelovi[1])?;
     let p: Value = serde_json::from_slice(&bajtovi).ok()?;
     let k = p["k"].as_str()?;
-    let d = p["d"].as_str().filter(|d| datum_ok(d))?;
-    let i = p["i"].as_str().filter(|i| datum_ok(i))?;
+    let d = p["d"].as_str().filter(|d| js::iso_datum(d))?;
+    let i = p["i"].as_str().filter(|i| js::iso_datum(i))?;
     // `u` koji nije string je neispravan token (kao u licenca.ts); prazan = bilo koji uređaj.
     if p.get("u").is_some_and(|u| !u.is_string()) {
         return None;
@@ -175,7 +171,7 @@ pub fn razlika_dana(od: &str, do_: &str) -> i64 {
 pub fn efektivni_danas(stvarni: &str, zadnji: Option<&str>, iz_baze: Option<&str>) -> String {
     let mut danas = stvarni;
     for d in [zadnji, iz_baze].into_iter().flatten() {
-        if datum_ok(d) && d > danas {
+        if js::iso_datum(d) && d > danas {
             danas = d;
         }
     }
@@ -199,7 +195,7 @@ pub fn najnoviji_datum_iz_baze(db: &Db) -> Option<String> {
 }
 
 fn procitaj_datum(db: &Db) -> R<Option<String>> {
-    Ok(db.val(UPIT_NAJNOVIJI_DATUM, &[])?.as_str().filter(|d| datum_ok(d)).map(str::to_string))
+    Ok(db.val(UPIT_NAJNOVIJI_DATUM, &[])?.as_str().filter(|d| js::iso_datum(d)).map(str::to_string))
 }
 
 /// `najnovijiDatumIzBazeJednom`: najnoviji datum iz baze, pročitan jednom po

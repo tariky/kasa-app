@@ -8,7 +8,7 @@ use serde_json::{Map, Value};
 
 use crate::greska::R;
 use crate::sql::Db;
-use crate::baci;
+use crate::{baci, js};
 use crate::kanali::Kanal;
 
 const UPITI_TS: &str = include_str!("../../../src/lib/knjigovodja/upiti.ts");
@@ -39,10 +39,7 @@ fn upiti() -> &'static [(String, String)] {
 
 /// `YYYY-MM-DD` (samo oblik, kao regex u podaci.ts).
 fn datum(v: &Value) -> Option<&str> {
-    let s = v.as_str()?;
-    let b = s.as_bytes();
-    let ok = b.len() == 10 && b.iter().enumerate().all(|(i, c)| if i == 4 || i == 7 { *c == b'-' } else { c.is_ascii_digit() });
-    ok.then_some(s)
+    v.as_str().filter(|s| js::iso_datum(s))
 }
 
 /// Parametri `:od`/`:do` pozicijski, redom kojim se prvi put javljaju u upitu

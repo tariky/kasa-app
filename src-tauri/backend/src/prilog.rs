@@ -6,18 +6,11 @@ use serde_json::{json, Map, Value};
 use crate::greska::R;
 use crate::js::{self, round2, to_number, truthy};
 use crate::pending_racun::{baci_ako_ceka_nezavrsen, preuzmi_pending_red, vec_evidentiran};
-use crate::racun::niz;
-use crate::racuni::{spoji, validan_datum_valute};
+use crate::racuni::validan_datum_valute;
 use crate::sql::Db;
 use crate::stampa::{self, Odstampan, Uredjaj};
 use crate::zaliha::{self, Dokument, Smjer};
 use crate::{baci, fiskalni, p, provjera_racuna, racun, tring, tring_racun, Backend};
-
-/// `s.slice(0, n)` — JS broji UTF-16 jedinice.
-fn slice_utf16(s: &str, n: usize) -> String {
-    let jedinice: Vec<u16> = s.encode_utf16().take(n).collect();
-    String::from_utf16_lossy(&jedinice)
-}
 
 // ─── lib/prilog.ts ──────────────────────────────────────────
 
@@ -44,7 +37,7 @@ pub const PRILOG_VEZA_MAX: usize = 14;
 pub fn prilog_naziv(broj: &Value, opis: &Value, veza: &Value) -> String {
     let dio = |v: &Value, max: usize, zadano: &str| {
         let s = if v.is_null() { String::new() } else { js::to_string(v) };
-        let s = slice_utf16(s.trim(), max);
+        let s = js::slice_utf16(s.trim(), max);
         if s.is_empty() { zadano.to_string() } else { s }
     };
     let o = dio(opis, PRILOG_OPIS_MAX, PRILOG_OPIS_DEFAULT);
@@ -54,7 +47,7 @@ pub fn prilog_naziv(broj: &Value, opis: &Value, veza: &Value) -> String {
 
 /// Zbir stavki priloga — zaokruživanje po stavci kao na fiskalnom uređaju.
 pub fn suma_priloga(stavke: &[Value]) -> f64 {
-    round2(stavke.iter().fold(0.0, |sum, s| sum + racun::iznos_stavke(&spoji(s, vec![("rabat", js::nn(&s["rabat"], &json!(0)).clone())]))))
+    round2(stavke.iter().fold(0.0, |sum, s| sum + racun::iznos_stavke(&js::spoji(s, vec![("rabat", js::nn(&s["rabat"], &json!(0)).clone())]))))
 }
 
 /// Provjeri stavke priloga (proizvod mora postojati). Odvojeno od upisa da se
@@ -103,7 +96,7 @@ pub fn save_prilog_stavke_in_transaction(db: &Db, order_id: &Value, stavke: &Val
         baci!("Faktura je završena — stavke se ne mogu mijenjati");
     }
 
-    let stavke = niz(stavke, "stavke")?;
+    let stavke = js::iter_ili_baci(stavke, "stavke")?;
     validiraj_prilog_stavke(db, stavke)?;
 
     let dokument = Dokument { vrsta: "prilog", id: order_id };

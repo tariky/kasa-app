@@ -13,15 +13,6 @@ use crate::tring::{self, Odgovor};
 use crate::zaliha::{self, Dokument, Smjer};
 use crate::{baci, cash, fiskalni, p, tring_racun, Backend};
 
-/// JS `Math.max(a, b)` / `Math.min(a, b)` — NaN se širi (Rustov `max` ga preskače).
-fn js_max(a: f64, b: f64) -> f64 {
-    if a.is_nan() || b.is_nan() { f64::NAN } else { a.max(b) }
-}
-
-fn js_min(a: f64, b: f64) -> f64 {
-    if a.is_nan() || b.is_nan() { f64::NAN } else { a.min(b) }
-}
-
 // ─── lib/refund.ts ──────────────────────────────────────────
 
 /// Storno vraća tačno ono što je račun skinuo: za svaki izlaz računa (prodaja
@@ -157,8 +148,8 @@ pub fn refund_and_print(b: &Backend, data: &Value, korisnik_id: i64, odobrio_adm
     // Stanje ladice je informativno — ne smije oboriti storno.
     if let Ok(stanje) = cash::drawer_state(db) {
         let stanje_ladice = to_number(&stanje["ocekivanoStanje"]);
-        manjak_uredjaj = js_max(0.0, round2(potrebno_uredjaj - stanje_ladice));
-        manjak_ladica = js_max(0.0, round2(js_min(potrebno_ladica, potrebno_uredjaj) - stanje_ladice));
+        manjak_uredjaj = js::max(0.0, round2(potrebno_uredjaj - stanje_ladice));
+        manjak_ladica = js::max(0.0, round2(js::min(potrebno_ladica, potrebno_uredjaj) - stanje_ladice));
     }
 
     let dozvoli_polog = truthy(&data["dozvoliPolog"]);
@@ -186,7 +177,7 @@ pub fn refund_and_print(b: &Backend, data: &Value, korisnik_id: i64, odobrio_adm
         // Nenovčani dio pokrića ide automatski — nema odluke za operatera jer
         // nikakav stvaran novac ne mijenja vlasnika (virmanski račun se ovdje
         // pokriva u cijelosti, pa storno prolazi bez ijednog dodatnog klika).
-        let samo_uredjaj = js_max(0.0, round2(manjak_uredjaj - manjak_ladica));
+        let samo_uredjaj = js::max(0.0, round2(manjak_uredjaj - manjak_ladica));
         if samo_uredjaj > 0.0 {
             cash::device_cash_in(b, samo_uredjaj)?;
             uneseno = samo_uredjaj;

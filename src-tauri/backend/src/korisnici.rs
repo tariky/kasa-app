@@ -173,11 +173,6 @@ pub fn osiguraj_zadanog_admina(db: &Db) -> R<()> {
     Ok(())
 }
 
-/// JS `r.id === osimId` (id iz baze je broj; id iz payload-a je šta god je poslano).
-fn isti_id(id: i64, osim: &Value) -> bool {
-    osim.as_f64() == Some(id as f64)
-}
-
 /// Korisnik čiji PIN odgovara (opcionalno samo među adminima, osim datog id-a).
 /// Provjerava se svaki red, bez ranog izlaza, da trajanje ne otkriva koji je
 /// korisnik pogođen.
@@ -193,7 +188,8 @@ pub fn nadji_po_pinu(db: &Db, pin: &Value, samo_admin: bool, osim_id: Option<&Va
         if samo_admin && uloga != "admin" {
             continue;
         }
-        if osim_id.is_some_and(|o| isti_id(id, o)) {
+        // `r.id === osimId` — id iz payload-a je šta god je poslano.
+        if osim_id.is_some_and(|o| js::jednako(&json!(id), o)) {
             continue;
         }
         nadjen = Some(Korisnik { id, ime: r["ime"].clone(), uloga });

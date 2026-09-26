@@ -6,7 +6,7 @@ use crate::greska::R;
 use crate::js::{self, round2, to_number};
 use crate::sql::Db;
 use crate::zaliha::{self, Dokument, Smjer};
-use crate::{baci, p};
+use crate::p;
 
 /// Iznos stavke zaokružen na fene (uređaj zaokružuje po stavci).
 pub fn iznos_stavke(s: &Value) -> f64 {
@@ -27,14 +27,6 @@ pub fn izracunaj_totale(stavke: &[Value]) -> (f64, f64) {
     let ukupno = round2(stavke.iter().fold(0.0, |sum, s| sum + iznos_stavke(s)));
     let pdv = round2(stavke.iter().fold(0.0, |sum, s| sum + pdv_stavke(s)));
     (ukupno, pdv)
-}
-
-/// `for (const s of stavke)` — ono što nije niz u JS-u baca TypeError.
-pub(crate) fn niz<'a>(v: &'a Value, ime: &str) -> R<&'a Vec<Value>> {
-    match v.as_array() {
-        Some(a) => Ok(a),
-        None => baci!("{ime} is not iterable"),
-    }
 }
 
 /// Kupac kolona u `orders` (odluka 3): bez vrijednosti ili tekst prazan nakon
@@ -71,7 +63,7 @@ pub fn upisi_racun(db: &Db, input: &Value) -> R<i64> {
         ],
     )?;
     let order_id = r.last_insert_rowid;
-    let stavke = niz(&input["stavke"], "data.stavke")?;
+    let stavke = js::iter_ili_baci(&input["stavke"], "data.stavke")?;
     for s in stavke {
         db.run(
             "INSERT INTO order_items (orderId, productId, kolicina, cijena, rabat, pdvStopa) VALUES (?, ?, ?, ?, ?, ?)",

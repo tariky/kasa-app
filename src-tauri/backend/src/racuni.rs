@@ -3,7 +3,6 @@
 
 use std::collections::HashSet;
 
-use regex::Regex;
 use serde_json::{json, Map, Value};
 
 use crate::greska::R;
@@ -20,17 +19,6 @@ use crate::storno::{refund_and_print, refund_order_in_transaction};
 use crate::kanali::Kanal;
 use crate::{audit, baci, fiskalni, korisnici, p, ponude, proizvodnja, provjera_racuna, racun, tring_racun, Backend};
 
-// ─── Pomoćne ────────────────────────────────────────────────
-
-/// `{ ...base, k: v, ... }` — ključevi koji već postoje ostaju na svom mjestu.
-pub(crate) fn spoji(base: &Value, dodaci: Vec<(&str, Value)>) -> Value {
-    let mut m = base.as_object().cloned().unwrap_or_default();
-    for (k, v) in dodaci {
-        m.insert(k.to_string(), v);
-    }
-    Value::Object(m)
-}
-
 // ─── lib/valuta.ts ──────────────────────────────────────────
 
 // Datum valute (rok plaćanja) na izdatom računu. Nije dio fiskalnog zapisa —
@@ -41,8 +29,7 @@ pub(crate) fn spoji(base: &Value, dodaci: Vec<(&str, Value)>) -> Value {
 /// Prihvata samo `YYYY-MM-DD` koji zaista postoji u kalendaru (ne 2026-02-30).
 pub fn validan_datum_valute(datum: &str) -> bool {
     // ISO datum bez vremena, onako kako ga vraća `DatePicker`.
-    thread_local!(static ISO_DATUM: Regex = Regex::new(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$").unwrap());
-    if !ISO_DATUM.with(|r| r.is_match(datum)) {
+    if !js::iso_datum(datum) {
         return false;
     }
     let broj = |od: usize, do_: usize| datum[od..do_].parse::<u32>().unwrap_or(0);
@@ -199,7 +186,7 @@ fn finalize(b: &Backend, unos: &Value) -> R<Value> {
     // Sve što može pasti prije štampe (postavke uređaja, račun za uređaj) ide
     // prije write-ahead reda — greška ovdje ne ostavlja nezavršen račun.
     let uredjaj = Uredjaj::iz_postavki(b)?;
-    let racun = tring_racun::build_tring_racun(&spoji(&data, vec![("items", data["stavke"].clone())]));
+    let racun = tring_racun::build_tring_racun(&js::spoji(&data, vec![("items", data["stavke"].clone())]));
 
     // 1. Write-ahead: persist the snapshot BEFORE printing (committed immediately).
     let pending_id = db
@@ -224,7 +211,7 @@ fn finalize(b: &Backend, unos: &Value) -> R<Value> {
         }
         racun::upisi_racun(
             db,
-            &spoji(&data, vec![("brojFiskalnogRacuna", broj_fiskalnog_racuna.clone()), ("isManual", json!(0))]),
+            &js::spoji(&data, vec![("brojFiskalnogRacuna", broj_fiskalnog_racuna.clone()), ("isManual", json!(0))]),
         )
         .map(Some)
     });
@@ -350,7 +337,7 @@ fn pending_resolve(b: &Backend, data: &Value) -> R<Value> {
             };
             let order_id = racun::upisi_racun(
                 db,
-                &spoji(
+                &js::spoji(
                     &snap,
                     vec![
                         ("brojFiskalnogRacuna", broj.clone()),
@@ -415,11 +402,7 @@ fn dismiss_fiscal_gap(b: &Backend, broj: &Value) -> R<Value> {
     let db = b.db();
     let mut dismissed = odbacene_praznine(db)?;
     // `includes` poredi brojeve po vrijednosti (5 i 5.0 su isti).
-    let isti = |v: &Value| match (v.as_f64(), broj.as_f64()) {
-        (Some(x), Some(y)) => x == y,
-        _ => v == broj,
-    };
-    if dismissed.iter().any(isti) {
+    if dismissed.iter().any(|v| js::jednako(v, broj)) {
         return Ok(json!({ "success": true }));
     }
     dismissed.push(broj.clone());

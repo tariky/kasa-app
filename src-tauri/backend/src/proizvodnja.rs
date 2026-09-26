@@ -2,7 +2,6 @@
 
 use std::collections::{HashMap, HashSet};
 
-use regex::Regex;
 use serde_json::{json, Map, Value};
 
 use crate::greska::R;
@@ -24,20 +23,6 @@ pub const PRODAJNA_USLUGA_NAZIV: &str = "Namještaj po mjeri";
 
 fn round4(n: f64) -> f64 {
     js::js_round(n * 10000.0) / 10000.0
-}
-
-/// `Number(datum.slice(0, 4))` kao JSON broj (NaN → null, kako ga SQLite veže).
-fn godina_iz_datuma(datum: &str) -> Value {
-    let s: String = datum.chars().take(4).collect();
-    js::f(to_number(&Value::String(s)))
-}
-
-/// `for (const s of stavke)` — sve osim niza nije iterabilno.
-fn niz<'a>(v: &'a Value, ime: &str) -> R<&'a [Value]> {
-    match v.as_array() {
-        Some(a) => Ok(a),
-        None => baci!("{ime} is not iterable"),
-    }
 }
 
 // ── numeracija ───────────────────────────────────────────
@@ -131,7 +116,7 @@ fn upisi_stavke(db: &Db, nalog_id: &Value, stavke: &[Value]) -> R<()> {
 pub fn replace_stavke(db: &Db, id: &Value, stavke: &Value) -> R<()> {
     let n = ucitaj_nalog_ili_baci(db, id)?;
     baci_ako_zakljucan(&n["status"])?;
-    let stavke = niz(stavke, "stavke")?;
+    let stavke = js::iter_ili_baci(stavke, "stavke")?;
     validiraj_stavke(db, stavke)?;
     db.run("DELETE FROM radni_nalog_stavke WHERE radniNalogId = ?", p![id])?;
     upisi_stavke(db, id, stavke)
@@ -154,7 +139,7 @@ pub fn create_nalog(db: &Db, input: &Value, danas: &str) -> R<Value> {
         baci!("Korisnik nije prijavljen");
     }
     let datum = if truthy(&input["datum"]) { js::to_string(&input["datum"]) } else { danas.to_string() };
-    let godina = godina_iz_datuma(&datum);
+    let godina = js::godina_iz_datuma(&datum);
     let mut opis = trim_ili_prazno(&input["opis"], "opis")?;
     let mut kolicina = 1.0;
     let vrsta = &input["vrsta"];
@@ -349,7 +334,7 @@ pub fn set_proizvodi_naloga(db: &Db, id: &Value, proizvodi: &Value) -> R<()> {
     if !truthy(&n["ponudaId"]) {
         baci!("Proizvodi se biraju samo za nalog iz ponude");
     }
-    let proizvodi = niz(proizvodi, "proizvodi")?;
+    let proizvodi = js::iter_ili_baci(proizvodi, "proizvodi")?;
     upisi_proizvode(db, id, &n["ponudaId"], proizvodi)
 }
 
@@ -411,13 +396,13 @@ pub fn update_nalog(db: &Db, id: &Value, patch: &Value) -> R<()> {
         set("kolicina", js::f(kolicina));
     }
     if has(patch, "datum") {
-        thread_local!(static DATUM: Regex = Regex::new(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}").unwrap());
-        let Some(datum) = patch["datum"].as_str().filter(|d| DATUM.with(|r| r.is_match(d))) else {
+        // `/^\d{4}-\d{2}-\d{2}/` — datum na početku (i s vremenom iza).
+        let Some(datum) = patch["datum"].as_str().filter(|d| d.get(..10).is_some_and(js::iso_datum)) else {
             baci!("Datum naloga nije ispravan");
         };
         set("datum", json!(datum));
         // Numeracija ide po godini: prelazak u drugu godinu daje sljedeći slobodan broj te godine.
-        let godina = godina_iz_datuma(datum);
+        let godina = js::godina_iz_datuma(datum);
         let trenutna = db.val("SELECT godina FROM radni_nalozi WHERE id = ?", p![id])?;
         if trenutna.as_f64() != godina.as_f64() {
             let broj = next_broj_naloga(db, &godina)?;
@@ -577,7 +562,7 @@ pub fn save_normativ(db: &Db, product_id: &Value, stavke: &Value) -> R<()> {
     if !product_tip(db, product_id)?.is_some_and(|p| p["tip"] == "artikal") {
         baci!("Normativ se vodi samo za artikal");
     }
-    let stavke = niz(stavke, "stavke")?;
+    let stavke = js::iter_ili_baci(stavke, "stavke")?;
     validiraj_stavke(db, stavke)?;
     baci_ako_dupli_materijal(db, stavke)?;
     db.run("DELETE FROM normativi WHERE productId = ?", p![product_id])?;

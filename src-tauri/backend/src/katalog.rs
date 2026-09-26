@@ -80,14 +80,6 @@ fn validiraj_plu(plu: &Value) -> R<Value> {
     }
 }
 
-/// JS `x !== y` za vrijednosti iz JSON-a i baze (brojevi po vrijednosti).
-pub(crate) fn razlicito(a: &Value, b: &Value) -> bool {
-    match (a.as_f64(), b.as_f64()) {
-        (Some(x), Some(y)) => x != y,
-        _ => a != b,
-    }
-}
-
 // Zajednička pravila za product:create (id = null) i product:update. Na create-u su
 // sva polja obavezna, na update-u se provjerava samo ono što je poslano. Vraća
 // trimovane šifru, naziv i barkod (prazan barkod = null) spremne za upis.
@@ -185,7 +177,7 @@ fn product_update(b: &Backend, id: &Value, data: &Value) -> R<Value> {
         let result = db.run(&format!("UPDATE products SET {} WHERE id = ?", fields.join(", ")), &values)?;
         // Ručna izmjena cijene ulazi u historiju: poništavanje ranije primke je ne smije pregaziti.
         if let Some(prije) = prije {
-            if has(data, "cijena") && razlicito(&data["cijena"], &prije["cijena"]) {
+            if has(data, "cijena") && !js::jednako(&data["cijena"], &prije["cijena"]) {
                 zapisi_promjene_cijena(db, "rucno", &Value::Null, &[(id.clone(), prije["cijena"].clone(), data["cijena"].clone())])?;
                 audit::zabiljezi(
                     b,
@@ -370,7 +362,7 @@ fn product_slobodan(b: &Backend, data: &Value) -> R<Value> {
         let id = match postojeci {
             Some(k) => {
                 db.run("UPDATE products SET cijena = ?, updatedAt = datetime('now','localtime') WHERE id = ?", p![data["cijena"], k["id"]])?;
-                if razlicito(&data["cijena"], &k["cijena"]) {
+                if !js::jednako(&data["cijena"], &k["cijena"]) {
                     audit::zabiljezi(
                         b,
                         "artikal:cijena",

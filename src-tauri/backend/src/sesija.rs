@@ -159,9 +159,7 @@ pub fn korisnik(b: &Backend) -> R<Korisnik> {
 /// `{ ...unos, korisnikId }` — payload s korisnikom iz sesije (vrijednost iz
 /// payload-a nema efekta; ključ koji je već postojao ostaje na svom mjestu).
 pub fn sa_korisnikom(unos: &Value, korisnik_id: i64) -> Value {
-    let mut m = unos.as_object().cloned().unwrap_or_default();
-    m.insert("korisnikId".into(), json!(korisnik_id));
-    Value::Object(m)
+    js::spoji(unos, vec![("korisnikId", json!(korisnik_id))])
 }
 
 /// Baca grešku ako `korisnik` (None = niko nije prijavljen) ne smije zvati
