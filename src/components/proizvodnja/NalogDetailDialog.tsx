@@ -1,6 +1,5 @@
 // src/components/proizvodnja/NalogDetailDialog.tsx
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { pdf } from '@react-pdf/renderer';
 import type { ProizvodPonude, RadniNalog } from '@/types';
 import type { Kalkulacija } from '@/lib/proizvodnja';
 import { formatBrojNaloga } from '@/lib/proizvodnja';
@@ -9,7 +8,7 @@ import { useDokumentPostavke } from '@/components/DokumentPostavkeProvider';
 import { rokOznaka, uskladiIzbor, proizvodiIzIzbora } from '@/lib/nalogPrikaz';
 import { localDateStr } from '@/lib/novac';
 import { cn, formatKM, formatDate } from '@/lib/utils';
-import { ucitajZaStampu } from '@/lib/stampa';
+import { otvoriPdf, spremiPdf, ucitajZaStampu } from '@/lib/stampa';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Key, mod } from '@/components/ui/ledger';
@@ -130,22 +129,17 @@ export function NalogDetailDialog({ nalogId, redoslijed, uloga, onClose, onNavig
     catch (e) { greska(e); }
   };
 
-  const buildPdfBlob = async (n: RadniNalog) => {
+  const nalogPdf = async (n: RadniNalog) => {
     const { firma, postavke } = await ucitajZaStampu();
-    return pdf(<RadniNalogPdf nalog={n} firma={firma} postavke={postavke} />).toBlob();
+    return <RadniNalogPdf nalog={n} firma={firma} postavke={postavke} />;
   };
   const printPdf = async () => {
     if (!nalog || stavkeDirty) return;
-    const url = URL.createObjectURL(await buildPdfBlob(nalog));
-    const win = window.open(url, '_blank');
-    if (win) win.onafterprint = () => URL.revokeObjectURL(url);
+    await otvoriPdf(await nalogPdf(nalog));
   };
   const exportPdf = async () => {
     if (!nalog || stavkeDirty) return;
-    const blob = await buildPdfBlob(nalog);
-    const savePath = await window.api.showSaveDialog({ defaultName: `RadniNalog-${nalog.broj}-${nalog.godina}.pdf`, filters: [{ name: 'PDF', extensions: ['pdf'] }] });
-    if (!savePath) return;
-    await window.api.writeFile(savePath, Array.from(new Uint8Array(await blob.arrayBuffer())) as any);
+    await spremiPdf(await nalogPdf(nalog), `RadniNalog-${nalog.broj}-${nalog.godina}.pdf`);
   };
 
   const mozeZavrsiti = uredivo && (nalog?.stavke?.length ?? 0) > 0;

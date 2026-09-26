@@ -1,6 +1,5 @@
 // src/components/skladiste/UlazDialog.tsx
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { pdf } from '@react-pdf/renderer';
 import type { Dobavljac, PregledCijenaUlaza, Primka, PrimkaStavka, Product, PromijenjenoOdPregleda } from '@/types';
 import { jePloca, m2UKom } from '@/lib/ploca';
 import { localDateStr, round2 } from '@/lib/novac';
@@ -20,6 +19,7 @@ import { UlazPdf } from '@/components/UlazPdf';
 import { UlazStavkeEditor, type UlazStavkeHandle } from './UlazStavkeEditor';
 import { PregledCijenaAside, PregledCijenaTabela, PregledPromijenjen, imaSadrzaj } from './PregledCijenaUlaza';
 import { potvrdi } from '@/lib/dijalog';
+import { otvoriPdf, spremiPdf } from '@/lib/stampa';
 import { Pencil, Trash2, Printer, Download, Save, ChevronUp, ChevronDown, Building2, AlertTriangle, X } from 'lucide-react';
 
 export type UlazStanje = { kind: 'zatvoren' } | { kind: 'pregled'; id: number } | { kind: 'uredi'; id: number } | { kind: 'novi' };
@@ -302,19 +302,14 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
     finally { setBrisem(false); }
   };
 
-  const buildPdf = async () => pdf(<UlazPdf primka={primka!} firma={await window.api.getFirmaSettings()} />).toBlob();
+  const primkaPdf = async () => <UlazPdf primka={primka!} firma={await window.api.getFirmaSettings()} />;
   const printPdf = async () => {
     if (!primka || edit) return;
-    const url = URL.createObjectURL(await buildPdf());
-    const win = window.open(url, '_blank');
-    if (win) win.onafterprint = () => URL.revokeObjectURL(url);
+    await otvoriPdf(await primkaPdf());
   };
   const exportPdf = async () => {
     if (!primka || edit) return;
-    const blob = await buildPdf();
-    const path = await window.api.showSaveDialog({ defaultName: `${primka.brojPrimke}.pdf`, filters: [{ name: 'PDF', extensions: ['pdf'] }] });
-    if (!path) return;
-    await window.api.writeFile(path, Array.from(new Uint8Array(await blob.arrayBuffer())) as any);
+    await spremiPdf(await primkaPdf(), `${primka.brojPrimke}.pdf`);
   };
 
   const anySub = brisiOpen || potvrda != null || pending != null;

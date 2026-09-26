@@ -1,6 +1,5 @@
 // src/components/racuni/RacunDetailDialog.tsx
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { pdf } from '@react-pdf/renderer';
 import type { Order } from '@/types';
 import { cn, formatKM, formatDateTime } from '@/lib/utils';
 import { iznosStavke } from '@/lib/racun';
@@ -10,7 +9,7 @@ import { formatDatumValute } from '@/lib/valuta';
 import { gotovinskiIznos } from '@/lib/drawer';
 import { prikazPlacanja } from '@/lib/placanje';
 import { round2 } from '@/lib/novac';
-import { ucitajZaStampu } from '@/lib/stampa';
+import { otvoriPdf, spremiPdf, ucitajZaStampu } from '@/lib/stampa';
 import { otvoriNezavrseneRacune } from '@/lib/nezavrseniRacuni';
 import { izvrsiFiskalno } from '@/lib/fiskalniIshod';
 import { Button } from '@/components/ui/button';
@@ -121,35 +120,25 @@ export function RacunDetailDialog({ orderId, redoslijed, uloga, onClose, onNavig
   const mozeUreditiFakturu = imaFakturu && !fakturaZavrsena && !refunded;
 
   // ── dokumenti ─────────────────────────────────────────
-  const otvoriZaStampu = (blob: Blob) => {
-    const url = URL.createObjectURL(blob);
-    const win = window.open(url, '_blank');
-    if (win) win.onafterprint = () => URL.revokeObjectURL(url);
-  };
-  const spremi = async (blob: Blob, defaultName: string) => {
-    const savePath = await window.api.showSaveDialog({ defaultName, filters: [{ name: 'PDF', extensions: ['pdf'] }] });
-    if (!savePath) return;
-    await window.api.writeFile(savePath, Array.from(new Uint8Array(await blob.arrayBuffer())) as any);
-  };
-  const racunBlob = async (o: Order) => {
+  const racunPdf = async (o: Order) => {
     const { firma, postavke } = await ucitajZaStampu();
-    return pdf(<RacunPdf order={o} firma={firma} postavke={postavke} lang={lang} />).toBlob();
+    return <RacunPdf order={o} firma={firma} postavke={postavke} lang={lang} />;
   };
-  const otpremnicaBlob = async (o: Order) => {
+  const otpremnicaPdf = async (o: Order) => {
     const { firma, postavke } = await ucitajZaStampu();
-    return pdf(<OtpremnicaPdf order={o} firma={firma} postavke={postavke} />).toBlob();
+    return <OtpremnicaPdf order={o} firma={firma} postavke={postavke} />;
   };
 
-  const stampajRacun = async () => { if (order) try { otvoriZaStampu(await racunBlob(order)); } catch (e) { greska(e, 'Štampa računa'); } };
+  const stampajRacun = async () => { if (order) try { await otvoriPdf(await racunPdf(order)); } catch (e) { greska(e, 'Štampa računa'); } };
   const spremiRacun = async () => {
     if (!order) return;
-    try { await spremi(await racunBlob(order), `${lang === 'en' ? 'Invoice' : 'Racun'}-${order.brojFiskalnogRacuna || order.id}.pdf`); }
+    try { await spremiPdf(await racunPdf(order), `${lang === 'en' ? 'Invoice' : 'Racun'}-${order.brojFiskalnogRacuna || order.id}.pdf`); }
     catch (e) { greska(e, 'Spremanje računa'); }
   };
-  const stampajOtpremnicu = async () => { if (order) try { otvoriZaStampu(await otpremnicaBlob(order)); } catch (e) { greska(e, 'Štampa otpremnice'); } };
+  const stampajOtpremnicu = async () => { if (order) try { await otvoriPdf(await otpremnicaPdf(order)); } catch (e) { greska(e, 'Štampa otpremnice'); } };
   const spremiOtpremnicu = async () => {
     if (!order) return;
-    try { await spremi(await otpremnicaBlob(order), `Otpremnica-${order.brojFiskalnogRacuna || order.id}.pdf`); }
+    try { await spremiPdf(await otpremnicaPdf(order), `Otpremnica-${order.brojFiskalnogRacuna || order.id}.pdf`); }
     catch (e) { greska(e, 'Spremanje otpremnice'); }
   };
 
@@ -172,7 +161,7 @@ export function RacunDetailDialog({ orderId, redoslijed, uloga, onClose, onNavig
         return;
       }
       const { firma, postavke } = await ucitajZaStampu();
-      otvoriZaStampu(await pdf(<PrilogPdf order={order} firma={firma} stavke={stavke as any} postavke={postavke} />).toBlob());
+      await otvoriPdf(<PrilogPdf order={order} firma={firma} stavke={stavke as any} postavke={postavke} />);
     } catch (e) { greska(e, 'Štampa fakture'); }
   };
 

@@ -1,14 +1,14 @@
-import { pdf } from '@react-pdf/renderer';
 import { TrendingUp } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { LedgerHead } from '@/components/ui/ledger';
 import { Stat } from '@/components/ui/stat';
 import { PrometPdf } from '@/components/PrometPdf';
 import { cn, formatKM, formatDateTime } from '@/lib/utils';
+import { otvoriPdf } from '@/lib/stampa';
 import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { sumePrometa } from '@/lib/izvjestaji';
 import type { FirmaSettings, Order } from '@/types';
-import { IzvjestajKartica, PdfDugme, Prazno, PraznoStanje, fmtDisplay, openPdfInWindow, td } from './dijelovi';
+import { IzvjestajKartica, PdfDugme, Prazno, PraznoStanje, fmtDisplay, td } from './dijelovi';
 
 /** Status reda: tačka + tekst, bez obojene pilule. */
 function StatusTacka({ tone, children }: { tone: 'emerald' | 'amber' | 'rose'; children: React.ReactNode }) {
@@ -35,10 +35,10 @@ export default function PrometTab({ orders, dateFrom, dateTo, firma, onGreska }:
   const exportPrometPdf = async () => {
     if (!firma || orders.length === 0) return;
     try {
-      const blob = await pdf(
-        <PrometPdf orders={orders} dateFrom={fmtDisplay(dateFrom)} dateTo={fmtDisplay(dateTo)} firma={firma} />
-      ).toBlob();
-      openPdfInWindow(blob, `Promet ${fmtDisplay(dateFrom)} - ${fmtDisplay(dateTo)}`);
+      await otvoriPdf(
+        <PrometPdf orders={orders} dateFrom={fmtDisplay(dateFrom)} dateTo={fmtDisplay(dateTo)} firma={firma} />,
+        `Promet ${fmtDisplay(dateFrom)} - ${fmtDisplay(dateTo)}`,
+      );
     } catch {
       onGreska('Greška pri generisanju PDF-a za promet');
     }

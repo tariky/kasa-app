@@ -14,16 +14,6 @@ export function fmtDisplay(d: Date): string {
   return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
 }
 
-/** Otvori generisani PDF u novom prozoru. */
-export function openPdfInWindow(blob: Blob, title: string) {
-  const url = URL.createObjectURL(blob);
-  const win = window.open(url, '_blank');
-  if (win) {
-    win.document.title = title;
-    win.onload = () => URL.revokeObjectURL(url);
-  }
-}
-
 /** Prazna vrijednost u ćeliji. */
 export function Prazno() {
   return <span className="text-slate-200">—</span>;

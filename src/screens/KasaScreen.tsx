@@ -19,10 +19,9 @@ import {
   dodajUKosaricu, dodajSlobodnuStavku, restoreCart, postaviRabat, postaviRabatNaSve, postaviKolicinu, stavkeTekst,
   type SavedCartItem,
 } from '@/lib/kosarica';
-import { pdf } from '@react-pdf/renderer';
 import { OtpremnicaPdf } from '@/components/OtpremnicaPdf';
 import { otvoriFakturuZaStampu } from '@/components/stampaFakture';
-import { ucitajZaStampu } from '@/lib/stampa';
+import { otvoriPdf, ucitajZaStampu } from '@/lib/stampa';
 import FakturaDialog, { type SkicaFakture } from '@/components/FakturaDialog';
 import SlobodnaStavkaDialog from '@/components/kasa/SlobodnaStavkaDialog';
 import StavkeRacuna from '@/components/kasa/StavkeRacuna';
@@ -469,10 +468,7 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
       const fullOrder = await window.api.getOrder(orderId);
       if (!fullOrder) return;
       const { firma, postavke } = await ucitajZaStampu();
-      const blob = await pdf(<OtpremnicaPdf order={fullOrder} firma={firma} postavke={postavke} />).toBlob();
-      const url = URL.createObjectURL(blob);
-      const win = window.open(url, '_blank');
-      if (win) win.onafterprint = () => URL.revokeObjectURL(url);
+      await otvoriPdf(<OtpremnicaPdf order={fullOrder} firma={firma} postavke={postavke} />);
     } catch (err: any) {
       setMessage({ type: 'error', text: `Greška pri štampanju otpremnice: ${err?.message || 'Nepoznata greška'}` });
     }

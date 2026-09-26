@@ -17,7 +17,6 @@ import {
   Receipt, X, Hammer,
   Send, Check, Ban, Search, Paperclip,
 } from 'lucide-react';
-import { pdf } from '@react-pdf/renderer';
 import { PonudaPdf } from '@/components/PonudaPdf';
 import { filtriraj, type PoljaPretrage } from '@/lib/pretraga';
 import { formatBrojPonude, efektivniStatus, plusDana, danaIzmedju } from '@/lib/ponuda';
@@ -35,7 +34,7 @@ import { zadaniIzbor, proizvodiIzIzbora } from '@/lib/nalogPrikaz';
 import { ProizvodiNaloga } from '@/components/proizvodnja/ProizvodiNaloga';
 import { zadanoZaKupca, primijeniRabatKupca, formatRabat, type FormatBroja } from '@/lib/dokumentPostavke';
 import { useDokumentPostavke } from '@/components/DokumentPostavkeProvider';
-import { ucitajZaStampu } from '@/lib/stampa';
+import { otvoriPdf, spremiPdf, ucitajZaStampu } from '@/lib/stampa';
 import { PretragaProizvoda } from '@/components/PretragaProizvoda';
 import { useKupci } from '@/components/PretragaKupaca';
 import type { Product, ProizvodPonude } from '@/types';
@@ -379,28 +378,18 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
 
   // ── PDF ────────────────────────────────────────────────────
 
-  const buildPdfBlob = async (p: PonudaRow) => {
+  const ponudaPdf = async (p: PonudaRow) => {
     const full = p.stavke ? p : await window.api.getPonuda(p.id);
     const { firma, postavke } = await ucitajZaStampu();
-    return pdf(<PonudaPdf ponuda={full as any} firma={firma} postavke={postavke} />).toBlob();
+    return <PonudaPdf ponuda={full as any} firma={firma} postavke={postavke} />;
   };
 
   const handlePrintPdf = async (p: PonudaRow) => {
-    const blob = await buildPdfBlob(p);
-    const url = URL.createObjectURL(blob);
-    const win = window.open(url, '_blank');
-    if (win) win.onafterprint = () => URL.revokeObjectURL(url);
+    await otvoriPdf(await ponudaPdf(p));
   };
 
   const handleExportPdf = async (p: PonudaRow) => {
-    const blob = await buildPdfBlob(p);
-    const savePath = await window.api.showSaveDialog({
-      defaultName: `Ponuda-${p.broj}-${p.godina}.pdf`,
-      filters: [{ name: 'PDF', extensions: ['pdf'] }],
-    });
-    if (!savePath) return;
-    const arrayBuffer = await blob.arrayBuffer();
-    await window.api.writeFile(savePath, Array.from(new Uint8Array(arrayBuffer)) as any);
+    await spremiPdf(await ponudaPdf(p), `Ponuda-${p.broj}-${p.godina}.pdf`);
   };
 
   const selStatus = selected ? efektivniStatus(selected, danas) : '';
