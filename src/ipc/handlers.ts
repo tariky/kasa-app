@@ -38,7 +38,8 @@ import {
 } from '../lib/ponuda';
 import { buildTringRacun } from '../lib/tringRacun';
 import { pripremiRacun, PDV_STOPE } from '../lib/provjeraRacuna';
-import { zapisiAudit, promjenePostavki } from '../lib/audit';
+import { zapisiAudit } from '../lib/audit';
+import { procitajPostavku, procitajGrupu, upisiPostavke } from '../lib/postavke';
 import { addCashMovement, retryCashMovement, getTodayMovements, getDrawerState, getLastPologIznos } from '../lib/cash';
 import { logoVelicina, ziroRacuniPozicija } from '../lib/firma';
 import { dohvatiKnjigovodja } from '../lib/knjigovodja/podaci';
@@ -145,8 +146,7 @@ export function registerIpcHandlers(): void {
 
   const db = getDb();
 
-  const postavka = (key: string): string | null =>
-    (db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined)?.value ?? null;
+  const postavka = (key: string): string | null => procitajPostavku(db, key);
 
   // ─── Sesija i korisnici ──────────────────────────────────
   // Prijavljeni korisnik živi samo u main procesu (jedan prozor = jedna sesija);
@@ -1234,8 +1234,7 @@ export function registerIpcHandlers(): void {
     if (dismissed.includes(broj)) return { success: true };
     dismissed.push(broj);
     db.transaction(() => {
-      db.prepare("INSERT INTO settings (key, value) VALUES ('fiscal.dismissedGaps', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-        .run(JSON.stringify(dismissed));
+      upisiPostavke(db, [['fiscal.dismissedGaps', JSON.stringify(dismissed)]]);
       audit('fiskalni:odbaciPrazninu', { broj });
     })();
     return { success: true };
@@ -1412,12 +1411,8 @@ export function registerIpcHandlers(): void {
 
   handle('proizvodnja:setEnabled', (enabled: boolean) => {
     db.transaction(() => {
-      const staraVrijednost = postavka('proizvodnja.enabled');
-      db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
-        .run('proizvodnja.enabled', String(enabled));
-      if (staraVrijednost !== String(enabled)) {
-        audit('postavke:set', { kljuc: 'proizvodnja.enabled', staraVrijednost, novaVrijednost: String(enabled) });
-      }
+      const [promjena] = upisiPostavke(db, [['proizvodnja.enabled', String(enabled)]]);
+      if (promjena) audit('postavke:set', { ...promjena });
       if (enabled) osigurajProdajnuUslugu(db);
     })();
     return { success: true };
@@ -1462,28 +1457,15 @@ export function registerIpcHandlers(): void {
     if (typeof data.operatorPassword === 'string' && data.operatorPassword !== '') {
       nove.push(['tring.operatorPassword', data.operatorPassword]);
     }
+    // Audit: lozinka samo kao "promijenjena", nikad vrijednost.
     db.transaction(() => {
-      // Audit: lozinka samo kao "promijenjena", nikad vrijednost.
-      const promjene = promjenePostavki(postavka, nove, new Set(['tring.operatorPassword']));
-      const upsert = db.prepare(
-        'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
-      );
-      for (const [k, v] of nove) upsert.run(k, v);
-      if (promjene.length > 0) audit('postavke:tring', { promjene });
+      upisiPostavke(db, nove, { audit, akcija: 'postavke:tring', bezVrijednosti: new Set(['tring.operatorPassword']) });
     })();
     return { success: true };
   });
 
   handle('settings:getFirma', () => {
-    const rows = db
-      .prepare("SELECT key, value FROM settings WHERE key LIKE 'firma.%'")
-      .all() as Array<{ key: string; value: string }>;
-
-    const settings: Record<string, string> = {};
-    for (const row of rows) {
-      settings[row.key.replace('firma.', '')] = row.value;
-    }
-
+    const settings = procitajGrupu(db, 'firma');
     const bankAccounts = [1, 2, 3]
       .map(i => ({
         bankName: settings[`bank${i}.name`] ?? '',
@@ -1518,12 +1500,8 @@ export function registerIpcHandlers(): void {
   handle('settings:set', (key: string, value: string) => {
     if (typeof value !== 'string') throw new Error('Vrijednost postavke mora biti tekst');
     db.transaction(() => {
-      const staraVrijednost = postavka(key);
-      db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
-        .run(key, value);
-      if (key !== 'kasa.scanMode' && staraVrijednost !== value) {
-        audit('postavke:set', { kljuc: key, staraVrijednost, novaVrijednost: value });
-      }
+      const [promjena] = upisiPostavke(db, [[key, value]]);
+      if (promjena && key !== 'kasa.scanMode') audit('postavke:set', { ...promjena });
     })();
     return { success: true };
   });
@@ -1579,14 +1557,9 @@ export function registerIpcHandlers(): void {
       nove.push([`firma.bank${i + 1}.name`, a.bankName ?? '']);
       nove.push([`firma.bank${i + 1}.number`, a.accountNumber ?? '']);
     }
+    // Audit: stara i nova vrijednost promijenjenih ključeva; logo (slika) samo kao "promijenjen".
     db.transaction(() => {
-      // Audit: stara i nova vrijednost promijenjenih ključeva; logo (slika) samo kao "promijenjen".
-      const promjene = promjenePostavki(postavka, nove, new Set(['firma.logo']));
-      const upsert = db.prepare(
-        'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
-      );
-      for (const [k, v] of nove) upsert.run(k, v);
-      if (promjene.length > 0) audit('postavke:firma', { promjene });
+      upisiPostavke(db, nove, { audit, akcija: 'postavke:firma', bezVrijednosti: new Set(['firma.logo']) });
     })();
     return { success: true };
   });
