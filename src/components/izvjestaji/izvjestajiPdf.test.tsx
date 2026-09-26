@@ -3,6 +3,8 @@ import { test, expect } from 'bun:test';
 import { isValidElement, type ReactNode } from 'react';
 import { Text, renderToBuffer } from '@react-pdf/renderer';
 import { PrimkePdf } from '../PrimkePdf';
+import { PrometPdf } from '../PrometPdf';
+import { NivelacijaPdf } from '../NivelacijaPdf';
 
 const FIRMA = { naziv: 'Firma d.o.o.', adresa: 'Ulica 1', grad: 'Sarajevo', idBroj: '4200000000001', pdvBroj: '200000000001' };
 
@@ -41,5 +43,38 @@ test('primke: RUC bez PDV-a i samo nad artiklima, oznaka „RUC“', async () =>
   expect(t).toContain('115,00 KM (62,2%)');
   expect(t).toContain('293,00 KM');
   expect(t).toContain('351,00 KM');
+  expect((await renderToBuffer(el)).subarray(0, 4).toString()).toBe('%PDF');
+});
+
+test('promet: sume izvršenih računa, storno odvojeno, neto promet', async () => {
+  const racun = (id: number, ukupno: number, pdvIznos: number, status = 'completed') =>
+    ({ id, ukupno, pdvIznos, status, nacinPlacanja: 'Gotovina', createdAt: '2026-02-10 10:00:00', korisnikIme: 'Admin' });
+  const orders = [racun(1, 23.4, 3.4), racun(2, 0.1, 0.01), racun(3, 0.2, 0.03), racun(4, 11.7, 1.7, 'refunded')];
+  const el = <PrometPdf orders={orders} dateFrom="01.02.2026" dateTo="28.02.2026" firma={FIRMA} />;
+  const t = tekstovi(el);
+  expect(t).toContain('23,70 KM');       // ukupna prodaja
+  expect(t).toContain('20,26 KM');       // osnovica
+  expect(t).toContain('3,44 KM');        // PDV
+  expect(t).toContain('11,70 KM (1)');   // reklamacije
+  expect(t).toContain('12,00 KM');       // neto promet
+  expect(t[t.indexOf('Broj računa:') + 1]).toBe('3');
+  expect((await renderToBuffer(el)).subarray(0, 4).toString()).toBe('%PDF');
+});
+
+test('nivelacija: razlike po znaku i PDV izlučen iz razlike stavki sa stopom E', async () => {
+  const stavka = (id: number, kolicina: number, staraCijena: number, novaCijena: number, pdvStopa: string) => ({
+    id, nivelacijaId: 1, productId: id, kolicina, staraCijena, novaCijena, pdvStopa,
+    razlika: novaCijena - staraCijena, ukupnaRazlika: (novaCijena - staraCijena) * kolicina,
+  });
+  const nivelacija = {
+    id: 1, brojNivelacije: 'NIV-2026-001', datum: '2026-02-10', primkaId: null, napomena: null, createdAt: '2026-02-10 10:00:00',
+    stavke: [stavka(1, 10, 11.7, 14.04, 'E'), stavka(2, 2, 5, 4, 'K'), stavka(3, 3, 2.34, 1.17, 'E')],
+  };
+  const el = <NivelacijaPdf nivelacija={nivelacija} firma={{ ...FIRMA, skladiste: '', logo: '' }} />;
+  const t = tekstovi(el);
+  expect(t).toContain('23,40 KM');   // pozitivna
+  expect(t).toContain('-5,51 KM');   // negativna
+  expect(t).toContain('2,89 KM');    // PDV na razliku: (23,40 − 3,51) × 17 / 117
+  expect(t).toContain('17,89 KM');   // neto razlika
   expect((await renderToBuffer(el)).subarray(0, 4).toString()).toBe('%PDF');
 });

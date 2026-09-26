@@ -5,6 +5,7 @@ import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
 import { POTPIS_AUTORA } from '@/lib/brend';
 import { kontaktFirme } from '@/lib/firma';
 import { PDV_STOPA_E_PCT } from '@/lib/pdv';
+import { sumeNivelacija } from '@/lib/izvjestaji';
 
 export interface NivelacijaPdfProps {
   nivelacija: Nivelacija;
@@ -178,13 +179,7 @@ const s = StyleSheet.create({
 export function NivelacijaPdf({ nivelacija, firma }: NivelacijaPdfProps) {
   const stavke = nivelacija.stavke ?? [];
 
-  const totPozitivna = stavke.filter(s => s.ukupnaRazlika > 0).reduce((a, s) => a + s.ukupnaRazlika, 0);
-  const totNegativna = stavke.filter(s => s.ukupnaRazlika < 0).reduce((a, s) => a + s.ukupnaRazlika, 0);
-  const totRazlika = stavke.reduce((a, s) => a + s.ukupnaRazlika, 0);
-
-  const pdvNaRazliku = stavke
-    .filter(st => st.pdvStopa === 'E')
-    .reduce((a, st) => a + st.ukupnaRazlika, 0) * PDV_STOPA_E_PCT / (100 + PDV_STOPA_E_PCT);
+  const sume = sumeNivelacija([nivelacija]);
 
   const pad = (n: number) => String(n).padStart(2, '0');
   const d = new Date();
@@ -286,7 +281,7 @@ export function NivelacijaPdf({ nivelacija, firma }: NivelacijaPdfProps) {
             <Text style={[s.tTotalCell, s.cStara]} />
             <Text style={[s.tTotalCell, s.cNova]} />
             <Text style={[s.tTotalCell, s.cRazJed]}>UKUPNO:</Text>
-            <Text style={[s.tTotalCell, s.cRazUk, { borderRight: 'none' }]}>{fmt(totRazlika)}</Text>
+            <Text style={[s.tTotalCell, s.cRazUk, { borderRight: 'none' }]}>{fmt(sume.razlika)}</Text>
           </View>
         </View>
 
@@ -294,19 +289,19 @@ export function NivelacijaPdf({ nivelacija, firma }: NivelacijaPdfProps) {
           <View style={s.summaryTable}>
             <View style={s.summaryLine}>
               <Text style={s.summaryLabel}>Ukupna pozitivna razlika:</Text>
-              <Text style={s.summaryValue}>{fmt(totPozitivna)} KM</Text>
+              <Text style={s.summaryValue}>{fmt(sume.pozitivna)} KM</Text>
             </View>
             <View style={s.summaryLine}>
               <Text style={s.summaryLabel}>Ukupna negativna razlika:</Text>
-              <Text style={s.summaryValue}>{fmt(totNegativna)} KM</Text>
+              <Text style={s.summaryValue}>{fmt(sume.negativna)} KM</Text>
             </View>
             <View style={s.summaryLine}>
               <Text style={s.summaryLabel}>{`PDV na razliku (${PDV_STOPA_E_PCT}%):`}</Text>
-              <Text style={s.summaryValue}>{fmt(pdvNaRazliku)} KM</Text>
+              <Text style={s.summaryValue}>{fmt(sume.pdvRazlike)} KM</Text>
             </View>
             <View style={s.summaryLineBold}>
               <Text style={[s.summaryLabel, { fontFamily: FB, fontWeight: 700 }]}>Neto razlika:</Text>
-              <Text style={s.summaryValue}>{fmt(totRazlika)} KM</Text>
+              <Text style={s.summaryValue}>{fmt(sume.razlika)} KM</Text>
             </View>
           </View>
         </View>

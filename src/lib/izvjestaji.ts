@@ -4,6 +4,7 @@
 
 import { kalkulacijaPrimke, type StavkaZaKalkulaciju } from './kalkulacija';
 import { round2 } from './novac';
+import { izluciPdv, PDV_STOPA_E_PCT } from './pdv';
 
 export interface SumePrimki {
   /** Nabavna vrijednost svih stavki (fakturna − rabat + zavisni), i materijala. */
@@ -48,4 +49,72 @@ export function sumePrimke(primke: Array<{ stavke?: StavkaZaKalkulaciju[] }>): S
 export function rucPrimke(primka: { stavke?: StavkaZaKalkulaciju[] }): { ruc: number; rucPct: number } {
   const { ruc, rucPct } = sumePrimke([primka]);
   return { ruc, rucPct };
+}
+
+export interface SumePrometa {
+  /** Zbir izvršenih računa, sa PDV-om. */
+  ukupno: number;
+  pdv: number;
+  /** Osnovica: ukupno − PDV. */
+  bezPdv: number;
+  brojRacuna: number;
+  /** Zbir storniranih računa. */
+  reklamacije: number;
+  brojReklamacija: number;
+}
+
+/** Sume prometa za period: izvršeni računi (`completed`) i, odvojeno, stornirani (`refunded`). */
+export function sumePrometa(orders: Array<{ ukupno: number; pdvIznos: number; status?: string }>): SumePrometa {
+  let ukupno = 0, pdv = 0, brojRacuna = 0, reklamacije = 0, brojReklamacija = 0;
+  for (const o of orders) {
+    if (o.status === 'completed') {
+      ukupno += o.ukupno; pdv += o.pdvIznos; brojRacuna++;
+    } else if (o.status === 'refunded') {
+      reklamacije += o.ukupno; brojReklamacija++;
+    }
+  }
+  ukupno = round2(ukupno);
+  pdv = round2(pdv);
+  return { ukupno, pdv, bezPdv: round2(ukupno - pdv), brojRacuna, reklamacije: round2(reklamacije), brojReklamacija };
+}
+
+/** Zbir pozitivnih i zbir negativnih iznosa, na fening. */
+export function razlikePoZnaku(iznosi: number[]): { pozitivna: number; negativna: number } {
+  let pozitivna = 0, negativna = 0;
+  for (const x of iznosi) {
+    if (x > 0) pozitivna += x;
+    else if (x < 0) negativna += x;
+  }
+  return { pozitivna: round2(pozitivna), negativna: round2(negativna) };
+}
+
+export interface SumeNivelacija {
+  /** Neto razlika u prodajnoj vrijednosti: Σ količina × (nova − stara), sa PDV-om. */
+  razlika: number;
+  /** Zbir stavki kojima je vrijednost porasla. */
+  pozitivna: number;
+  /** Zbir stavki kojima je vrijednost pala (negativan broj). */
+  negativna: number;
+  /** PDV sadržan u razlici stavki sa stopom E. */
+  pdvRazlike: number;
+}
+
+/** Sume nivelacija po stavkama; razlika stavke je ista kao `ukupnaRazlika` koju upisuje backend. */
+export function sumeNivelacija(
+  nivelacije: Array<{ stavke?: Array<{ kolicina: number; staraCijena: number; novaCijena: number; pdvStopa: string }> }>,
+): SumeNivelacija {
+  const razlike: number[] = [];
+  let razlikaE = 0;
+  for (const n of nivelacije) {
+    for (const s of n.stavke ?? []) {
+      const r = (s.novaCijena - s.staraCijena) * s.kolicina;
+      razlike.push(r);
+      if (s.pdvStopa === 'E') razlikaE += r;
+    }
+  }
+  return {
+    razlika: round2(razlike.reduce((a, r) => a + r, 0)),
+    ...razlikePoZnaku(razlike),
+    pdvRazlike: izluciPdv(razlikaE, PDV_STOPA_E_PCT),
+  };
 }

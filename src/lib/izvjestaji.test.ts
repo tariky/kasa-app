@@ -1,7 +1,8 @@
 import { test, expect, describe } from 'bun:test';
-import { sumePrimke, rucPrimke } from './izvjestaji';
+import { sumePrimke, rucPrimke, sumePrometa, sumeNivelacija, razlikePoZnaku } from './izvjestaji';
 import { kalkulacijaPrimke, type StavkaZaKalkulaciju } from './kalkulacija';
 import { round2 } from './novac';
+import { izluciPdv } from './pdv';
 
 const st = (p: Partial<StavkaZaKalkulaciju>): StavkaZaKalkulaciju => ({
   kolicina: 1, nabavnaCijena: 0, rabat: 0, zavisniTroskovi: 0, cijena: 0, pdvStopa: 'E', ...p,
@@ -87,5 +88,51 @@ describe('RUC primki', () => {
   test('prodaja ispod nabavne daje negativan RUC', () => {
     const p = { stavke: [st({ kolicina: 2, nabavnaCijena: 50, cijena: 46.8 })] }; // bez PDV 40 × 2 = 80, nabavna 100
     expect(rucPrimke(p)).toEqual({ ruc: -20, rucPct: -20 });
+  });
+});
+
+test('izluciPdv: PDV sadržan u bruto iznosu, na fening', () => {
+  expect(izluciPdv(117, 17)).toBe(17);
+  expect(izluciPdv(10, 17)).toBe(1.45);    // 1,4529…
+  expect(izluciPdv(-23.4, 17)).toBe(-3.4);
+  expect(izluciPdv(50, 0)).toBe(0);
+});
+
+describe('promet', () => {
+  const racun = (ukupno: number, pdvIznos: number, status = 'completed') => ({ ukupno, pdvIznos, nacinPlacanja: 'Gotovina', status });
+
+  test('sume samo izvršenih računa; storno ide u reklamacije; zaokruženo na fening', () => {
+    const s = sumePrometa([racun(23.4, 3.4), racun(0.1, 0.01), racun(0.2, 0.03), racun(11.7, 1.7, 'refunded')]);
+    expect(s).toEqual({ ukupno: 23.7, pdv: 3.44, bezPdv: 20.26, brojRacuna: 3, reklamacije: 11.7, brojReklamacija: 1 });
+  });
+
+  test('prazan period su nule', () => {
+    expect(sumePrometa([])).toEqual({ ukupno: 0, pdv: 0, bezPdv: 0, brojRacuna: 0, reklamacije: 0, brojReklamacija: 0 });
+  });
+});
+
+describe('nivelacije', () => {
+  test('razlika = Σ količina × (nova − stara); PDV izlučen iz razlike stavki sa stopom E', () => {
+    const niv = {
+      stavke: [
+        { kolicina: 10, staraCijena: 11.7, novaCijena: 14.04, pdvStopa: 'E' }, // +23,40 → PDV 3,40
+        { kolicina: 2, staraCijena: 5, novaCijena: 4, pdvStopa: 'K' },         // −2,00, bez PDV-a
+        { kolicina: 3, staraCijena: 2.34, novaCijena: 1.17, pdvStopa: 'E' },   // −3,51 → PDV −0,51
+      ],
+    };
+    expect(sumeNivelacija([niv])).toEqual({ razlika: 17.89, pozitivna: 23.4, negativna: -5.51, pdvRazlike: 2.89 });
+  });
+
+  test('više nivelacija se sabira; bez stavki su nule', () => {
+    const a = { stavke: [{ kolicina: 1, staraCijena: 10, novaCijena: 21.7, pdvStopa: 'E' }] }; // +11,70 → PDV 1,70
+    const b = { stavke: [{ kolicina: 1, staraCijena: 5.85, novaCijena: 0, pdvStopa: 'E' }] };  // −5,85 → PDV −0,85
+    expect(sumeNivelacija([a, b])).toEqual({ razlika: 5.85, pozitivna: 11.7, negativna: -5.85, pdvRazlike: 0.85 });
+    expect(sumeNivelacija([])).toEqual({ razlika: 0, pozitivna: 0, negativna: 0, pdvRazlike: 0 });
+    expect(sumeNivelacija([{ stavke: [] }, {}])).toEqual({ razlika: 0, pozitivna: 0, negativna: 0, pdvRazlike: 0 });
+  });
+
+  test('razlike po znaku (lista nivelacija na ekranu sabira ukupne razlike dokumenata)', () => {
+    expect(razlikePoZnaku([0.1, -2, 0.2, 0, -0.35])).toEqual({ pozitivna: 0.3, negativna: -2.35 });
+    expect(razlikePoZnaku([])).toEqual({ pozitivna: 0, negativna: 0 });
   });
 });
