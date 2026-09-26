@@ -24,13 +24,13 @@ export function ocistiPorukuIpc(poruka: string): string {
   return poruka.replace(/^Error invoking remote method '[^']*':\s*(Error:\s*)?/, '');
 }
 
-/** `pozovi` čije odbijanje nosi poruku bez Electron omota (preload). */
+/** `pozovi` čije odbijanje nosi poruku bez Electron omota (preload); izvorno odbijanje je `cause`. */
 export function ocistiGreske(pozovi: Pozovi): Pozovi {
   return async (kanal, ...args) => {
     try {
       return await pozovi(kanal, ...args);
     } catch (e) {
-      throw new Error(ocistiPorukuIpc(e instanceof Error ? e.message : String(e)));
+      throw new Error(ocistiPorukuIpc(e instanceof Error ? e.message : String(e)), { cause: e });
     }
   };
 }
