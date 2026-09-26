@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 use crate::greska::R;
 use crate::js::{self, has};
 use crate::proizvodnja::je_artikal_u_proizvodnji;
+use crate::provjera_racuna::{NACINI_PLACANJA, PDV_STOPE};
 use crate::skladiste::{is_dobavljac_used, zapisi_promjene_cijena};
 use crate::sql::Db;
 use crate::zaliha::{self, Dokument, Smjer};
@@ -26,7 +27,6 @@ fn normalizuj_tip(t: &Value) -> &str {
     }
 }
 
-const PDV_STOPE: [&str; 2] = ["E", "K"];
 /// Tring: naziv zajedno s JM ima 32–36 znakova, zavisno od uređaja.
 const SLOBODAN_NAZIV_MAX: usize = 32;
 
@@ -482,8 +482,6 @@ fn validiraj_kupca(db: &Db, data: &Value, id: &Value) -> R<Vec<(&'static str, St
     }
     Ok(upis)
 }
-
-const NACINI_PLACANJA: [&str; 4] = ["Gotovina", "Kartica", "Virman", "Ček"];
 
 // Zadane vrijednosti kupca za dokumente — samo poslana polja; prazno/null briše vrijednost.
 fn validiraj_zadano_kupca(data: &Value) -> R<Vec<(&'static str, Value)>> {
