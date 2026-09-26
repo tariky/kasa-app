@@ -12,6 +12,7 @@ import { opisPlacanja, raspodjelaPlacanja } from '@/lib/placanje';
 import { round2 } from '@/lib/novac';
 import { ucitajZaStampu } from '@/lib/stampa';
 import { otvoriNezavrseneRacune } from '@/lib/nezavrseniRacuni';
+import { izvrsiFiskalno } from '@/lib/fiskalniIshod';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -214,28 +215,29 @@ export function RacunDetailDialog({ orderId, redoslijed, uloga, onClose, onNavig
     try {
       // Štampa i upis storna idu kroz jedan poziv da ne ostane odštampana
       // reklamacija bez zapisa u bazi ako nešto pukne između.
-      const result = await window.api.refundAndPrintOrder({
+      const { ishod, res: result } = await izvrsiFiskalno(() => window.api.refundAndPrintOrder({
         id: order.id,
         brojReklamacije: reklamacijaBroj.trim() || undefined,
         dozvoliPolog,
         adminPin: trebaPin ? pinValue : undefined,
-      });
+      }));
       // Storno je možda odštampan (ili već upisan iz dijaloga nezavršenih
       // računa): bez ponovnog slanja i bez ponude pologa.
-      if (result && !result.success && (result.ishodNepoznat || result.vecEvidentiran)) {
+      if (ishod.vrsta === 'nepoznat' || ishod.vrsta === 'vecEvidentiran') {
         setReklamacijaOpen(false);
         setReklamacijaBroj('');
-        setNotice({ type: 'error', text: result.error || 'Ishod štampe nije poznat.' });
-        if (result.ishodNepoznat) otvoriNezavrseneRacune();
+        setNotice({ type: 'error', text: ishod.poruka });
+        if (ishod.vrsta === 'nepoznat') otvoriNezavrseneRacune();
         await reload();
         return;
       }
-      if (!result || !result.success) {
-        const details = result?.odgovori ? Object.entries(result.odgovori).map(([k, v]) => `${k}: ${v}`).join(', ') : '';
-        setReklamacijaGreska(`${result?.error || 'Nepoznata greška'}${details ? ` (${details})` : ''}`);
+      if (ishod.vrsta === 'greska' || !result) {
+        setReklamacijaGreska(ishod.poruka);
         // Prazna ladica nije razlog da se storno ne može napraviti — operateru
         // se ponudi override koji manjak evidentira kao polog i ponovi štampu.
         setOverrideManjak(result?.nedovoljnoSredstava ? (result.manjak ?? 0) : null);
+        // Odbijen poziv (npr. pogrešan PIN administratora) — PIN se upisuje ponovo.
+        if (!result) setPinValue('');
         return;
       }
       setReklamacijaOpen(false);
@@ -246,10 +248,6 @@ export function RacunDetailDialog({ orderId, redoslijed, uloga, onClose, onNavig
           + (result.pologIznos ? ` (evidentiran polog ${formatKM(result.pologIznos)})` : ''),
       });
       await reload();
-    } catch (err: any) {
-      console.error('Reklamacija error:', err);
-      setReklamacijaGreska(err?.message || 'Nepoznata greška');
-      setPinValue('');
     } finally {
       setReklamacijaLoading(false);
     }

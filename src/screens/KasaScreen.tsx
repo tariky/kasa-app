@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { User as UserIcon, Banknote, CreditCard, Building, FileCheck, Printer, Percent, Paperclip, PencilLine, ScanBarcode, Eraser, X } from 'lucide-react';
+import { User as UserIcon, Printer, Percent, Paperclip, PencilLine, ScanBarcode, Eraser, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { DecimalInput } from '@/components/ui/decimal-input';
@@ -29,19 +29,13 @@ import SpremljeneKosarice, { type SavedCartRow } from '@/components/kasa/Spremlj
 import type { Product, CartItem, Kupac } from '@/types';
 import { potvrdi } from '@/lib/dijalog';
 import { otvoriNezavrseneRacune } from '@/lib/nezavrseniRacuni';
+import { izvrsiFiskalno } from '@/lib/fiskalniIshod';
+import type { NacinPlacanja } from '@/lib/placanje';
+import { NacinPlacanjaBirac } from '@/components/NacinPlacanjaBirac';
 import { zadanoZaKupca, primijeniRabatKupca, formatRabat, nacinKupcaNaKasi, nacinBezKupca } from '@/lib/dokumentPostavke';
 import { useDokumentPostavke } from '@/components/DokumentPostavkeProvider';
 
-type PaymentType = 'Gotovina' | 'Kartica' | 'Virman' | 'Ček';
-const NACINI: PaymentType[] = ['Gotovina', 'Kartica', 'Virman', 'Ček'];
-const NAPLATI: Record<PaymentType, string> = { Gotovina: 'gotovinom', Kartica: 'karticom', Virman: 'virmanom', 'Ček': 'čekom' };
-
-const paymentIcons: Record<PaymentType, React.ReactNode> = {
-  Gotovina: <Banknote className="h-4 w-4" />,
-  Kartica: <CreditCard className="h-4 w-4" />,
-  Virman: <Building className="h-4 w-4" />,
-  'Ček': <FileCheck className="h-4 w-4" />,
-};
+const NAPLATI: Record<NacinPlacanja, string> = { Gotovina: 'gotovinom', Kartica: 'karticom', Virman: 'virmanom', 'Ček': 'čekom' };
 
 const ARTIKLI_I_USLUGE: Product['tip'][] = ['artikal', 'usluga'];
 
@@ -61,7 +55,7 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
   const { postavke } = useDokumentPostavke();
   const [cart, setCart] = useState<CartItem[]>([]);
   const [zadnje, setZadnje] = useState<{ id: number; n: number } | null>(null);
-  const [paymentType, setPaymentType] = useState<PaymentType>('Gotovina');
+  const [paymentType, setPaymentType] = useState<NacinPlacanja>('Gotovina');
   const [kusurTotal, setKusurTotal] = useState<number | null>(null);
   const [kusurValue, setKusurValue] = useState('');
   const [loading, setLoading] = useState(false);
@@ -97,7 +91,7 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
   const qtyInputRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   // Način koji je postavio izabrani kupac — kad kupac ode, vraća se na Gotovinu.
-  const nacinOdKupcaRef = useRef<PaymentType | null>(null);
+  const nacinOdKupcaRef = useRef<NacinPlacanja | null>(null);
 
   const fokusPretraga = useCallback(() => { setTimeout(() => searchInputRef.current?.focus(), 50); }, []);
 
@@ -445,33 +439,32 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
         pdvStopa: item.product.pdvStopa,
       }));
 
-      const res = await window.api.finalizeOrder({
+      const { ishod, res } = await izvrsiFiskalno(() => window.api.finalizeOrder({
         ukupno: total, pdvIznos: pdvAmount, nacinPlacanja: paymentType,
         kupac, napomena: racunNapomena || undefined, stavke,
-      });
+      }));
 
       // Odštampan i već upisan iz dijaloga nezavršenih računa: prodaja je
       // završena (bez novog id-a) — korpa se prazni da se ne pošalje ponovo.
-      if (res && !res.success && res.vecEvidentiran) {
+      if (ishod.vrsta === 'vecEvidentiran') {
         setCart([]); setZadnje(null); setKupacOpen(false); clearKupac();
-        setMessage({ type: 'error', text: res.error || 'Račun je već evidentiran.' });
+        setMessage({ type: 'error', text: ishod.poruka });
         loadDailyTotal();
         return;
       }
 
-      if (res && !res.success && res.ishodNepoznat) {
+      if (ishod.vrsta === 'nepoznat') {
         // Račun je možda odštampan: sad ga vodi dijalog nezavršenih računa,
         // pa se korpa prazni — ponovno slanje bi moglo dati dupli račun.
         setCart([]); setZadnje(null); setKupacOpen(false); clearKupac();
-        setMessage({ type: 'error', text: res.error || 'Ishod štampe nije poznat.' });
+        setMessage({ type: 'error', text: ishod.poruka });
         otvoriNezavrseneRacune();
         return;
       }
 
-      if (!res || !res.success) {
-        const details = res?.odgovori ? Object.entries(res.odgovori).map(([k, v]) => `${k}: ${v}`).join(', ') : '';
-        setMessage({ type: 'error', text: `Greška pri štampanju: ${res?.error || 'Nepoznata greška'}${details ? ` (${details})` : ''}` });
-        setLoading(false);
+      // Siguran neuspjeh (uređaj odbio) ili odbijen poziv prije štampe — korpa ostaje za novi pokušaj.
+      if (ishod.vrsta === 'greska' || !res) {
+        setMessage({ type: 'error', text: `${res ? 'Greška pri štampanju' : 'Greška'}: ${ishod.poruka}` });
         return;
       }
 
@@ -490,8 +483,6 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
       } else {
         fokusPretraga();
       }
-    } catch (err: any) {
-      setMessage({ type: 'error', text: `Greška: ${err?.message || 'Nepoznata greška'}` });
     } finally {
       setLoading(false);
     }
@@ -715,46 +706,14 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
           </div>
 
           {/* Način plaćanja */}
-          <div
-            className="flex gap-1 rounded-xl border border-slate-200 bg-white p-1"
-            role="radiogroup"
-            aria-label="Način plaćanja"
-            onKeyDown={e => {
-              if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-              e.preventDefault();
-              const i = NACINI.indexOf(paymentType);
-              const next = e.key === 'ArrowRight' ? (i + 1) % NACINI.length : (i - 1 + NACINI.length) % NACINI.length;
-              setPaymentType(NACINI[next]);
-              if (NACINI[next] === 'Virman' && !kupacIdBroj.trim()) setKupacOpen(true);
-              (e.currentTarget.children[next] as HTMLElement | undefined)?.focus();
+          <NacinPlacanjaBirac
+            value={paymentType}
+            onChange={nacin => {
+              setPaymentType(nacin);
+              // Virman zahtijeva kupca — odmah otvori dialog za odabir
+              if (nacin === 'Virman' && !kupacIdBroj.trim()) setKupacOpen(true);
             }}
-          >
-            {NACINI.map(type => {
-              const aktivan = paymentType === type;
-              return (
-                <button
-                  key={type}
-                  type="button"
-                  role="radio"
-                  aria-checked={aktivan}
-                  tabIndex={aktivan ? 0 : -1}
-                  className={cn(
-                    'flex flex-1 flex-col items-center gap-1 rounded-lg py-2 text-[11px] transition-colors',
-                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50',
-                    aktivan ? 'bg-[#0f1629] font-medium text-white' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800',
-                  )}
-                  onClick={() => {
-                    setPaymentType(type);
-                    // Virman zahtijeva kupca — odmah otvori dialog za odabir
-                    if (type === 'Virman' && !kupacIdBroj.trim()) setKupacOpen(true);
-                  }}
-                >
-                  <span className={aktivan ? 'text-white' : 'text-slate-400'}>{paymentIcons[type]}</span>
-                  {type}
-                </button>
-              );
-            })}
-          </div>
+          />
 
           {message && (
             <div
