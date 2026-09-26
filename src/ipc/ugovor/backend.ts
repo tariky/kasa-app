@@ -55,6 +55,13 @@ export interface Backend {
   ponovoPokreni(): Promise<void>;
   /** Svi registrovani kanali backenda (za provjeru da ugovorni testovi pokrivaju svaki). */
   kanali(): Promise<string[]>;
+  /**
+   * R2 podaci koje "licenca" daje automatskom backup-u (null = licenca bez
+   * backup-a). Token → R2 podaci imaju svoje testove (licenca.test.ts, licenca.rs).
+   */
+  postaviBackupLicencu(r2: import('../../lib/licenca').R2Podaci | null): void;
+  /** Događaji koje je backend poslao prozoru (`backup:stanje`, `licenca:blokirano`…), redom. */
+  dogadjaji: { ime: string; podaci: unknown }[];
   close(): Promise<void>;
 }
 

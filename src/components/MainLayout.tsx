@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { User } from '@/types';
 import {
-  ScanBarcode, Warehouse, NotebookTabs, ReceiptText, FileSignature, BarChart3, Settings, LogOut, WandSparkles, Factory,
+  ScanBarcode, Warehouse, NotebookTabs, ReceiptText, FileSignature, BarChart3, Settings, LogOut, WandSparkles, Factory, CloudOff,
 } from 'lucide-react';
 import appIcon from '@/assets/icon.png';
 import KasaScreen from '@/screens/KasaScreen';
@@ -10,7 +10,7 @@ import SifarnikScreen from '@/screens/SifarnikScreen';
 import NarudzbeScreen from '@/screens/NarudzbeScreen';
 import PonudeScreen from '@/screens/PonudeScreen';
 import IzvjestajiScreen from '@/screens/IzvjestajiScreen';
-import PostavkeScreen from '@/screens/PostavkeScreen';
+import PostavkeScreen, { otvoriPostavkeGrupu } from '@/screens/PostavkeScreen';
 import GeneratorScreen from '@/screens/GeneratorScreen';
 import ProizvodnjaScreen from '@/screens/ProizvodnjaScreen';
 import PendingRacuniDialog from '@/components/PendingRacuniDialog';
@@ -18,6 +18,8 @@ import PologPrompt from '@/components/PologPrompt';
 import { useModuli } from '@/hooks/useModuli';
 import type { Modul } from '@/lib/moduli';
 import LicencaTraka from '@/components/licenca/LicencaTraka';
+import BackupTraka from '@/components/backup/BackupTraka';
+import { useBackupPrikaz } from '@/hooks/useBackup';
 import { DokumentPostavkeProvider } from '@/components/DokumentPostavkeProvider';
 import type { LicencaInfo } from '@/lib/licencaTipovi';
 import { cn } from '@/lib/utils';
@@ -42,6 +44,30 @@ const inicijali = (ime: string) =>
 // Kratko kašnjenje: kursor koji samo prođe preko lijeve ivice ne otvara meni.
 const ODGODA_OTVARANJA_MS = 150;
 
+/** Stavka sidebara za trajnu grešku backup-a; admin klikom otvara Postavke → Sistem, kasiru je samo oznaka. */
+function BackupUpozorenje({ tekst, otvoren, onOtvori }: { tekst: string; otvoren: boolean; onOtvori?: () => void }) {
+  const klasa = 'w-full flex items-center gap-3 px-[15px] py-2.5 rounded-lg text-[13px] font-medium whitespace-nowrap text-amber-400';
+  const sadrzaj = (
+    <>
+      <CloudOff size={18} strokeWidth={1.5} className="shrink-0" />
+      {/* Puni tekst je u `title`; u sidebar (224 px) staje samo kraći. */}
+      <span className={cn('min-w-0 truncate transition-opacity duration-150', otvoren ? 'opacity-100' : 'opacity-0')}>Nema backup-a 24 h</span>
+    </>
+  );
+  return (
+    <div className="px-2 pb-1 no-print">
+      {onOtvori ? (
+        <button type="button" title={tekst} aria-label={tekst} onClick={onOtvori}
+          className={cn(klasa, 'transition-colors duration-150 hover:bg-amber-400/[0.08] hover:text-amber-300')}>
+          {sadrzaj}
+        </button>
+      ) : (
+        <div role="status" title={tekst} className={klasa}>{sadrzaj}</div>
+      )}
+    </div>
+  );
+}
+
 interface Props {
   user: User;
   licenca: LicencaInfo;
@@ -51,6 +77,7 @@ interface Props {
 export default function MainLayout({ user, licenca, onLogout }: Props) {
   const [screen, setScreen] = useState<Screen>('kasa');
   const moduli = useModuli();
+  const backup = useBackupPrikaz();
   const [openNalogId, setOpenNalogId] = useState<number | null>(null);
   const [otvoren, setOtvoren] = useState(false);
   const tajmer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -158,6 +185,15 @@ export default function MainLayout({ user, licenca, onLogout }: Props) {
               })}
             </nav>
 
+            {/* Trajna greška backup-a: stoji danima, pa je u sidebaru — ne prekriva akcije ekrana. */}
+            {backup?.uPostavke && (
+              <BackupUpozorenje
+                tekst={backup.tekst}
+                otvoren={otvoren}
+                onOtvori={user.uloga === 'admin' ? () => { otvoriPostavkeGrupu('sistem'); setScreen('postavke'); zatvori(); } : undefined}
+              />
+            )}
+
             {/* User & Logout */}
             <div className="px-2 py-3 border-t border-white/[0.06]">
               <div className="flex items-center gap-3 px-2 py-2 mb-1 whitespace-nowrap" title={otvoren ? undefined : user.ime}>
@@ -184,6 +220,7 @@ export default function MainLayout({ user, licenca, onLogout }: Props) {
         {/* Main content */}
         <main className="relative z-0 isolate flex-1 overflow-hidden flex flex-col">
           <LicencaTraka info={licenca} />
+          <BackupTraka prikaz={backup} />
           {/* Na širokim ekranima sadržaj ostaje centriran u ograničenoj širini
               (1440px + 64px sidebar = 1504px), a sa strane ostaje pozadina. */}
           <div className="flex-1 min-h-0 overflow-hidden bg-slate-100">

@@ -24,6 +24,8 @@ let userData = '';
 let restart = false;
 const dijalog: OdgovoriDijaloga = { sacuvaj: null, otvori: null, potvrda: 0 };
 const otvoreniDijalozi: OtvoreniDijalog[] = [];
+const dogadjaji: { ime: string; podaci: unknown }[] = [];
+let backupR2: import('../../lib/licenca').R2Podaci | null = null;
 
 function zabiljezi(vrsta: OtvoreniDijalog['vrsta'], opcije: Record<string, unknown>): void {
   otvoreniDijalozi.push({ vrsta, opcije });
@@ -42,12 +44,21 @@ mock.module('electron', () => ({
     showOpenDialog: async (o: Record<string, unknown>) => (zabiljezi('otvori', o), { canceled: dijalog.otvori === null, filePaths: dijalog.otvori ? [dijalog.otvori] : [] }),
     showMessageBox: async (o: Record<string, unknown>) => (zabiljezi('potvrda', o), { response: dijalog.potvrda }),
   },
-  BrowserWindow: { getAllWindows: () => [] },
+  BrowserWindow: {
+    // Prije pravog prozora: jedan zatvoren i jedan čiji send baca — događaji
+    // moraju ipak stići (src/ipc/backup.ts preskače/hvata po prozoru).
+    getAllWindows: () => [
+      { isDestroyed: () => true, webContents: { send: () => { throw new Error('Object has been destroyed'); } } },
+      { isDestroyed: () => false, webContents: { send: () => { throw new Error('Render frame was disposed'); } } },
+      { isDestroyed: () => false, webContents: { send: (ime: string, podaci: unknown) => { dogadjaji.push({ ime, podaci: JSON.parse(JSON.stringify(podaci ?? null)) }); } } },
+    ],
+  },
 }));
 mock.module(path.join(__dirname, '../licenca.ts'), () => ({
   provjeriKanal: () => undefined,
   stanjeLicence: () => ({ stanje: 'aktivna' }),
   aktivirajLicencu: () => ({ stanje: 'aktivna' }),
+  backupPristup: () => backupR2,
 }));
 
 export async function otvoriTsBackend(): Promise<Backend> {
@@ -59,6 +70,8 @@ export async function otvoriTsBackend(): Promise<Backend> {
   restart = false;
   Object.assign(dijalog, { sacuvaj: null, otvori: null, potvrda: 0 });
   otvoreniDijalozi.length = 0;
+  dogadjaji.length = 0;
+  backupR2 = null;
   userData = mkdtempSync(path.join(tmpdir(), 'kasa-ugovor-'));
   const radniFolder = path.join(userData, 'radni');
   mkdirSync(radniFolder);
@@ -73,6 +86,8 @@ export async function otvoriTsBackend(): Promise<Backend> {
     tring,
     dijalog,
     otvoreniDijalozi,
+    dogadjaji,
+    postaviBackupLicencu: (r2) => { backupR2 = r2; },
     radniFolder,
     restartovan: () => restart,
     async kanali() {

@@ -14,7 +14,7 @@ import {
   Building2, ScanBarcode, Printer, FileText, Users, ShieldCheck, Settings2,
 } from 'lucide-react';
 
-type Grupa = 'firma' | 'kasa' | 'fiskalni' | 'dokumenti' | 'korisnici' | 'licenca' | 'sistem';
+export type Grupa = 'firma' | 'kasa' | 'fiskalni' | 'dokumenti' | 'korisnici' | 'licenca' | 'sistem';
 
 type Ton = 'ok' | 'upozorenje' | 'greska' | null;
 
@@ -36,6 +36,12 @@ const GRUPE: { id: Grupa; naziv: string; ikona: typeof Building2 }[] = [
 
 // Ekran se odmontira pri promjeni ekrana u navigaciji; povratak otvara zadnju grupu.
 let zadnjaGrupa: Grupa = 'firma';
+
+/** Otvara Postavke na grupi `g` (npr. klik na pilulu backup-a). */
+export function otvoriPostavkeGrupu(g: Grupa): void {
+  zadnjaGrupa = g;
+  window.dispatchEvent(new CustomEvent('ui:postavkeGrupa', { detail: g }));
+}
 
 export default function PostavkeScreen() {
   const [grupa, setGrupaState] = useState<Grupa>(zadnjaGrupa);
@@ -66,6 +72,12 @@ export default function PostavkeScreen() {
     ucitajFirmu();
     ucitajTring();
     ucitajKorisnike();
+  }, []);
+
+  useEffect(() => {
+    const na = (e: Event) => setGrupa((e as CustomEvent<Grupa>).detail);
+    window.addEventListener('ui:postavkeGrupa', na);
+    return () => window.removeEventListener('ui:postavkeGrupa', na);
   }, []);
 
   const opisLic = licenca ? opisLicence(licenca) : null;

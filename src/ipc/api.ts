@@ -2,14 +2,24 @@
 // (ipcRenderer.invoke) i Tauri (invoke('api')), pa renderer vidi isti API
 // nad oba backenda. Kanali su ugovor — vidi src/ipc/ugovor.
 
-export type Pozovi = (kanal: string, ...args: unknown[]) => Promise<any>;
+import type { BackupDogadjaj } from '../lib/backupRaspored';
 
-export function napraviApi(pozovi: Pozovi, naLicencaBlokirano: (cb: () => void) => () => void) {
+export type Pozovi = (kanal: string, ...args: unknown[]) => Promise<any>;
+/** Pretplata na događaj backenda (Electron `ipcRenderer.on`, Tauri `listen`); vraća odjavu. */
+export type NaDogadjaj = (ime: string, cb: (podaci: unknown) => void) => () => void;
+
+export function napraviApi(pozovi: Pozovi, naDogadjaj: NaDogadjaj) {
   return {
     // Licenca
     getLicenca: () => pozovi('licenca:stanje'),
     aktivirajLicencu: (token: string) => pozovi('licenca:aktiviraj', token),
-    onLicencaBlokirano: naLicencaBlokirano,
+    onLicencaBlokirano: (cb: () => void) => naDogadjaj('licenca:blokirano', () => cb()),
+
+    // Automatski backup
+    getBackupInfo: () => pozovi('backup:info'),
+    backupSada: () => pozovi('backup:sada'),
+    onBackupStanje: (cb: (d: BackupDogadjaj) => void) =>
+      naDogadjaj('backup:stanje', d => cb(d as BackupDogadjaj)),
 
     // Users — sesija živi u main procesu (vidi src/ipc/sesija.ts); korisnikId se
     // nigdje ne šalje, backend ga uzima iz sesije.

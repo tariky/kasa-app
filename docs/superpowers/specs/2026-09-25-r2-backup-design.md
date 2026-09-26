@@ -3,7 +3,7 @@
 **Datum:** 2026-09-25
 **Status:** Approved (brainstorming) — djelimično urađeno, vidi "Stanje implementacije"
 
-## Stanje implementacije (2026-09-25)
+## Stanje implementacije (2026-09-26)
 
 **Urađeno i provjereno na stvarnom bucketu** (`pazar-lunatik-doo`, dev licenca "Lunatik doo"):
 - `src/lib/licenca.ts` — polje `b` u tokenu, `licenca.backup = { bucket }`, `backupPodaci(token)` (samo main proces).
@@ -16,11 +16,34 @@
 - `tools/backup/backup.ts` — `kljuc`, `posalji`, `lista`, `preuzmi`, `sifruj`, `desifruj`
   (`posalji` bez argumenata radi tačno ono što treba aplikacija: licenca + baza dev aplikacije → R2).
 
+**Urađeno u aplikaciji (Electron)** — jedinični i ugovorni testovi prolaze, izgled trake i kartice provjeren
+na statičkom pregledu; klik "Backup sada" u pravom Electronu prema stvarnom R2 ostaje ručna provjera vlasnika:
+- `src/lib/backupRaspored.ts` — `sljedeciBackup`, `trajnaGreska`, `ukupniProcenat`, tipovi `BackupStanje` / `BackupInfo` / `BackupDogadjaj`.
+- `src/lib/backupTok.ts` — `napraviBackup`: tok kopija → šifrovanje → slanje, jedan backup istovremeno, stanje, događaji, `tick`.
+- `src/ipc/backup.ts` — kanali `backup:info` / `backup:sada`, događaj `backup:stanje`, VACUUM INTO preko
+  better-sqlite3, `userData/backup-stanje.json`, provjera svake minute; preload dobija opštu pretplatu na događaje.
+- `src/lib/r2.ts` — `r2Posalji` s napretkom po bajtovima i `R2Greska` sa HTTP statusom i S3 `kod`-om (403 `backupTok` pretvara u "R2 pristup više ne važi…", a 403 `RequestTimeTooSkewed` u poruku o satu).
+- `src/lib/backupTraka.ts` + `src/components/backup/BackupTraka.tsx` — linija i pilula u `MainLayout` (tekstovi, boje, trajanje);
+  stanje drži `useBackupPrikaz` (`src/hooks/useBackup.ts`), trajnu grešku crta stavka `BackupUpozorenje` u lijevom meniju.
+- `src/components/postavke/AutomatskiBackup.tsx` + `src/hooks/useBackup.ts` — kartica u Postavke → Sistem.
+- Ugovor: `src/ipc/ugovor/backup.ugovor.test.ts` protiv lažnog S3 (`src/ipc/ugovor/laziS3.ts`, `PAZAR_BACKUP_ENDPOINT`).
+
+**Odluke donesene u planu** (`docs/superpowers/plans/2026-09-25-r2-backup-aplikacija.md`):
+1. `sljedeciBackup(stanje, sada, start)` ima treći argument (start), pa pao pokušaj ima prednost (+15 min) i ništa ne ide prije `start + 1 min` — bez petlje kad backup-a nikad nije bilo.
+2. Tajmer je provjera svake minute (`setInterval` + `sljedeciBackup`) umjesto jednog dugog `setTimeout`-a — preživi spavanje laptopa i sam primijeti novu licencu (±1 min).
+3. `procenat` u događaju je unutar faze (0–100), a traka ga preslikava na ukupni (`ukupniProcenat`); Rust šalje isto.
+4. `backup:sada` čeka kraj i vraća `BackupInfo` (greška backup-a je u `info.greska`); baca samo kad backup nije u licenci.
+5. Napredak po bajtovima ide kroz `node:http(s)` PUT s `content-length` u komadima od 64 KB, jer `fetch` sa streamom šalje chunked što R2 odbija; GET i lista ostaju na `fetch`.
+6. Ugovorni harness dobija `postaviBackupLicencu(r2)` i `dogadjaji`, a backup testovi su `describe.skipIf(KASA_BACKEND === 'rust')` dok Rust ne stigne.
+7. Klik na trajno upozorenje otvara Postavke → Sistem samo za admina; kod kasira je to samo oznaka.
+8. Stanje pri pokretanju daje `useBackupPrikaz` (pita `backup:info` na mount): traka se odmah prikaže ako backup teče, inače čeka događaje; trajnu grešku prikazuje lijevi meni (odluka 10), ne traka.
+9. `backup:sada` smije samo admin, `backup:info` svaki prijavljeni korisnik.
+10. Prolazna traka i pilula gore desno (klik prolazi kroz njih); trajno upozorenje (nema backup-a >24 h) je stavka u lijevom meniju iznad korisnika — klik vodi u Postavke › Sistem samo za admina (pilula na ekranu je prekrivala dugme Faktura na Kasi).
+
 **Ostaje:**
-1. Electron main: raspored (`sljedeciBackup`), tok backup-a (VACUUM INTO preko better-sqlite3 → `sifrujBackup` → `r2Posalji`), `userData/backup-stanje.json`, kanali `backup:info` / `backup:sada`, događaj `backup:stanje`, opšta pretplata na događaje u preloadu.
-2. Renderer: kartica "Automatski backup" u Postavkama, `BackupTraka` u `MainLayout`.
-3. Napredak slanja po bajtovima (`r2Posalji` danas šalje cijelo tijelo odjednom, bez napretka).
-4. Tauri/Rust: isto (crates `age`, `hmac`, `aes-gcm`; `ureq`, `sha2` već postoje), ugovorni testovi protiv lažnog S3 (`PAZAR_BACKUP_ENDPOINT`), interop Rust age → JS `desifrujBackup`.
+1. Tauri/Rust: isto (crates `age`, `hmac`, `aes-gcm`; `ureq`, `sha2` već postoje), ugovorni testovi protiv lažnog S3 (`PAZAR_BACKUP_ENDPOINT`), interop Rust age → JS `desifrujBackup`.
+   Ugovor `backup.ugovor.test.ts` već postoji i čeka Rust (`describe.skipIf`); `ugovor_server.rs` treba
+   `postaviBackupLicencu` i događaje `{"dogadjaj":"backup:stanje","podaci":…}`.
 
 
 ## Problem
@@ -190,6 +213,7 @@ Preload danas pretplaćuje samo `licenca:blokirano`; postaje opšta
 - gotovo: linija zelena i puna, `✓ Backup spremljen · 15:00`, nestaje za 3 s.
 - greška: linija žuta, `Backup nije uspio — pokušavam ponovo za 15 min`, 5 s.
 - `trajnaGreska`: pilula ostaje, klik vodi u Postavke.
+  _Izmijenjeno:_ trajno upozorenje je stavka u lijevom meniju, ne pilula — vidi odluku 10 u "Stanje implementacije".
 - `no-print`.
 
 ## Povrat (izgorio računar)
@@ -206,6 +230,7 @@ Lista koristi S3 `ListObjectsV2` s istim SigV4 potpisom.
 
 - Nema interneta / R2 odbije → `greska` sa porukom, ponovo za 15 min.
 - 403 → poruka "R2 pristup više ne važi — zatražite novu licencu" (ključ rotiran).
+- 403 `RequestTimeTooSkewed` (sat računara odstupa >15 min) → "Sat na ovom računaru nije tačan — podesite datum i vrijeme, pa će backup proći."
 - Greška backup-a nikad ne prekida rad kase; ništa se ne loguje s kredencijalima.
 
 ## Testiranje

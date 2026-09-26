@@ -19,8 +19,8 @@ if (!('api' in window) && '__TAURI_INTERNALS__' in window) {
         reject(new Error(typeof e === 'string' ? e : String((e as any)?.message ?? e)));
       });
     }),
-    (cb) => {
-      const odjava = listen('licenca:blokirano', () => cb());
+    (ime, cb) => {
+      const odjava = listen(ime, e => cb(e.payload));
       return () => { void odjava.then(f => f()); };
     },
   );

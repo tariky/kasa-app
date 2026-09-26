@@ -35,6 +35,7 @@ export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
   mkdirSync(radniFolder, { recursive: true });
 
   let restart = false;
+  const dogadjaji: { ime: string; podaci: unknown }[] = [];
   let cekaju = new Map<number, (o: Odgovor) => void>();
 
   /** Pokrene ugovor-server nad `userData` i sačeka da javi da je spreman. */
@@ -66,6 +67,7 @@ export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
           const o = JSON.parse(linija) as Odgovor;
           if (o.spreman !== undefined) spreman(o);
           else if (o.dogadjaj === 'restart') restart = true;
+          else if (o.dogadjaj) dogadjaji.push({ ime: o.dogadjaj, podaci: (o as { podaci?: unknown }).podaci ?? null });
           else if (o.id !== undefined) { mojiZahtjevi.get(o.id)?.(o); mojiZahtjevi.delete(o.id); }
         }
       }
@@ -106,6 +108,10 @@ export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
     tring,
     dijalog,
     otvoreniDijalozi,
+    dogadjaji,
+    postaviBackupLicencu() {
+      throw new Error('Rust backend još nema automatski backup (faza 4, vidi spec)');
+    },
     radniFolder,
     restartovan: () => restart,
     async kanali() {

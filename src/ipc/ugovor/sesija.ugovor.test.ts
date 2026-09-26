@@ -84,6 +84,8 @@ const SVI_KANALI = [
   'tring:init', 'tring:xReport', 'tring:zReport', 'tring:periodicReport', 'tring:getLogs', 'tring:clearLogs',
   'cash:add', 'cash:retry', 'cash:getToday', 'cash:lastPolog', 'cash:drawerState',
   'dialog:saveFile', 'fs:writeFile', 'db:backup', 'db:restore',
+  // Rust: faza 4 (automatski backup)
+  ...(process.env.KASA_BACKEND === 'rust' ? [] : ['backup:info', 'backup:sada']),
 ];
 
 /** Kanali bez prijave (licenca:* se ovdje ne zove — harness je zamjenjuje). */
@@ -93,6 +95,8 @@ const ADMIN_KANALI = [
   'user:create', 'user:update', 'user:delete', 'settings:saveFirma', 'settings:saveTring', 'proizvodnja:setEnabled',
   'fiscal:setZadnjiBroj', 'order:dismissFiscalGap', 'pending:discard', 'db:backup', 'db:restore', 'izvoz:knjigovodja',
   'tring:init', 'tring:getLogs', 'tring:clearLogs',
+  // Rust: faza 4 (automatski backup)
+  ...(process.env.KASA_BACKEND === 'rust' ? [] : ['backup:sada']),
 ];
 
 /** Zove svaki kanal iz `kanali` bez argumenata; vraća one koji nisu odbijeni porukom `poruka`. */

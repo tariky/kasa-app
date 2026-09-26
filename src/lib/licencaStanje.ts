@@ -116,6 +116,11 @@ export function smijeRaditi(s: StanjeLicence): boolean {
   return s.stanje === 'aktivna' || s.stanje === 'upozorenje' || s.stanje === 'milost';
 }
 
+/** Automatski backup radi dok program smije raditi i licenca ima `backup`. */
+export function backupDozvoljen(s: StanjeLicence): boolean {
+  return smijeRaditi(s) && 'licenca' in s && !!s.licenca.backup;
+}
+
 /** Kanali koji prave nove dokumente ili mijenjaju stanje zaliha. */
 const BLOKIRANI_KANALI = new Set([
   'order:create', 'order:createManual', 'order:finalize', 'order:finalizePrilog',

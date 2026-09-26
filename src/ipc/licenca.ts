@@ -6,11 +6,11 @@
 import { app, BrowserWindow } from 'electron';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { lokalniDatum } from '../lib/licenca';
+import { lokalniDatum, backupPodaci, type R2Podaci } from '../lib/licenca';
 import { LICENCA_JAVNI_KLJUC } from '../lib/licencaJavniKljuc';
 import { uredjajId } from '../lib/uredjaj';
 import { getDb } from '../database/db';
-import { izracunajStanje, efektivniDanas, kanalPodLicencom, najnovijiDatumIzBazeJednom, razlogBlokade, type LicencaInfo } from '../lib/licencaStanje';
+import { izracunajStanje, efektivniDanas, kanalPodLicencom, najnovijiDatumIzBazeJednom, razlogBlokade, backupDozvoljen, type LicencaInfo } from '../lib/licencaStanje';
 
 interface Zapis {
   token?: string;
@@ -61,6 +61,13 @@ export function stanjeLicence(): LicencaInfo {
   if (z.zadnjiDatum !== danas && z.token) zapisi({ ...z, zadnjiDatum: danas });
   const uredjaj = uredjajId();
   return { ...izracunajStanje(z.token, LICENCA_JAVNI_KLJUC, { danas, uredjaj }), uredjaj };
+}
+
+/** R2 podaci za automatski backup; null kad licenca ne važi ili nema backup. Samo main proces. */
+export function backupPristup(): R2Podaci | null {
+  if (!backupDozvoljen(stanjeLicence())) return null;
+  const token = procitaj().token;
+  return token ? backupPodaci(token) : null;
 }
 
 export function aktivirajLicencu(token: string): LicencaInfo {

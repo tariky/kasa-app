@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test';
-import { potpisiS3, r2Posalji, r2Lista, r2Preuzmi, imeBackupa, type R2Pristup } from './r2';
+import { potpisiS3, r2Posalji, r2Lista, r2Preuzmi, imeBackupa, R2Greska, type R2Pristup } from './r2';
 
 // Službeni primjeri iz AWS dokumentacije "Signature Calculations for the
 // Authorization Header: Transferring Payload in a Single Chunk".
@@ -94,6 +94,74 @@ test('r2: greške servera su čitljive', async () => {
   try {
     await expect(r2Posalji(pristup(server.url.origin, { accessKeyId: 'POGRESAN' }), 'x', new Uint8Array())).rejects.toThrow('R2 je odbio pristup (403 AccessDenied)');
     await expect(r2Lista(pristup(server.url.origin, { bucket: 'nepostojeci' }), '')).rejects.toThrow('404 NoSuchBucket');
+  } finally {
+    server.stop(true);
+  }
+});
+
+test('r2Posalji: napredak po bajtovima, tijelo stiže cijelo s dužinom', async () => {
+  const primljeno: { duzina: string | null; tijelo: Uint8Array }[] = [];
+  const server = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      primljeno.push({ duzina: req.headers.get('content-length'), tijelo: new Uint8Array(await req.arrayBuffer()) });
+      return new Response(null, { status: 200 });
+    },
+  });
+  try {
+    const tijelo = new Uint8Array(300_000).map((_, i) => i % 251);
+    const napredak: [number, number][] = [];
+    await r2Posalji(pristup(server.url.origin), 'A/x.db.age', tijelo, (p, u) => napredak.push([p, u]));
+    expect(primljeno[0].duzina).toBe('300000');
+    expect(primljeno[0].tijelo).toEqual(tijelo);
+    expect(napredak.length).toBeGreaterThan(1);
+    expect(napredak.at(-1)).toEqual([300_000, 300_000]);
+    for (let i = 1; i < napredak.length; i++) expect(napredak[i][0]).toBeGreaterThan(napredak[i - 1][0]);
+  } finally {
+    server.stop(true);
+  }
+});
+
+test('r2Posalji: 403 je R2Greska sa statusom, poruka ostaje ista', async () => {
+  const { server } = lazniS3();
+  try {
+    const e = await r2Posalji(pristup(server.url.origin, { accessKeyId: 'POGRESAN' }), 'x', new Uint8Array([1])).catch(x => x);
+    expect(e).toBeInstanceOf(R2Greska);
+    expect(e.status).toBe(403);
+    expect(e.message).toContain('R2 je odbio pristup (403 AccessDenied)');
+    expect(e.kod).toBe('AccessDenied');
+  } finally {
+    server.stop(true);
+  }
+});
+
+test('r2Posalji: S3 <Code> je u R2Greska.kod (RequestTimeTooSkewed), poruka ostaje ista', async () => {
+  const xml = '<Error><Code>RequestTimeTooSkewed</Code><Message>The difference between the request time and the current time is too large.</Message></Error>';
+  const server = Bun.serve({ port: 0, fetch: () => new Response(xml, { status: 403 }) });
+  try {
+    const e = await r2Posalji(pristup(server.url.origin), 'x', new Uint8Array([1])).catch(x => x);
+    expect(e).toBeInstanceOf(R2Greska);
+    expect(e.status).toBe(403);
+    expect(e.kod).toBe('RequestTimeTooSkewed');
+    expect(e.message).toBe('R2 je odbio pristup (403 RequestTimeTooSkewed): The difference between the request time and the current time is too large.');
+  } finally {
+    server.stop(true);
+  }
+});
+
+test('r2Posalji: nema servera → R2Greska bez statusa', async () => {
+  const e = await r2Posalji(pristup('http://127.0.0.1:1'), 'x', new Uint8Array([1])).catch(x => x);
+  expect(e).toBeInstanceOf(R2Greska);
+  expect(e.status).toBeUndefined();
+  expect(e.message).toStartWith('Nema veze s R2');
+});
+
+test('r2Posalji: server koji ne odgovara → greška nakon isteka vremena', async () => {
+  const server = Bun.serve({ port: 0, fetch: () => new Promise<Response>(() => {}) });
+  try {
+    const e = await r2Posalji(pristup(server.url.origin), 'x', new Uint8Array([1]), undefined, 200).catch(x => x);
+    expect(e).toBeInstanceOf(R2Greska);
+    expect(e.message).toContain('isteklo vrijeme');
   } finally {
     server.stop(true);
   }
