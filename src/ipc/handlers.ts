@@ -37,6 +37,7 @@ import {
   upisiKonverzijuPonude, type PonudaStatus,
 } from '../lib/ponuda';
 import { buildTringRacun } from '../lib/tringRacun';
+import { upisiRacun } from '../lib/racun';
 import { pripremiRacun, PDV_STOPE } from '../lib/provjeraRacuna';
 import { zapisiAudit, promjenePostavki } from '../lib/audit';
 import { addCashMovement, retryCashMovement, getTodayMovements, getDrawerState, getLastPologIznos } from '../lib/cash';
@@ -68,65 +69,6 @@ function handle<T>(channel: string, handler: (...args: any[]) => T): void {
       throw new Error(error.message || 'Nepoznata greška');
     }
   });
-}
-
-// Insert a completed order + items + stock movements from a snapshot-shaped payload.
-// Returns the new orderId. Caller is responsible for wrapping in a transaction.
-function insertCompletedOrder(
-  db: Database.Database,
-  data: {
-    korisnikId: number; ukupno: number; pdvIznos: number; nacinPlacanja: string;
-    brojFiskalnogRacuna: string | null;
-    kupac?: { naziv?: string; idBroj?: string; adresa?: string; grad?: string; postanskiBroj?: string };
-    stavke: Array<{ productId: number; kolicina: number; cijena: number; rabat: number; pdvStopa: string }>;
-    isManual?: 0 | 1; createdAt?: string;
-    // Račun po prilogu: nema stavki, nosi interni broj priloga i naziv zbirne stavke.
-    prilogBroj?: number | null;
-    prilogNaziv?: string | null;
-    // Faktura: rok plaćanja i napomena putuju kroz snapshot.
-    datumValute?: string | null;
-    napomena?: string | null;
-  }
-): number {
-  const isManual = data.isManual ?? 0;
-  const hasCreatedAt = typeof data.createdAt === 'string' && data.createdAt.length > 0;
-
-  const result = db
-    .prepare(`
-      INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, status,
-        kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj, isManual${hasCreatedAt ? ', createdAt' : ''}, prilogBroj, prilogNaziv, datumValute, napomena)
-      VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?${hasCreatedAt ? ', ?' : ''}, ?, ?, ?, ?)
-    `)
-    .run(
-      data.korisnikId, data.ukupno, data.pdvIznos, data.nacinPlacanja, data.brojFiskalnogRacuna,
-      data.kupac?.naziv || null, data.kupac?.idBroj || null, data.kupac?.adresa || null,
-      data.kupac?.grad || null, data.kupac?.postanskiBroj || null, isManual,
-      ...(hasCreatedAt ? [data.createdAt] : []),
-      data.prilogBroj ?? null,
-      data.prilogNaziv ?? null,
-      data.datumValute ?? null,
-      data.napomena ?? null
-    );
-
-  const orderId = result.lastInsertRowid as number;
-
-  const insertItem = db.prepare(
-    'INSERT INTO order_items (orderId, productId, kolicina, cijena, rabat, pdvStopa) VALUES (?, ?, ?, ?, ?, ?)'
-  );
-  const insertStock = hasCreatedAt
-    ? db.prepare("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId, createdAt) VALUES (?, 'izlaz', ?, 'order', ?, ?)")
-    : db.prepare("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'izlaz', ?, 'order', ?)");
-
-  for (const item of data.stavke) {
-    insertItem.run(orderId, item.productId, item.kolicina, item.cijena, item.rabat, item.pdvStopa);
-    const product = db.prepare('SELECT tip FROM products WHERE id = ?').get(item.productId) as { tip: string } | undefined;
-    if (!product || product.tip !== 'usluga') {
-      if (hasCreatedAt) insertStock.run(item.productId, item.kolicina, orderId, data.createdAt);
-      else insertStock.run(item.productId, item.kolicina, orderId);
-    }
-  }
-
-  return orderId;
 }
 
 export function registerIpcHandlers(): void {
@@ -943,7 +885,7 @@ export function registerIpcHandlers(): void {
     if (existing) throw new Error('Fiskalni račun sa tim brojem već postoji');
 
     return db.transaction(() => {
-      const id = insertCompletedOrder(db, {
+      const id = upisiRacun(db, {
         korisnikId, ukupno: r.ukupno, pdvIznos: r.pdvIznos, nacinPlacanja: r.nacinPlacanja,
         brojFiskalnogRacuna: broj, kupac: r.kupac, stavke: r.stavke, isManual: 1, createdAt,
       });
@@ -990,7 +932,7 @@ export function registerIpcHandlers(): void {
     const brojFiskalnogRacuna = result.odgovori?.BrojFiskalnogRacuna || null;
     const finalizeTx = db.transaction(() => {
       if (!preuzmiPendingRed(db, pendingId)) return null;
-      return insertCompletedOrder(db, { ...data, brojFiskalnogRacuna, isManual: 0 });
+      return upisiRacun(db, { ...data, brojFiskalnogRacuna, isManual: 0 });
     });
     const orderId = finalizeTx();
     if (orderId === null) return vecEvidentiran(brojFiskalnogRacuna);
@@ -1170,7 +1112,7 @@ export function registerIpcHandlers(): void {
         });
       } else {
         // Snapshot bez vrste: račun sa kase ili faktura (i sve stare baze).
-        orderId = insertCompletedOrder(db, {
+        orderId = upisiRacun(db, {
           ...snap,
           brojFiskalnogRacuna: broj,
           // Prilog račun: broj fakture je BF koji operater ovdje ukuca; rezervni

@@ -3,7 +3,7 @@ import type { SqlDb } from './sqldb';
 import { parseFiskalniBroj, predvidjeniFiskalniBroj } from './fiskalni';
 import { validanDatumValute } from './valuta';
 import { round2 } from './novac';
-import { iznosStavke, izracunajTotale } from './racun';
+import { iznosStavke, izracunajTotale, upisiRacun } from './racun';
 import { buildTringRacun } from './tringRacun';
 import { provjeriIznoseStavke, provjeriKupca } from './provjeraRacuna';
 import { provjeriNacinPlacanja } from './placanje';
@@ -319,18 +319,10 @@ export async function finalizePrilogAndPrint(
     transaction(() => {
       // Red riješen iz dijaloga dok je štampa trajala → bez drugog zapisa.
       if (!preuzmiPendingRed(db, pendingId)) { vecUpisan = true; return; }
-      const r = db.prepare(`
-        INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, status,
-          kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj, isManual, prilogBroj, prilogNaziv,
-          datumValute, napomena)
-        VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
-      `).run(
-        data.korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna,
-        kupac?.naziv || null, kupac?.idBroj || null, kupac?.adresa || null,
-        kupac?.grad || null, kupac?.postanskiBroj || null, prilogBroj, naziv,
-        datumValute, napomena
-      );
-      orderId = Number(r.lastInsertRowid);
+      orderId = upisiRacun(db, {
+        korisnikId: data.korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, kupac,
+        stavke: [], prilogBroj, prilogNaziv: naziv, datumValute, napomena,
+      });
       if (stavke.length > 0) savePrilogStavkeInTransaction(db, orderId, stavke);
       if (ponudaId != null) oznaciPonuduFakturisanom(db, ponudaId, orderId);
       if (skicaId != null) db.prepare('DELETE FROM faktura_skice WHERE id = ?').run(skicaId);
