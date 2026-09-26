@@ -233,6 +233,9 @@ fn nije_zabiljezen(dokument: &str, rod: Rod, greska: &Greska) -> Greska {
 
 // ─── Tok fiskalnog dokumenta ────────────────────────────────
 
+/// Ono što tok izvede iz broja koji je vratio uređaj (upis, naziv dokumenta, odgovor).
+type IzBroja<'a, X> = Box<dyn FnOnce(&Value) -> X + 'a>;
+
 /// Jedan fiskalni dokument za [`fiskalizuj`] (TS `Fiskalizacija`). Pozivalac
 /// PRIJE `fiskalizuj` uradi sve što može pasti: provjere koje bi oborile upis
 /// (odštampan fiskalni dokument se ne može povući), postavke uređaja
@@ -248,14 +251,14 @@ pub struct Fiskalizacija<'a, T> {
     /// Upis nakon uspješne štampe, u istoj transakciji u kojoj se preuzima
     /// write-ahead red (s vezama: ponuda konvertovana, nalog fakturisan…).
     /// Dobija broj koji je vratio uređaj.
-    pub upisi: Box<dyn FnOnce(&Value) -> R<T> + 'a>,
+    pub upisi: IzBroja<'a, R<T>>,
     /// Naziv dokumenta u poruci kad upis nakon štampe padne
     /// (`poruka_nakon_stampe`), iz broja koji je vratio uređaj.
-    pub dokument: Box<dyn FnOnce(&Value) -> String + 'a>,
+    pub dokument: IzBroja<'a, String>,
     /// `Rod::Zenski` za reklamaciju.
     pub rod: Rod,
     /// Odgovor kad je red u međuvremenu riješen iz dijaloga nezavršenih.
-    pub vec_evidentiran: Box<dyn FnOnce(&Value) -> Value + 'a>,
+    pub vec_evidentiran: IzBroja<'a, Value>,
 }
 
 impl<'a, T> Fiskalizacija<'a, T> {
