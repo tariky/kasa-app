@@ -1,8 +1,17 @@
 import * as http from "node:http";
+import * as net from "node:net";
 
 const DEFAULT_HOST = "localhost";
 const DEFAULT_PORT = 8085;
 const TIMEOUT_MS = 30_000;
+/**
+ * Koliko se čeka TCP veza s uređajem. Kraće od TIMEOUT_MS: dok veza nije
+ * uspostavljena, zahtjev sigurno nije poslan, pa ugašen uređaj na mreži (SYN
+ * bez odgovora) brzo daje običnu grešku umjesto nepoznatog ishoda. Uređaj je
+ * na localhostu/LAN-u — 5 s je višestruko više od stvarnog povezivanja.
+ * Rust: CONNECT_TIMEOUT u tring.rs.
+ */
+const CONNECT_TIMEOUT_MS = 5_000;
 const MAX_LOG_ENTRIES = 200;
 
 let requestCounter = 0;
@@ -56,6 +65,8 @@ export interface TringConfig {
   port?: number;
   /** Koliko se čeka uređaj (ms); zadano 30 s — kraće samo u testovima. */
   timeoutMs?: number;
+  /** Koliko se čeka TCP veza (ms); zadano 5 s — kraće samo u testovima. */
+  connectTimeoutMs?: number;
 }
 
 export interface TringResponse {
@@ -137,6 +148,10 @@ function nextRequestNumber(): number {
  * uspostavljena) — račun nije odštampan. Svaka druga greška nakon što je
  * zahtjev krenuo (timeout, prekid veze, neparsiran odgovor) znači da je
  * uređaj možda štampao: ishod nije poznat. Rust: `nije_poslano` u tring.rs.
+ *
+ * U Electronu (Node) zahtjev ide preko veze koju `postXml` sam uspostavi, pa
+ * ovi kodovi tu stižu samo prije povezivanja; lista pokriva Bun (testovi),
+ * čiji `node:http` ne koristi `createConnection` nego otvara svoju vezu.
  */
 const NIJE_POSLANO = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'EHOSTDOWN', 'ENETUNREACH', 'EADDRNOTAVAIL']);
 
@@ -186,49 +201,84 @@ function postXml(urlPath: string, body: string): Promise<TringResponse> {
       ...(nepoznat ? { ishodNepoznat: true } : {}),
     });
 
-    const req = http.request(
-      {
-        hostname: host,
-        port,
-        path: urlPath,
-        method: "POST",
-        headers: {
-          "Content-Type": "text/xml",
-          "Content-Length": Buffer.byteLength(body, "utf-8"),
+    // 1. Veza. Dok TCP veza nije uspostavljena, zahtjev sigurno nije poslan:
+    // svaka greška (odbijena, nepoznat host, Windowsov ETIMEDOUT) i isteklo
+    // vrijeme povezivanja su siguran neuspjeh — ugašen uređaj na mreži ne
+    // smije otvoriti dijalog nezavršenih računa.
+    let spojeno = false;
+    const veza = net.connect({ host, port });
+    const tajmer = setTimeout(() => {
+      veza.destroy();
+      zavrsi(neuspjeh(`connect ETIMEDOUT ${host}:${port}`, false), "");
+    }, config.connectTimeoutMs ?? CONNECT_TIMEOUT_MS);
+    veza.once("error", (err: NodeJS.ErrnoException & { errors?: Error[] }) => {
+      if (spojeno) return; // poslije povezivanja greške vodi HTTP zahtjev
+      clearTimeout(tajmer);
+      // "localhost" → više adresa: greška je AggregateError s praznom porukom.
+      const poruka = err.message || err.errors?.[0]?.message || `connect ${err.code ?? "greška"} ${host}:${port}`;
+      zavrsi(neuspjeh(poruka, false), "");
+    });
+    veza.once("connect", () => {
+      spojeno = true;
+      clearTimeout(tajmer);
+      if (!gotovo) posaljiZahtjev();
+    });
+
+    // 2. Zahtjev preko uspostavljene veze — od sada je ishod nepoznat osim
+    // kad uređaj odgovori.
+    const posaljiZahtjev = () => {
+      let vezaPreuzeta = false;
+      const req = http.request(
+        {
+          hostname: host,
+          port,
+          path: urlPath,
+          method: "POST",
+          headers: {
+            "Content-Type": "text/xml",
+            "Content-Length": Buffer.byteLength(body, "utf-8"),
+          },
+          // Bez agenta: jedna veza po zahtjevu (Connection: close), i to baš ova.
+          createConnection: () => { vezaPreuzeta = true; return veza; },
         },
-        timeout: config.timeoutMs ?? TIMEOUT_MS,
-      },
-      (res) => {
-        const chunks: Buffer[] = [];
-        res.on("data", (chunk: Buffer) => chunks.push(chunk));
-        res.on("end", () => {
-          const xml = Buffer.concat(chunks).toString("utf-8");
-          const parsed = parseResponse(xml);
-          parsed.statusCode = res.statusCode ?? null;
-          if (!odgovorUredjaja(xml)) {
-            parsed.error ??= "Neispravan odgovor fiskalnog uređaja";
-            parsed.ishodNepoznat = true;
-          }
-          zavrsi(parsed, xml);
-        });
-        // Veza prekinuta usred odgovora — bez ovoga obećanje nikad ne završi.
-        res.on("error", (err) => {
-          zavrsi(neuspjeh(err.message, true, res.statusCode ?? null), Buffer.concat(chunks).toString("utf-8"));
-        });
-      }
-    );
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (chunk: Buffer) => chunks.push(chunk));
+          res.on("end", () => {
+            const xml = Buffer.concat(chunks).toString("utf-8");
+            const parsed = parseResponse(xml);
+            parsed.statusCode = res.statusCode ?? null;
+            if (!odgovorUredjaja(xml)) {
+              parsed.error ??= "Neispravan odgovor fiskalnog uređaja";
+              parsed.ishodNepoznat = true;
+            }
+            zavrsi(parsed, xml);
+          });
+          // Veza prekinuta usred odgovora — bez ovoga obećanje nikad ne završi.
+          res.on("error", (err) => {
+            zavrsi(neuspjeh(err.message, true, res.statusCode ?? null), Buffer.concat(chunks).toString("utf-8"));
+          });
+        }
+      );
 
-    req.on("timeout", () => {
-      req.destroy();
-      zavrsi(neuspjeh("Request timed out", true), "");
-    });
+      // Opcija `timeout` bi išla samo u net.createConnection, a veza je već
+      // uspostavljena — zato na zahtjevu (tišina na vezi duža od timeouta).
+      req.setTimeout(config.timeoutMs ?? TIMEOUT_MS);
+      req.on("timeout", () => {
+        req.destroy();
+        zavrsi(neuspjeh("Request timed out", true), "");
+      });
 
-    req.on("error", (err: NodeJS.ErrnoException) => {
-      zavrsi(neuspjeh(err.message, !NIJE_POSLANO.has(err.code ?? "")), "");
-    });
+      req.on("error", (err: NodeJS.ErrnoException) => {
+        zavrsi(neuspjeh(err.message, !NIJE_POSLANO.has(err.code ?? "")), "");
+      });
 
-    req.write(body);
-    req.end();
+      // Bun ignoriše createConnection i otvara svoju vezu — probna se zatvara.
+      if (!vezaPreuzeta) veza.destroy();
+
+      req.write(body);
+      req.end();
+    };
   });
 }
 

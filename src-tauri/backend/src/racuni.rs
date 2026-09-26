@@ -99,7 +99,7 @@ pub fn neuspjela_stampa(db: &Db, pending_id: i64, result: &Odgovor) -> R<Value> 
     Ok(json!({ "success": false, "error": greska, "odgovori": odgovori(result) }))
 }
 
-/// Write-ahead red je nestao dok je štampa trajala — račun se ne upisuje drugi put.
+/// Tekst odgovora `vec_evidentiran`.
 pub fn poruka_vec_evidentiran(broj_fiskalnog_racuna: &Value) -> String {
     format!(
         "Fiskalni račun BF {} JE odštampan, ali je njegov nezavršeni zapis u međuvremenu riješen ili odbačen — \
@@ -109,14 +109,22 @@ pub fn poruka_vec_evidentiran(broj_fiskalnog_racuna: &Value) -> String {
 }
 
 /// Prvi korak transakcije upisa nakon uspješne štampe: obriše write-ahead red i
-/// time preuzme račun. Ako red više ne postoji (riješen ili odbačen iz dijaloga
-/// dok je štampa trajala), vraća grešku `poruka_vec_evidentiran` pa transakcija
-/// ne upiše drugi zapis istog računa.
-pub fn preuzmi_pending_red(db: &Db, pending_id: i64, broj_fiskalnog_racuna: &Value) -> R<()> {
-    if db.run("DELETE FROM pending_receipts WHERE id = ?", p![pending_id])?.changes != 1 {
-        baci!("{}", poruka_vec_evidentiran(broj_fiskalnog_racuna));
-    }
-    Ok(())
+/// time preuzme račun. `false` = red više ne postoji (riješen ili odbačen iz
+/// dijaloga dok je štampa trajala) — pozivalac tada ne upisuje drugi zapis
+/// istog računa nego vraća `vec_evidentiran(...)`.
+pub fn preuzmi_pending_red(db: &Db, pending_id: i64) -> R<bool> {
+    Ok(db.run("DELETE FROM pending_receipts WHERE id = ?", p![pending_id])?.changes == 1)
+}
+
+/// Račun je odštampan i već upisan iz dijaloga — ekran ga tretira kao završen,
+/// bez novog id-a (`vecEvidentiran: true`).
+pub fn vec_evidentiran(broj_fiskalnog_racuna: &Value) -> Value {
+    json!({
+        "success": false,
+        "vecEvidentiran": true,
+        "error": poruka_vec_evidentiran(broj_fiskalnog_racuna),
+        "brojFiskalnogRacuna": broj_fiskalnog_racuna,
+    })
 }
 
 // ─── insertCompletedOrder (handlers.ts) ─────────────────────
@@ -377,6 +385,10 @@ fn finalize_prilog_and_print(b: &Backend, data: &Value) -> R<Value> {
     let kupac = provjera_racuna::provjeri_kupca(&data["kupac"])?;
     let kupac_v = kupac.clone().unwrap_or(Value::Null);
     let (datum_valute, napomena, ponuda_id) = provjeri_dodatke_fakture(db, data)?;
+    // Skica iz koje je faktura nastala: briše se kad račun postoji u bazi (i kad
+    // se nezavršeni račun riješi kao odštampan), da se ne fiskalizuje ponovo.
+    // `Number.isInteger(data.skicaId)`.
+    let skica_id = data["skicaId"].as_f64().filter(|x| x.fract() == 0.0).map(|x| x as i64);
 
     // Naziv stavke mora nositi broj isječka na koji se kuca, a njega uređaj vrati
     // tek nakon štampe — zato predviđanje iz fiskalnog niza. Poslije štampe se
@@ -411,6 +423,10 @@ fn finalize_prilog_and_print(b: &Backend, data: &Value) -> R<Value> {
     snapshot.insert("datumValute".into(), datum_valute.clone());
     snapshot.insert("napomena".into(), napomena.clone());
     snapshot.insert("ponudaId".into(), ponuda_id.clone());
+    // Samo kad postoji — stari snapshoti i računi bez skice ostaju isti.
+    if let Some(id) = skica_id {
+        snapshot.insert("skicaId".into(), json!(id));
+    }
     let pending_id = db
         .run(
             "INSERT INTO pending_receipts (korisnikId, snapshot) VALUES (?, ?)",
@@ -452,7 +468,9 @@ fn finalize_prilog_and_print(b: &Backend, data: &Value) -> R<Value> {
     });
     let upis = db.tx(|| {
         // Red riješen iz dijaloga dok je štampa trajala → bez drugog zapisa.
-        preuzmi_pending_red(db, pending_id, &broj_fiskalnog_racuna)?;
+        if !preuzmi_pending_red(db, pending_id)? {
+            return Ok(None);
+        }
         let r = db.run(
             "
         INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, status,
@@ -474,11 +492,14 @@ fn finalize_prilog_and_print(b: &Backend, data: &Value) -> R<Value> {
         if !ponuda_id.is_null() {
             oznaci_ponudu_fakturisanom(db, &ponuda_id, &json!(order_id))?;
         }
-        Ok(order_id)
+        if let Some(id) = skica_id {
+            db.run("DELETE FROM faktura_skice WHERE id = ?", p![id])?;
+        }
+        Ok(Some(order_id))
     });
     let order_id = match upis {
-        Ok(id) => id,
-        Err(e) if e.0 == poruka_vec_evidentiran(&broj_fiskalnog_racuna) => return Err(e),
+        Ok(Some(id)) => id,
+        Ok(None) => return Ok(vec_evidentiran(&broj_fiskalnog_racuna)),
         // Račun je već na papiru; pending red namjerno ostaje da se može riješiti
         // kroz pending:resolve, ali operater to mora znati odmah.
         Err(e) => baci!(
@@ -967,12 +988,18 @@ fn finalize(b: &Backend, unos: &Value) -> R<Value> {
     // row already resolved from the dialog meanwhile means no second order.
     let broj_fiskalnog_racuna = broj_sa_uredjaja(&result);
     let order_id = db.tx(|| {
-        preuzmi_pending_red(db, pending_id, &broj_fiskalnog_racuna)?;
+        if !preuzmi_pending_red(db, pending_id)? {
+            return Ok(None);
+        }
         insert_completed_order(
             db,
             &spoji(&data, vec![("brojFiskalnogRacuna", broj_fiskalnog_racuna.clone()), ("isManual", json!(0))]),
         )
+        .map(Some)
     })?;
+    let Some(order_id) = order_id else {
+        return Ok(vec_evidentiran(&broj_fiskalnog_racuna));
+    };
 
     Ok(json!({ "success": true, "id": order_id, "brojFiskalnogRacuna": broj_fiskalnog_racuna, "odgovori": result["odgovori"] }))
 }
@@ -1038,6 +1065,10 @@ fn pending_resolve(b: &Backend, data: &Value) -> R<Value> {
             if ponuda.is_some_and(|p| p["status"] != "konvertovana") {
                 oznaci_ponudu_fakturisanom(db, &snap["ponudaId"], &json!(order_id))?;
             }
+        }
+        // Faktura iz skice: odštampana faktura se ne smije moći fiskalizovati ponovo.
+        if !snap["skicaId"].is_null() {
+            db.run("DELETE FROM faktura_skice WHERE id = ?", p![snap["skicaId"]])?;
         }
         db.run("DELETE FROM pending_receipts WHERE id = ?", p![data["id"]])?;
         audit::zabiljezi(b, "pending:rijesi", json!({ "pendingId": data["id"], "brojFiskalnogRacuna": broj, "orderId": order_id }))?;

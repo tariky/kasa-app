@@ -661,6 +661,21 @@ describe('nepoznat ishod štampe', () => {
     expect(red('SELECT COUNT(*) AS n FROM orders').n).toBe(0);
   });
 
+  // Uređaj na LAN-u ugašen (SYN bez odgovora, nema RST-a): veza se ne
+  // uspostavi, zahtjev sigurno nije poslan — red se briše, bez dijaloga.
+  // Traje koliko i timeout povezivanja (5 s), osim gdje mreža odmah javi grešku.
+  test('finalize: veza se ne uspostavi — sigurno nije odštampano, red se briše', async () => {
+    const p = dodajArtikal('I5', 5, { stanje: 10 });
+    b.db.prepare("UPDATE settings SET value = '10.255.255.1' WHERE key = 'tring.host'").run();
+
+    const r = await b.call('order:finalize', racun([kasaStavka(p, 1, 5)]));
+
+    expect(r.success).toBe(false);
+    expect(r.ishodNepoznat).toBeUndefined();
+    expect(pending()).toEqual([]);
+    expect(red('SELECT COUNT(*) AS n FROM orders').n).toBe(0);
+  }, 15000);
+
   test('finalize: greška uređaja nema oznaku nepoznatog ishoda', async () => {
     const p = dodajArtikal('I3', 5, { stanje: 10 });
     b.tring.greskaNa('/sfr', 'Nema papira', 12);
@@ -700,7 +715,8 @@ describe('nepoznat ishod štampe', () => {
 // ─── Račun riješen iz dijaloga dok je štampa trajala ─────────
 // Dok uređaj štampa, operater može pending red riješiti ručno (npr. nakon
 // ponovne prijave dijalog ga pokaže). Kad štampa onda uspije, drugi zapis
-// istog računa se ne smije upisati.
+// istog računa se ne smije upisati. Odgovor nosi `vecEvidentiran` da ekran
+// korpu/fakturu tretira kao završenu (bez novog id-a) i ne pošalje je ponovo.
 
 describe('pending red riješen tokom štampe', () => {
   async function rijesiTokomStampe(stigao: Promise<void>): Promise<{ id: number }> {
@@ -716,7 +732,9 @@ describe('pending red riješen tokom štampe', () => {
     const rucni = await rijesiTokomStampe(stampa.stigao);
     stampa.pusti();
 
-    await expect(finalize).rejects.toThrow('već evidentiran');
+    const r = await finalize;
+    expect(r.error).toContain('već evidentiran');
+    expect({ ...r, error: null }).toEqual({ success: false, vecEvidentiran: true, brojFiskalnogRacuna: '101', error: null });
     expect(red('SELECT COUNT(*) AS n FROM orders').n).toBe(1);
     expect(red('SELECT id FROM orders').id).toBe(rucni.id);
     expect(stanje(p)).toBe(9);
@@ -733,10 +751,75 @@ describe('pending red riješen tokom štampe', () => {
     await rijesiTokomStampe(stampa.stigao);
     stampa.pusti();
 
-    await expect(finalize).rejects.toThrow('već evidentiran');
+    const r = await finalize;
+    expect(r.error).toContain('već evidentiran');
+    expect({ ...r, error: null }).toEqual({ success: false, vecEvidentiran: true, brojFiskalnogRacuna: '101', error: null });
     expect(red('SELECT COUNT(*) AS n FROM orders').n).toBe(1);
     expect(red('SELECT COUNT(*) AS n FROM prilog_stavke').n).toBe(1);
     expect(stanje(p)).toBe(8);
+  });
+});
+
+// ─── Skica fakture i fiskalizacija ──────────────────────────
+// Skica iz koje je faktura fiskalizovana ne smije ostati — mogla bi se
+// fiskalizovati ponovo. Faktura s nepoznatim ishodom čuva skicu dok operater
+// ne riješi nezavršeni račun: odštampan → skica se briše; odbačen → ostaje.
+
+describe('skica fakture', () => {
+  let zaustavi: (() => void) | null = null;
+  afterEach(() => { zaustavi?.(); zaustavi = null; });
+
+  function dodajSkicu(): number {
+    return Number(b.db.prepare("INSERT INTO faktura_skice (naziv, podaci, ukupno) VALUES ('Skica', '{}', 40)").run().lastInsertRowid);
+  }
+  const imaSkicu = (id: number) => red('SELECT COUNT(*) AS n FROM faktura_skice WHERE id = ?', id).n === 1;
+
+  async function nepoznatIshod(skicaId: number) {
+    await b.call('fiscal:setZadnjiBroj', 100);
+    const u = await pokreniPokvareniTring('prekid');
+    zaustavi = u.stop;
+    b.db.prepare("UPDATE settings SET value = '127.0.0.1' WHERE key = 'tring.host'").run();
+    b.db.prepare("UPDATE settings SET value = ? WHERE key = 'tring.port'").run(String(u.port));
+    const r = await b.call('order:finalizePrilog', { iznos: 40, nacinPlacanja: 'Virman', skicaId });
+    expect(r.ishodNepoznat).toBe(true);
+    const [row] = await b.call('pending:list');
+    expect(row.snapshot.skicaId).toBe(skicaId);
+    return row.id as number;
+  }
+
+  test('uspješna fiskalizacija briše skicu', async () => {
+    await b.call('fiscal:setZadnjiBroj', 100);
+    const skica = dodajSkicu();
+    const r = await b.call('order:finalizePrilog', { iznos: 40, nacinPlacanja: 'Virman', skicaId: skica });
+    expect(r.success).toBe(true);
+    expect(imaSkicu(skica)).toBe(false);
+  });
+
+  test('nepoznat ishod: skica ostaje, pa se briše kad se račun riješi kao odštampan', async () => {
+    const skica = dodajSkicu();
+    const pendingId = await nepoznatIshod(skica);
+    expect(imaSkicu(skica)).toBe(true);
+
+    await b.call('pending:resolve', { id: pendingId, brojFiskalnogRacuna: '101', createdAt: '2026-09-26 10:00:00' });
+    expect(imaSkicu(skica)).toBe(false);
+  });
+
+  test('nepoznat ishod: odbačen račun (nije odštampan) ostavlja skicu', async () => {
+    const skica = dodajSkicu();
+    const pendingId = await nepoznatIshod(skica);
+    await b.call('pending:discard', pendingId);
+    expect(imaSkicu(skica)).toBe(true);
+  });
+
+  test('bez skice snapshot nema skicaId', async () => {
+    await b.call('fiscal:setZadnjiBroj', 100);
+    const stampa = b.tring.zadrzi('/sfr');
+    const finalize = b.call('order:finalizePrilog', { iznos: 40, nacinPlacanja: 'Virman' });
+    await stampa.stigao;
+    const [row] = await b.call('pending:list');
+    expect('skicaId' in row.snapshot).toBe(false);
+    stampa.pusti();
+    expect((await finalize).success).toBe(true);
   });
 });
 

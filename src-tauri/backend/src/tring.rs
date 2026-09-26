@@ -18,6 +18,13 @@ use crate::sat::Sat;
 const DEFAULT_HOST: &str = "localhost";
 const DEFAULT_PORT: i64 = 8085;
 const TIMEOUT: Duration = Duration::from_secs(30);
+/// Koliko se čeka TCP veza s uređajem. Kraće od `TIMEOUT`: dok veza nije
+/// uspostavljena, zahtjev sigurno nije poslan, pa ugašen uređaj na mreži (SYN
+/// bez odgovora) brzo daje običnu grešku umjesto nepoznatog ishoda. Uređaj je
+/// na localhostu/LAN-u — 5 s je višestruko više od stvarnog povezivanja.
+/// Kraće od globalnog i zato da ureq prijavi `Timeout::Connect`, ne `Global`.
+/// TS: CONNECT_TIMEOUT_MS u services/tring.ts.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_LOG_ENTRIES: usize = 200;
 
 const XML_DECL: &str = r#"<?xml version="1.0" encoding="utf-8"?>"#;
@@ -31,6 +38,8 @@ pub struct Tring {
     port: AtomicI64,
     /// Koliko se čeka uređaj (ms); zadano `TIMEOUT` — kraće samo u testovima.
     timeout_ms: AtomicU64,
+    /// Koliko se čeka TCP veza (ms); zadano `CONNECT_TIMEOUT`.
+    connect_timeout_ms: AtomicU64,
     request_counter: AtomicI64,
     log_id_counter: AtomicI64,
     logs: Mutex<Vec<Value>>,
@@ -61,6 +70,9 @@ pub fn ishod_nepoznat(o: &Odgovor) -> bool {
 fn nije_poslano(e: &ureq::Error) -> bool {
     match e {
         ureq::Error::HostNotFound | ureq::Error::ConnectionFailed | ureq::Error::BadUri(_) => true,
+        // Veza nije uspostavljena u roku (ureq i OS-ov TimedOut pri povezivanju
+        // prijavljuje kao Connect; Global bi značio da je istekao ukupni rok).
+        ureq::Error::Timeout(ureq::Timeout::Resolve | ureq::Timeout::Connect) => true,
         ureq::Error::Io(io) => matches!(
             io.kind(),
             ErrorKind::ConnectionRefused | ErrorKind::HostUnreachable | ErrorKind::NetworkUnreachable | ErrorKind::AddrNotAvailable
@@ -94,6 +106,7 @@ impl Tring {
             host: Mutex::new(DEFAULT_HOST.into()),
             port: AtomicI64::new(DEFAULT_PORT),
             timeout_ms: AtomicU64::new(TIMEOUT.as_millis() as u64),
+            connect_timeout_ms: AtomicU64::new(CONNECT_TIMEOUT.as_millis() as u64),
             request_counter: AtomicI64::new(0),
             log_id_counter: AtomicI64::new(0),
             logs: Mutex::new(Vec::new()),
@@ -114,8 +127,9 @@ impl Tring {
     }
 
     #[cfg(test)]
-    pub(crate) fn postavi_timeout(&self, t: Duration) {
-        self.timeout_ms.store(t.as_millis() as u64, Ordering::SeqCst);
+    pub(crate) fn postavi_timeout(&self, ukupno: Duration, veza: Duration) {
+        self.timeout_ms.store(ukupno.as_millis() as u64, Ordering::SeqCst);
+        self.connect_timeout_ms.store(veza.as_millis() as u64, Ordering::SeqCst);
     }
 
     pub fn set_logging_enabled(&self, on: bool) {
@@ -169,6 +183,7 @@ impl Tring {
 
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .timeout_global(Some(Duration::from_millis(self.timeout_ms.load(Ordering::SeqCst))))
+            .timeout_connect(Some(Duration::from_millis(self.connect_timeout_ms.load(Ordering::SeqCst))))
             .http_status_as_error(false)
             // Node `http` ne gleda HTTP(S)_PROXY; uređaj je na localhostu/LAN-u.
             .proxy(None)
@@ -319,6 +334,8 @@ fn url_host(host: &str) -> String {
 /// Poruke kao Node `http` (`err.message`), da ih ekran prikaže isto.
 fn poruka_greske(e: &ureq::Error, host: &str, port: i64) -> String {
     match e {
+        // Kao TS: veza nije uspostavljena u roku.
+        ureq::Error::Timeout(ureq::Timeout::Connect) => format!("connect ETIMEDOUT {host}:{port}"),
         ureq::Error::Timeout(_) => "Request timed out".into(),
         ureq::Error::Io(io) => match io.kind() {
             ErrorKind::ConnectionRefused => {
@@ -768,7 +785,7 @@ mod tests {
     fn tring_na(port: u16) -> Tring {
         let t = Tring::novi(Sat::sistemski(), Arc::new(Petlja::nova()));
         t.configure("127.0.0.1", Some(port as i64));
-        t.postavi_timeout(Duration::from_millis(300));
+        t.postavi_timeout(Duration::from_millis(300), Duration::from_millis(100));
         t
     }
 
@@ -821,6 +838,20 @@ mod tests {
         let r = t.stampati_fiskalni_racun(&racun());
         assert!(!uspjeh(&r));
         assert!(!ishod_nepoznat(&r), "{r}");
+    }
+
+    /// Uređaj na LAN-u ugašen: SYN bez odgovora, veza se ne uspostavi → zahtjev
+    /// sigurno nije poslan. (Gdje mreža odmah javi "unreachable", ishod je isti.)
+    #[test]
+    fn ishod_veza_se_ne_uspostavi_sigurno_nije_stampano() {
+        let t = tring_na(1);
+        t.configure("10.255.255.1", Some(8085));
+        t.postavi_timeout(Duration::from_secs(3), Duration::from_millis(200));
+        let pocetak = Instant::now();
+        let r = t.stampati_fiskalni_racun(&racun());
+        assert!(!uspjeh(&r));
+        assert!(!ishod_nepoznat(&r), "{r}");
+        assert!(pocetak.elapsed() < Duration::from_secs(2), "{:?}", pocetak.elapsed());
     }
 
     #[test]

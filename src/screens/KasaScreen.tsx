@@ -461,6 +461,15 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
         kupac, napomena: racunNapomena || undefined, stavke,
       });
 
+      // Odštampan i već upisan iz dijaloga nezavršenih računa: prodaja je
+      // završena (bez novog id-a) — korpa se prazni da se ne pošalje ponovo.
+      if (res && !res.success && res.vecEvidentiran) {
+        setCart([]); setZadnje(null); setKupacOpen(false); clearKupac();
+        setMessage({ type: 'error', text: res.error || 'Račun je već evidentiran.' });
+        loadDailyTotal();
+        return;
+      }
+
       if (res && !res.success && res.ishodNepoznat) {
         // Račun je možda odštampan: sad ga vodi dijalog nezavršenih računa,
         // pa se korpa prazni — ponovno slanje bi moglo dati dupli račun.

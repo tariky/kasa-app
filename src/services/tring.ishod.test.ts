@@ -61,6 +61,18 @@ describe('sigurno nije odštampano — bez oznake nepoznatog ishoda', () => {
     expect(r.success).toBe(true);
     expect(Tring.ishodNepoznat(r)).toBe(false);
   });
+
+  // Uređaj na LAN-u ugašen: SYN ostaje bez odgovora (nema RST-a). Veza se ne
+  // uspostavi, pa zahtjev sigurno nije poslan — ne smije otvoriti dijalog
+  // nezavršenih računa. (Gdje mreža odmah javi "unreachable", ishod je isti.)
+  test('veza se ne uspostavi (uređaj ugašen na mreži)', async () => {
+    Tring.configure({ host: '10.255.255.1', port: 8085, connectTimeoutMs: 200, timeoutMs: 3000 });
+    const pocetak = Date.now();
+    const r = await Tring.stampatiFiskalniRacun(racun());
+    expect(r.success).toBe(false);
+    expect(r.ishodNepoznat).toBeUndefined();
+    expect(Date.now() - pocetak).toBeLessThan(2000);
+  });
 });
 
 describe('zahtjev je stigao, a odgovora nema — ishod nepoznat', () => {
@@ -74,7 +86,7 @@ describe('zahtjev je stigao, a odgovora nema — ishod nepoznat', () => {
     test(opis, async () => {
       const uredjaj = await pokreniPokvareniTring(kvar);
       zaustavi.push(uredjaj.stop);
-      Tring.configure({ host: '127.0.0.1', port: uredjaj.port, timeoutMs: 300 });
+      Tring.configure({ host: '127.0.0.1', port: uredjaj.port, timeoutMs: 300, connectTimeoutMs: 100 });
 
       const r = await Tring.stampatiFiskalniRacun(racun());
 
@@ -90,7 +102,7 @@ describe('zahtjev je stigao, a odgovora nema — ishod nepoznat', () => {
   test('dnevnik ima tačno jedan zapis i kad se veza prekine nakon timeouta', async () => {
     const uredjaj = await pokreniPokvareniTring('visi');
     zaustavi.push(uredjaj.stop);
-    Tring.configure({ host: '127.0.0.1', port: uredjaj.port, timeoutMs: 200 });
+    Tring.configure({ host: '127.0.0.1', port: uredjaj.port, timeoutMs: 200, connectTimeoutMs: 100 });
     Tring.setLoggingEnabled(true);
     Tring.clearLogs();
     try {

@@ -8,7 +8,7 @@ import type { SqlDb } from './sqldb';
  * upiše prije štampe, a briše tek kad je ishod poznat — neuspjeh sa sigurnim
  * ishodom ga briše, nepoznat ishod ga ostavlja za dijalog nezavršenih
  * računa, a uspjeh ga briše u istoj transakciji s upisom računa.
- * Rust: `neuspjela_stampa` i `preuzmi_pending_red` u racuni.rs.
+ * Rust: `neuspjela_stampa`, `preuzmi_pending_red` i `vec_evidentiran` u racuni.rs.
  */
 
 export interface NeuspjehStampe {
@@ -42,9 +42,6 @@ export function neuspjelaStampa(
   return { success: false, error: greska, odgovori };
 }
 
-/** Write-ahead red je nestao dok je štampa trajala — račun se ne upisuje drugi put. */
-export class RacunVecEvidentiran extends Error {}
-
 export function porukaVecEvidentiran(brojFiskalnogRacuna: string | null): string {
   return `Fiskalni račun BF ${brojFiskalnogRacuna ?? '?'} JE odštampan, ali je njegov nezavršeni zapis u međuvremenu ` +
     'riješen ili odbačen — račun je već evidentiran i drugi zapis nije napravljen. ' +
@@ -53,11 +50,23 @@ export function porukaVecEvidentiran(brojFiskalnogRacuna: string | null): string
 
 /**
  * Prvi korak transakcije upisa nakon uspješne štampe: obriše write-ahead red i
- * time preuzme račun. Ako red više ne postoji (riješen ili odbačen iz dijaloga
- * dok je štampa trajala), baca `RacunVecEvidentiran` pa transakcija ne upiše
- * drugi zapis istog računa.
+ * time preuzme račun. `false` = red više ne postoji (riješen ili odbačen iz
+ * dijaloga dok je štampa trajala) — pozivalac tada ne upisuje drugi zapis
+ * istog računa nego vraća `vecEvidentiran(...)`.
  */
-export function preuzmiPendingRed(db: SqlDb, pendingId: number, brojFiskalnogRacuna: string | null): void {
-  const r = db.prepare('DELETE FROM pending_receipts WHERE id = ?').run(pendingId);
-  if (r.changes !== 1) throw new RacunVecEvidentiran(porukaVecEvidentiran(brojFiskalnogRacuna));
+export function preuzmiPendingRed(db: SqlDb, pendingId: number): boolean {
+  return db.prepare('DELETE FROM pending_receipts WHERE id = ?').run(pendingId).changes === 1;
+}
+
+export interface VecEvidentiran {
+  success: false;
+  /** Račun je odštampan i već upisan iz dijaloga — ekran ga tretira kao završen, bez novog id-a. */
+  vecEvidentiran: true;
+  error: string;
+  brojFiskalnogRacuna: string | null;
+}
+
+/** Odgovor kad `preuzmiPendingRed` vrati false. */
+export function vecEvidentiran(brojFiskalnogRacuna: string | null): VecEvidentiran {
+  return { success: false, vecEvidentiran: true, error: porukaVecEvidentiran(brojFiskalnogRacuna), brojFiskalnogRacuna };
 }

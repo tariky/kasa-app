@@ -14,8 +14,14 @@ import { otvoriNezavrseneRacune } from '@/lib/nezavrseniRacuni';
 
 const DELAY_SECONDS = 5;
 
-/** `nepoznat`: uređaj nije potvrdio račun — rješava se u nezavršenim računima, ne štampa ponovo. */
+/**
+ * `nepoznat`: uređaj nije potvrdio račun ili je poziv odbijen — rješava se u
+ * nezavršenim računima, ne štampa ponovo.
+ */
 type RacunStatus = 'pending' | 'done' | 'failed' | 'nepoznat';
+
+/** Odgovor order:finalize; `odbijen` = poziv je bacio grešku. */
+type Ishod = { success: boolean; error?: string; ishodNepoznat?: boolean; vecEvidentiran?: boolean; odbijen?: boolean };
 
 export default function GeneratorScreen() {
   const [products, setProducts] = useState<Product[]>([]);
@@ -99,17 +105,29 @@ export default function GeneratorScreen() {
       setPhase('print');
 
       // Print, with a single retry after the recovery delay (retry-then-stop).
-      let res: { success: boolean; error?: string; ishodNepoznat?: boolean } =
-        await finalizeOne(r).catch((e: any) => ({ success: false, error: e?.message }));
-      // Nepoznat ishod se ne ponavlja — račun je možda već odštampan.
-      if ((!res || !res.success) && !res?.ishodNepoznat) {
+      // Ponavlja se samo siguran neuspjeh uređaja. Nepoznat ishod, već
+      // evidentiran račun i odbijen poziv (greška može doći i poslije štampe)
+      // zaustavljaju seriju bez ponavljanja — inače prijeti dupli račun.
+      let res: Ishod = await finalizeOne(r).catch((e: any) => ({ success: false, error: e?.message, odbijen: true }));
+      const bezPonavljanja = (x: Ishod) => x.success || x.ishodNepoznat || x.vecEvidentiran || x.odbijen;
+      if (!bezPonavljanja(res)) {
         setPhase('wait');
         await sleepWithCountdown(DELAY_SECONDS);
         setPhase('print');
-        res = await finalizeOne(r).catch((e: any) => ({ success: false, error: e?.message }));
+        res = await finalizeOne(r).catch((e: any) => ({ success: false, error: e?.message, odbijen: true }));
       }
 
-      if (res?.ishodNepoznat) {
+      if (res.vecEvidentiran) {
+        setStatuses(prev => ({ ...prev, [r.id]: 'done' }));
+        setRunning(false);
+        runningRef.current = false;
+        setActiveId(null);
+        setMessage({ type: 'error', text: `Zaustavljeno na računu ${printed + 1}/${queue.length}: ${res.error}` });
+        await loadProducts();
+        return;
+      }
+
+      if (res.ishodNepoznat || res.odbijen) {
         setStatuses(prev => ({ ...prev, [r.id]: 'nepoznat' }));
         setRunning(false);
         runningRef.current = false;

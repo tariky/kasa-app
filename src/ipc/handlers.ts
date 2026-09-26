@@ -21,7 +21,7 @@ import {
   izdajRacunZaNalog, getNormativ, saveNormativ, osigurajProdajnuUslugu,
 } from '../lib/proizvodnja';
 import { refundAndPrint } from '../lib/refund';
-import { neuspjelaStampa, preuzmiPendingRed } from '../lib/pendingRacun';
+import { neuspjelaStampa, preuzmiPendingRed, vecEvidentiran } from '../lib/pendingRacun';
 import { postaviDatumValute } from '../lib/valuta';
 import {
   savePrilogStavkeInTransaction, finalizePrilogAndPrint, oznaciPonuduFakturisanom,
@@ -1254,10 +1254,11 @@ export function registerIpcHandlers(): void {
     // row already resolved from the dialog meanwhile means no second order.
     const brojFiskalnogRacuna = result.odgovori?.BrojFiskalnogRacuna || null;
     const finalizeTx = db.transaction(() => {
-      preuzmiPendingRed(db, pendingId, brojFiskalnogRacuna);
+      if (!preuzmiPendingRed(db, pendingId)) return null;
       return insertCompletedOrder(db, { ...data, brojFiskalnogRacuna, isManual: 0 });
     });
     const orderId = finalizeTx();
+    if (orderId === null) return vecEvidentiran(brojFiskalnogRacuna);
 
     return { success: true, id: orderId, brojFiskalnogRacuna, odgovori: result.odgovori };
   });
@@ -1270,6 +1271,7 @@ export function registerIpcHandlers(): void {
     stavke?: PrilogStavkaUnos[];
     prilogOpis?: string; prilogVeza?: string;
     datumValute?: string | null; napomena?: string | null; ponudaId?: number | null;
+    skicaId?: number | null;
   }) => {
     const data = { ...unos, korisnikId: korisnik().id };
     loadTringConfig();
@@ -1425,6 +1427,8 @@ export function registerIpcHandlers(): void {
         const ponuda = db.prepare('SELECT status FROM ponude WHERE id = ?').get(snap.ponudaId) as { status: string } | undefined;
         if (ponuda && ponuda.status !== 'konvertovana') oznaciPonuduFakturisanom(db, snap.ponudaId, orderId);
       }
+      // Faktura iz skice: odštampana faktura se ne smije moći fiskalizovati ponovo.
+      if (snap.skicaId != null) db.prepare('DELETE FROM faktura_skice WHERE id = ?').run(snap.skicaId);
       db.prepare('DELETE FROM pending_receipts WHERE id = ?').run(data.id);
       audit('pending:rijesi', { pendingId: data.id, brojFiskalnogRacuna: data.brojFiskalnogRacuna.trim(), orderId });
       return orderId;

@@ -69,15 +69,20 @@ interface Window {
       success: boolean; id?: number; brojFiskalnogRacuna?: string | null; error?: string; odgovori?: Record<string, string>;
       /** Uređaj nije potvrdio račun — možda je odštampan; riješava se u dijalogu nezavršenih računa. */
       ishodNepoznat?: boolean;
+      /** Odštampan, ali već upisan iz dijaloga nezavršenih računa — završen, bez novog id-a. */
+      vecEvidentiran?: boolean;
     }>;
     finalizePrilogOrder: (data: {
       iznos?: number; nacinPlacanja: string; kupac?: any;
       stavke?: Array<{ productId: number; kolicina: number; cijena: number; rabat?: number; pdvStopa: string }>;
       prilogOpis?: string; prilogVeza?: string;
       datumValute?: string | null; napomena?: string | null; ponudaId?: number | null;
+      /** Skica iz koje je faktura nastala — backend je briše kad račun postoji u bazi. */
+      skicaId?: number | null;
     }) => Promise<{
       success: boolean; id?: number; prilogBroj?: number; brojFiskalnogRacuna?: string | null;
       upozorenje?: string; error?: string; odgovori?: Record<string, string>; ishodNepoznat?: boolean;
+      vecEvidentiran?: boolean;
     }>;
     getFiskalnaNumeracija: () => Promise<{
       zadnjiUBazi: number | null; zadnjiUpisani: number | null; predvidjeni: number | null;
