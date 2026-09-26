@@ -9,6 +9,7 @@ import { buildTringRacun } from './tringRacun';
 import { provjeriIznoseStavke, provjeriKupca } from './provjeraRacuna';
 import { provjeriNacinPlacanja } from './placanje';
 import { baciAkoCekaNezavrsen } from './pendingRacun';
+import * as zaliha from './zaliha';
 
 /**
  * Račun po prilogu: fiskalno se kuca jedna zbirna stavka, a stvarne stavke se
@@ -69,23 +70,19 @@ export function prilogKompletan(ukupno: number, stavke: PrilogStavkaUnos[]): boo
 }
 
 /**
- * Provjeri stavke priloga i vrati tip proizvoda po id-u (usluge ne diraju
- * zalihu). Odvojeno od upisa da se stavke mogu odbiti i prije štampe —
- * greška poslije štampe znači papir bez pokrića.
+ * Provjeri stavke priloga (proizvod mora postojati). Odvojeno od upisa da se
+ * stavke mogu odbiti i prije štampe — greška poslije štampe znači papir bez
+ * pokrića.
  */
-export function validirajPrilogStavke(db: SqlDb, stavke: PrilogStavkaUnos[]): Map<number, string> {
-  const tipovi = new Map<number, string>();
+export function validirajPrilogStavke(db: SqlDb, stavke: PrilogStavkaUnos[]): void {
   for (const s of stavke) {
     if (!s || typeof s !== 'object') throw new Error('Neispravna stavka računa');
     provjeriIznoseStavke(s);
     if (s.pdvStopa !== 'E') {
       throw new Error('U prilog smiju samo stavke sa PDV stopom E (zbirna stavka je fiskalizovana sa E)');
     }
-    const product = db.prepare('SELECT tip FROM products WHERE id = ?').get(s.productId) as { tip: string } | undefined;
-    if (!product) throw new Error(`Proizvod #${s.productId} ne postoji`);
-    tipovi.set(s.productId, product.tip);
+    if (!db.prepare('SELECT 1 FROM products WHERE id = ?').get(s.productId)) throw new Error(`Proizvod #${s.productId} ne postoji`);
   }
-  return tipovi;
 }
 
 /**
@@ -117,22 +114,18 @@ export function savePrilogStavkeInTransaction(
     throw new Error('Faktura je završena — stavke se ne mogu mijenjati');
   }
 
-  const tipovi = validirajPrilogStavke(db, stavke);
+  validirajPrilogStavke(db, stavke);
 
+  const dokument = { vrsta: 'prilog', id: orderId };
   db.prepare('DELETE FROM prilog_stavke WHERE orderId = ?').run(orderId);
-  db.prepare("DELETE FROM stock_movements WHERE referenceType = 'prilog' AND referenceId = ?").run(orderId);
+  zaliha.ponisti(db, dokument);
 
   const insertStavka = db.prepare(
     'INSERT INTO prilog_stavke (orderId, productId, kolicina, cijena, rabat, pdvStopa) VALUES (?, ?, ?, ?, ?, ?)'
   );
-  const insertStock = db.prepare(
-    "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId, createdAt) VALUES (?, 'izlaz', ?, 'prilog', ?, ?)"
-  );
-
-  for (const s of stavke) {
-    insertStavka.run(orderId, s.productId, s.kolicina, s.cijena, s.rabat ?? 0, s.pdvStopa);
-    if (tipovi.get(s.productId) !== 'usluga') insertStock.run(s.productId, s.kolicina, orderId, order.createdAt);
-  }
+  for (const s of stavke) insertStavka.run(orderId, s.productId, s.kolicina, s.cijena, s.rabat ?? 0, s.pdvStopa);
+  // Usluga ne razdužuje (pravilo je u knjizi zalihe).
+  zaliha.knjizi(db, dokument, 'izlaz', stavke, { datum: order.createdAt });
 }
 
 /** Zbirna stavka kako se šalje fiskalnom uređaju (i sintetizuje u prikazima). */

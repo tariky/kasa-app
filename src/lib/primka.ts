@@ -15,6 +15,7 @@ import {
   artikliPrimke, cijeneArtikala, promjeneUProdaji, brojeviNivelacijaPrimke, napomenaProtunivelacije,
   pocetakPregleda, rezultatPregleda, cijeneKojeOstaju, istiPregled,
 } from './skladiste';
+import * as zaliha from './zaliha';
 
 /** Primka kako je šalje ekran ulaza (primka:create, primka:update i njihov pregled). */
 export interface PrimkaUnos {
@@ -131,9 +132,6 @@ export function napraviPrimke({ db, audit, transaction }: PrimkaDeps): Primke {
     const insertStavka = db.prepare(
       'INSERT INTO primka_stavke (primkaId, productId, kolicina, cijena, nabavnaCijena, rabat, zavisniTroskovi, pdvStopa, staraCijena) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
     );
-    const insertStock = db.prepare(
-      "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId, createdAt) VALUES (?, 'ulaz', ?, 'primka', ?, ?)"
-    );
 
     // Collect price diffs BEFORE inserting stock (so stock reflects pre-delivery state)
     const { nivelacija, bezZaliha } = collectPriceChanges(db, data.stavke);
@@ -141,12 +139,11 @@ export function napraviPrimke({ db, audit, transaction }: PrimkaDeps): Primke {
     // Now insert stavke and stock movements. Artiklima bez zalihe stavka
     // pamti staru cijenu (nema nivelacije) da je update/delete može vratiti.
     const stareCijene = stareCijeneStavki(data.stavke, bezZaliha);
-    // Ulaz na zalihu nosi datum primke; nivelacija ostaje s današnjim datumom.
-    const datumUlaza = datumKretanjaPrimke(datum);
     data.stavke.forEach((stavka, i) => {
       insertStavka.run(primkaId, stavka.productId, stavka.kolicina, stavka.cijena, stavka.nabavnaCijena, stavka.rabat, stavka.zavisniTroskovi ?? 0, stavka.pdvStopa, stareCijene[i]);
-      insertStock.run(stavka.productId, stavka.kolicina, primkaId, datumUlaza);
     });
+    // Ulaz na zalihu nosi datum primke; nivelacija ostaje s današnjim datumom.
+    zaliha.knjizi(db, { vrsta: 'primka', id: Number(primkaId) }, 'ulaz', data.stavke, { datum: datumKretanjaPrimke(datum) });
 
     upisiCijene(db, [...nivelacija, ...bezZaliha]);
     upisiNivelaciju(db, primkaId, nivelacija, null);
@@ -176,13 +173,10 @@ export function napraviPrimke({ db, audit, transaction }: PrimkaDeps): Primke {
 
     // Delete old stavke and stock movements
     db.prepare('DELETE FROM primka_stavke WHERE primkaId = ?').run(data.id);
-    db.prepare("DELETE FROM stock_movements WHERE referenceType = 'primka' AND referenceId = ?").run(data.id);
+    zaliha.ponisti(db, { vrsta: 'primka', id: data.id });
 
     const insertStavka = db.prepare(
       'INSERT INTO primka_stavke (primkaId, productId, kolicina, cijena, nabavnaCijena, rabat, zavisniTroskovi, pdvStopa, staraCijena) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-    );
-    const insertStock = db.prepare(
-      "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId, createdAt) VALUES (?, 'ulaz', ?, 'primka', ?, ?)"
     );
 
     // Collect price diffs BEFORE inserting stock — samo za dodane artikle i
@@ -211,12 +205,11 @@ export function napraviPrimke({ db, audit, transaction }: PrimkaDeps): Primke {
     // pamti staru cijenu (nema nivelacije) da je update/delete može vratiti;
     // zadržane promjene zadržavaju svoju zapamćenu cijenu.
     const stareCijene = stareCijeneIzmjene(data.stavke, bezZaliha, izmjena.zadrzaneStareCijene);
-    // Ulaz na zalihu nosi datum primke; nivelacija ostaje s današnjim datumom.
-    const datumUlaza = datumKretanjaPrimke(datum);
     data.stavke.forEach((stavka, i) => {
       insertStavka.run(data.id, stavka.productId, stavka.kolicina, stavka.cijena, stavka.nabavnaCijena, stavka.rabat, stavka.zavisniTroskovi ?? 0, stavka.pdvStopa, stareCijene[i]);
-      insertStock.run(stavka.productId, stavka.kolicina, data.id, datumUlaza);
     });
+    // Ulaz na zalihu nosi datum primke; nivelacija ostaje s današnjim datumom.
+    zaliha.knjizi(db, { vrsta: 'primka', id: data.id }, 'ulaz', data.stavke, { datum: datumKretanjaPrimke(datum) });
 
     auditCijenaPrimke(prije, 'primka:izmjena', data.id);
 
@@ -235,7 +228,7 @@ export function napraviPrimke({ db, audit, transaction }: PrimkaDeps): Primke {
     revertPrimkaPrices(db, id);
 
     db.prepare('DELETE FROM primka_stavke WHERE primkaId = ?').run(id);
-    db.prepare("DELETE FROM stock_movements WHERE referenceType = 'primka' AND referenceId = ?").run(id);
+    zaliha.ponisti(db, { vrsta: 'primka', id });
 
     // Nivelacije primke su dokumenti po kojima se prodavalo i ostaju. Vraćena
     // cijena u prodaji se dokumentuje protunivelacijom s današnjim datumom,

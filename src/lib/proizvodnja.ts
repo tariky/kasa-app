@@ -1,7 +1,7 @@
 import type { SqlDb } from './sqldb';
 import { localDateStr, round2 } from './novac';
 import { uNetto } from './pdvUnos';
-import { getProductStock } from './skladiste';
+import * as zaliha from './zaliha';
 import { TOLERANCIJA_ZALIHE } from './tolerancije';
 import { izracunajTotale, upisiRacun } from './racun';
 import { provjeriNacinPlacanja } from './placanje';
@@ -213,7 +213,7 @@ export function proizvodiPonude(db: SqlDb, ponudaId: number): ProizvodPonude[] {
     ORDER BY ps.id
   `).all(ponudaId) as ProizvodPonude[];
   for (const r of redovi) {
-    r.stanje = getProductStock(db, r.productId);
+    r.stanje = zaliha.stanje(db, r.productId);
     r.zadano = r.stanje < r.kolicina - TOLERANCIJA_ZALIHE;
   }
   return redovi;
@@ -377,7 +377,7 @@ export function getNalogStavke(db: SqlDb, id: number): RadniNalogStavka[] {
     WHERE s.radniNalogId = ?
     ORDER BY s.id
   `).all(id) as RadniNalogStavka[];
-  for (const s of stavke) s.stanje = getProductStock(db, s.materijalId);
+  for (const s of stavke) s.stanje = zaliha.stanje(db, s.materijalId);
   return stavke;
 }
 
@@ -569,21 +569,12 @@ export function zavrsiNalog(db: SqlDb, id: number): void {
     }
   }
 
-  const izlaz = db.prepare(
-    "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'izlaz', ?, 'radni_nalog', ?)"
-  );
   const zamrzni = db.prepare('UPDATE radni_nalog_stavke SET nabavnaCijena = ? WHERE id = ?');
-  for (const s of stavke) {
-    zamrzni.run(getProsjecnaNabavna(db, s.materijalId), s.id);
-    izlaz.run(s.materijalId, s.kolicina, id);
-  }
-  const ulaz = db.prepare(
-    "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'ulaz', ?, 'radni_nalog', ?)"
-  );
-  if (n.vrsta === 'zaliha' && n.productId) {
-    ulaz.run(n.productId, n.kolicina, id);
-  }
-  for (const p of proizvodi) ulaz.run(p.productId, p.kolicina, id);
+  for (const s of stavke) zamrzni.run(getProsjecnaNabavna(db, s.materijalId), s.id);
+  const dokument = { vrsta: 'radni_nalog', id };
+  zaliha.knjizi(db, dokument, 'izlaz', stavke.map(s => ({ productId: s.materijalId, kolicina: s.kolicina })));
+  const gotov = n.vrsta === 'zaliha' && n.productId ? [{ productId: n.productId, kolicina: n.kolicina }] : [];
+  zaliha.knjizi(db, dokument, 'ulaz', [...gotov, ...proizvodi]);
   db.prepare("UPDATE radni_nalozi SET status = 'zavrsen', zavrsenAt = datetime('now','localtime') WHERE id = ?").run(id);
 }
 
@@ -611,7 +602,7 @@ export function vratiUIzradu(db: SqlDb, id: number): void {
     GROUP BY sm.productId ORDER BY MIN(sm.id)
   `).all(id) as Array<{ productId: number; kolicina: number; naziv: string | null }>;
   for (const u of ulazi) {
-    const stanje = getProductStock(db, u.productId);
+    const stanje = zaliha.stanje(db, u.productId);
     if (stanje < u.kolicina - TOLERANCIJA_ZALIHE) {
       throw new Error(
         `Proizvod "${u.naziv ?? `#${u.productId}`}" je već prodan/izdat — nalog se ne može vratiti u izradu ` +
@@ -619,7 +610,7 @@ export function vratiUIzradu(db: SqlDb, id: number): void {
       );
     }
   }
-  db.prepare("DELETE FROM stock_movements WHERE referenceType = 'radni_nalog' AND referenceId = ?").run(id);
+  zaliha.ponisti(db, { vrsta: 'radni_nalog', id });
   db.prepare('UPDATE radni_nalog_stavke SET nabavnaCijena = NULL WHERE radniNalogId = ?').run(id);
   db.prepare("UPDATE radni_nalozi SET status = 'u_izradi', zavrsenAt = NULL WHERE id = ?").run(id);
 }

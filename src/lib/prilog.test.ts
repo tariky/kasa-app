@@ -7,7 +7,7 @@ import {
   sumaPriloga, prilogKompletan, buildPrilogFiskalnaStavka,
   savePrilogStavkeInTransaction,
 } from './prilog';
-import { getProductStock } from './skladiste';
+import { stanje } from './zaliha';
 
 let db: SqlDb & Database;
 
@@ -88,8 +88,8 @@ test('savePrilogStavke upisuje stavke i skida stanje artiklima', () => {
 
   const rows = db.prepare('SELECT * FROM prilog_stavke WHERE orderId = ?').all(orderId);
   expect(rows.length).toBe(2);
-  expect(getProductStock(db, 1)).toBe(98);   // artikal skinut
-  expect(getProductStock(db, 2)).toBe(100);  // usluga ne dira stanje
+  expect(stanje(db, 1)).toBe(98);   // artikal skinut
+  expect(stanje(db, 2)).toBe(100);  // usluga ne dira stanje
 });
 
 test('ponovni upis radi diff: stara kretanja se zamijene, bez duplog skidanja', () => {
@@ -100,8 +100,8 @@ test('ponovni upis radi diff: stara kretanja se zamijene, bez duplog skidanja', 
   savePrilogStavkeInTransaction(db, orderId, [{ productId: 1, kolicina: 2, cijena: 30, pdvStopa: 'E' }]);
   savePrilogStavkeInTransaction(db, orderId, [{ productId: 3, kolicina: 3, cijena: 50, pdvStopa: 'E' }]);
 
-  expect(getProductStock(db, 1)).toBe(100);  // vraćeno nakon zamjene
-  expect(getProductStock(db, 3)).toBe(97);
+  expect(stanje(db, 1)).toBe(100);  // vraćeno nakon zamjene
+  expect(stanje(db, 3)).toBe(97);
   const rows = db.prepare('SELECT productId FROM prilog_stavke WHERE orderId = ?').all(orderId) as any[];
   expect(rows.map(r => r.productId)).toEqual([3]);
 });
@@ -168,5 +168,5 @@ test('odbija nepostojeći proizvod prije upisa ijedne stavke', () => {
     { productId: 99, kolicina: 1, cijena: 30, pdvStopa: 'E' },
   ])).toThrow(/ne postoji/);
   expect(db.prepare('SELECT * FROM prilog_stavke WHERE orderId = ?').all(orderId).length).toBe(0);
-  expect(getProductStock(db, 1)).toBe(100);
+  expect(stanje(db, 1)).toBe(100);
 });
