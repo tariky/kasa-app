@@ -296,7 +296,7 @@ export default function DodajRacunDialog({ open, onOpenChange, onSaved, prefillB
                     </div>
                   )}
 
-                  <KupacRacunaPolja className="mt-3 pt-3 border-t border-slate-100" value={kupac} onChange={setKupac} />
+                  <KupacRacunaPolja varijanta="oznake" className="mt-3 pt-3 border-t border-slate-100" value={kupac} onChange={setKupac} />
                 </div>
               )}
               {kupacOpen && (

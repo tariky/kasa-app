@@ -78,12 +78,14 @@ describe('otvoriPdf', () => {
   test('prima i React element dokumenta — pravi PDF iz njega', async () => {
     const napravljeni: Blob[] = [];
     URL.createObjectURL = (b: Blob) => { napravljeni.push(b); return 'blob:test/el'; };
+    // react-pdf treba prave tajmere; bez prozora URL se oslobađa odmah i ne ostaje interval.
     jest.useRealTimers();
+    prozor = null;
     await otvoriPdf(createElement(Document, null, createElement(Page, null, createElement(Text, null, 'Test'))));
     expect(otvoreno[0].url).toBe('blob:test/el');
+    expect(oslobodjeno).toEqual(['blob:test/el']);
     const bajtovi = new Uint8Array(await napravljeni[0].arrayBuffer());
     expect(new TextDecoder().decode(bajtovi.slice(0, 5))).toBe('%PDF-');
-    otvoren().closed = true;
   });
 });
 

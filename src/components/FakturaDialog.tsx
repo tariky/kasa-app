@@ -907,7 +907,7 @@ function KorakFirma({ kupci, firma, uredjivanje, setUredjivanje, firmaIdRef, onI
           <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-4">
             <p className="text-[13px] font-medium text-slate-800">Podaci firme</p>
             <KupacRacunaPolja
-              className="mt-3" velicina="lg" value={uredjivanje} onChange={setUredjivanje}
+              className="mt-3" varijanta="lg" value={uredjivanje} onChange={setUredjivanje}
               idBrojRef={firmaIdRef} onKeyDown={enterPotvrdjuje}
             />
             <div className="mt-4 flex items-center gap-2">
