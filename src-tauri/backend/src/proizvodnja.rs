@@ -10,7 +10,7 @@ use crate::pending_racun::{baci_ako_ceka_nezavrsen, preuzmi_pending_red, snapsho
 use crate::js::{self, has, round2, to_number, truthy};
 use crate::ponude;
 use crate::racun::{izracunaj_totale, upisi_racun};
-use crate::zaliha::TOLERANCIJA_ZALIHE;
+use crate::zaliha::{self, Dokument, Smjer, TOLERANCIJA_ZALIHE};
 use crate::sql::Db;
 use crate::stampa::{self, Odstampan, UToku, Uredjaj};
 use crate::tring::uspjeh;
@@ -37,19 +37,6 @@ fn niz<'a>(v: &'a Value, ime: &str) -> R<&'a [Value]> {
         Some(a) => Ok(a),
         None => baci!("{ime} is not iterable"),
     }
-}
-
-/// Stanje artikla iz kretanja zalihe (`getProductStock` iz lib/skladiste.ts).
-fn stanje_artikla(db: &Db, product_id: &Value) -> R<Value> {
-    db.val(
-        "
-    SELECT COALESCE(
-      SUM(CASE WHEN tip = 'ulaz' THEN kolicina ELSE -kolicina END), 0
-    ) AS stanje
-    FROM stock_movements WHERE productId = ?
-  ",
-        p![product_id],
-    )
 }
 
 // ── numeracija ───────────────────────────────────────────
@@ -282,7 +269,7 @@ pub fn proizvodi_ponude(db: &Db, ponuda_id: &Value) -> R<Vec<Value>> {
         p![ponuda_id],
     )?;
     for r in &mut redovi {
-        let stanje = stanje_artikla(db, &r["productId"])?;
+        let stanje = zaliha::stanje(db, &r["productId"])?;
         let zadano = to_number(&stanje) < to_number(&r["kolicina"]) - TOLERANCIJA_ZALIHE;
         r["stanje"] = stanje;
         r["zadano"] = json!(zadano);
@@ -519,7 +506,7 @@ pub fn get_nalog_stavke(db: &Db, id: &Value) -> R<Vec<Value>> {
         p![id],
     )?;
     for s in &mut stavke {
-        s["stanje"] = stanje_artikla(db, &s["materijalId"])?;
+        s["stanje"] = zaliha::stanje(db, &s["materijalId"])?;
     }
     Ok(stavke)
 }
@@ -758,23 +745,12 @@ pub fn zavrsi_nalog(db: &Db, id: &Value) -> R<()> {
             "UPDATE radni_nalog_stavke SET nabavnaCijena = ? WHERE id = ?",
             p![js::f(get_prosjecna_nabavna(db, &s["materijalId"])?), s["id"]],
         )?;
-        db.run(
-            "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'izlaz', ?, 'radni_nalog', ?)",
-            p![s["materijalId"], s["kolicina"], id],
-        )?;
     }
-    let ulaz = |product_id: &Value, kolicina: &Value| {
-        db.run(
-            "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'ulaz', ?, 'radni_nalog', ?)",
-            p![product_id, kolicina, id],
-        )
-    };
-    if n["vrsta"] == "zaliha" && truthy(&n["productId"]) {
-        ulaz(&n["productId"], &n["kolicina"])?;
-    }
-    for pr in &proizvodi {
-        ulaz(&pr["productId"], &pr["kolicina"])?;
-    }
+    let dokument = Dokument { vrsta: "radni_nalog", id };
+    zaliha::knjizi(db, dokument, Smjer::Izlaz, stavke.iter().map(|s| (&s["materijalId"], &s["kolicina"])), &Value::Null)?;
+    let gotov = (n["vrsta"] == "zaliha" && truthy(&n["productId"])).then_some((&n["productId"], &n["kolicina"]));
+    let proizvedeno = gotov.into_iter().chain(proizvodi.iter().map(|pr| (&pr["productId"], &pr["kolicina"])));
+    zaliha::knjizi(db, dokument, Smjer::Ulaz, proizvedeno, &Value::Null)?;
     db.run("UPDATE radni_nalozi SET status = 'zavrsen', zavrsenAt = datetime('now','localtime') WHERE id = ?", p![id])?;
     Ok(())
 }
@@ -814,7 +790,7 @@ pub fn vrati_u_izradu(db: &Db, id: &Value) -> R<()> {
         p![id],
     )?;
     for u in &ulazi {
-        let stanje = to_number(&stanje_artikla(db, &u["productId"])?);
+        let stanje = to_number(&zaliha::stanje(db, &u["productId"])?);
         let kolicina = to_number(&u["kolicina"]);
         if stanje < kolicina - TOLERANCIJA_ZALIHE {
             let naziv = if u["naziv"].is_null() { format!("#{}", js::to_string(&u["productId"])) } else { js::to_string(&u["naziv"]) };
@@ -825,7 +801,7 @@ pub fn vrati_u_izradu(db: &Db, id: &Value) -> R<()> {
             );
         }
     }
-    db.run("DELETE FROM stock_movements WHERE referenceType = 'radni_nalog' AND referenceId = ?", p![id])?;
+    zaliha::ponisti(db, Dokument { vrsta: "radni_nalog", id })?;
     db.run("UPDATE radni_nalog_stavke SET nabavnaCijena = NULL WHERE radniNalogId = ?", p![id])?;
     db.run("UPDATE radni_nalozi SET status = 'u_izradi', zavrsenAt = NULL WHERE id = ?", p![id])?;
     Ok(())

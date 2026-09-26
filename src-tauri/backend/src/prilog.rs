@@ -1,8 +1,6 @@
 //! Račun po prilogu (`lib/prilog.ts`): fiskalno se kuca jedna zbirna
 //! stavka, a stvarne stavke se dodjeljuju naknadno.
 
-use std::collections::HashMap;
-
 use serde_json::{json, Map, Value};
 
 use crate::greska::R;
@@ -12,6 +10,7 @@ use crate::racun::niz;
 use crate::racuni::{spoji, validan_datum_valute};
 use crate::sql::Db;
 use crate::stampa::{self, Odstampan, Uredjaj};
+use crate::zaliha::{self, Dokument, Smjer};
 use crate::{baci, fiskalni, p, provjera_racuna, racun, tring, tring_racun, Backend};
 
 /// `s.slice(0, n)` — JS broji UTF-16 jedinice.
@@ -58,11 +57,10 @@ pub fn suma_priloga(stavke: &[Value]) -> f64 {
     round2(stavke.iter().fold(0.0, |sum, s| sum + racun::iznos_stavke(&spoji(s, vec![("rabat", js::nn(&s["rabat"], &json!(0)).clone())]))))
 }
 
-/// Provjeri stavke priloga i vrati tip proizvoda po id-u (usluge ne diraju
-/// zalihu). Odvojeno od upisa da se stavke mogu odbiti i prije štampe —
-/// greška poslije štampe znači papir bez pokrića.
-pub fn validiraj_prilog_stavke(db: &Db, stavke: &[Value]) -> R<HashMap<String, Value>> {
-    let mut tipovi = HashMap::new();
+/// Provjeri stavke priloga (proizvod mora postojati). Odvojeno od upisa da se
+/// stavke mogu odbiti i prije štampe — greška poslije štampe znači papir bez
+/// pokrića.
+pub fn validiraj_prilog_stavke(db: &Db, stavke: &[Value]) -> R<()> {
     for s in stavke {
         // JS `!s || typeof s !== 'object'` — niz prolazi (i padne na količini).
         if !(s.is_object() || s.is_array()) {
@@ -72,12 +70,11 @@ pub fn validiraj_prilog_stavke(db: &Db, stavke: &[Value]) -> R<HashMap<String, V
         if s["pdvStopa"] != "E" {
             baci!("U prilog smiju samo stavke sa PDV stopom E (zbirna stavka je fiskalizovana sa E)");
         }
-        let Some(product) = db.get("SELECT tip FROM products WHERE id = ?", p![s["productId"]])? else {
+        if !db.ima("SELECT 1 FROM products WHERE id = ?", p![s["productId"]])? {
             baci!("Proizvod #{} ne postoji", provjera_racuna::prikaz_polja(s, "productId"));
-        };
-        tipovi.insert(js::stringify(&s["productId"]), product["tip"].clone());
+        }
     }
-    Ok(tipovi)
+    Ok(())
 }
 
 /// Zamijeni kompletan set stavki priloga i sinhronizuj zalihe.
@@ -107,24 +104,20 @@ pub fn save_prilog_stavke_in_transaction(db: &Db, order_id: &Value, stavke: &Val
     }
 
     let stavke = niz(stavke, "stavke")?;
-    let tipovi = validiraj_prilog_stavke(db, stavke)?;
+    validiraj_prilog_stavke(db, stavke)?;
 
+    let dokument = Dokument { vrsta: "prilog", id: order_id };
     db.run("DELETE FROM prilog_stavke WHERE orderId = ?", p![order_id])?;
-    db.run("DELETE FROM stock_movements WHERE referenceType = 'prilog' AND referenceId = ?", p![order_id])?;
+    zaliha::ponisti(db, dokument)?;
 
     for s in stavke {
         db.run(
             "INSERT INTO prilog_stavke (orderId, productId, kolicina, cijena, rabat, pdvStopa) VALUES (?, ?, ?, ?, ?, ?)",
             p![order_id, s["productId"], s["kolicina"], s["cijena"], js::nn(&s["rabat"], &json!(0)), s["pdvStopa"]],
         )?;
-        if tipovi.get(&js::stringify(&s["productId"])).map_or(true, |t| t != "usluga") {
-            db.run(
-                "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId, createdAt) VALUES (?, 'izlaz', ?, 'prilog', ?, ?)",
-                p![s["productId"], s["kolicina"], order_id, order["createdAt"]],
-            )?;
-        }
     }
-    Ok(())
+    // Usluga ne razdužuje (pravilo je u knjizi zalihe).
+    zaliha::knjizi(db, dokument, Smjer::Izlaz, stavke.iter().map(|s| (&s["productId"], &s["kolicina"])), &order["createdAt"])
 }
 
 /// Zbirna stavka kako se šalje fiskalnom uređaju (i sintetizuje u prikazima).

@@ -7,6 +7,7 @@ use crate::js::{self, has};
 use crate::proizvodnja::je_artikal_u_proizvodnji;
 use crate::skladiste::{is_dobavljac_used, zapisi_promjene_cijena};
 use crate::sql::Db;
+use crate::zaliha::{self, Dokument, Smjer};
 use crate::{audit, baci, p, Args, Backend};
 
 // Napomena: `data.x !== undefined` je ovdje `has(data, "x")`. JSON gubi samo
@@ -28,26 +29,28 @@ const PDV_STOPE: [&str; 2] = ["E", "K"];
 /// Tring: naziv zajedno s JM ima 32–36 znakova, zavisno od uređaja.
 const SLOBODAN_NAZIV_MAX: usize = 32;
 
-/// Stanje artikla iz kretanja zaliha (podupit u product:getAll), plus šifre
-/// dobavljača artikla u jednom stringu — za pretragu u šifarniku, primci i kasi.
-const SELECT_SA_SIFRAMA: &str = "
+/// Stanje artikla iz kretanja zaliha (`STANJE_SQL`), plus šifre dobavljača
+/// artikla u jednom stringu — za pretragu u šifarniku, primci i kasi.
+fn select_sa_siframa() -> String {
+    format!(
+        "
         SELECT p.*,
-          COALESCE(
-            (SELECT SUM(CASE WHEN sm.tip = 'ulaz' THEN sm.kolicina ELSE -sm.kolicina END)
-             FROM stock_movements sm WHERE sm.productId = p.id),
-            0
-          ) AS stanje,
+          {} AS stanje,
           (SELECT GROUP_CONCAT(ds.sifra, ' ') FROM artikal_dobavljac_sifre ds
             WHERE ds.productId = p.id AND ds.sifra IS NOT NULL) AS sifreDobavljaca
-        FROM products p";
+        FROM products p",
+        zaliha::stanje_sql()
+    )
+}
 
 fn product_get_all(db: &Db, tip: &Value) -> R<Value> {
+    let select = select_sa_siframa();
     if js::truthy(tip) {
         return db
-            .all(&format!("{SELECT_SA_SIFRAMA}\n        WHERE p.slobodan = 0 AND p.tip = ?\n        ORDER BY p.naziv\n      "), p![normalizuj_tip(tip)])
+            .all(&format!("{select}\n        WHERE p.slobodan = 0 AND p.tip = ?\n        ORDER BY p.naziv\n      "), p![normalizuj_tip(tip)])
             .map(Value::from);
     }
-    db.all(&format!("{SELECT_SA_SIFRAMA}\n        WHERE p.slobodan = 0\n        ORDER BY p.naziv\n      "), p![]).map(Value::from)
+    db.all(&format!("{select}\n        WHERE p.slobodan = 0\n        ORDER BY p.naziv\n      "), p![]).map(Value::from)
 }
 
 /// Trimovane šifra, naziv i barkod (prazan barkod = null) spremni za upis;
@@ -235,31 +238,18 @@ fn product_adjust_stock(b: &Backend, product_id: &Value, new_stanje: &Value) -> 
     let Some(novo) = new_stanje.as_f64().filter(|x| x.is_finite()) else {
         baci!("Stanje mora biti broj");
     };
-    // Calculate current stock
-    let stanje = db.val(
-        "
-      SELECT COALESCE(
-        SUM(CASE WHEN tip = 'ulaz' THEN kolicina ELSE -kolicina END), 0
-      ) AS stanje
-      FROM stock_movements WHERE productId = ?
-    ",
-        p![product_id],
-    )?;
-
+    let stanje = zaliha::stanje(db, product_id)?;
     let diff = novo - js::to_number(&stanje);
     // Ostatak zaokruživanja (0,1 + 0,2 − 0,3) nije korekcija.
-    if diff.abs() < crate::zaliha::TOLERANCIJA_ZALIHE {
+    if diff.abs() < zaliha::TOLERANCIJA_ZALIHE {
         return Ok(json!({ "changes": 0 }));
     }
 
-    let tip = if diff > 0.0 { "ulaz" } else { "izlaz" };
+    let smjer = if diff > 0.0 { Smjer::Ulaz } else { Smjer::Izlaz };
     let kolicina = js::f(diff.abs());
 
     db.tx(|| {
-        db.run(
-            "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, ?, ?, 'adjustment', 0)",
-            p![product_id, tip, kolicina],
-        )?;
+        zaliha::knjizi(db, Dokument { vrsta: "adjustment", id: &json!(0) }, smjer, [(product_id, &kolicina)], &Value::Null)?;
         audit::zabiljezi(b, "zaliha:korekcija", json!({ "productId": product_id, "staroStanje": stanje, "novoStanje": new_stanje }))
     })?;
 
@@ -334,16 +324,14 @@ fn product_find_by_dobavljac_sifra(db: &Db, dobavljac_id: &Value, sifra: &Value)
         return Ok(Value::Null);
     };
     db.get(
-        "
-      SELECT p.*,
-        COALESCE(
-          (SELECT SUM(CASE WHEN sm.tip = 'ulaz' THEN sm.kolicina ELSE -sm.kolicina END)
-           FROM stock_movements sm WHERE sm.productId = p.id),
-          0
-        ) AS stanje
+        &format!(
+            "
+      SELECT p.*, {} AS stanje
       FROM artikal_dobavljac_sifre ds JOIN products p ON p.id = ds.productId
       WHERE ds.dobavljacId = ? AND ds.sifra = ?
     ",
+            zaliha::stanje_sql()
+        ),
         p![dobavljac_id, s],
     )
     .map(|r| r.unwrap_or(Value::Null))

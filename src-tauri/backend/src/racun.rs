@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 use crate::greska::R;
 use crate::js::{self, round2, to_number};
 use crate::sql::Db;
+use crate::zaliha::{self, Dokument, Smjer};
 use crate::{baci, p};
 
 /// Iznos stavke zaokružen na fene (uređaj zaokružuje po stavci).
@@ -51,7 +52,8 @@ fn kupac_kolona(kupac: &Value, polje: &str) -> Value {
 /// oblik `UpisRacunaInput` iz TS-a: `korisnikId, ukupno, pdvIznos,
 /// nacinPlacanja, brojFiskalnogRacuna, kupac?, stavke, isManual?, createdAt?`,
 /// a faktura i još `prilogBroj?, prilogNaziv?, datumValute?, napomena?`.
-/// Usluga (tip artikla iz baze) ne razdužuje skladište. Poziva se u transakciji.
+/// Izlaz ide kroz knjigu zalihe (usluga ne razdužuje; tip artikla iz baze).
+/// Poziva se u transakciji.
 pub fn upisi_racun(db: &Db, input: &Value) -> R<i64> {
     let k = &input["kupac"];
     // Bez datuma: sada (zadani datum kolone), inače datum s papira.
@@ -69,19 +71,20 @@ pub fn upisi_racun(db: &Db, input: &Value) -> R<i64> {
         ],
     )?;
     let order_id = r.last_insert_rowid;
-    for s in niz(&input["stavke"], "data.stavke")? {
+    let stavke = niz(&input["stavke"], "data.stavke")?;
+    for s in stavke {
         db.run(
             "INSERT INTO order_items (orderId, productId, kolicina, cijena, rabat, pdvStopa) VALUES (?, ?, ?, ?, ?, ?)",
             p![order_id, s["productId"], s["kolicina"], s["cijena"], s["rabat"], s["pdvStopa"]],
         )?;
-        let artikal = db.get("SELECT tip FROM products WHERE id = ?", p![s["productId"]])?;
-        if artikal.is_none_or(|a| a["tip"] != "usluga") {
-            db.run(
-                "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId, createdAt) VALUES (?, 'izlaz', ?, 'order', ?, COALESCE(?, datetime('now','localtime')))",
-                p![s["productId"], s["kolicina"], order_id, created_at],
-            )?;
-        }
     }
+    zaliha::knjizi(
+        db,
+        Dokument { vrsta: "order", id: &Value::from(order_id) },
+        Smjer::Izlaz,
+        stavke.iter().map(|s| (&s["productId"], &s["kolicina"])),
+        &created_at.map_or(Value::Null, Value::from),
+    )?;
     Ok(order_id)
 }
 
