@@ -7,7 +7,7 @@ use regex::Regex;
 use serde_json::{json, Map, Value};
 
 use crate::greska::R;
-use crate::js::{self, or, or_null, round2, to_number, truthy};
+use crate::js::{self, or, round2, to_number, truthy};
 use crate::sql::Db;
 use crate::stampa::{self, UToku, Uredjaj};
 use crate::tring::{self, Odgovor};
@@ -28,14 +28,6 @@ fn spoji(base: &Value, dodaci: Vec<(&str, Value)>) -> Value {
     Value::Object(m)
 }
 
-/// `for (const s of stavke)` — ono što nije niz u JS-u baca TypeError.
-fn niz<'a>(v: &'a Value, ime: &str) -> R<&'a Vec<Value>> {
-    match v.as_array() {
-        Some(a) => Ok(a),
-        None => baci!("{ime} is not iterable"),
-    }
-}
-
 /// JS `Math.max(a, b)` / `Math.min(a, b)` — NaN se širi (Rustov `max` ga preskače).
 fn js_max(a: f64, b: f64) -> f64 {
     if a.is_nan() || b.is_nan() { f64::NAN } else { a.max(b) }
@@ -49,74 +41,6 @@ fn js_min(a: f64, b: f64) -> f64 {
 fn slice_utf16(s: &str, n: usize) -> String {
     let jedinice: Vec<u16> = s.encode_utf16().take(n).collect();
     String::from_utf16_lossy(&jedinice)
-}
-
-fn kupac_polje(data: &Value, k: &str) -> Value {
-    or_null(&data["kupac"][k])
-}
-
-// ─── insertCompletedOrder (handlers.ts) ─────────────────────
-
-// Insert a completed order + items + stock movements from a snapshot-shaped payload.
-// Returns the new orderId. Caller is responsible for wrapping in a transaction.
-fn insert_completed_order(db: &Db, data: &Value) -> R<i64> {
-    let is_manual = js::nn(&data["isManual"], &json!(0)).clone();
-    let created_at = data["createdAt"].as_str().filter(|s| !s.is_empty());
-    let has_created_at = created_at.is_some();
-
-    let sql = format!(
-        "
-      INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, status,
-        kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj, isManual{}, prilogBroj, prilogNaziv, datumValute, napomena)
-      VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?{}, ?, ?, ?, ?)
-    ",
-        if has_created_at { ", createdAt" } else { "" },
-        if has_created_at { ", ?" } else { "" },
-    );
-    let mut params = vec![
-        data["korisnikId"].clone(),
-        data["ukupno"].clone(),
-        data["pdvIznos"].clone(),
-        data["nacinPlacanja"].clone(),
-        data["brojFiskalnogRacuna"].clone(),
-        kupac_polje(data, "naziv"),
-        kupac_polje(data, "idBroj"),
-        kupac_polje(data, "adresa"),
-        kupac_polje(data, "grad"),
-        kupac_polje(data, "postanskiBroj"),
-        is_manual,
-    ];
-    if let Some(c) = created_at {
-        params.push(json!(c));
-    }
-    params.push(data["prilogBroj"].clone());
-    params.push(data["prilogNaziv"].clone());
-    // Faktura: rok plaćanja i napomena putuju kroz snapshot.
-    params.push(data["datumValute"].clone());
-    params.push(data["napomena"].clone());
-    let order_id = db.run(&sql, &params)?.last_insert_rowid;
-
-    for item in niz(&data["stavke"], "data.stavke")? {
-        db.run(
-            "INSERT INTO order_items (orderId, productId, kolicina, cijena, rabat, pdvStopa) VALUES (?, ?, ?, ?, ?, ?)",
-            p![order_id, item["productId"], item["kolicina"], item["cijena"], item["rabat"], item["pdvStopa"]],
-        )?;
-        let tip = db.get("SELECT tip FROM products WHERE id = ?", p![item["productId"]])?;
-        if tip.map_or(true, |t| t["tip"] != "usluga") {
-            match created_at {
-                Some(c) => db.run(
-                    "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId, createdAt) VALUES (?, 'izlaz', ?, 'order', ?, ?)",
-                    p![item["productId"], item["kolicina"], order_id, c],
-                )?,
-                None => db.run(
-                    "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'izlaz', ?, 'order', ?)",
-                    p![item["productId"], item["kolicina"], order_id],
-                )?,
-            };
-        }
-    }
-
-    Ok(order_id)
 }
 
 // ─── lib/prilog.ts ──────────────────────────────────────────
@@ -205,7 +129,7 @@ pub fn save_prilog_stavke_in_transaction(db: &Db, order_id: &Value, stavke: &Val
         baci!("Faktura je završena — stavke se ne mogu mijenjati");
     }
 
-    let stavke = niz(stavke, "stavke")?;
+    let stavke = racun::niz(stavke, "stavke")?;
     let tipovi = validiraj_prilog_stavke(db, stavke)?;
 
     db.run("DELETE FROM prilog_stavke WHERE orderId = ?", p![order_id])?;
@@ -398,21 +322,16 @@ fn finalize_prilog_and_print(b: &Backend, data: &Value) -> R<Value> {
         if !preuzmi_pending_red(db, pending_id)? {
             return Ok(None);
         }
-        let r = db.run(
-            "
-        INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, status,
-          kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj, isManual, prilogBroj, prilogNaziv,
-          datumValute, napomena)
-        VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
-      ",
-            p![
-                data["korisnikId"], js::f(ukupno), js::f(pdv_iznos), nacin_placanja, broj_fiskalnog_racuna,
-                or_null(&kupac_v["naziv"]), or_null(&kupac_v["idBroj"]), or_null(&kupac_v["adresa"]),
-                or_null(&kupac_v["grad"]), or_null(&kupac_v["postanskiBroj"]), prilog_broj, naziv,
-                datum_valute, napomena
-            ],
+        // Prilog račun nema order_items: fiskalizovana je samo zbirna stavka.
+        let order_id = racun::upisi_racun(
+            db,
+            &json!({
+                "korisnikId": data["korisnikId"], "ukupno": js::f(ukupno), "pdvIznos": js::f(pdv_iznos),
+                "nacinPlacanja": nacin_placanja, "brojFiskalnogRacuna": broj_fiskalnog_racuna, "kupac": kupac_v,
+                "stavke": [], "isManual": 0, "prilogBroj": prilog_broj, "prilogNaziv": naziv,
+                "datumValute": datum_valute, "napomena": napomena,
+            }),
         )?;
-        let order_id = r.last_insert_rowid;
         if !stavke.is_empty() {
             save_prilog_stavke_in_transaction(db, &json!(order_id), &stavke_v)?;
         }
@@ -854,7 +773,7 @@ fn create_manual(b: &Backend, unos: &Value) -> R<Value> {
 
     let stavke: Vec<Value> = r.stavke.iter().map(|s| s.stavka.clone()).collect();
     db.tx(|| {
-        let id = insert_completed_order(
+        let id = racun::upisi_racun(
             db,
             &json!({
                 "korisnikId": korisnik_id, "ukupno": js::f(r.ukupno), "pdvIznos": js::f(r.pdv_iznos),
@@ -929,7 +848,7 @@ fn finalize(b: &Backend, unos: &Value) -> R<Value> {
         if !preuzmi_pending_red(db, pending_id)? {
             return Ok(None);
         }
-        insert_completed_order(
+        racun::upisi_racun(
             db,
             &spoji(&data, vec![("brojFiskalnogRacuna", broj_fiskalnog_racuna.clone()), ("isManual", json!(0))]),
         )
@@ -1011,7 +930,7 @@ fn pending_resolve(b: &Backend, data: &Value) -> R<Value> {
             } else {
                 fiskalni::parse_fiskalni_broj(&broj).map(Value::from).unwrap_or_else(|| snap["prilogBroj"].clone())
             };
-            let order_id = insert_completed_order(
+            let order_id = racun::upisi_racun(
                 db,
                 &spoji(
                     &snap,
@@ -1189,3 +1108,4 @@ pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
         _ => return None,
     })
 }
+
