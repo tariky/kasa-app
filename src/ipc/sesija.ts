@@ -36,6 +36,8 @@ export const ADMIN_KANALI: ReadonlySet<string> = new Set([
   'proizvodnja:setEnabled',
   'fiscal:setZadnjiBroj', 'order:dismissFiscalGap', 'pending:discard',
   'db:backup', 'db:restore',
+  // Automatski backup: ručno pokretanje (Postavke); backup:info smije svaki prijavljeni.
+  'backup:sada',
   'izvoz:knjigovodja',
   // Dijagnostika fiskalnog uređaja (Postavke → Fiskalni); log sadrži i lozinku operatera.
   'tring:init', 'tring:getLogs', 'tring:clearLogs',

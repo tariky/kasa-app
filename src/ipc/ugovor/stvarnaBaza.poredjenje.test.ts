@@ -47,6 +47,7 @@ async function tsBackend(userData: string): Promise<Pozovi> {
     provjeriKanal: () => undefined,
     stanjeLicence: () => ({ stanje: 'aktivna' }),
     aktivirajLicencu: () => ({ stanje: 'aktivna' }),
+    backupPristup: () => null,
   }));
   const { registerIpcHandlers } = await import('../handlers');
   registerIpcHandlers();

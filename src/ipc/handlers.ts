@@ -45,6 +45,7 @@ import { logoVelicina, ziroRacuniPozicija } from '../lib/firma';
 import { dohvatiKnjigovodja } from '../lib/knjigovodja/podaci';
 import * as Tring from '../services/tring';
 import { provjeriKanal, stanjeLicence, aktivirajLicencu } from './licenca';
+import { backupInfo, backupSada, backupNakonAktivacije, registrujBackup } from './backup';
 import { imeZaCuvanje, dozvoljeniFilteri, dozvoljenaEkstenzija } from './cuvanje';
 import {
   provjeriPristup, OgranicenjePokusaja, OgranicenjePromjenaPina, PORUKA_NISTE_PRIJAVLJENI, TAJNE_POSTAVKE, KLJUC_BLOKADE,
@@ -139,7 +140,16 @@ function insertCompletedOrder(
 export function registerIpcHandlers(): void {
   // ─── Licenca ───
   handle('licenca:stanje', () => stanjeLicence());
-  handle('licenca:aktiviraj', (token: string) => aktivirajLicencu(token));
+  handle('licenca:aktiviraj', (token: string) => {
+    const info = aktivirajLicencu(token);
+    backupNakonAktivacije();
+    return info;
+  });
+
+  // ─── Automatski backup (src/ipc/backup.ts) ───
+  registrujBackup();
+  handle('backup:info', () => backupInfo());
+  handle('backup:sada', () => backupSada());
 
   const db = getDb();
 
