@@ -30,10 +30,10 @@ export interface FiskalniOdgovor {
 
 /**
  * Oznaka bačene greške upisa POSLIJE uspješne štampe: "Račun X JE odštampan,
- * ali nije zabilježen u bazi", "Reklamacija #X JE odštampana, ali …" (lib/ponuda.ts,
- * lib/proizvodnja.ts, lib/prilog.ts, lib/refund.ts; Rust ponude.rs
- * `poruka_nakon_stampe`, racuni.rs). Dokument je na papiru, a write-ahead
- * red ostaje (rollback) za dijalog nezavršenih računa.
+ * ali nije zabilježen u bazi", "Reklamacija #X JE odštampana, ali …" — svih pet
+ * tokova (lib/fiskalizacija.ts `porukaNakonStampe`, lib/proizvodnja.ts; Rust
+ * stampa.rs `nije_zabiljezen`, `poruka_nakon_stampe`). Dokument je na papiru,
+ * a write-ahead red ostaje (rollback) za dijalog nezavršenih računa.
  */
 const ODSTAMPAN_NIJE_UPISAN = /JE odštampan/;
 
@@ -75,13 +75,13 @@ async function procitaj(nezavrseni: () => Promise<number[]>): Promise<Set<number
 
 /**
  * Pozove fiskalni kanal i pročita ishod. Greška bačena bez oznake nije uvijek
- * validacija: order:finalize (oba backenda) grešku transakcije upisa poslije
- * uspješne štampe baca sirovu, a IPC može pasti bez odgovora. Tada ostaje
- * write-ahead red koji je upisao ovaj poziv, pa se nezavršeni čitaju prije i
- * poslije: novi red (ili čitanje koje nije uspjelo) → `nepoznat`, inače
- * `greska`. Red koji je čekao i prije ne odlučuje — nevezan dokument ne
- * smije pretvoriti grešku validacije u nepoznat ishod, a red istog dokumenta
- * ionako odbija štampu (`baciAkoCekaNezavrsen`).
+ * validacija: IPC može pasti bez odgovora, ili poziv baci poslije write-ahead
+ * reda (upis koji padne poslije štampe oba backenda javljaju s oznakom —
+ * `ODSTAMPAN_NIJE_UPISAN`). Tada ostaje write-ahead red koji je upisao ovaj
+ * poziv, pa se nezavršeni čitaju prije i poslije: novi red (ili čitanje koje
+ * nije uspjelo) → `nepoznat`, inače `greska`. Red koji je čekao i prije ne
+ * odlučuje — nevezan dokument ne smije pretvoriti grešku validacije u nepoznat
+ * ishod, a red istog dokumenta ionako odbija štampu (`baciAkoCekaNezavrsen`).
  */
 export async function izvrsiFiskalno<R extends FiskalniOdgovor>(
   poziv: () => Promise<R | null | undefined>,
