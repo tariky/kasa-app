@@ -10,7 +10,7 @@ use crate::greska::R;
 use crate::js::{self, is_integer, nn, to_string};
 use crate::sql::Db;
 use crate::audit::{self, NovaPostavka};
-use crate::sesija::pristup;
+use crate::pristup::pristup;
 use crate::kanali::Kanal;
 use crate::{baci, p, proizvodnja, Backend};
 

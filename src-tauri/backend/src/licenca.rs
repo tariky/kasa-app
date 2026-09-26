@@ -22,7 +22,7 @@ use sha2::{Digest, Sha256};
 
 use crate::greska::{Greska, R};
 use crate::js;
-use crate::sesija::pristup;
+use crate::pristup::pristup;
 use crate::sql::Db;
 use crate::kanali::Kanal;
 use crate::Backend;
@@ -373,7 +373,7 @@ fn pod_licencom(kanal: &str) -> bool {
 /// `razlogBlokade`: `Some((istekla, poruka))` kad licenca ne dozvoljava kanal.
 /// Bez važeće licence (samo pregled) i kanali modula su blokirani; čitanja nisu.
 pub fn razlog_blokade(s: &Value, kanal: &str) -> Option<(bool, String)> {
-    if (pristup().blokirani_bez_licence.contains(kanal) || kanal_modula(kanal)) && !smije_raditi(s) {
+    if pod_licencom(kanal) && !smije_raditi(s) {
         return Some((true, "Licenca je istekla — program radi samo za pregled. Unesite novi kod licence.".into()));
     }
     let trazi = katalog()["kanali"].get(kanal)?.as_array()?;

@@ -8,65 +8,20 @@
 //! upis, nikad preko štampe na Tringu ili dijaloga (petlja se tada otpušta i
 //! drugi pozivi rade — vidi petlja.rs).
 
-use std::collections::{HashMap, HashSet};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::collections::HashMap;
+use std::sync::{Mutex, MutexGuard};
 
 use serde_json::{json, Map, Value};
 
 use crate::greska::{Greska, R};
 use crate::js;
+use crate::pristup::pristup;
 use crate::sql::Db;
 use crate::{p, postavke, Backend};
 
 pub const PORUKA_NISTE_PRIJAVLJENI: &str = "Niste prijavljeni";
 pub const PORUKA_SAMO_ADMIN: &str = "Ovu radnju može izvršiti samo administrator";
 pub const PORUKA_ZADANI_PIN: &str = "Prije rada promijenite zadani PIN 0000";
-
-/// Liste pristupa iz `src/ipc/pristup.json` — isti fajl čita sesija.ts, pa su
-/// pravila ista u oba backenda.
-pub struct Pristup {
-    /// Kanali koji rade i bez prijave (ekran za prijavu i aktivaciju licence);
-    /// settings:get samo za ključeve iz `postavke_bez_prijave` (vidi provjeri_pristup).
-    pub kanali_bez_prijave: HashSet<String>,
-    /// Jedini kanali (uz `kanali_bez_prijave`) dok prijavljeni korisnik još ima zadani PIN.
-    pub kanali_sa_zadanim_pinom: HashSet<String>,
-    /// Kanali koji mijenjaju stanje, a UI ih nudi samo administratoru (Postavke,
-    /// Knjigovođa tab) ili su sami po sebi administratorski.
-    pub admin_kanali: HashSet<String>,
-    /// Kanali koji prave nove dokumente ili mijenjaju stanje zaliha — bez važeće
-    /// licence blokirani (licenca.rs).
-    pub blokirani_bez_licence: HashSet<String>,
-    /// Postavke koje renderer čita prije prijave (skala ekrana, moduli na LoginScreenu).
-    pub postavke_bez_prijave: HashSet<String>,
-    /// settings:set — ključevi koje smije postaviti svaki prijavljeni korisnik (KasaScreen).
-    pub postavke_za_sve: HashSet<String>,
-    /// settings:set — ključevi iz Postavki (samo administrator). Sve ostalo se odbija.
-    pub postavke_za_admina: HashSet<String>,
-    /// Postavke koje settings:get nikad ne vraća (ide null). Stanje blokade PIN-a
-    /// je interno: ni čitanje ni upis (settings:set ga ionako odbija, nije na listi).
-    pub tajne_postavke: HashSet<String>,
-}
-
-pub fn pristup() -> &'static Pristup {
-    static P: OnceLock<Pristup> = OnceLock::new();
-    P.get_or_init(|| {
-        let v: Value = serde_json::from_str(include_str!("../../../src/ipc/pristup.json")).expect("ispravan pristup.json");
-        let lista = |put: &str| -> HashSet<String> {
-            let niz = v.pointer(put).and_then(Value::as_array).unwrap_or_else(|| panic!("pristup.json nema liste {put}"));
-            niz.iter().map(|x| x.as_str().unwrap_or_else(|| panic!("pristup.json {put}: {x} nije string")).to_owned()).collect()
-        };
-        Pristup {
-            kanali_bez_prijave: lista("/kanaliBezPrijave"),
-            kanali_sa_zadanim_pinom: lista("/kanaliSaZadanimPinom"),
-            admin_kanali: lista("/adminKanali"),
-            blokirani_bez_licence: lista("/blokiraniBezLicence"),
-            postavke_bez_prijave: lista("/postavke/bezPrijave"),
-            postavke_za_sve: lista("/postavke/zaSve"),
-            postavke_za_admina: lista("/postavke/zaAdmina"),
-            tajne_postavke: lista("/postavke/tajne"),
-        }
-    })
-}
 
 /// Korisnik kako ga vide kanali — nikad s PIN-om ni hešom.
 #[derive(Debug, Clone)]
@@ -406,24 +361,6 @@ mod tests {
             greska(provjeri_pristup("settings:set", &[json!(7)], Some(&admin), false)).as_deref(),
             Some("Postavka \"\" se ne može mijenjati")
         );
-    }
-
-    #[test]
-    fn pristup_json_se_parsira() {
-        // `super::`: test `pristup` iznad zasjenjuje funkciju.
-        let p = super::pristup();
-        for (ime, lista) in [
-            ("kanaliBezPrijave", &p.kanali_bez_prijave),
-            ("kanaliSaZadanimPinom", &p.kanali_sa_zadanim_pinom),
-            ("adminKanali", &p.admin_kanali),
-            ("blokiraniBezLicence", &p.blokirani_bez_licence),
-            ("postavke.bezPrijave", &p.postavke_bez_prijave),
-            ("postavke.zaSve", &p.postavke_za_sve),
-            ("postavke.zaAdmina", &p.postavke_za_admina),
-            ("postavke.tajne", &p.tajne_postavke),
-        ] {
-            assert!(!lista.is_empty(), "{ime} je prazna");
-        }
     }
 
     #[test]

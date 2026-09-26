@@ -23,6 +23,7 @@ pub mod stampa;
 pub mod licenca;
 pub mod kanali;
 pub mod petlja;
+pub mod pristup;
 pub mod sesija;
 pub mod audit;
 pub mod provjera_racuna;
