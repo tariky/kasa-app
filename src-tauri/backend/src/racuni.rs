@@ -13,7 +13,7 @@ use crate::stampa::{self, UToku, Uredjaj};
 use crate::tring::{self, Odgovor};
 use crate::sesija::{self, Korisnik};
 use crate::pending_racun::{
-    baci_ako_ceka_nezavrsen, preuzmi_pending_red, vec_evidentiran, vec_evidentiran_storno, zapisi_pending,
+    self, baci_ako_ceka_nezavrsen, preuzmi_pending_red, vec_evidentiran, vec_evidentiran_storno, zapisi_pending,
 };
 use crate::{audit, baci, cash, fiskalni, korisnici, p, ponude, proizvodnja, provjera_racuna, racun, tring_racun, Args, Backend};
 
@@ -893,9 +893,13 @@ fn pending_resolve(b: &Backend, data: &Value) -> R<Value> {
         baci!("Nepoznata vrsta nezavršenog zapisa: \"{}\"", js::to_string(vrsta));
     }
 
-    // Storno nosi broj reklamacije — drugi niz, ne broj računa.
-    if vrsta != "storno" && db.ima("SELECT id FROM orders WHERE brojFiskalnogRacuna = ?", p![broj])? {
-        baci!("Fiskalni račun sa tim brojem već postoji");
+    // Storno ne upisuje račun: nosi broj reklamacije (drugi niz, ne broj
+    // računa) i nema način plaćanja.
+    if vrsta != "storno" {
+        pending_racun::provjeri_nacin_placanja(&snap)?;
+        if db.ima("SELECT id FROM orders WHERE brojFiskalnogRacuna = ?", p![broj])? {
+            baci!("Fiskalni račun sa tim brojem već postoji");
+        }
     }
 
     let id = db.tx(|| {
@@ -1109,3 +1113,77 @@ pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
     })
 }
 
+#[cfg(test)]
+mod tests {
+    use serde_json::{json, Value};
+
+    use crate::racun::tests::proba;
+
+    /// Ruling 8: pending:resolve prije ikakvog upisa provjerava način plaćanja
+    /// iz snapshota — kanonski tekst s liste ili JSON raspodjela koju
+    /// `raspodjela_placanja` prepoznaje. Inače greška, ništa upisano, red ostaje.
+    #[test]
+    fn pending_resolve_odbija_nepoznat_nacin_placanja() {
+        let p = proba("resolve-nacin");
+        let a = p.artikal("A1", "artikal");
+        let snapshot = |vrsta: Option<&str>, nacin: Option<Value>| {
+            let mut s = json!({
+                "korisnikId": 1, "ukupno": 5, "pdvIznos": 0.73,
+                "stavke": [{ "productId": a, "kolicina": 1, "cijena": 5, "rabat": 0, "pdvStopa": "E", "productTip": "artikal" }],
+            });
+            if let Some(v) = vrsta {
+                s["vrsta"] = json!(v);
+                s[if v == "ponuda" { "ponudaId" } else { "nalogId" }] = json!(999);
+            }
+            if let Some(n) = nacin {
+                s["nacinPlacanja"] = n;
+            }
+            s
+        };
+        let rijesi = |id: i64, broj: &str| {
+            p.call("pending:resolve", vec![json!({ "id": id, "brojFiskalnogRacuna": broj, "createdAt": "2026-03-03 10:00:00" })])
+        };
+        let broj = |sql: &str| p.all(sql)[0]["n"].clone();
+
+        let odbijeni: Vec<(Option<&str>, Option<Value>, &str)> = vec![
+            (None, Some(json!("gotovina")), "gotovina"),
+            (None, Some(json!(" Gotovina ")), " Gotovina "),
+            (None, Some(json!("cek")), "cek"),
+            (None, Some(json!("Bitcoin")), "Bitcoin"),
+            (None, Some(json!(r#"{"gotovina":5,"zlato":1}"#)), r#"{"gotovina":5,"zlato":1}"#),
+            (None, Some(json!(r#"{"gotovina":0}"#)), r#"{"gotovina":0}"#),
+            (None, Some(json!("")), ""),
+            (None, Some(Value::Null), "null"),
+            (None, None, "undefined"),
+            (Some("ponuda"), Some(json!("KARTICA")), "KARTICA"),
+            (Some("nalog"), Some(json!("virman")), "virman"),
+        ];
+        for (vrsta, nacin, prikaz) in odbijeni {
+            let id = p.pending(snapshot(vrsta, nacin));
+            assert_eq!(
+                rijesi(id, "700"),
+                Err(format!("Nepoznat način plaćanja: \"{prikaz}\"")),
+                "{vrsta:?} {prikaz}"
+            );
+        }
+        assert_eq!(broj("SELECT COUNT(*) AS n FROM orders"), json!(0));
+        assert_eq!(broj("SELECT COUNT(*) AS n FROM pending_receipts"), json!(11));
+        assert_eq!(broj("SELECT COUNT(*) AS n FROM stock_movements"), json!(0));
+
+        // Kanonski tekst i prepoznata JSON raspodjela (ključevi bez obzira na slova) prolaze.
+        for (i, nacin) in ["Gotovina", "Kartica", "Virman", "Ček", r#"{"gotovina":3,"cek":2}"#, r#"{"Gotovina":5}"#].iter().enumerate() {
+            let id = p.pending(snapshot(None, Some(json!(nacin))));
+            assert!(rijesi(id, &format!("80{i}")).is_ok(), "{nacin}");
+        }
+        assert_eq!(broj("SELECT COUNT(*) AS n FROM orders"), json!(6));
+
+        // Storno ne upisuje način plaćanja — njegov snapshot ga nema.
+        let order = p.run(
+            "INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, status) VALUES (1, 5, 0.73, 'Gotovina', '900', 'completed')",
+            &[],
+        );
+        let storno = p.pending(json!({ "vrsta": "storno", "orderId": order, "brojRacuna": "900", "korisnikId": 1, "ukupno": 5, "stavke": [] }));
+        assert!(rijesi(storno, "R-1").is_ok());
+        assert_eq!(p.all(&format!("SELECT status FROM orders WHERE id = {order}"))[0]["status"], json!("refunded"));
+    }
+}

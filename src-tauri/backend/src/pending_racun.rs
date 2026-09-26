@@ -13,6 +13,7 @@ use serde_json::{json, Value};
 
 use crate::greska::R;
 use crate::js;
+use crate::provjera_racuna::{prikaz_polja, raspodjela_placanja, NACINI_PLACANJA};
 use crate::sql::Db;
 use crate::stampa::prikaz_broja;
 use crate::{baci, p};
@@ -70,6 +71,21 @@ pub fn snapshot_kupca(k: &Option<Value>) -> Value {
         }),
         None => Value::Null,
     }
+}
+
+/// Način plaćanja iz snapshota, prije upisa računa iz dijaloga (Ruling 8):
+/// kanonski tekst s liste `NACINI_PLACANJA` ili JSON raspodjela koju
+/// `raspodjela_placanja` prepoznaje. Sve drugo ("gotovina", " Gotovina ",
+/// nepoznata vrsta) bi u `orders` upisalo način koji ladica ne zna.
+pub fn provjeri_nacin_placanja(snap: &Value) -> R<()> {
+    let ispravan = snap["nacinPlacanja"].as_str().is_some_and(|n| {
+        NACINI_PLACANJA.contains(&n)
+            || (matches!(js::parse(n), Ok(Value::Object(_))) && raspodjela_placanja(n, 0.0).is_some())
+    });
+    if !ispravan {
+        baci!("Nepoznat način plaćanja: \"{}\"", prikaz_polja(snap, "nacinPlacanja"));
+    }
+    Ok(())
 }
 
 /// Write-ahead: snapshot se upiše (odmah, van transakcije) prije štampe.
