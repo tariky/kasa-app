@@ -32,6 +32,8 @@ pub mod katalog;
 pub mod skladiste;
 pub mod pending_racun;
 pub mod racuni;
+pub mod prilog;
+pub mod storno;
 pub mod cash;
 pub mod ponude;
 pub mod proizvodnja;
