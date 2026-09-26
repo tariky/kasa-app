@@ -2,6 +2,7 @@
 // provjera brisanja artikla, slobodna stavka na kasi i UPDATE samo poslanih
 // kolona. Kanali su u handlers.ts; Rust: katalog.rs.
 import type { SqlDb } from './sqldb';
+import type { Product } from '../types';
 import { PDV_STOPE } from './provjeraRacuna';
 import { NACINI_PLACANJA } from './placanje';
 import { jeArtikalUProizvodnji } from './proizvodnja';
@@ -136,7 +137,7 @@ export const SLOBODAN_NAZIV_MAX = 32;
  */
 export function slobodnaStavka(
   db: SqlDb, data: { naziv?: string; cijena?: number; pdvStopa?: string; jm?: string }, audit: Audit,
-) {
+): Product {
   const naziv = data.naziv?.trim() ?? '';
   if (!naziv) throw new Error('Naziv stavke je obavezan');
   if (naziv.length > SLOBODAN_NAZIV_MAX) throw new Error(`Naziv stavke može imati najviše ${SLOBODAN_NAZIV_MAX} znaka`);
@@ -171,7 +172,7 @@ export function slobodnaStavka(
     `).run(sifraZa(broj), naziv, jm, data.cijena, data.pdvStopa);
     id = Number(r.lastInsertRowid);
   }
-  return db.prepare('SELECT p.*, 0 AS stanje FROM products p WHERE p.id = ?').get(id);
+  return db.prepare('SELECT p.*, 0 AS stanje FROM products p WHERE p.id = ?').get(id) as Product;
 }
 
 // ─── Dobavljači ─────────────────────────────────────────────

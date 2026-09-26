@@ -62,10 +62,11 @@ import type {
 let provjeriSesiju: (channel: string, args: unknown[]) => void = () => undefined;
 
 /**
- * Odgovor handlera kanala `K` (kanali.ts). Gdje ugovor kaže `null`, handler smije
- * vratiti i `undefined` (npr. `.get()` bez reda) — u ugovoru je to isto "nema vrijednosti".
+ * Odgovor handlera kanala `K` (kanali.ts). "Nema vrijednosti" je `null`, ne
+ * `undefined`: Electron IPC prenosi `undefined` kakav jeste, a ugovor i Rust
+ * vraćaju `null` (npr. `.get()` bez reda → `?? null`).
  */
-type OdgovorHandlera<K extends Kanal> = Rezultat<K> | (null extends Rezultat<K> ? undefined : never);
+type OdgovorHandlera<K extends Kanal> = Rezultat<K>;
 
 function handle<K extends Kanal>(
   channel: K, handler: (...args: Argumenti<K>) => OdgovorHandlera<K> | Promise<OdgovorHandlera<K>>,
@@ -214,7 +215,7 @@ export function registerIpcHandlers(): void {
   });
 
   handle('product:get', (id: number) => {
-    return db.prepare('SELECT * FROM products WHERE id = ?').get(id) as Product | undefined;
+    return (db.prepare('SELECT * FROM products WHERE id = ?').get(id) as Product | undefined) ?? null;
   });
 
   // Pravila šifarnika (validacija, brisanje, slobodna stavka): lib/katalog.ts.
@@ -451,7 +452,7 @@ export function registerIpcHandlers(): void {
 
   handle('primka:create', (data, potvrda) => primke.unesi(data, potvrda));
   handle('primka:update', (data, potvrda) => primke.izmijeni(data, potvrda));
-  handle('primka:delete', (id, potvrda) => primke.obrisi(id, potvrda));
+  handle('primka:delete', (id, potvrda) => primke.obrisi(id, potvrda) ?? null);
   // Pregled ništa ne upisuje, pa nije u licencnoj blokadi.
   handle('primka:pregledUnosa', data => primke.pregledUnosa(data));
   handle('primka:pregledIzmjene', data => primke.pregledIzmjene(data));
