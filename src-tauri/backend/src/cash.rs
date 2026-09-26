@@ -21,7 +21,7 @@ use crate::{baci, p, provjera_racuna, sesija, Backend};
 /// iznos ili ništa — ili JSON `{gotovina, kartica, ...}` s razbijenim iznosima.
 /// Nepoznat oblik ne nosi gotovinu (izvoz ga označi kao nepoznat).
 pub fn gotovinski_iznos(nacin_placanja: &Value, ukupno: f64) -> f64 {
-    provjera_racuna::raspodjela_placanja(&js::to_string(nacin_placanja), ukupno).map_or(0.0, |iznosi| iznosi[0])
+    provjera_racuna::raspodjela_placanja(&js::to_string(nacin_placanja), ukupno).map_or(0.0, |p| p.gotovina)
 }
 
 /// `prodaje` su računi prodani u periodu (bez obzira na kasniji storno —
