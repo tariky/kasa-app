@@ -92,6 +92,8 @@ const ADDED_COLUMNS: Array<[string, string]> = [
   ['orders', 'napomena'],
   ['products', 'plocaSirina'],
   ['products', 'plocaVisina'],
+  ['cijena_historija', 'ponistena'],
+  ['cijena_historija', 'cijenaUProdaji'],
 ];
 const ADDED_TABLES = [
   'dobavljaci', 'kupci', 'pending_receipts', 'prilog_stavke',
