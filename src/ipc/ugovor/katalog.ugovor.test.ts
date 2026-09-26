@@ -1,6 +1,6 @@
 // Ugovor za kanale product:*, materijal:search, dobavljac:* i kupac:* — vidi backend.ts.
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
-import { otvoriBackend, type Backend } from './backend';
+import { otvoriBackend, prijavi, ADMIN_PIN, type Backend } from './backend';
 
 let b: Backend;
 
@@ -997,6 +997,23 @@ describe('kupac: zadano za dokumente', () => {
     expect(k.rabat).toBe(5);
     expect(k.rokPlacanjaDana).toBeNull();
     expect(k.nacinPlacanja).toBeNull();
+  });
+
+  test('stara baza bez novih kolona: migracija ih dodaje kao null, update ih postavlja', async () => {
+    const id = dodajKupca('Stari', '1', '033 111');
+    for (const kol of ['rokPlacanjaDana', 'nacinPlacanja', 'rabat']) b.db.exec(`ALTER TABLE kupci DROP COLUMN ${kol}`);
+    await b.ponovoPokreni();
+    await prijavi(b, ADMIN_PIN);
+
+    const [k] = await b.call('kupac:getAll');
+    expect(k).toMatchObject({ id, naziv: 'Stari', idBroj: '1', kontakt: '033 111' });
+    expect(k.rokPlacanjaDana).toBeNull();
+    expect(k.nacinPlacanja).toBeNull();
+    expect(k.rabat).toBeNull();
+
+    expect(await b.call('kupac:update', id, { rokPlacanjaDana: 15, nacinPlacanja: 'Virman', rabat: 2.5 })).toEqual({ changes: 1 });
+    expect(red('SELECT rokPlacanjaDana, nacinPlacanja, rabat FROM kupci WHERE id = ?', id))
+      .toEqual({ rokPlacanjaDana: 15, nacinPlacanja: 'Virman', rabat: 2.5 });
   });
 });
 

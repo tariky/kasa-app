@@ -464,7 +464,7 @@ describe('settings:set', () => {
 
   test('sve ostalo se odbija i adminu (tajne, interni ključevi, firma, tring)', async () => {
     await prijavi(b, ADMIN_PIN);
-    for (const k of ['tring.operatorPassword', 'tring.host', 'fiscal.dismissedGaps', 'firma.naziv', 'proizvodnja.enabled', 'kasa.nesto', '']) {
+    for (const k of ['tring.operatorPassword', 'tring.host', 'fiscal.dismissedGaps', 'firma.naziv', 'proizvodnja.enabled', 'kasa.nesto', 'dokumenti.nepostojeci', '']) {
       await expect(b.call('settings:set', k, 'x')).rejects.toThrow(`Postavka "${k}" se ne može mijenjati`);
     }
     expect(red("SELECT value FROM settings WHERE key = 'tring.operatorPassword'").value).toBe('0');
