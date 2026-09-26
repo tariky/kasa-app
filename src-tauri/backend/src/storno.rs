@@ -61,7 +61,7 @@ fn je_nedovoljno_sredstava(r: &Odgovor) -> bool {
     let tekst = |v: &Value| if v.is_null() { String::new() } else { js::to_string(v) };
     let mut dijelovi = vec![tekst(&r["error"]), tekst(&r["vrstaOdgovora"])];
     if let Some(o) = r["odgovori"].as_object() {
-        dijelovi.extend(o.values().map(|v| js::to_string(v)));
+        dijelovi.extend(o.values().map(js::to_string));
     }
     NEDOVOLJNO_RE.with(|re| re.is_match(&dijelovi.join(" ")))
 }

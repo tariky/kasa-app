@@ -7,6 +7,9 @@
 //! `ugovor-server` binarija. Sve što zavisi od okruženja (dijalozi, restart,
 //! obavijest o licenci) ide kroz [`Platforma`].
 
+// `if !(x > 0.0)` je namjerno isto kao TS `if (!(x > 0))`: NaN ne prolazi provjeru.
+#![allow(clippy::neg_cmp_op_on_partial_ord)]
+
 pub mod greska;
 pub mod js;
 pub mod sql;

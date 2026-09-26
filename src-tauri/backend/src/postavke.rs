@@ -136,7 +136,7 @@ fn get_firma(db: &Db) -> R<Value> {
         .filter(|b| !to_string(&b["bankName"]).trim().is_empty() || !to_string(&b["accountNumber"]).trim().is_empty())
         .collect();
     // `Number(undefined)` je NaN → zadana veličina.
-    let logo = s.get("logoVelicina").map(|v| js::to_number(v)).unwrap_or(f64::NAN);
+    let logo = s.get("logoVelicina").map(js::to_number).unwrap_or(f64::NAN);
     Ok(json!({
         "naziv": g("naziv"),
         "adresa": g("adresa"),
@@ -228,7 +228,7 @@ fn set_enabled(b: &Backend, enabled: &Value) -> R<Value> {
 }
 
 fn save_cart(db: &Db, naziv: &Value, items: &Value, ukupno: &Value) -> R<Value> {
-    if js::length(items).map_or(true, |n| n == 0) {
+    if js::length(items).is_none_or(|n| n == 0) {
         baci!("Košarica je prazna");
     }
     let r = db.run("INSERT INTO saved_carts (naziv, items, ukupno) VALUES (?, ?, ?)", p![naziv, js::stringify(items), ukupno])?;

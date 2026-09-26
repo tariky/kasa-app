@@ -29,7 +29,7 @@ fn round4(n: f64) -> f64 {
 
 /// Sljedeći redni broj naloga u godini — od 1, ili iza posljednjeg broja iz starog programa.
 pub fn next_broj_naloga(db: &Db, godina: &Value) -> R<i64> {
-    let max = db.val("SELECT MAX(broj) AS maxBroj FROM radni_nalozi WHERE godina = ?", &[godina.clone()])?;
+    let max = db.val("SELECT MAX(broj) AS maxBroj FROM radni_nalozi WHERE godina = ?", std::slice::from_ref(godina))?;
     Ok(max.as_i64().unwrap_or(0).max(crate::ponude::nastavak_numeracije(db, "nalog", godina)?) + 1)
 }
 

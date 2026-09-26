@@ -58,7 +58,7 @@ pub fn nastavak_numeracije(db: &Db, dok: &str, godina: &Value) -> R<i64> {
 
 /// Sljedeći redni broj ponude u godini — od 1, ili iza posljednjeg broja iz starog programa.
 pub fn next_broj_ponude(db: &Db, godina: &Value) -> R<i64> {
-    let max = db.val("SELECT MAX(broj) AS maxBroj FROM ponude WHERE godina = ?", &[godina.clone()])?;
+    let max = db.val("SELECT MAX(broj) AS maxBroj FROM ponude WHERE godina = ?", std::slice::from_ref(godina))?;
     Ok(max.as_i64().unwrap_or(0).max(nastavak_numeracije(db, "ponuda", godina)?) + 1)
 }
 
