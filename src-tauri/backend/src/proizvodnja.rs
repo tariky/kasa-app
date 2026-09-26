@@ -10,7 +10,7 @@ use crate::pending_racun::{baci_ako_ceka_nezavrsen, preuzmi_pending_red, snapsho
 use crate::js::{self, has, round2, to_number, truthy};
 use crate::ponude;
 use crate::racun::{izracunaj_totale, upisi_racun};
-use crate::skladiste::TOLERANCIJA_ZALIHE;
+use crate::zaliha::TOLERANCIJA_ZALIHE;
 use crate::sql::Db;
 use crate::stampa::{self, Odstampan, UToku, Uredjaj};
 use crate::tring::uspjeh;

@@ -10,16 +10,11 @@ use crate::js;
 use crate::p;
 use crate::sql::Db;
 use crate::katalog::razlicito;
+use crate::zaliha::TOLERANCIJA_ZALIHE;
 use crate::{audit, baci, Args, Backend};
 
 /// Tolerancija pri poređenju cijena (fening).
 const EPS: f64 = 0.001;
-
-/// Tolerancija za stanje zalihe (`TOLERANCIJA_ZALIHE`): |stanje| < 1e-9 je
-/// nula. Stanje je zbir kretanja u REAL-u, pa ostaje šum (0,1 + 0,2 − 0,3 ≠ 0)
-/// — takva "zaliha" ne pravi nivelaciju, upozorenje ni korekciju. Ista
-/// granica važi u izvozu i proizvodnji. TS: lib/tolerancije.ts.
-pub const TOLERANCIJA_ZALIHE: f64 = 1e-9;
 
 /// Ključ za JS `Map`/`Set` po productId: `5` i `"5"` su različiti ključevi, kao u JS-u.
 fn kljuc(v: &Value) -> String {

@@ -248,7 +248,7 @@ fn product_adjust_stock(b: &Backend, product_id: &Value, new_stanje: &Value) -> 
 
     let diff = novo - js::to_number(&stanje);
     // Ostatak zaokruživanja (0,1 + 0,2 − 0,3) nije korekcija.
-    if diff.abs() < crate::skladiste::TOLERANCIJA_ZALIHE {
+    if diff.abs() < crate::zaliha::TOLERANCIJA_ZALIHE {
         return Ok(json!({ "changes": 0 }));
     }
 
