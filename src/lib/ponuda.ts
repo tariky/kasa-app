@@ -129,6 +129,8 @@ export function setStatusPonude(db: SqlDb, id: number, status: PonudaStatus): vo
   const ponuda = db.prepare('SELECT status FROM ponude WHERE id = ?')
     .get(id) as { status: string } | undefined;
   if (!ponuda) throw new Error('Ponuda ne postoji');
+  // Račun po ponudi koji čeka konvertuje ponudu kad se riješi.
+  baciAkoCekaNezavrsen(db, 'ponudaId', id, 'Račun po ovoj ponudi', 'prije promjene statusa ponude');
   if (ponuda.status === 'konvertovana') throw new Error('Konvertovana ponuda se ne može mijenjati');
 
   db.prepare('UPDATE ponude SET status = ? WHERE id = ?').run(status, id);
@@ -143,6 +145,7 @@ export function setStatusPonude(db: SqlDb, id: number, status: PonudaStatus): vo
 export function deletePonuda(db: SqlDb, id: number): { changes: number } {
   const ponuda = db.prepare('SELECT status FROM ponude WHERE id = ?').get(id) as { status: string } | undefined;
   if (!ponuda) return { changes: 0 };
+  baciAkoCekaNezavrsen(db, 'ponudaId', id, 'Račun po ovoj ponudi', 'prije brisanja ponude');
   if (ponuda.status === 'konvertovana') {
     throw new Error('Konvertovana ponuda se ne može obrisati — po njoj je izdat račun');
   }
@@ -174,6 +177,8 @@ export function updatePonuda(
   const ponuda = db.prepare('SELECT id, status, kupacId, datum, vaziDo FROM ponude WHERE id = ?')
     .get(id) as { id: number; status: string; kupacId: number; datum: string; vaziDo: string } | undefined;
   if (!ponuda) throw new Error('Ponuda ne postoji');
+  // Snapshot računa koji čeka nosi stare stavke — izmjena bi ih razdvojila od ponude.
+  baciAkoCekaNezavrsen(db, 'ponudaId', id, 'Račun po ovoj ponudi', 'prije izmjene ponude');
   if (ponuda.status === 'konvertovana') throw new Error('Konvertovana ponuda se ne može mijenjati');
   const stavke = provjeriStavke(db, data.stavke);
 

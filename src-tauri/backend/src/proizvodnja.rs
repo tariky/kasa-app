@@ -467,6 +467,9 @@ pub fn delete_nalog(db: &Db, id: &Value) -> R<()> {
     let n = ucitaj_nalog_ili_baci(db, id)?;
     // Odštampan račun bez naloga mogao bi se samo odbaciti.
     baci_ako_ceka_nezavrsen(db, "nalogId", id, "Račun za ovaj nalog", "prije brisanja naloga")?;
+    if !n["ponudaId"].is_null() {
+        baci_ako_ceka_nezavrsen(db, "ponudaId", &n["ponudaId"], "Račun po ponudi ovog naloga", "prije brisanja naloga")?;
+    }
     baci_ako_zakljucan(&n["status"])?;
     baci_ako_ponuda_fakturisana(db, &n["ponudaId"], "obrisati")?;
     db.run("DELETE FROM radni_nalog_stavke WHERE radniNalogId = ?", p![id])?;
@@ -793,6 +796,16 @@ pub fn vrati_u_izradu(db: &Db, id: &Value) -> R<()> {
     }
     // Račun koji čeka u nezavršenim fakturiše završen nalog kad se riješi.
     baci_ako_ceka_nezavrsen(db, "nalogId", id, "Račun za ovaj nalog", "prije vraćanja naloga u izradu")?;
+    // I račun po ponudi naloga izdat sa ekrana Ponude: kad se riješi, ponuda je fakturisana.
+    if !n["ponudaId"].is_null() {
+        baci_ako_ceka_nezavrsen(
+            db,
+            "ponudaId",
+            &n["ponudaId"],
+            "Račun po ponudi ovog naloga",
+            "prije vraćanja naloga u izradu",
+        )?;
+    }
     baci_ako_ponuda_fakturisana(db, &n["ponudaId"], "vratiti u izradu")?;
 
     let ulazi = db.all(

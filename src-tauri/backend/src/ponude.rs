@@ -168,6 +168,8 @@ pub fn set_status_ponude(db: &Db, id: &Value, status: &Value) -> R<()> {
     let Some(ponuda) = db.get("SELECT status FROM ponude WHERE id = ?", p![id])? else {
         baci!("Ponuda ne postoji");
     };
+    // Račun po ponudi koji čeka konvertuje ponudu kad se riješi.
+    baci_ako_ceka_nezavrsen(db, "ponudaId", id, "Račun po ovoj ponudi", "prije promjene statusa ponude")?;
     if ponuda["status"] == "konvertovana" {
         baci!("Konvertovana ponuda se ne može mijenjati");
     }
@@ -183,6 +185,7 @@ pub fn delete_ponuda(db: &Db, id: &Value) -> R<Value> {
     let Some(ponuda) = db.get("SELECT status FROM ponude WHERE id = ?", p![id])? else {
         return Ok(json!({ "changes": 0 }));
     };
+    baci_ako_ceka_nezavrsen(db, "ponudaId", id, "Račun po ovoj ponudi", "prije brisanja ponude")?;
     if ponuda["status"] == "konvertovana" {
         baci!("Konvertovana ponuda se ne može obrisati — po njoj je izdat račun");
     }
@@ -210,6 +213,8 @@ pub fn update_ponuda(db: &Db, id: &Value, data: &Value) -> R<()> {
     let Some(ponuda) = db.get("SELECT id, status, kupacId, datum, vaziDo FROM ponude WHERE id = ?", p![id])? else {
         baci!("Ponuda ne postoji");
     };
+    // Snapshot računa koji čeka nosi stare stavke — izmjena bi ih razdvojila od ponude.
+    baci_ako_ceka_nezavrsen(db, "ponudaId", id, "Račun po ovoj ponudi", "prije izmjene ponude")?;
     if ponuda["status"] == "konvertovana" {
         baci!("Konvertovana ponuda se ne može mijenjati");
     }

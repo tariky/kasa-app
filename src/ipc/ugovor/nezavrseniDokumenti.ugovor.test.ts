@@ -274,6 +274,30 @@ describe('ponuda:konvertuj — write-ahead', () => {
     expect(await konvertuj(druga.id)).toMatchObject({ success: true });
   });
 
+  test('dok red postoji, ponuda se ne mijenja, ne briše i ne mijenja joj se status', async () => {
+    const pon = await prihvacenaPonuda();
+    await uredjajBezPotvrde();
+    await konvertuj(pon.id);
+    const ceka = 'Račun po ovoj ponudi čeka u nezavršenim računima (ishod štampe nije poznat) — riješite ga';
+
+    await expect(b.call('ponuda:update', pon.id, { stavke: [{ productId: pon.p, kolicina: 5, cijena: 10, rabat: 0, pdvStopa: 'E' }] }))
+      .rejects.toThrow(`${ceka} prije izmjene ponude`);
+    await expect(b.call('ponuda:setStatus', pon.id, 'odbijena'))
+      .rejects.toThrow(`${ceka} prije promjene statusa ponude`);
+    await expect(b.call('ponuda:delete', pon.id))
+      .rejects.toThrow(`${ceka} prije brisanja ponude`);
+    expect(ponuda(pon.id)).toEqual({ status: 'prihvacena', racunId: null });
+    expect(red('SELECT ukupno FROM ponude WHERE id = ?', pon.id).ukupno).toBe(20);
+    expect(redovi('SELECT kolicina FROM ponuda_stavke WHERE ponudaId = ?', pon.id)).toEqual([{ kolicina: 2 }]);
+
+    // Druga ponuda nije blokirana; odbačen red (nije odštampan) otključava ponudu.
+    const druga = await prihvacenaPonuda();
+    expect(await b.call('ponuda:setStatus', druga.id, 'odbijena')).toEqual({ success: true });
+    await b.call('pending:discard', await pendingId());
+    expect(await b.call('ponuda:setStatus', pon.id, 'odbijena')).toEqual({ success: true });
+    expect(await b.call('ponuda:delete', pon.id)).toEqual({ changes: 1 });
+  });
+
   test('stara faktura iz ponude (snapshot bez vrste, s ponudaId) takođe blokira konverziju', async () => {
     const pon = await prihvacenaPonuda();
     dodajPending({
@@ -441,6 +465,28 @@ describe('nalog:izdajRacun — write-ahead (nalog iz ponude)', () => {
     expect(red('SELECT nacinPlacanja, brojFiskalnogRacuna FROM orders WHERE id = ?', r.id))
       .toEqual({ nacinPlacanja: 'Virman', brojFiskalnogRacuna: '702' });
     expect(stanje(p)).toBe(prije - 2);
+  });
+
+  // Račun po ponudi sa ekrana Ponude (snapshot bez nalogId) čeka: nalog iste
+  // ponude se ne vraća u izradu i ne briše, kao i kad je račun izdat iz naloga.
+  test('dok račun po ponudi naloga čeka, nalog se ne vraća u izradu i ne briše', async () => {
+    const { nalogId, ponudaId } = await zavrsenNalogIzPonude();
+    await uredjajBezPotvrde();
+    await konvertuj(ponudaId);
+    expect(pending()[0]).toMatchObject({ vrsta: 'ponuda', ponudaId });
+    expect('nalogId' in pending()[0]).toBe(false);
+    const ceka = 'Račun po ponudi ovog naloga čeka u nezavršenim računima (ishod štampe nije poznat) — riješite ga';
+
+    await expect(b.call('nalog:setStatus', { id: nalogId, status: 'vrati' })).rejects.toThrow(`${ceka} prije vraćanja naloga u izradu`);
+    await expect(b.call('nalog:delete', nalogId)).rejects.toThrow(`${ceka} prije brisanja naloga`);
+    expect(nalog(nalogId)).toEqual({ status: 'zavrsen', racunId: null });
+
+    // Nalog u izradi (ponuda fakturisana prije završetka) se takođe ne briše.
+    await b.call('pending:discard', await pendingId());
+    expect(await b.call('nalog:setStatus', { id: nalogId, status: 'vrati' })).toEqual({ success: true });
+    await konvertuj(ponudaId);
+    await expect(b.call('nalog:delete', nalogId)).rejects.toThrow(`${ceka} prije brisanja naloga`);
+    expect(nalog(nalogId)).toEqual({ status: 'u_izradi', racunId: null });
   });
 
   test('uspjeh: ponuda konvertovana i nalog fakturisan u istoj transakciji, red obrisan', async () => {

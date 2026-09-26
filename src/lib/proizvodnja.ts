@@ -335,6 +335,7 @@ export function deleteNalog(db: SqlDb, id: number): void {
   const n = ucitajNalogIliBaci(db, id);
   // Odštampan račun bez naloga mogao bi se samo odbaciti.
   baciAkoCekaNezavrsen(db, 'nalogId', id, 'Račun za ovaj nalog', 'prije brisanja naloga');
+  if (n.ponudaId != null) baciAkoCekaNezavrsen(db, 'ponudaId', n.ponudaId, 'Račun po ponudi ovog naloga', 'prije brisanja naloga');
   baciAkoZakljucan(n.status);
   baciAkoPonudaFakturisana(db, n.ponudaId, 'obrisati');
   db.prepare('DELETE FROM radni_nalog_stavke WHERE radniNalogId = ?').run(id);
@@ -602,6 +603,10 @@ export function vratiUIzradu(db: SqlDb, id: number): void {
   if (n.status !== 'zavrsen') throw new Error('Samo završen nalog se vraća u izradu');
   // Račun koji čeka u nezavršenim fakturiše završen nalog kad se riješi.
   baciAkoCekaNezavrsen(db, 'nalogId', id, 'Račun za ovaj nalog', 'prije vraćanja naloga u izradu');
+  // I račun po ponudi naloga izdat sa ekrana Ponude: kad se riješi, ponuda je fakturisana.
+  if (n.ponudaId != null) {
+    baciAkoCekaNezavrsen(db, 'ponudaId', n.ponudaId, 'Račun po ponudi ovog naloga', 'prije vraćanja naloga u izradu');
+  }
   baciAkoPonudaFakturisana(db, n.ponudaId, 'vratiti u izradu');
 
   const ulazi = db.prepare(`
