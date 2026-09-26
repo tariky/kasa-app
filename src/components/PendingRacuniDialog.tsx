@@ -3,6 +3,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { naOtvaranjeNezavrsenih } from '@/lib/nezavrseniRacuni';
 
 interface PendingRow {
   id: number;
@@ -10,6 +11,8 @@ interface PendingRow {
   snapshot: {
     ukupno: number;
     stavke: Array<{ naziv: string; kolicina: number; cijena: number }>;
+    /** Račun po prilogu: na uređaj ide jedna zbirna stavka s ovim nazivom. */
+    prilogNaziv?: string | null;
   };
 }
 
@@ -33,6 +36,8 @@ export default function PendingRacuniDialog({ uloga }: { uloga: 'admin' | 'kasir
   }, []);
 
   useEffect(() => { load(); }, [load]);
+  // Nepoznat ishod štampe: ekran traži da se dijalog otvori odmah.
+  useEffect(() => naOtvaranjeNezavrsenih(() => { load(); }), [load]);
 
   const current = rows[0];
   if (!current) return null;
@@ -71,12 +76,19 @@ export default function PendingRacuniDialog({ uloga }: { uloga: 'admin' | 'kasir
         </DialogHeader>
         <div className="space-y-4">
           <p className="text-sm text-slate-600">
-            Ovaj račun je poslan na štampu, ali aplikacija nije potvrdila upis (moguć prekid/pad računara).
+            Ovaj račun je poslan na štampu, ali aplikacija nije potvrdila upis (uređaj nije odgovorio ili je
+            došlo do prekida/pada računara).
             <strong> Provjerite papirni račun.</strong>
           </p>
           <div className="rounded border p-3 text-sm">
             <div className="font-medium mb-1">Stavke:</div>
             <ul className="space-y-0.5">
+              {current.snapshot.stavke.length === 0 && current.snapshot.prilogNaziv && (
+                <li className="flex justify-between">
+                  <span>{current.snapshot.prilogNaziv}</span>
+                  <span className="font-mono">{current.snapshot.ukupno.toFixed(2)}</span>
+                </li>
+              )}
               {current.snapshot.stavke.map((s, i) => (
                 <li key={i} className="flex justify-between">
                   <span>{s.naziv} × {s.kolicina}</span>

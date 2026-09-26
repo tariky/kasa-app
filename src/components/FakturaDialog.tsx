@@ -24,6 +24,8 @@ import type { Kupac, Product } from '@/types';
 import { PretragaProizvoda } from '@/components/PretragaProizvoda';
 import SlobodnaStavkaDialog from '@/components/kasa/SlobodnaStavkaDialog';
 import { localDateStr } from '@/lib/novac';
+import { otvoriNezavrseneRacune } from '@/lib/nezavrseniRacuni';
+import { obavijesti } from '@/lib/dijalog';
 import { useDokumentPostavke } from '@/components/DokumentPostavkeProvider';
 import { rokUIzbor, zadanoZaFakturu, primijeniRabatKupca, formatRabat } from '@/lib/dokumentPostavke';
 
@@ -391,6 +393,9 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
         datumValute,
         napomena: napomena.trim() || null,
         ponudaId: ponuda?.id ?? null,
+        // Backend briše skicu kad faktura postoji u bazi — i kad se nezavršen
+        // račun kasnije riješi kao odštampan, pa se ista skica ne fiskalizuje dvaput.
+        skicaId: skicaId ?? null,
         kupac: {
           naziv: firma.naziv.trim(), idBroj: firma.idBroj.trim(), adresa: firma.adresa.trim(),
           grad: firma.grad.trim(), postanskiBroj: firma.postanskiBroj.trim(),
@@ -410,6 +415,18 @@ export default function FakturaDialog({ open, onOpenChange, uloga, pocetno, skic
           upozorenje: res.upozorenje ?? null,
         });
         onOpenChange(false);
+      } else if (res?.ishodNepoznat) {
+        // Faktura je možda fiskalizovana — dijalog se zatvara da je operater ne
+        // pošalje ponovo, a ishod rješava u nezavršenim računima. Skica ostaje
+        // (za slučaj da nije odštampana); rješenje "odštampan" je briše.
+        onOpenChange(false);
+        otvoriNezavrseneRacune();
+        onSkicePromijenjene?.();
+      } else if (res?.vecEvidentiran) {
+        // Odštampana i već upisana iz dijaloga nezavršenih računa — završeno.
+        onOpenChange(false);
+        onSkicePromijenjene?.();
+        await obavijesti(res.error || 'Faktura je već evidentirana.');
       } else {
         const details = res?.odgovori ? Object.entries(res.odgovori).map(([k, v]) => `${k}: ${v}`).join(', ') : '';
         setError(`${res?.error || 'Štampa nije uspjela'}${details ? ` (${details})` : ''}`);

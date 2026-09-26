@@ -2,9 +2,10 @@
 //! Stanje (konfiguracija, brojač zahtjeva, dnevnik) živi u instanci, ne u
 //! globalnim varijablama.
 
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::io::ErrorKind;
+use std::net::ToSocketAddrs;
 use std::time::{Duration, Instant};
 
 use regex::Regex;
@@ -17,6 +18,13 @@ use crate::sat::Sat;
 const DEFAULT_HOST: &str = "localhost";
 const DEFAULT_PORT: i64 = 8085;
 const TIMEOUT: Duration = Duration::from_secs(30);
+/// Koliko se čeka TCP veza s uređajem. Kraće od `TIMEOUT`: dok veza nije
+/// uspostavljena, zahtjev sigurno nije poslan, pa ugašen uređaj na mreži (SYN
+/// bez odgovora) brzo daje običnu grešku umjesto nepoznatog ishoda. Uređaj je
+/// na localhostu/LAN-u — 5 s je višestruko više od stvarnog povezivanja.
+/// Kraće od globalnog i zato da ureq prijavi `Timeout::Connect`, ne `Global`.
+/// TS: CONNECT_TIMEOUT_MS u services/tring.ts.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_LOG_ENTRIES: usize = 200;
 
 const XML_DECL: &str = r#"<?xml version="1.0" encoding="utf-8"?>"#;
@@ -28,6 +36,10 @@ const POVRAT_NOVCA_PATHS: [&str; 2] = ["/povratnovca", "/pn"];
 pub struct Tring {
     host: Mutex<String>,
     port: AtomicI64,
+    /// Koliko se čeka uređaj (ms); zadano `TIMEOUT` — kraće samo u testovima.
+    timeout_ms: AtomicU64,
+    /// Koliko se čeka TCP veza (ms); zadano `CONNECT_TIMEOUT`.
+    connect_timeout_ms: AtomicU64,
     request_counter: AtomicI64,
     log_id_counter: AtomicI64,
     logs: Mutex<Vec<Value>>,
@@ -44,11 +56,57 @@ pub fn uspjeh(o: &Odgovor) -> bool {
     o["success"].as_bool().unwrap_or(false)
 }
 
+/// Uređaj nije potvrdio ni uspjeh ni grešku, a zahtjev je do njega stigao —
+/// račun je možda odštampan. Pozivalac tada NE smije brisati write-ahead red
+/// (pending_receipts); operater ishod razrješava ručno. TS: `ishodNepoznat`.
+pub fn ishod_nepoznat(o: &Odgovor) -> bool {
+    !uspjeh(o) && o["ishodNepoznat"] == Value::Bool(true)
+}
+
+/// Greške veze kod kojih zahtjev sigurno nije stigao do uređaja (veza nije ni
+/// uspostavljena) — račun nije odštampan. Svaka druga greška nakon što je
+/// zahtjev krenuo (timeout, prekid veze, neparsiran odgovor) znači da je
+/// uređaj možda štampao. TS: `NIJE_POSLANO` u services/tring.ts.
+fn nije_poslano(e: &ureq::Error) -> bool {
+    match e {
+        ureq::Error::HostNotFound | ureq::Error::ConnectionFailed | ureq::Error::BadUri(_) => true,
+        // Veza nije uspostavljena u roku (ureq i OS-ov TimedOut pri povezivanju
+        // prijavljuje kao Connect; Global bi značio da je istekao ukupni rok).
+        ureq::Error::Timeout(ureq::Timeout::Resolve | ureq::Timeout::Connect) => true,
+        ureq::Error::Io(io) => matches!(
+            io.kind(),
+            ErrorKind::ConnectionRefused | ErrorKind::HostUnreachable | ErrorKind::NetworkUnreachable | ErrorKind::AddrNotAvailable
+        ),
+        _ => false,
+    }
+}
+
+/// Ime hosta se razrješava prije slanja: DNS greška iz ureq-a stiže kao obična
+/// io greška (tekst i vrsta zavise od OS-a), pa se po njoj ne bi znalo da
+/// zahtjev nije ni krenuo. Neispravan port ostaje ureq-u.
+fn razrijesi_host(host: &str, port: i64) -> Result<(), ureq::Error> {
+    let Ok(port) = u16::try_from(port) else {
+        return Ok(());
+    };
+    let ime = host.trim_start_matches('[').trim_end_matches(']');
+    match (ime, port).to_socket_addrs() {
+        Ok(mut adrese) => adrese.next().map(|_| ()).ok_or(ureq::Error::HostNotFound),
+        Err(e) => Err(ureq::Error::Io(e)),
+    }
+}
+
+/// Odgovor uređaja ima `<VrstaOdgovora>` (OK/Greska) ili `<Greska>` (greska.xsd).
+fn odgovor_uredjaja(xml: &str) -> bool {
+    xml.contains("<VrstaOdgovora>") || xml.contains("<Greska>")
+}
+
 impl Tring {
     pub fn novi(sat: Sat, petlja: Arc<Petlja>) -> Self {
         Tring {
             host: Mutex::new(DEFAULT_HOST.into()),
             port: AtomicI64::new(DEFAULT_PORT),
+            timeout_ms: AtomicU64::new(TIMEOUT.as_millis() as u64),
+            connect_timeout_ms: AtomicU64::new(CONNECT_TIMEOUT.as_millis() as u64),
             request_counter: AtomicI64::new(0),
             log_id_counter: AtomicI64::new(0),
             logs: Mutex::new(Vec::new()),
@@ -66,6 +124,12 @@ impl Tring {
     pub fn configure(&self, host: &str, port: Option<i64>) {
         *self.host.lock().unwrap_or_else(|e| e.into_inner()) = host.to_string();
         self.port.store(port.unwrap_or(DEFAULT_PORT), Ordering::SeqCst);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn postavi_timeout(&self, ukupno: Duration, veza: Duration) {
+        self.timeout_ms.store(ukupno.as_millis() as u64, Ordering::SeqCst);
+        self.connect_timeout_ms.store(veza.as_millis() as u64, Ordering::SeqCst);
     }
 
     pub fn set_logging_enabled(&self, on: bool) {
@@ -118,7 +182,8 @@ impl Tring {
         let url = format!("http://{}:{}{}", url_host(&host), port, url_path);
 
         let agent: ureq::Agent = ureq::Agent::config_builder()
-            .timeout_global(Some(TIMEOUT))
+            .timeout_global(Some(Duration::from_millis(self.timeout_ms.load(Ordering::SeqCst))))
+            .timeout_connect(Some(Duration::from_millis(self.connect_timeout_ms.load(Ordering::SeqCst))))
             .http_status_as_error(false)
             // Node `http` ne gleda HTTP(S)_PROXY; uređaj je na localhostu/LAN-u.
             .proxy(None)
@@ -126,33 +191,49 @@ impl Tring {
             .into();
 
         let odmor = self.petlja.odmor();
-        let odgovor = agent
-            .post(&url)
-            .header("Content-Type", "text/xml")
-            .send(body)
-            .and_then(|mut res| {
-                let status = res.status().as_u16() as i64;
-                let xml = res.body_mut().read_to_string()?;
-                Ok((status, xml))
-            });
+        // Uz grešku ide i da li je zahtjev sigurno ostao neposlan.
+        let odgovor = match razrijesi_host(&host, port) {
+            Err(e) => Err((e, true)),
+            Ok(()) => agent
+                .post(&url)
+                .header("Content-Type", "text/xml")
+                .send(body)
+                .and_then(|mut res| {
+                    let status = res.status().as_u16() as i64;
+                    let xml = res.body_mut().read_to_string()?;
+                    Ok((status, xml))
+                })
+                .map_err(|e| {
+                    let neposlan = nije_poslano(&e);
+                    (e, neposlan)
+                }),
+        };
         drop(odmor);
 
         match odgovor {
             Ok((status, xml)) => {
                 let mut parsed = parse_response(&xml);
-                parsed.as_object_mut().unwrap().insert("statusCode".into(), Value::from(status));
+                let m = parsed.as_object_mut().unwrap();
+                m.insert("statusCode".into(), Value::from(status));
+                if !odgovor_uredjaja(&xml) {
+                    m.entry("error").or_insert_with(|| json!("Neispravan odgovor fiskalnog uređaja"));
+                    m.insert("ishodNepoznat".into(), json!(true));
+                }
                 self.add_log(url_path, body, &xml, Value::from(status), &parsed, start.elapsed());
                 parsed
             }
-            Err(e) => {
+            Err((e, neposlan)) => {
                 let poruka = poruka_greske(&e, &host, port);
-                let result = json!({
+                let mut result = json!({
                     "success": false,
                     "vrstaOdgovora": "Greska",
                     "odgovori": {},
                     "error": poruka,
                     "statusCode": null,
                 });
+                if !neposlan {
+                    result["ishodNepoznat"] = json!(true);
+                }
                 self.add_log(url_path, body, "", Value::Null, &result, start.elapsed());
                 result
             }
@@ -253,6 +334,8 @@ fn url_host(host: &str) -> String {
 /// Poruke kao Node `http` (`err.message`), da ih ekran prikaže isto.
 fn poruka_greske(e: &ureq::Error, host: &str, port: i64) -> String {
     match e {
+        // Kao TS: veza nije uspostavljena u roku.
+        ureq::Error::Timeout(ureq::Timeout::Connect) => format!("connect ETIMEDOUT {host}:{port}"),
         ureq::Error::Timeout(_) => "Request timed out".into(),
         ureq::Error::Io(io) => match io.kind() {
             ErrorKind::ConnectionRefused => {
@@ -691,6 +774,113 @@ mod tests {
         for d in [json!("2026</Vrijednost><X>-01-05"), json!("26-01-05"), json!("2026-01"), json!("2026-01-05T00:00"), json!(""), json!(20260105)] {
             assert_eq!(greska(periodicni_parametri(&d, &json!("2026-02-10"))), "neispravan datum (očekuje se GGGG-MM-DD)");
             assert_eq!(greska(periodicni_parametri(&json!("2026-01-05"), &d)), "neispravan datum (očekuje se GGGG-MM-DD)");
+        }
+    }
+
+    // ─── Ishod štampe (TS: src/services/tring.ishod.test.ts) ───
+
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    fn tring_na(port: u16) -> Tring {
+        let t = Tring::novi(Sat::sistemski(), Arc::new(Petlja::nova()));
+        t.configure("127.0.0.1", Some(port as i64));
+        t.postavi_timeout(Duration::from_millis(300), Duration::from_millis(100));
+        t
+    }
+
+    fn racun() -> Value {
+        racun_sa_stavkom(stavka(kafa(), json!(1), json!(0)))
+    }
+
+    /// Server koji primi zahtjev pa odgovori sa `odgovor` (ili, bez njega, uradi `kvar`).
+    fn uredjaj(kvar: &'static str, odgovor: Option<String>) -> u16 {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = s.read(&mut buf);
+            if let Some(o) = odgovor {
+                let _ = s.write_all(o.as_bytes());
+                return;
+            }
+            // Isti kvarovi kao `Kvar` u src/ipc/ugovor/laziTring.ts.
+            match kvar {
+                "prekid" => drop(s),
+                "smece" => {
+                    let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 15\r\n\r\n<html>ok</html>");
+                }
+                "pola" => {
+                    let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/xml\r\nContent-Length: 500\r\n\r\n<RacunOdgovor><VrstaOd");
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                _ => std::thread::sleep(Duration::from_secs(2)), // visi
+            }
+        });
+        port
+    }
+
+    #[test]
+    fn ishod_veza_odbijena_sigurno_nije_stampano() {
+        let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let r = tring_na(port).stampati_fiskalni_racun(&racun());
+        assert!(!uspjeh(&r));
+        assert!(to_string(&r["error"]).contains("ECONNREFUSED"), "{r}");
+        assert!(r.get("ishodNepoznat").is_none(), "{r}");
+        assert!(!ishod_nepoznat(&r));
+    }
+
+    #[test]
+    fn ishod_nepoznat_host_sigurno_nije_stampano() {
+        let t = tring_na(1);
+        t.configure("nema-ovog-uredjaja.invalid", Some(8085));
+        let r = t.stampati_fiskalni_racun(&racun());
+        assert!(!uspjeh(&r));
+        assert!(!ishod_nepoznat(&r), "{r}");
+    }
+
+    /// Uređaj na LAN-u ugašen: SYN bez odgovora, veza se ne uspostavi → zahtjev
+    /// sigurno nije poslan. (Gdje mreža odmah javi "unreachable", ishod je isti.)
+    #[test]
+    fn ishod_veza_se_ne_uspostavi_sigurno_nije_stampano() {
+        let t = tring_na(1);
+        t.configure("10.255.255.1", Some(8085));
+        t.postavi_timeout(Duration::from_secs(3), Duration::from_millis(200));
+        let pocetak = Instant::now();
+        let r = t.stampati_fiskalni_racun(&racun());
+        assert!(!uspjeh(&r));
+        assert!(!ishod_nepoznat(&r), "{r}");
+        assert!(pocetak.elapsed() < Duration::from_secs(2), "{:?}", pocetak.elapsed());
+    }
+
+    #[test]
+    fn ishod_odbijen_prije_slanja() {
+        let r = tring_na(1).stampati_fiskalni_racun(&sa(racun(), "brojRacuna", json!(-1)));
+        assert!(!ishod_nepoznat(&r));
+    }
+
+    #[test]
+    fn ishod_odgovor_uredjaja_je_poznat() {
+        for xml in [
+            "<RacunOdgovor><VrstaOdgovora>Greska</VrstaOdgovora><Greska><Broj>12</Broj><Opis>Nema papira</Opis></Greska></RacunOdgovor>",
+            "<Greska><Broj>535</Broj><Opis>Nema para</Opis></Greska>",
+        ] {
+            let http = format!("HTTP/1.1 200 OK\r\nContent-Type: application/xml\r\nContent-Length: {}\r\n\r\n{xml}", xml.len());
+            let r = tring_na(uredjaj("", Some(http))).stampati_fiskalni_racun(&racun());
+            assert!(!uspjeh(&r));
+            assert!(!ishod_nepoznat(&r), "{r}");
+        }
+    }
+
+    #[test]
+    fn ishod_nepoznat_kad_je_zahtjev_stigao_a_odgovora_nema() {
+        for kvar in ["prekid", "smece", "pola", "visi"] {
+            let r = tring_na(uredjaj(kvar, None)).stampati_fiskalni_racun(&racun());
+            assert!(!uspjeh(&r), "{kvar}: {r}");
+            assert_eq!(r["ishodNepoznat"], json!(true), "{kvar}: {r}");
+            assert!(ishod_nepoznat(&r));
+            assert!(!to_string(&r["error"]).is_empty(), "{kvar}: {r}");
         }
     }
 }

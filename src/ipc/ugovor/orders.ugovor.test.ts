@@ -1,6 +1,7 @@
 // Ugovor za kanale order:* i pending:* — vidi backend.ts.
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
 import { otvoriBackend, type Backend } from './backend';
+import { pokreniPokvareniTring, slobodanPort, type Kvar } from './laziTring';
 import { izracunajTotale } from '../../lib/racun';
 
 let b: Backend;
@@ -598,5 +599,302 @@ describe('provjera računa prije štampe (order:finalize, order:createManual)', 
     await expect(b.call('order:finalizePrilog', { iznos: '10', nacinPlacanja: 'Virman' })).rejects.toThrow('Iznos mora biti veći od 0');
     expect(b.tring.zahtjevi).toEqual([]);
     expect(red('SELECT COUNT(*) AS n FROM pending_receipts').n).toBe(0);
+  });
+});
+
+// ─── Nepoznat ishod štampe ──────────────────────────────────
+// Zahtjev je stigao do uređaja, a potvrde nema (prekid veze, odgovor koji nije
+// odgovor uređaja, timeout): račun je možda odštampan, pa write-ahead red
+// ostaje za dijalog nezavršenih računa. Sigurno neodštampan račun (veza
+// odbijena, greška uređaja) briše red kao i ranije.
+
+describe('nepoznat ishod štampe', () => {
+  let zaustavi: (() => void) | null = null;
+  afterEach(() => { zaustavi?.(); zaustavi = null; });
+
+  async function uredjajSKvarom(kvar: Kvar) {
+    const u = await pokreniPokvareniTring(kvar);
+    zaustavi = u.stop;
+    b.db.prepare("UPDATE settings SET value = '127.0.0.1' WHERE key = 'tring.host'").run();
+    b.db.prepare("UPDATE settings SET value = ? WHERE key = 'tring.port'").run(String(u.port));
+    return u;
+  }
+
+  function pending(): any[] {
+    return b.db.prepare('SELECT snapshot FROM pending_receipts').all().map((r: any) => JSON.parse(r.snapshot));
+  }
+
+  for (const kvar of ['prekid', 'smece'] as const) {
+    test(`finalize (${kvar}): red ostaje, ništa se ne upisuje, renderer dobije oznaku`, async () => {
+      const p = dodajArtikal('I1', 5, { stanje: 10 });
+      const u = await uredjajSKvarom(kvar);
+
+      const r = await b.call('order:finalize', racun([kasaStavka(p, 2, 5)]));
+
+      expect(u.primljeno()).toBe(1);
+      expect(r.success).toBe(false);
+      expect(r.ishodNepoznat).toBe(true);
+      expect(r.error).toContain('nezavršenih računa');
+      expect(pending()).toHaveLength(1);
+      expect(pending()[0]).toMatchObject({ ukupno: 10, stavke: [{ productId: p, kolicina: 2 }] });
+      expect(red('SELECT COUNT(*) AS n FROM orders').n).toBe(0);
+      expect(stanje(p)).toBe(10);
+
+      // Operater potvrdi da je račun odštampan — tek tad nastaje narudžba.
+      const [{ id }] = await b.call('pending:list');
+      const rijesen = await b.call('pending:resolve', { id, brojFiskalnogRacuna: '777', createdAt: '2026-09-26 10:00:00' });
+      expect(red('SELECT brojFiskalnogRacuna FROM orders WHERE id = ?', rijesen.id).brojFiskalnogRacuna).toBe('777');
+      expect(stanje(p)).toBe(8);
+    });
+  }
+
+  test('finalize: uređaj ugašen (veza odbijena) — sigurno nije odštampano, red se briše', async () => {
+    const p = dodajArtikal('I2', 5, { stanje: 10 });
+    b.db.prepare("UPDATE settings SET value = '127.0.0.1' WHERE key = 'tring.host'").run();
+    b.db.prepare("UPDATE settings SET value = ? WHERE key = 'tring.port'").run(String(await slobodanPort()));
+
+    const r = await b.call('order:finalize', racun([kasaStavka(p, 1, 5)]));
+
+    expect(r.success).toBe(false);
+    expect(r.ishodNepoznat).toBeUndefined();
+    expect(pending()).toEqual([]);
+    expect(red('SELECT COUNT(*) AS n FROM orders').n).toBe(0);
+  });
+
+  // Uređaj na LAN-u ugašen (SYN bez odgovora, nema RST-a): veza se ne
+  // uspostavi, zahtjev sigurno nije poslan — red se briše, bez dijaloga.
+  // Traje koliko i timeout povezivanja (5 s), osim gdje mreža odmah javi grešku.
+  test('finalize: veza se ne uspostavi — sigurno nije odštampano, red se briše', async () => {
+    const p = dodajArtikal('I5', 5, { stanje: 10 });
+    b.db.prepare("UPDATE settings SET value = '10.255.255.1' WHERE key = 'tring.host'").run();
+
+    const r = await b.call('order:finalize', racun([kasaStavka(p, 1, 5)]));
+
+    expect(r.success).toBe(false);
+    expect(r.ishodNepoznat).toBeUndefined();
+    expect(pending()).toEqual([]);
+    expect(red('SELECT COUNT(*) AS n FROM orders').n).toBe(0);
+  }, 15000);
+
+  test('finalize: greška uređaja nema oznaku nepoznatog ishoda', async () => {
+    const p = dodajArtikal('I3', 5, { stanje: 10 });
+    b.tring.greskaNa('/sfr', 'Nema papira', 12);
+    const r = await b.call('order:finalize', racun([kasaStavka(p, 1, 5)]));
+    expect(r).toEqual({ success: false, error: 'Nema papira [12]', odgovori: {} });
+    expect(pending()).toEqual([]);
+  });
+
+  test('finalizePrilog (prekid): red sa stavkama priloga ostaje', async () => {
+    await b.call('fiscal:setZadnjiBroj', 100);
+    const p = dodajArtikal('I4', 20, { stanje: 10 });
+    await uredjajSKvarom('prekid');
+
+    const r = await b.call('order:finalizePrilog', {
+      nacinPlacanja: 'Virman', stavke: [{ productId: p, kolicina: 2, cijena: 20, rabat: 0, pdvStopa: 'E' }],
+    });
+
+    expect(r.success).toBe(false);
+    expect(r.ishodNepoznat).toBe(true);
+    expect(r.error).toContain('nezavršenih računa');
+    expect(pending()).toHaveLength(1);
+    expect(pending()[0]).toMatchObject({ ukupno: 40, prilogBroj: 101, prilogStavke: [{ productId: p, kolicina: 2 }] });
+    expect(red('SELECT COUNT(*) AS n FROM orders').n).toBe(0);
+    expect(stanje(p)).toBe(10);
+  });
+
+  test('finalizePrilog: greška uređaja briše red', async () => {
+    await b.call('fiscal:setZadnjiBroj', 100);
+    b.tring.greskaNa('/sfr', 'Nema papira');
+    const r = await b.call('order:finalizePrilog', { iznos: 10, nacinPlacanja: 'Virman' });
+    expect(r.success).toBe(false);
+    expect(r.ishodNepoznat).toBeUndefined();
+    expect(pending()).toEqual([]);
+  });
+});
+
+// ─── Račun riješen iz dijaloga dok je štampa trajala ─────────
+// Dok uređaj štampa, operater može pending red riješiti ručno (npr. nakon
+// ponovne prijave dijalog ga pokaže). Kad štampa onda uspije, drugi zapis
+// istog računa se ne smije upisati. Odgovor nosi `vecEvidentiran` da ekran
+// korpu/fakturu tretira kao završenu (bez novog id-a) i ne pošalje je ponovo.
+
+describe('pending red riješen tokom štampe', () => {
+  async function rijesiTokomStampe(stigao: Promise<void>): Promise<{ id: number }> {
+    await stigao;
+    const [{ id }] = await b.call('pending:list');
+    return b.call('pending:resolve', { id, brojFiskalnogRacuna: '500', createdAt: '2026-09-26 10:00:00' });
+  }
+
+  test('finalize ne upisuje drugu narudžbu', async () => {
+    const p = dodajArtikal('D1', 5, { stanje: 10 });
+    const stampa = b.tring.zadrzi('/sfr');
+    const finalize = b.call('order:finalize', racun([kasaStavka(p, 1, 5)]));
+    const rucni = await rijesiTokomStampe(stampa.stigao);
+    stampa.pusti();
+
+    const r = await finalize;
+    expect(r.error).toContain('već evidentiran');
+    expect({ ...r, error: null }).toEqual({ success: false, vecEvidentiran: true, brojFiskalnogRacuna: '101', error: null });
+    expect(red('SELECT COUNT(*) AS n FROM orders').n).toBe(1);
+    expect(red('SELECT id FROM orders').id).toBe(rucni.id);
+    expect(stanje(p)).toBe(9);
+    expect(red('SELECT COUNT(*) AS n FROM pending_receipts').n).toBe(0);
+  });
+
+  test('finalizePrilog ne upisuje drugu fakturu', async () => {
+    await b.call('fiscal:setZadnjiBroj', 100);
+    const p = dodajArtikal('D2', 20, { stanje: 10 });
+    const stampa = b.tring.zadrzi('/sfr');
+    const finalize = b.call('order:finalizePrilog', {
+      nacinPlacanja: 'Virman', stavke: [{ productId: p, kolicina: 2, cijena: 20, rabat: 0, pdvStopa: 'E' }],
+    });
+    await rijesiTokomStampe(stampa.stigao);
+    stampa.pusti();
+
+    const r = await finalize;
+    expect(r.error).toContain('već evidentiran');
+    expect({ ...r, error: null }).toEqual({ success: false, vecEvidentiran: true, brojFiskalnogRacuna: '101', error: null });
+    expect(red('SELECT COUNT(*) AS n FROM orders').n).toBe(1);
+    expect(red('SELECT COUNT(*) AS n FROM prilog_stavke').n).toBe(1);
+    expect(stanje(p)).toBe(8);
+  });
+});
+
+// ─── Skica fakture i fiskalizacija ──────────────────────────
+// Skica iz koje je faktura fiskalizovana ne smije ostati — mogla bi se
+// fiskalizovati ponovo. Faktura s nepoznatim ishodom čuva skicu dok operater
+// ne riješi nezavršeni račun: odštampan → skica se briše; odbačen → ostaje.
+
+describe('skica fakture', () => {
+  let zaustavi: (() => void) | null = null;
+  afterEach(() => { zaustavi?.(); zaustavi = null; });
+
+  function dodajSkicu(): number {
+    return Number(b.db.prepare("INSERT INTO faktura_skice (naziv, podaci, ukupno) VALUES ('Skica', '{}', 40)").run().lastInsertRowid);
+  }
+  const imaSkicu = (id: number) => red('SELECT COUNT(*) AS n FROM faktura_skice WHERE id = ?', id).n === 1;
+
+  async function nepoznatIshod(skicaId: number) {
+    await b.call('fiscal:setZadnjiBroj', 100);
+    const u = await pokreniPokvareniTring('prekid');
+    zaustavi = u.stop;
+    b.db.prepare("UPDATE settings SET value = '127.0.0.1' WHERE key = 'tring.host'").run();
+    b.db.prepare("UPDATE settings SET value = ? WHERE key = 'tring.port'").run(String(u.port));
+    const r = await b.call('order:finalizePrilog', { iznos: 40, nacinPlacanja: 'Virman', skicaId });
+    expect(r.ishodNepoznat).toBe(true);
+    const [row] = await b.call('pending:list');
+    expect(row.snapshot.skicaId).toBe(skicaId);
+    return row.id as number;
+  }
+
+  test('uspješna fiskalizacija briše skicu', async () => {
+    await b.call('fiscal:setZadnjiBroj', 100);
+    const skica = dodajSkicu();
+    const r = await b.call('order:finalizePrilog', { iznos: 40, nacinPlacanja: 'Virman', skicaId: skica });
+    expect(r.success).toBe(true);
+    expect(imaSkicu(skica)).toBe(false);
+  });
+
+  test('nepoznat ishod: skica ostaje, pa se briše kad se račun riješi kao odštampan', async () => {
+    const skica = dodajSkicu();
+    const pendingId = await nepoznatIshod(skica);
+    expect(imaSkicu(skica)).toBe(true);
+
+    await b.call('pending:resolve', { id: pendingId, brojFiskalnogRacuna: '101', createdAt: '2026-09-26 10:00:00' });
+    expect(imaSkicu(skica)).toBe(false);
+  });
+
+  test('nepoznat ishod: odbačen račun (nije odštampan) ostavlja skicu', async () => {
+    const skica = dodajSkicu();
+    const pendingId = await nepoznatIshod(skica);
+    await b.call('pending:discard', pendingId);
+    expect(imaSkicu(skica)).toBe(true);
+  });
+
+  test('bez skice snapshot nema skicaId', async () => {
+    await b.call('fiscal:setZadnjiBroj', 100);
+    const stampa = b.tring.zadrzi('/sfr');
+    const finalize = b.call('order:finalizePrilog', { iznos: 40, nacinPlacanja: 'Virman' });
+    await stampa.stigao;
+    const [row] = await b.call('pending:list');
+    expect('skicaId' in row.snapshot).toBe(false);
+    stampa.pusti();
+    expect((await finalize).success).toBe(true);
+  });
+});
+
+// ─── Kretanja priloga nose datum računa ─────────────────────
+
+describe('datum kretanja priloga', () => {
+  const datumi = (orderId: number) => b.db
+    .prepare("SELECT createdAt FROM stock_movements WHERE referenceType = 'prilog' AND referenceId = ? ORDER BY id")
+    .all(orderId).map((r: any) => r.createdAt);
+
+  test('dodjela stavki danima kasnije i ponovno spremanje skidaju robu na datum računa', async () => {
+    await b.call('fiscal:setZadnjiBroj', 100);
+    const p = dodajArtikal('K1', 10, { stanje: 10 });
+    const q = dodajArtikal('K2', 10, { stanje: 10 });
+    const { id } = await b.call('order:finalizePrilog', { iznos: 30, nacinPlacanja: 'Virman' });
+    b.db.prepare("UPDATE orders SET createdAt = '2026-01-10 09:15:00' WHERE id = ?").run(id);
+
+    await b.call('prilog:saveStavke', id, [{ productId: p, kolicina: 1, cijena: 10, rabat: 0, pdvStopa: 'E' }]);
+    expect(datumi(id)).toEqual(['2026-01-10 09:15:00']);
+
+    await b.call('prilog:saveStavke', id, [
+      { productId: p, kolicina: 2, cijena: 10, rabat: 0, pdvStopa: 'E' },
+      { productId: q, kolicina: 1, cijena: 10, rabat: 0, pdvStopa: 'E' },
+    ]);
+    expect(datumi(id)).toEqual(['2026-01-10 09:15:00', '2026-01-10 09:15:00']);
+  });
+
+  test('račun riješen iz nezavršenih nosi datum koji je operater unio', async () => {
+    const p = dodajArtikal('K3', 10, { stanje: 10 });
+    const pendingId = Number(b.db.prepare('INSERT INTO pending_receipts (korisnikId, snapshot) VALUES (?, ?)').run(ADMIN, JSON.stringify({
+      korisnikId: ADMIN, ukupno: 20, pdvIznos: 2.91, nacinPlacanja: 'Virman', stavke: [],
+      prilogBroj: 5, prilogNaziv: 'Stavke po fakturi br. 5',
+      prilogStavke: [{ productId: p, kolicina: 2, cijena: 10, rabat: 0, pdvStopa: 'E' }],
+    })).lastInsertRowid);
+
+    const r = await b.call('pending:resolve', { id: pendingId, brojFiskalnogRacuna: '6', createdAt: '2026-02-03 11:00:00' });
+
+    expect(datumi(r.id)).toEqual(['2026-02-03 11:00:00']);
+    expect(stanje(p)).toBe(8);
+  });
+});
+
+// ─── Storno vraća ono što je račun skinuo ───────────────────
+
+describe('storno i zaliha', () => {
+  const povrat = (orderId: number) => b.db
+    .prepare("SELECT productId, tip, kolicina FROM stock_movements WHERE referenceType = 'refund' AND referenceId = ? ORDER BY id")
+    .all(orderId);
+
+  test('artikal koji je nakon prodaje postao usluga se vraća; usluga koja je postala artikal ne', async () => {
+    const a = dodajArtikal('Z1', 3, { stanje: 10 });
+    const u = dodajArtikal('Z2', 4, { tip: 'usluga' });
+    const { id } = await izdaj([stavka(a, 2, 3), stavka(u, 1, 4)], { brojFiskalnogRacuna: '60' });
+    b.db.prepare("UPDATE products SET tip = 'usluga' WHERE id = ?").run(a);
+    b.db.prepare("UPDATE products SET tip = 'artikal' WHERE id = ?").run(u);
+
+    expect(await b.call('order:refundAndPrint', { id })).toMatchObject({ success: true });
+
+    expect(povrat(id)).toEqual([{ productId: a, tip: 'ulaz', kolicina: 2 }]);
+    expect(stanje(a)).toBe(10);
+    expect(stanje(u)).toBe(0);
+  });
+
+  test('storno fakture vraća robu skinutu prilogom', async () => {
+    await b.call('fiscal:setZadnjiBroj', 100);
+    const p = dodajArtikal('Z3', 10, { stanje: 10 });
+    const { id } = await b.call('order:finalizePrilog', {
+      nacinPlacanja: 'Virman', stavke: [{ productId: p, kolicina: 3, cijena: 10, rabat: 0, pdvStopa: 'E' }],
+    });
+    expect(stanje(p)).toBe(7);
+    b.db.prepare("UPDATE products SET tip = 'usluga' WHERE id = ?").run(p);
+
+    expect(await b.call('order:refundAndPrint', { id })).toMatchObject({ success: true });
+
+    expect(povrat(id)).toEqual([{ productId: p, tip: 'ulaz', kolicina: 3 }]);
+    expect(stanje(p)).toBe(10);
   });
 });

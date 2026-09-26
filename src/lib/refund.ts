@@ -8,19 +8,34 @@ import { gotovinskiIznos } from './drawer';
 import { round2 } from './novac';
 
 /**
+ * Storno vraća tačno ono što je račun skinuo: za svaki izlaz računa (prodaja
+ * 'order' ili prilog 'prilog') ulaz 'refund' iste količine za isti artikal.
+ * Današnji tip artikla se ne gleda — artikal je mogao postati usluga i
+ * obrnuto nakon prodaje. Rust: `vrati_zalihu_racuna` u racuni.rs.
+ */
+export function vratiZalihuRacuna(db: SqlDb, orderId: number): void {
+  const izlazi = db.prepare(
+    "SELECT productId, kolicina FROM stock_movements WHERE tip = 'izlaz' AND referenceType IN ('order', 'prilog') AND referenceId = ? ORDER BY id"
+  ).all(orderId) as Array<{ productId: number; kolicina: number }>;
+  const insertStock = db.prepare(
+    "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'ulaz', ?, 'refund', ?)"
+  );
+  for (const izlaz of izlazi) insertStock.run(izlaz.productId, izlaz.kolicina, orderId);
+}
+
+/**
  * Označi račun storniranim, vrati zalihu i upiši broj reklamacije.
  *
  * Poziva se unutar transakcije. Provjera statusa je ujedno i zaštita od
  * dvostrukog storna: drugi poziv za isti račun više ne nađe 'completed' red.
- * Usluge nemaju zalihu pa se za njih ne kreira kretanje.
  */
 export function refundOrderInTransaction(
   db: SqlDb,
   id: number,
   brojReklamacije: string | null
 ): void {
-  const order = db.prepare("SELECT id, prilogBroj FROM orders WHERE id = ? AND status = 'completed'")
-    .get(id) as { id: number; prilogBroj: number | null } | undefined;
+  const order = db.prepare("SELECT id FROM orders WHERE id = ? AND status = 'completed'")
+    .get(id) as { id: number } | undefined;
   if (!order) throw new Error('Račun ne postoji ili je već storniran');
 
   db.prepare(
@@ -28,23 +43,7 @@ export function refundOrderInTransaction(
     'brojReklamacije = COALESCE(?, brojReklamacije) WHERE id = ?'
   ).run(brojReklamacije, id);
 
-  // Prilog račun nema order_items — zaliha se vraća po stavkama priloga.
-  const items = (order.prilogBroj != null
-    ? db.prepare('SELECT productId, kolicina FROM prilog_stavke WHERE orderId = ?')
-    : db.prepare('SELECT productId, kolicina FROM order_items WHERE orderId = ?')
-  ).all(id) as Array<{ productId: number; kolicina: number }>;
-
-  const insertStock = db.prepare(
-    "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'ulaz', ?, 'refund', ?)"
-  );
-
-  for (const item of items) {
-    const product = db.prepare('SELECT tip FROM products WHERE id = ?')
-      .get(item.productId) as { tip: string } | undefined;
-    if (!product || product.tip !== 'usluga') {
-      insertStock.run(item.productId, item.kolicina, id);
-    }
-  }
+  vratiZalihuRacuna(db, id);
 }
 
 export interface RefundDeps {

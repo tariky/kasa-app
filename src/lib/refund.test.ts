@@ -30,10 +30,19 @@ function dodajRacun(stavke: Array<{ productId: number; kolicina: number }>): num
   for (const s of stavke) {
     db.prepare("INSERT INTO order_items (orderId, productId, kolicina, cijena, rabat, pdvStopa) VALUES (?, ?, ?, 10, 0, 'E')")
       .run(orderId, s.productId, s.kolicina);
-    db.prepare("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'izlaz', ?, 'order', ?)")
-      .run(s.productId, s.kolicina, orderId);
+    // Kao insertCompletedOrder: usluga pri prodaji ne skida zalihu.
+    const tip = (db.prepare('SELECT tip FROM products WHERE id = ?').get(s.productId) as { tip: string }).tip;
+    if (tip !== 'usluga') {
+      db.prepare("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'izlaz', ?, 'order', ?)")
+        .run(s.productId, s.kolicina, orderId);
+    }
   }
   return orderId;
+}
+
+function kretanjaStorna(orderId: number) {
+  return db.prepare("SELECT productId, tip, kolicina FROM stock_movements WHERE referenceType = 'refund' AND referenceId = ? ORDER BY id")
+    .all(orderId);
 }
 
 test('storno mijenja status, vraća zalihu i upisuje broj reklamacije', () => {
@@ -80,6 +89,51 @@ test('usluge se ne vraćaju na zalihu', () => {
 
   expect(getProductStock(db, 1)).toBe(100);
   expect(getProductStock(db, 2)).toBe(uslugaPrije);
+});
+
+// Storno vraća tačno ono što je račun skinuo (izlazna kretanja računa), ne
+// ono što bi današnji tip artikla rekao — tip se mijenja nakon prodaje.
+test('artikal koji je nakon prodaje postao usluga ipak se vraća na zalihu', () => {
+  dodajArtikal(1);
+  const orderId = dodajRacun([{ productId: 1, kolicina: 3 }]);
+  db.prepare("UPDATE products SET tip = 'usluga' WHERE id = 1").run();
+
+  refundOrderInTransaction(db, orderId, 'R-1');
+
+  expect(kretanjaStorna(orderId)).toEqual([{ productId: 1, tip: 'ulaz', kolicina: 3 }]);
+  expect(getProductStock(db, 1)).toBe(100);
+});
+
+test('usluga koja je nakon prodaje postala artikal ne dobija ulaz', () => {
+  dodajArtikal(2, 'usluga');
+  const orderId = dodajRacun([{ productId: 2, kolicina: 1 }]);
+  db.prepare("UPDATE products SET tip = 'artikal' WHERE id = 2").run();
+  const prije = getProductStock(db, 2);
+
+  refundOrderInTransaction(db, orderId, 'R-2');
+
+  expect(kretanjaStorna(orderId)).toEqual([]);
+  expect(getProductStock(db, 2)).toBe(prije);
+});
+
+test('storno prilog računa vraća prilog izlaze; tuđa kretanja s istim brojem se ne diraju', () => {
+  dodajArtikal(1);
+  dodajArtikal(2);
+  const r = db.prepare(`
+    INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, status, prilogBroj)
+    VALUES (1, 30, 0, 'Virman', '556', 'completed', 1)
+  `).run();
+  const orderId = Number(r.lastInsertRowid);
+  db.prepare("INSERT INTO prilog_stavke (orderId, productId, kolicina, cijena, pdvStopa) VALUES (?, 1, 2, 10, 'E')").run(orderId);
+  db.prepare("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (1, 'izlaz', 2, 'prilog', ?)").run(orderId);
+  // Nalog i primka s istim id-em nisu dio računa.
+  db.prepare("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (2, 'izlaz', 5, 'radni_nalog', ?)").run(orderId);
+  db.prepare("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (2, 'ulaz', 4, 'primka', ?)").run(orderId);
+
+  refundOrderInTransaction(db, orderId, 'R-3');
+
+  expect(kretanjaStorna(orderId)).toEqual([{ productId: 1, tip: 'ulaz', kolicina: 2 }]);
+  expect(getProductStock(db, 1)).toBe(100);
 });
 
 test('storno upisuje refundedAt — bez njega se dnevni obračun ladice ne može izvesti', () => {

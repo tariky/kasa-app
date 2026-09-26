@@ -28,6 +28,7 @@ import StavkeRacuna from '@/components/kasa/StavkeRacuna';
 import SpremljeneKosarice, { type SavedCartRow } from '@/components/kasa/SpremljeneKosarice';
 import type { Product, CartItem, Kupac } from '@/types';
 import { potvrdi } from '@/lib/dijalog';
+import { otvoriNezavrseneRacune } from '@/lib/nezavrseniRacuni';
 import { zadanoZaKupca, primijeniRabatKupca, formatRabat, nacinKupcaNaKasi, nacinBezKupca } from '@/lib/dokumentPostavke';
 import { useDokumentPostavke } from '@/components/DokumentPostavkeProvider';
 
@@ -459,6 +460,24 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
         ukupno: total, pdvIznos: pdvAmount, nacinPlacanja: paymentType,
         kupac, napomena: racunNapomena || undefined, stavke,
       });
+
+      // Odštampan i već upisan iz dijaloga nezavršenih računa: prodaja je
+      // završena (bez novog id-a) — korpa se prazni da se ne pošalje ponovo.
+      if (res && !res.success && res.vecEvidentiran) {
+        setCart([]); setZadnje(null); setKupacOpen(false); clearKupac();
+        setMessage({ type: 'error', text: res.error || 'Račun je već evidentiran.' });
+        loadDailyTotal();
+        return;
+      }
+
+      if (res && !res.success && res.ishodNepoznat) {
+        // Račun je možda odštampan: sad ga vodi dijalog nezavršenih računa,
+        // pa se korpa prazni — ponovno slanje bi moglo dati dupli račun.
+        setCart([]); setZadnje(null); setKupacOpen(false); clearKupac();
+        setMessage({ type: 'error', text: res.error || 'Ishod štampe nije poznat.' });
+        otvoriNezavrseneRacune();
+        return;
+      }
 
       if (!res || !res.success) {
         const details = res?.odgovori ? Object.entries(res.odgovori).map(([k, v]) => `${k}: ${v}`).join(', ') : '';
