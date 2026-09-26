@@ -2,23 +2,24 @@ import { useEffect, useState } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import { opisLicence, type LicencaInfo } from '@/lib/licencaTipovi';
+import { useModuliKontekst } from '@/components/ModuliProvider';
 import LicencaForma from './LicencaForma';
 import { ShieldCheck, ShieldAlert, CheckCircle2 } from 'lucide-react';
 
 /**
- * Dialog za unos novog koda. Otvara ga `otvoriLicencaDialog()` ili main
- * proces kad blokira radnju zbog istekle licence.
+ * Dialog za unos novog koda. Otvara ga `otvoriLicencaDialog()` iz konteksta ili
+ * main proces kad blokira radnju zbog istekle licence.
  */
 export default function LicencaDialog({ info }: { info: LicencaInfo | null }) {
+  const { licencaDialogZahtjev } = useModuliKontekst();
   const [open, setOpen] = useState(false);
   const [uspjeh, setUspjeh] = useState<LicencaInfo | null>(null);
 
   useEffect(() => {
-    const otvori = () => { setUspjeh(null); setOpen(true); };
-    window.addEventListener('ui:licencaDialog', otvori);
-    const odjavi = window.api.onLicencaBlokirano(otvori);
-    return () => { window.removeEventListener('ui:licencaDialog', otvori); odjavi(); };
-  }, []);
+    if (licencaDialogZahtjev === 0) return;
+    setUspjeh(null);
+    setOpen(true);
+  }, [licencaDialogZahtjev]);
 
   if (!info) return null;
   const opis = opisLicence(uspjeh ?? info);

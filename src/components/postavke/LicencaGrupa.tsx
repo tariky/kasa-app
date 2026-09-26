@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react';
 import LicencaKartica from '@/components/licenca/LicencaKartica';
-import { useModuli } from '@/hooks/useModuli';
+import { useModuliKontekst } from '@/components/ModuliProvider';
 import { NAZIV_MODULA, type Modul } from '@/lib/moduli';
-import { cn } from '@/lib/utils';
+import { cn, porukaGreske } from '@/lib/utils';
+import { obavijesti } from '@/lib/dijalog';
 import { GrupaZaglavlje, PrekidacRed, Red, Sekcija } from './dijelovi';
 
 const OPIS: Record<Modul, string> = {
@@ -27,16 +27,12 @@ function StanjeModula({ ukljucen }: { ukljucen: boolean }) {
 }
 
 export default function LicencaGrupa() {
-  const moduli = useModuli();
-  const [generator, setGenerator] = useState(false);
-  const [proizvodnja, setProizvodnja] = useState(false);
-
-  useEffect(() => {
-    window.api.getSetting('ui.showGenerator').then((v) => setGenerator(v === 'true'));
-    window.api.getSetting('proizvodnja.enabled').then((v) => setProizvodnja(v === 'true'));
-  }, []);
+  const { moduli, postaviModul } = useModuliKontekst();
 
   const licenciran = (m: Modul) => !!moduli?.licencirani[m];
+  // Postavka se čita iz konteksta; navigacija (MainLayout) vidi promjenu bez remounta.
+  const postavi = (m: 'proizvodnja' | 'generator') => (v: boolean) =>
+    postaviModul(m, v).catch(e => obavijesti(porukaGreske(e)));
 
   return (
     <div className="pb-6">
@@ -56,25 +52,16 @@ export default function LicencaGrupa() {
             naslov={NAZIV_MODULA.proizvodnja}
             opis={<>{OPIS.proizvodnja}{moduli && !licenciran('proizvodnja') && <NijeULicenci />}</>}
             disabled={!licenciran('proizvodnja')}
-            checked={proizvodnja && licenciran('proizvodnja')}
-            onChange={async (v) => {
-              setProizvodnja(v);
-              await window.api.setProizvodnjaEnabled(v);
-              window.dispatchEvent(new CustomEvent('ui:proizvodnja', { detail: v }));
-            }}
+            checked={!!moduli?.ukljuceni.proizvodnja}
+            onChange={postavi('proizvodnja')}
           />
           <PrekidacRed
             id="modul-generator"
             naslov={NAZIV_MODULA.generator}
             opis={<>{OPIS.generator}{moduli && !licenciran('generator') && <NijeULicenci />}</>}
             disabled={!licenciran('generator')}
-            checked={generator && licenciran('generator')}
-            onChange={async (v) => {
-              setGenerator(v);
-              await window.api.setSetting('ui.showGenerator', String(v));
-              // MainLayout drži navigaciju — obavijesti ga bez remounta
-              window.dispatchEvent(new CustomEvent('ui:showGenerator', { detail: v }));
-            }}
+            checked={!!moduli?.ukljuceni.generator}
+            onChange={postavi('generator')}
           />
         </Sekcija>
       </div>

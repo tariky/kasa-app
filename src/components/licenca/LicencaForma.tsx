@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
 import { LICENCA_KONTAKT, type LicencaInfo } from '@/lib/licencaTipovi';
-import { objaviLicencu } from '@/hooks/useLicenca';
+import { useModuliKontekst } from '@/components/ModuliProvider';
 import { Copy, Check, Phone, Mail, KeyRound, Loader2 } from 'lucide-react';
 
 interface Props {
@@ -14,6 +14,7 @@ interface Props {
 
 /** Polje za kod licence, ID uređaja i kontakt — zajedničko dialogu i ekranu aktivacije. */
 export default function LicencaForma({ uredjaj, onAktivirano, tamno }: Props) {
+  const { objaviLicencu } = useModuliKontekst();
   const [kod, setKod] = useState('');
   const [greska, setGreska] = useState('');
   const [radi, setRadi] = useState(false);
