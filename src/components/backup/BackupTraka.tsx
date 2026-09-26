@@ -34,7 +34,7 @@ export default function BackupTraka({ onOtvoriPostavke }: { onOtvoriPostavke?: (
   const Ikona = prikaz.ton === 'uspjeh' ? Check : prikaz.ton === 'greska' ? CloudOff : Cloud;
 
   return (
-    <div className="no-print pointer-events-none fixed inset-x-0 top-0 z-50">
+    <div className="no-print pointer-events-none fixed inset-0 z-50">
       {prikaz.sirina > 0 && (
         <div className="h-0.5 w-full">
           <div className={cn('h-full transition-[width] duration-300', BOJA_LINIJE[prikaz.ton])} style={{ width: `${prikaz.sirina}%` }} />
@@ -45,8 +45,10 @@ export default function BackupTraka({ onOtvoriPostavke }: { onOtvoriPostavke?: (
         disabled={!klik}
         onClick={klik ? onOtvoriPostavke : undefined}
         className={cn(
-          'pointer-events-auto absolute right-3 top-2 flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium shadow-sm',
-          BOJA_PILULE[prikaz.ton], klik ? 'cursor-pointer hover:brightness-95' : 'cursor-default',
+          'absolute right-3 flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium shadow-sm',
+          // Trajna greška stoji danima — dolje desno, da ne prekrije akcije ekrana gore desno.
+          prikaz.uPostavke ? 'bottom-3' : 'top-2',
+          BOJA_PILULE[prikaz.ton], klik ? 'pointer-events-auto cursor-pointer hover:brightness-95' : 'pointer-events-none cursor-default',
         )}
       >
         <Ikona size={12} className="shrink-0" />
