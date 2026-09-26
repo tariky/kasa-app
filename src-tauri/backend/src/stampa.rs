@@ -295,17 +295,27 @@ mod tests {
         p.all("SELECT COUNT(*) AS n FROM pending_receipts")[0]["n"].clone()
     }
 
-    /// Ruling 14 (1): write-ahead red se upisuje tek kad je prošlo sve što može
-    /// pasti prije štampe (postavke uređaja, račun za uređaj) — greška prije
-    /// štampe ne ostavlja red u nezavršenim računima.
+    /// Write-ahead red se upisuje tek kad je prošlo sve što može pasti prije
+    /// štampe (postavke uređaja, račun za uređaj) — greška prije štampe ne
+    /// ostavlja red u nezavršenim računima.
     #[test]
     fn greska_prije_stampe_ne_ostavlja_red() {
         let p = proba("prije-stampe");
         let d = dokumenti(&p);
-        // Postavke uređaja se ne mogu pročitati.
-        p.run("ALTER TABLE settings RENAME TO settings_nema", &[]);
+        // Samo postavke uređaja (tring.*) se ne mogu pročitati: ostale postavke
+        // (fiskalni niz za prilog, PIN za storno) rade, pa svaki tok stigne do
+        // uređaja i padne baš tu (abs najmanjeg cijelog broja je prekoračenje).
+        p.b()
+            .db()
+            .exec(
+                "ALTER TABLE settings RENAME TO settings_prave;
+                 CREATE VIEW settings AS SELECT key,
+                   CASE WHEN key LIKE 'tring.%' THEN abs(-9223372036854775807 - 1) ELSE value END AS value
+                 FROM settings_prave;",
+            )
+            .unwrap();
         for (tok, r) in stampaj_sve(&p, &d) {
-            assert_eq!(r, Err("no such table: settings".to_string()), "{tok}");
+            assert_eq!(r, Err("integer overflow".to_string()), "{tok}");
         }
         assert_eq!(pending(&p), json!(0));
         assert_eq!(p.zahtjevi(), 0);
