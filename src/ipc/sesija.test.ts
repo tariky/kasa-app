@@ -1,5 +1,12 @@
-import { test, expect, describe } from 'bun:test';
-import { OgranicenjePokusaja, OgranicenjePromjenaPina, provjeriPristup, porukaBlokade } from './sesija';
+import { test, expect, describe, beforeEach } from 'bun:test';
+import { Database } from 'bun:sqlite';
+import { schema } from '../database/schema';
+import { hesirajPin, provjeriPin } from '../lib/korisnici';
+import type { SqlDb } from '../lib/sqldb';
+import {
+  OgranicenjePokusaja, OgranicenjePromjenaPina, provjeriPristup, porukaBlokade, napraviSesiju, KLJUC_BLOKADE,
+  PORUKA_NISTE_PRIJAVLJENI, PORUKA_SAMO_ADMIN, PORUKA_ZADANI_PIN,
+} from './sesija';
 
 const ADMIN = { id: 1, ime: 'Admin', uloga: 'admin' as const };
 const KASIR = { id: 2, ime: 'Kasir', uloga: 'kasir' as const };
@@ -22,6 +29,23 @@ describe('provjeriPristup', () => {
     expect(() => provjeriPristup('settings:set', ['racun.napomena'], ADMIN)).not.toThrow();
     expect(() => provjeriPristup('settings:set', ['tring.operatorPassword'], ADMIN)).toThrow('se ne može mijenjati');
     expect(() => provjeriPristup('settings:set', [42], ADMIN)).toThrow('Postavka "" se ne može mijenjati');
+  });
+});
+
+describe('provjeriPristup — vraćanje naloga u izradu', () => {
+  test('nalog:setStatus "vrati" smije samo admin; ostale statuse svako', () => {
+    const vrati = [{ id: 1, status: 'vrati' }];
+    expect(() => provjeriPristup('nalog:setStatus', vrati, KASIR)).toThrow('Vraćanje naloga u izradu može samo administrator');
+    expect(() => provjeriPristup('nalog:setStatus', vrati, ADMIN)).not.toThrow();
+    expect(() => provjeriPristup('nalog:setStatus', [{ id: 1, status: 'zavrsen' }], KASIR)).not.toThrow();
+    expect(() => provjeriPristup('nalog:setStatus', [{ id: 1, status: 'u_izradi' }], KASIR)).not.toThrow();
+    // Neispravan payload ostaje handleru (njegova poruka), kao i dosad.
+    for (const args of [[], [null], [5], [{ id: 1 }]]) {
+      expect(() => provjeriPristup('nalog:setStatus', args, KASIR)).not.toThrow();
+    }
+    // Bez prijave i sa zadanim PIN-om važe opšte poruke.
+    expect(() => provjeriPristup('nalog:setStatus', vrati, null)).toThrow('Niste prijavljeni');
+    expect(() => provjeriPristup('nalog:setStatus', vrati, KASIR, true)).toThrow('Prije rada promijenite zadani PIN 0000');
   });
 });
 
@@ -172,5 +196,213 @@ describe('OgranicenjePromjenaPina', () => {
     expect(() => o.provjeri(2)).not.toThrow();
     sada = 10 * 60_000;
     expect(() => o.provjeri(1)).not.toThrow();
+  });
+});
+
+// ─── Sesija (napraviSesiju) nad pravom bazom ────────────────
+// Mašina stanja prijave; kanali su u ugovoru oba backenda (ugovor/sesija.ugovor.test.ts).
+
+describe('napraviSesiju', () => {
+  // PBKDF2 je namjerno spor — heševi se računaju jednom.
+  const HES: Record<string, string> = Object.fromEntries(['0000', '1111', '1234', '2222'].map(p => [p, hesirajPin(p)]));
+  const BLOKADA_30 = porukaBlokade(30_000);
+  let db: SqlDb & Database;
+  let sada: number;
+  let admin: number;
+  let kasir: number;
+
+  function dodaj(ime: string, pin: string, uloga: 'admin' | 'kasir'): number {
+    return Number(db.prepare('INSERT INTO users (ime, pin, uloga) VALUES (?, ?, ?)').run(ime, HES[pin], uloga).lastInsertRowid);
+  }
+  const postavi = (k: string, v: string) => db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(k, v);
+  const pinKorisnika = (id: number) => (db.prepare('SELECT pin FROM users WHERE id = ?').get(id) as { pin: string }).pin;
+  const greska = (fn: () => unknown): string => { try { fn(); return ''; } catch (e) { return (e as Error).message; } };
+  const nova = () => napraviSesiju(db, () => sada);
+
+  beforeEach(() => {
+    db = new Database(':memory:') as SqlDb & Database;
+    db.exec(schema);
+    sada = 1_000_000_000;
+    admin = dodaj('Admin', '1111', 'admin');
+    kasir = dodaj('Kasir', '1234', 'kasir');
+  });
+
+  test('prijava otvara sesiju, odjava je zatvara', () => {
+    const s = nova();
+    expect(s.trenutni()).toBeNull();
+    expect(s.prijavi('1234')).toEqual({ id: kasir, ime: 'Kasir', uloga: 'kasir', zadaniPin: false });
+    expect(s.trenutni()).toEqual({ id: kasir, ime: 'Kasir', uloga: 'kasir' });
+    expect(s.korisnik().id).toBe(kasir);
+    expect(s.prijavljeniId()).toBe(kasir);
+    expect(() => s.provjeriPristup('product:getAll', [])).not.toThrow();
+    s.odjavi();
+    expect(s.trenutni()).toBeNull();
+    expect(s.prijavljeniId()).toBeNull();
+    expect(() => s.korisnik()).toThrow(PORUKA_NISTE_PRIJAVLJENI);
+    expect(() => s.provjeriPristup('product:getAll', [])).toThrow(PORUKA_NISTE_PRIJAVLJENI);
+  });
+
+  test('neuspjela prijava briše i dotadašnju sesiju — i kad je odbije blokada', () => {
+    const s = nova();
+    s.prijavi('1111');
+    expect(s.prijavi('9999')).toBeNull();
+    expect(s.trenutni()).toBeNull();
+    expect(() => s.provjeriPristup('product:getAll', [])).toThrow(PORUKA_NISTE_PRIJAVLJENI);
+
+    // Pogrešan admin PIN (storno) ne dira sesiju, ali puni zajednički brojač.
+    s.prijavi('1111');
+    for (let i = 0; i < 4; i++) expect(greska(() => s.provjeriAdminPin('9999'))).toBe('Neispravan admin PIN');
+    expect(s.trenutni()).toMatchObject({ id: admin });
+    // Prijava koju odbije blokada (i za tačan PIN) takođe zatvara sesiju.
+    expect(greska(() => s.prijavi('1111'))).toBe(BLOKADA_30);
+    expect(s.trenutni()).toBeNull();
+  });
+
+  test('uloga i postojanje korisnika se čitaju iz baze pri svakoj provjeri', () => {
+    const s = nova();
+    s.prijavi('1234');
+    expect(greska(() => s.provjeriPristup('db:restore', []))).toBe(PORUKA_SAMO_ADMIN);
+    db.prepare("UPDATE users SET uloga = 'admin' WHERE id = ?").run(kasir);
+    expect(() => s.provjeriPristup('db:restore', [])).not.toThrow();
+    db.prepare('DELETE FROM users WHERE id = ?').run(kasir);
+    expect(s.trenutni()).toBeNull();
+    expect(greska(() => s.provjeriPristup('product:getAll', []))).toBe(PORUKA_NISTE_PRIJAVLJENI);
+    expect(greska(() => s.korisnik())).toBe(PORUKA_NISTE_PRIJAVLJENI);
+  });
+
+  test('zadani PIN: dok ga ne promijeni, sesija smije samo promjenu PIN-a i odjavu', () => {
+    db.prepare('UPDATE users SET pin = ? WHERE id = ?').run(HES['0000'], admin);
+    const s = nova();
+    expect(s.prijavi('0000')).toEqual({ id: admin, ime: 'Admin', uloga: 'admin', zadaniPin: true });
+    expect(greska(() => s.provjeriPristup('product:getAll', []))).toBe(PORUKA_ZADANI_PIN);
+    expect(() => s.provjeriPristup('user:promijeniSvojPin', [])).not.toThrow();
+    expect(greska(() => s.promijeniSvojPin('0000', '0000'))).toBe('Novi PIN ne smije biti 0000');
+    s.promijeniSvojPin('0000', '2468');
+    expect(provjeriPin('2468', pinKorisnika(admin))).toBe(true);
+    expect(() => s.provjeriPristup('product:getAll', [])).not.toThrow();
+    expect(db.prepare('SELECT korisnikId, akcija, detalji FROM audit_log').all()).toEqual([
+      { korisnikId: admin, akcija: 'korisnik:promjenaPina', detalji: JSON.stringify({ id: admin }) },
+    ]);
+  });
+
+  test('zauzet PIN se broji kao neuspjeh: promjena svog PIN-a nije proročište za tuđe PIN-ove', () => {
+    const s = nova();
+    s.prijavi('1234');
+    for (let i = 0; i < 5; i++) {
+      expect(greska(() => s.promijeniSvojPin('1234', '1111'))).toBe('Taj PIN je zauzet, odaberite drugi');
+    }
+    // Sljedeći pokušaj, i sa slobodnim PIN-om, ne otkriva ništa.
+    expect(greska(() => s.promijeniSvojPin('1234', '7777'))).toBe(BLOKADA_30);
+    expect(provjeriPin('1234', pinKorisnika(kasir))).toBe(true);
+    // Brojač je zajednički: blokada važi i za prijavu.
+    expect(greska(() => s.prijavi('1111'))).toBe(BLOKADA_30);
+  });
+
+  test('pogrešan trenutni PIN je neuspjeh; neispravan novi PIN ne troši pokušaje', () => {
+    const s = nova();
+    s.prijavi('1234');
+    for (let i = 0; i < 10; i++) {
+      expect(greska(() => s.promijeniSvojPin('1234', '12'))).toBe('PIN mora imati najmanje 4 cifre');
+    }
+    for (let i = 0; i < 4; i++) {
+      expect(greska(() => s.promijeniSvojPin('9999', '2468'))).toBe('Trenutni PIN nije tačan');
+    }
+    // Uspjeh ne briše neuspjehe: još jedan neuspjeh (peti) blokira.
+    expect(s.prijavi('1234')).toMatchObject({ id: kasir });
+    expect(s.prijavi('9999')).toBeNull();
+    expect(greska(() => s.prijavi('1234'))).toBe(BLOKADA_30);
+  });
+
+  test('najviše 3 promjene svog PIN-a u 10 min', () => {
+    const s = nova();
+    s.prijavi('1234');
+    s.promijeniSvojPin('1234', '1235');
+    s.promijeniSvojPin('1235', '1236');
+    s.promijeniSvojPin('1236', '1237');
+    expect(greska(() => s.promijeniSvojPin('1237', '1238'))).toBe('Previše promjena PIN-a. Pokušajte ponovo za 600 s.');
+    sada += 10 * 60_000;
+    s.promijeniSvojPin('1237', '1238');
+    expect(provjeriPin('1238', pinKorisnika(kasir))).toBe(true);
+  });
+
+  test('blokada je u bazi: nova sesija (restart programa) je nastavlja; ističe po satu sesije', () => {
+    const s = nova();
+    for (let i = 0; i < 5; i++) expect(s.prijavi('9999')).toBeNull();
+    expect(db.prepare('SELECT value FROM settings WHERE key = ?').get(KLJUC_BLOKADE)).toBeTruthy();
+    const poRestartu = nova();
+    expect(greska(() => poRestartu.prijavi('1111'))).toBe(BLOKADA_30);
+    sada += 30_000;
+    expect(poRestartu.prijavi('1111')).toMatchObject({ id: admin });
+  });
+
+  test('admin PIN: samo PIN administratora; neuspjeh ulazi u ograničenje pokušaja', () => {
+    const s = nova();
+    expect(s.provjeriAdminPin('1111')).toEqual({ id: admin, ime: 'Admin', uloga: 'admin' });
+    for (const pin of ['1234', '9999', '', undefined]) {
+      expect(greska(() => s.provjeriAdminPin(pin))).toBe('Neispravan admin PIN');
+    }
+    expect(greska(() => s.provjeriAdminPin('8888'))).toBe('Neispravan admin PIN');
+    expect(greska(() => s.provjeriAdminPin('1111'))).toBe(BLOKADA_30);
+  });
+
+  describe('order:refundAndPrint uz kasa.requirePinRefund', () => {
+    test('kasir šalje admin PIN u istom pozivu — provjerava se prije handlera', () => {
+      postavi('kasa.requirePinRefund', 'true');
+      const s = nova();
+      s.prijavi('1234');
+      for (const args of [[], [null], [{ id: 1 }], [{ id: 1, adminPin: '' }]]) {
+        expect(greska(() => s.provjeriPristup('order:refundAndPrint', args))).toBe('Reklamacija traži PIN administratora');
+      }
+      expect(greska(() => s.provjeriPristup('order:refundAndPrint', [{ id: 1, adminPin: '1234' }]))).toBe('Neispravan admin PIN');
+      const unos = { id: 1, adminPin: '1111' };
+      s.provjeriPristup('order:refundAndPrint', [unos]);
+      expect(s.odobrioAdmin(unos)).toBe(admin);
+      // Odobrenje važi samo za payload poziva koji je prošao provjeru.
+      expect(s.odobrioAdmin({ ...unos })).toBeNull();
+    });
+
+    test('admin ne treba PIN; bez postavke ni kasir — tada nema odobrenja', () => {
+      postavi('kasa.requirePinRefund', 'true');
+      const s = nova();
+      s.prijavi('1111');
+      const odAdmina = { id: 1 };
+      s.provjeriPristup('order:refundAndPrint', [odAdmina]);
+      expect(s.odobrioAdmin(odAdmina)).toBeNull();
+
+      postavi('kasa.requirePinRefund', 'false');
+      s.prijavi('1234');
+      const odKasira = { id: 1, adminPin: '9999' };
+      s.provjeriPristup('order:refundAndPrint', [odKasira]);
+      expect(s.odobrioAdmin(odKasira)).toBeNull();
+    });
+
+    test('pogrešan admin PIN ulazi u ograničenje pokušaja', () => {
+      postavi('kasa.requirePinRefund', 'true');
+      const s = nova();
+      s.prijavi('1234');
+      for (let i = 0; i < 5; i++) {
+        expect(greska(() => s.provjeriPristup('order:refundAndPrint', [{ id: 1, adminPin: '9999' }]))).toBe('Neispravan admin PIN');
+      }
+      expect(greska(() => s.provjeriPristup('order:refundAndPrint', [{ id: 1, adminPin: '1111' }]))).toBe(BLOKADA_30);
+    });
+
+    test('bez prijave i sa zadanim PIN-om važe opšte poruke, PIN se ne provjerava', () => {
+      postavi('kasa.requirePinRefund', 'true');
+      const s = nova();
+      expect(greska(() => s.provjeriPristup('order:refundAndPrint', [{ id: 1, adminPin: '9999' }]))).toBe(PORUKA_NISTE_PRIJAVLJENI);
+      db.prepare('UPDATE users SET pin = ? WHERE id = ?').run(HES['0000'], kasir);
+      s.prijavi('0000');
+      expect(greska(() => s.provjeriPristup('order:refundAndPrint', [{ id: 1, adminPin: '9999' }]))).toBe(PORUKA_ZADANI_PIN);
+      expect(db.prepare('SELECT 1 FROM settings WHERE key = ?').get(KLJUC_BLOKADE)).toBeNull();
+    });
+  });
+
+  test('nalog:setStatus "vrati" kroz sesiju: kasir ne može ni kad u payload-u pošalje admina', () => {
+    const s = nova();
+    s.prijavi('1234');
+    expect(greska(() => s.provjeriPristup('nalog:setStatus', [{ id: 1, status: 'vrati', korisnikId: admin }])))
+      .toBe('Vraćanje naloga u izradu može samo administrator');
+    s.prijavi('1111');
+    expect(() => s.provjeriPristup('nalog:setStatus', [{ id: 1, status: 'vrati' }])).not.toThrow();
   });
 });
