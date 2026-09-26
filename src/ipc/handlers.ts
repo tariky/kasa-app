@@ -324,11 +324,11 @@ export function registerIpcHandlers(): void {
   handle('product:findByDobavljacSifra', (dobavljacId: number, sifra: string) => {
     const s = sifra?.trim();
     if (!s) return null;
-    return db.prepare(`
+    return (db.prepare(`
       SELECT p.*, ${zaliha.STANJE_SQL} AS stanje
       FROM artikal_dobavljac_sifre ds JOIN products p ON p.id = ds.productId
       WHERE ds.dobavljacId = ? AND ds.sifra = ?
-    `).get(dobavljacId, s) as Product | undefined ?? null;
+    `).get(dobavljacId, s) as Product | undefined) ?? null;
   });
 
   handle('dobavljac:getSifre', (dobavljacId: number) => {
