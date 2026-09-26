@@ -14,7 +14,7 @@ import CashMovementDialog from '@/components/CashMovementDialog';
 import KnjigovodjaTab from '@/components/izvjestaji/KnjigovodjaTab';
 import ZIzvjestajDialog from '@/components/izvjestaji/ZIzvjestajDialog';
 import { cn, formatKM, formatDateTime, formatDate } from '@/lib/utils';
-import { nabavnaVrijednost } from '@/lib/kalkulacija';
+import { sumePrimke } from '@/lib/izvjestaji';
 import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { Order, Primka } from '@/types';
 import { pdf } from '@react-pdf/renderer';
@@ -298,12 +298,7 @@ export default function IzvjestajiScreen({ uloga }: { uloga: string }) {
   const ukupneReklamacije = refundedOrders.reduce((sum, o) => sum + o.ukupno, 0);
   const brojRacuna = completedOrders.length;
 
-  const primkeNabavna = primkeData.reduce(
-    (sum, p) => sum + (p.stavke || []).reduce((s, st) => s + nabavnaVrijednost(st), 0), 0
-  );
-  const primkeProdajna = primkeData.reduce(
-    (sum, p) => sum + (p.stavke || []).reduce((s, st) => s + st.cijena * st.kolicina, 0), 0
-  );
+  const primke = sumePrimke(primkeData);
 
   /** Uređaj štampa jedan po jedan — dok radi, sva tri dugmeta su zaključana. */
   const stampaj = async (vrsta: FiskalniIzvjestaj, poziv: () => Promise<any>) => {
@@ -535,10 +530,10 @@ export default function IzvjestajiScreen({ uloga }: { uloga: string }) {
             <div className="flex-shrink-0 px-6 pt-5 pb-4">
               <div className="grid grid-cols-3 gap-3">
                 <Stat label="Broj primki" value={String(primkeData.length)} />
-                <Stat label="Nabavna vrijednost" value={formatKM(primkeNabavna)} />
-                <Stat label="Prodajna vrijednost" value={formatKM(primkeProdajna)} strong
-                  note={primkeNabavna > 0
-                    ? `+${((primkeProdajna - primkeNabavna) / primkeNabavna * 100).toFixed(1).replace('.', ',')}% marža`
+                <Stat label="Nabavna vrijednost" value={formatKM(primke.nabavna)} />
+                <Stat label="Prodajna vrijednost" value={formatKM(primke.prodajnaSaPdv)} strong
+                  note={primke.nabavnaArtikala > 0
+                    ? `${primke.rucPct > 0 ? '+' : ''}${primke.rucPct.toFixed(1).replace('.', ',')}% RUC`
                     : undefined} />
               </div>
             </div>
@@ -561,13 +556,11 @@ export default function IzvjestajiScreen({ uloga }: { uloga: string }) {
                       { label: 'Stavki', className: 'text-right px-2 w-[70px] hidden xl:table-cell' },
                       { label: 'Nabavna', className: 'text-right px-2 w-[120px]' },
                       { label: 'Prodajna', className: 'text-right px-2 w-[120px]' },
-                      { label: 'Marža', className: 'text-right pl-2 pr-5 w-[80px]' },
+                      { label: 'RUC', className: 'text-right pl-2 pr-5 w-[80px]' },
                     ]} />
                     <tbody>
                       {primkeData.map((primka) => {
-                        const nab = (primka.stavke || []).reduce((s, st) => s + nabavnaVrijednost(st), 0);
-                        const prod = (primka.stavke || []).reduce((s, st) => s + st.cijena * st.kolicina, 0);
-                        const marzaPct = nab > 0 ? ((prod - nab) / nab * 100) : 0;
+                        const red = sumePrimke([primka]);
                         return (
                           <tr key={primka.id} className="transition-colors hover:bg-slate-50">
                             <td className={cn(td, 'pl-5 pr-2 font-mono text-[12px] text-slate-400 whitespace-nowrap')}>{primka.brojPrimke}</td>
@@ -587,14 +580,14 @@ export default function IzvjestajiScreen({ uloga }: { uloga: string }) {
                               {primka.stavke?.length ?? 0}
                             </td>
                             <td className={cn(td, 'px-2 text-right font-mono text-[12px] tabular-nums text-slate-500 whitespace-nowrap')}>
-                              {formatKM(nab)}
+                              {formatKM(red.nabavna)}
                             </td>
                             <td className={cn(td, 'px-2 text-right font-mono text-[12.5px] font-semibold tabular-nums text-slate-800 whitespace-nowrap')}>
-                              {formatKM(prod)}
+                              {formatKM(red.prodajnaSaPdv)}
                             </td>
                             <td className={cn(td, 'pl-2 pr-5 text-right font-mono text-[12px] font-medium tabular-nums whitespace-nowrap',
-                              marzaPct > 0 ? 'text-emerald-600' : 'text-slate-400')}>
-                              {marzaPct > 0 ? '+' : ''}{marzaPct.toFixed(1).replace('.', ',')}%
+                              red.rucPct > 0 ? 'text-emerald-600' : 'text-slate-400')}>
+                              {red.rucPct > 0 ? '+' : ''}{red.rucPct.toFixed(1).replace('.', ',')}%
                             </td>
                           </tr>
                         );
