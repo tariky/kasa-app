@@ -143,7 +143,7 @@ function vratiCijeneAkoNepromijenjene(
  * Stari put za primke bez historije cijena (`cijena_historija`); artikli iz
  * `preskoci` su već vraćeni iz historije. Vraća broj vraćenih artikala.
  */
-export function revertNivelacijaPrices(db: SqlDb, primkaId: number, preskoci: Set<number> = new Set(), samo?: Set<number>): number {
+function revertNivelacijaPrices(db: SqlDb, primkaId: number, preskoci: Set<number> = new Set(), samo?: Set<number>): number {
   // Nivelacije se ne brišu, pa promjena artikla koji je izmjenom već uklonjen
   // s primke ostaje u njenoj nivelaciji — ta je poništena pri uklanjanju i ne
   // smije se vraćati ponovo (samo artikli koji su još na primci). Isto tako se
@@ -167,7 +167,7 @@ export function revertNivelacijaPrices(db: SqlDb, primkaId: number, preskoci: Se
  * artiklima bez zalihe (zapamćene u `primka_stavke.staraCijena`). Stavke bez
  * zapamćene cijene (stare primke) se ne diraju.
  */
-export function revertPricesWithoutStock(db: SqlDb, primkaId: number, preskoci: Set<number> = new Set(), samo?: Set<number>): number {
+function revertPricesWithoutStock(db: SqlDb, primkaId: number, preskoci: Set<number> = new Set(), samo?: Set<number>): number {
   const promjene = db.prepare(`
     SELECT productId, staraCijena, cijena AS novaCijena
     FROM primka_stavke
@@ -207,7 +207,7 @@ export function zapisiPromjeneCijena(
  * Vraća artikle koje je historija pokrila (za njih se stari put ne koristi).
  * `samo` ograniči poništavanje na te artikle (izmjena primke).
  */
-export function ponistiPromjeneCijenaPrimke(db: SqlDb, primkaId: number, samo?: Set<number>): Set<number> {
+function ponistiPromjeneCijenaPrimke(db: SqlDb, primkaId: number, samo?: Set<number>): Set<number> {
   const promjene = (db.prepare(
     "SELECT id, productId, staraCijena, novaCijena FROM cijena_historija WHERE izvor = 'primka' AND izvorId = ? AND ponistena = 0 ORDER BY id"
   ).all(primkaId) as Array<{ id: number; productId: number; staraCijena: number; novaCijena: number }>)
@@ -527,7 +527,7 @@ export function rezultatPregleda(db: SqlDb, pocetak: PocetakPregleda, cijenaOsta
  * sabiranju), redoslijed dokumenata ostaje (to je redoslijed brojeva).
  * Neispravan oblik → null.
  */
-export function otisakPregleda(p: unknown): string | null {
+function otisakPregleda(p: unknown): string | null {
   const n = (x: unknown) => { if (typeof x !== 'number' || !Number.isFinite(x)) throw 0; return Math.round(x * 1e6) / 1e6; };
   const niz = (x: unknown) => { if (!Array.isArray(x)) throw 0; return x as any[]; };
   const poArtiklu = <T extends { productId: number }>(xs: T[]) => [...xs].sort((a, b) => a.productId - b.productId);
