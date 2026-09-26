@@ -424,7 +424,7 @@ mod tests {
         assert_eq!(p.zahtjevi(), 0);
     }
 
-    /// Ruling 14 (2): štampa uspjela, upis pao — svaki tok javlja „JE odštampan,
+    /// Štampa uspjela, upis pao — svaki tok javlja „JE odštampan,
     /// ali nije zabilježen" (tekst kao u TS-u), a red ostaje za dijalog.
     #[test]
     fn upis_pao_poslije_stampe() {

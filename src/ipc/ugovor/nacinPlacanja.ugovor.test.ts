@@ -105,7 +105,7 @@ test('stari oblik načina plaćanja (mala slova, cek, JSON) ne prolazi nijednim 
   expect(broj("SELECT COUNT(*) AS n FROM radni_nalozi WHERE status <> 'zavrsen'")).toBe(0);
 });
 
-// Ruling 8: i naknadni upis iz nezavršenih (pending:resolve) provjerava način
+// I naknadni upis iz nezavršenih (pending:resolve) provjerava način
 // plaćanja iz snapshota PRIJE ikakvog upisa — stari red ili uvezen backup
 // može nositi oblik koji ladica ne zna. Dozvoljen je kanonski tekst s liste
 // ili JSON raspodjela koju čita `raspodjelaPlacanja`; storno ga nema.
@@ -134,7 +134,7 @@ test('pending:resolve odbija nepoznat način plaćanja iz snapshota, ništa ne u
     })],
   ];
 
-  // null i nedostajući ključ (undefined JSON izostavi) daju praznu vrijednost u poruci (Ruling 15).
+  // null i nedostajući ključ (undefined JSON izostavi) daju praznu vrijednost u poruci (`String(nacin ?? '')`).
   for (const [vrsta, snapshot] of snapshoti) {
     for (const nacin of ['gotovina', ' Gotovina ', 'Bitcoin', '{"zlato":5}', '{"gotovina":"5"}', '', null, undefined]) {
       const id = dodajPending(snapshot(nacin));

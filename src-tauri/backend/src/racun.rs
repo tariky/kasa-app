@@ -29,7 +29,7 @@ pub fn izracunaj_totale(stavke: &[Value]) -> (f64, f64) {
     (ukupno, pdv)
 }
 
-/// Kupac kolona u `orders` (odluka 3): bez vrijednosti ili tekst prazan nakon
+/// Kupac kolona u `orders`: bez vrijednosti ili tekst prazan nakon
 /// trim-a je NULL; ostalo se upisuje kako je uneseno.
 fn kupac_kolona(kupac: &Value, polje: &str) -> Value {
     match &kupac[polje] {
@@ -88,7 +88,7 @@ mod tests {
 
     const KOLONE_KUPCA: &str = "kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj";
 
-    /// Odluka 3: prazan kupac (null, nema ga, ili tekst prazan nakon trim-a)
+    /// Prazan kupac (null, nema ga, ili tekst prazan nakon trim-a)
     /// je NULL na svakom putu upisa računa; neprazan tekst ide kako je unesen.
     #[test]
     fn prazan_kupac_je_null_na_svim_putevima() {

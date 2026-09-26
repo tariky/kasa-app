@@ -462,7 +462,7 @@ mod tests {
 
     use crate::proba::proba;
 
-    /// Ruling 8: pending:resolve prije ikakvog upisa provjerava način plaćanja
+    /// pending:resolve prije ikakvog upisa provjerava način plaćanja
     /// iz snapshota — kanonski tekst s liste ili JSON raspodjela koju
     /// `raspodjela_placanja` prepoznaje. Inače greška, ništa upisano, red ostaje.
     #[test]
@@ -496,7 +496,7 @@ mod tests {
             (None, Some(json!(r#"{"gotovina":5,"zlato":1}"#)), r#"{"gotovina":5,"zlato":1}"#),
             (None, Some(json!(r#"{"gotovina":0}"#)), r#"{"gotovina":0}"#),
             (None, Some(json!("")), ""),
-            // Ruling 15: kao TS `String(nacin ?? '')` — null i nedostajući ključ su "".
+            // Kao TS `String(nacin ?? '')` — null i nedostajući ključ su "".
             (None, Some(Value::Null), ""),
             (None, None, ""),
             (None, Some(json!(5)), "5"),

@@ -150,7 +150,7 @@ export function snapshotKupca(k: Partial<Record<keyof SnapshotKupac, string | nu
  * Način plaćanja iz snapshota prije naknadnog upisa (pending:resolve): kanonski
  * tekst s liste NACINI_PLACANJA ili JSON raspodjela koju čita
  * `raspodjelaPlacanja`. Snapshot pišu provjereni putevi, ali stari red ili
- * uvezen backup može nositi oblik koji ladica i izvoz ne znaju (odluka 4).
+ * uvezen backup može nositi oblik koji ladica i izvoz ne znaju.
  * Rust: ista provjera u pending:resolve (racuni.rs).
  */
 export function provjeriNacinPlacanjaSnapshota(nacin: unknown): string {
