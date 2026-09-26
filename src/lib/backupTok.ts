@@ -26,7 +26,11 @@ export interface BackupOkruzenje {
 
 /** Poruka za korisnika. Bez kredencijala — R2 poruke ih ne sadrže. */
 export function porukaGreske(e: unknown): string {
-  if (e instanceof R2Greska && e.status === 403) return 'R2 pristup više ne važi — zatražite novu licencu';
+  if (e instanceof R2Greska && e.status === 403) {
+    // x-amz-date odstupa > 15 min: sat računara, ne licenca.
+    if (e.kod === 'RequestTimeTooSkewed') return 'Sat na ovom računaru nije tačan — podesite datum i vrijeme, pa će backup proći.';
+    return 'R2 pristup više ne važi — zatražite novu licencu';
+  }
   return e instanceof Error ? e.message : String(e);
 }
 

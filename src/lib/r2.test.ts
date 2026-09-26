@@ -129,6 +129,21 @@ test('r2Posalji: 403 je R2Greska sa statusom, poruka ostaje ista', async () => {
     expect(e).toBeInstanceOf(R2Greska);
     expect(e.status).toBe(403);
     expect(e.message).toContain('R2 je odbio pristup (403 AccessDenied)');
+    expect(e.kod).toBe('AccessDenied');
+  } finally {
+    server.stop(true);
+  }
+});
+
+test('r2Posalji: S3 <Code> je u R2Greska.kod (RequestTimeTooSkewed), poruka ostaje ista', async () => {
+  const xml = '<Error><Code>RequestTimeTooSkewed</Code><Message>The difference between the request time and the current time is too large.</Message></Error>';
+  const server = Bun.serve({ port: 0, fetch: () => new Response(xml, { status: 403 }) });
+  try {
+    const e = await r2Posalji(pristup(server.url.origin), 'x', new Uint8Array([1])).catch(x => x);
+    expect(e).toBeInstanceOf(R2Greska);
+    expect(e.status).toBe(403);
+    expect(e.kod).toBe('RequestTimeTooSkewed');
+    expect(e.message).toBe('R2 je odbio pristup (403 RequestTimeTooSkewed): The difference between the request time and the current time is too large.');
   } finally {
     server.stop(true);
   }

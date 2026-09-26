@@ -76,9 +76,12 @@ function amzDatum(d = new Date()): string {
   return d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
 }
 
-/** Svaka greška R2 poziva. `status` je HTTP status; nema ga kad server nije ni odgovorio. */
+/**
+ * Svaka greška R2 poziva. `status` je HTTP status; nema ga kad server nije ni
+ * odgovorio. `kod` je S3 `<Code>` iz tijela (npr. RequestTimeTooSkewed).
+ */
 export class R2Greska extends Error {
-  constructor(poruka: string, readonly status?: number) {
+  constructor(poruka: string, readonly status?: number, readonly kod?: string) {
     super(poruka);
     this.name = 'R2Greska';
   }
@@ -88,7 +91,7 @@ function greskaOdgovora(status: number, statusTekst: string, xml: string): R2Gre
   const kod = xml.match(/<Code>([^<]*)<\/Code>/)?.[1] ?? '';
   const poruka = xml.match(/<Message>([^<]*)<\/Message>/)?.[1] ?? statusTekst;
   const opis = `${status}${kod ? ` ${kod}` : ''}`;
-  return new R2Greska(status === 403 ? `R2 je odbio pristup (${opis}): ${poruka}` : `R2 greška (${opis}): ${poruka}`, status);
+  return new R2Greska(status === 403 ? `R2 je odbio pristup (${opis}): ${poruka}` : `R2 greška (${opis}): ${poruka}`, status, kod || undefined);
 }
 
 /** URL i potpisana zaglavlja (bez `host` — postavlja ga klijent). */

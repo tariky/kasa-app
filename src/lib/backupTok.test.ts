@@ -2,7 +2,7 @@ import { test, expect, beforeAll, beforeEach } from 'bun:test';
 import { generateIdentity, identityToRecipient } from 'age-encryption';
 import { gunzipSync } from 'node:zlib';
 import { Decrypter } from 'age-encryption';
-import { napraviBackup, NEMA_BACKUPA, type BackupOkruzenje } from './backupTok';
+import { napraviBackup, NEMA_BACKUPA, porukaGreske, type BackupOkruzenje } from './backupTok';
 import { R2Greska, type R2Pristup } from './r2';
 import type { BackupDogadjaj, BackupStanje } from './backupRaspored';
 import type { R2Podaci } from './licenca';
@@ -102,6 +102,15 @@ test('403: čitljiva poruka, greška u stanju, greskaOd ostaje od prvog pada, us
   sat = min(40);
   await b.sada();
   expect(stanje).toEqual({ zadnjiUspjeh: min(40).toISOString(), zadnjiPokusaj: min(40).toISOString() });
+});
+
+test('403: pomjeren sat (RequestTimeTooSkewed) nije "nova licenca"; ostali 403 jesu', () => {
+  expect(porukaGreske(new R2Greska('R2 je odbio pristup (403 RequestTimeTooSkewed): x', 403, 'RequestTimeTooSkewed')))
+    .toBe('Sat na ovom računaru nije tačan — podesite datum i vrijeme, pa će backup proći.');
+  expect(porukaGreske(new R2Greska('R2 je odbio pristup (403 AccessDenied): x', 403, 'AccessDenied')))
+    .toBe('R2 pristup više ne važi — zatražite novu licencu');
+  expect(porukaGreske(new R2Greska('R2 je odbio pristup (403): x', 403)))
+    .toBe('R2 pristup više ne važi — zatražite novu licencu');
 });
 
 test('trajna greška kad uspjeha nema duže od 24 h', async () => {

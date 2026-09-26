@@ -91,6 +91,16 @@ describe.skipIf(process.env.KASA_BACKEND === 'rust')('backup:*', () => {
     expect(await b.call('user:getAll')).toBeArray();
   });
 
+  test('pomjeren sat (403 RequestTimeTooSkewed): poruka o satu, ne o licenci', async () => {
+    b.postaviBackupLicencu(r2);
+    s3.status = 403;
+    s3.kod = 'RequestTimeTooSkewed';
+    const info = await b.call('backup:sada');
+    const poruka = 'Sat na ovom računaru nije tačan — podesite datum i vrijeme, pa će backup proći.';
+    expect(info.greska).toBe(poruka);
+    expect(stanjaBackupa().at(-1)).toEqual({ greska: poruka, trajnaGreska: false });
+  });
+
   test('server nedostupan: greška, bez izuzetka', async () => {
     b.postaviBackupLicencu(r2);
     s3.stop();

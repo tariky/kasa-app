@@ -21,11 +21,13 @@ export interface LaziS3 {
   zahtjevi: S3Zahtjev[];
   /** Status kojim server odgovara (200, 403, 500…). */
   status: number;
+  /** S3 `<Code>` u tijelu greške; bez njega 403 → AccessDenied. */
+  kod?: string;
   stop(): void;
 }
 
-export function pokreniLaziS3(opcije: { status?: number } = {}): LaziS3 {
-  const s3: LaziS3 = { url: '', zahtjevi: [], status: opcije.status ?? 200, stop: () => undefined };
+export function pokreniLaziS3(opcije: { status?: number; kod?: string } = {}): LaziS3 {
+  const s3: LaziS3 = { url: '', zahtjevi: [], status: opcije.status ?? 200, kod: opcije.kod, stop: () => undefined };
   const server = Bun.serve({
     port: 0,
     async fetch(req) {
@@ -46,6 +48,7 @@ export function pokreniLaziS3(opcije: { status?: number } = {}): LaziS3 {
         potpisIspravan: auth === ocekivano,
         hashIspravan: hash === createHash('sha256').update(tijelo).digest('hex'),
       });
+      if (s3.kod) return new Response(`<Error><Code>${s3.kod}</Code><Message>${s3.kod}</Message></Error>`, { status: s3.status });
       if (s3.status === 403) return new Response('<Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>', { status: 403 });
       return new Response(null, { status: s3.status });
     },
