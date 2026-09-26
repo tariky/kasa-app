@@ -193,10 +193,10 @@ impl Backend {
         // Electron handleru — program i ostali pozivi rade dalje.
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             // Redom: kanal postoji, licenca, sesija i uloga (handle() u handlers.ts).
-            kanali::postoji(kanal)?;
+            let k = kanali::kanal(kanal)?;
             licenca::provjeri_kanal(self, kanal)?;
             self.provjeri_sesiju(kanal, &a)?;
-            kanali::obradi(self, kanal, &a)
+            (k.h)(self, &a)
         }))
         .unwrap_or_else(|p| {
             let poruka = p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned());

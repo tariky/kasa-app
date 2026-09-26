@@ -11,7 +11,8 @@ use crate::greska::R;
 use crate::js::{self, has};
 use crate::sesija::{self, Korisnik, Pokusaji};
 use crate::sql::Db;
-use crate::{audit, baci, p, Args, Backend};
+use crate::kanali::Kanal;
+use crate::{audit, baci, p, Backend};
 
 pub const ULOGE: [&str; 2] = ["admin", "kasir"];
 
@@ -370,22 +371,21 @@ fn delete(b: &Backend, id: &Value) -> R<Value> {
     })
 }
 
-pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
-    let db = b.db();
-    Some(match kanal {
-        "user:login" => login(b, &a[0]),
-        "user:logout" => {
+pub const KANALI: &[Kanal] = &[
+    Kanal { ime: "user:login", h: |b, a| login(b, &a[0]) },
+    Kanal {
+        ime: "user:logout",
+        h: |b, _| {
             b.sesija.postavi(None, false);
             Ok(json!({ "success": true }))
-        }
-        "user:promijeniSvojPin" => promijeni_svoj_pin(b, &a[0], &a[1]),
-        "user:getAll" => db.all("SELECT id, ime, uloga FROM users ORDER BY ime", p![]).map(Value::from),
-        "user:create" => create(b, &a[0]),
-        "user:update" => update(b, &a[0], &a[1]),
-        "user:delete" => delete(b, &a[0]),
-        _ => return None,
-    })
-}
+        },
+    },
+    Kanal { ime: "user:promijeniSvojPin", h: |b, a| promijeni_svoj_pin(b, &a[0], &a[1]) },
+    Kanal { ime: "user:getAll", h: |b, _| b.db().all("SELECT id, ime, uloga FROM users ORDER BY ime", p![]).map(Value::from) },
+    Kanal { ime: "user:create", h: |b, a| create(b, &a[0]) },
+    Kanal { ime: "user:update", h: |b, a| update(b, &a[0], &a[1]) },
+    Kanal { ime: "user:delete", h: |b, a| delete(b, &a[0]) },
+];
 
 #[cfg(test)]
 mod tests {

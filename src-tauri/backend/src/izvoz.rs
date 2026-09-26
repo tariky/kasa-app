@@ -8,7 +8,8 @@ use serde_json::{Map, Value};
 
 use crate::greska::R;
 use crate::sql::Db;
-use crate::{baci, Args, Backend};
+use crate::baci;
+use crate::kanali::Kanal;
 
 const UPITI_TS: &str = include_str!("../../../src/lib/knjigovodja/upiti.ts");
 
@@ -71,13 +72,7 @@ fn knjigovodja(db: &Db, od: &Value, do_: &Value) -> R<Value> {
     Ok(Value::Object(out))
 }
 
-pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
-    let db = b.db();
-    Some(match kanal {
-        "izvoz:knjigovodja" => knjigovodja(db, &a[0], &a[1]),
-        _ => return None,
-    })
-}
+pub const KANALI: &[Kanal] = &[Kanal { ime: "izvoz:knjigovodja", h: |b, a| knjigovodja(b.db(), &a[0], &a[1]) }];
 
 #[cfg(test)]
 mod tests {

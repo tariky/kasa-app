@@ -8,7 +8,8 @@ use crate::proizvodnja::je_artikal_u_proizvodnji;
 use crate::skladiste::{is_dobavljac_used, zapisi_promjene_cijena};
 use crate::sql::Db;
 use crate::zaliha::{self, Dokument, Smjer};
-use crate::{audit, baci, p, Args, Backend};
+use crate::kanali::Kanal;
+use crate::{audit, baci, p, Backend};
 
 // Napomena: `data.x !== undefined` je ovdje `has(data, "x")`. JSON gubi samo
 // `undefined` (polje nestane), a `null` ostaje `null` — i u originalu je
@@ -571,33 +572,37 @@ fn kupac_delete(db: &Db, id: &Value) -> R<Value> {
     Ok(json!({ "changes": result.changes }))
 }
 
-pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
-    let db = b.db();
-    Some(match kanal {
-        "product:getAll" => product_get_all(db, &a[0]),
-        "product:get" => db.get("SELECT * FROM products WHERE id = ?", p![a[0]]).map(|r| r.unwrap_or(Value::Null)),
-        "product:create" => product_create(db, &a[0]),
-        "product:update" => product_update(b, &a[0], &a[1]),
-        "product:delete" => product_delete(db, &a[0]),
-        "product:adjustStock" => product_adjust_stock(b, &a[0], &a[1]),
-        "product:slobodan" => product_slobodan(b, &a[0]),
-        "product:getDobavljacSifre" => product_get_dobavljac_sifre(db, &a[0]),
-        "product:setDobavljacSifre" => product_set_dobavljac_sifre(db, &a[0], &a[1]),
-        "product:findByDobavljacSifra" => product_find_by_dobavljac_sifra(db, &a[0], &a[1]),
-        "dobavljac:getAll" => db.all("SELECT * FROM dobavljaci ORDER BY naziv", p![]).map(Value::from),
-        "dobavljac:create" => dobavljac_create(db, &a[0]),
-        "dobavljac:update" => dobavljac_update(db, &a[0], &a[1]),
-        "dobavljac:delete" => dobavljac_delete(db, &a[0]),
-        "dobavljac:getSifre" => db
-            .all(
-                "SELECT productId, sifra FROM artikal_dobavljac_sifre WHERE dobavljacId = ? AND sifra IS NOT NULL ORDER BY sifra",
-                p![a[0]],
-            )
-            .map(Value::from),
-        "kupac:getAll" => db.all("SELECT * FROM kupci ORDER BY naziv", p![]).map(Value::from),
-        "kupac:create" => kupac_create(db, &a[0]),
-        "kupac:update" => kupac_update(db, &a[0], &a[1]),
-        "kupac:delete" => kupac_delete(db, &a[0]),
-        _ => return None,
-    })
-}
+pub const KANALI: &[Kanal] = &[
+    Kanal { ime: "product:getAll", h: |b, a| product_get_all(b.db(), &a[0]) },
+    Kanal {
+        ime: "product:get",
+        h: |b, a| b.db().get("SELECT * FROM products WHERE id = ?", p![a[0]]).map(|r| r.unwrap_or(Value::Null)),
+    },
+    Kanal { ime: "product:create", h: |b, a| product_create(b.db(), &a[0]) },
+    Kanal { ime: "product:update", h: |b, a| product_update(b, &a[0], &a[1]) },
+    Kanal { ime: "product:delete", h: |b, a| product_delete(b.db(), &a[0]) },
+    Kanal { ime: "product:adjustStock", h: |b, a| product_adjust_stock(b, &a[0], &a[1]) },
+    Kanal { ime: "product:getDobavljacSifre", h: |b, a| product_get_dobavljac_sifre(b.db(), &a[0]) },
+    Kanal { ime: "product:setDobavljacSifre", h: |b, a| product_set_dobavljac_sifre(b.db(), &a[0], &a[1]) },
+    Kanal { ime: "product:findByDobavljacSifra", h: |b, a| product_find_by_dobavljac_sifra(b.db(), &a[0], &a[1]) },
+    Kanal {
+        ime: "dobavljac:getSifre",
+        h: |b, a| {
+            b.db()
+                .all(
+                    "SELECT productId, sifra FROM artikal_dobavljac_sifre WHERE dobavljacId = ? AND sifra IS NOT NULL ORDER BY sifra",
+                    p![a[0]],
+                )
+                .map(Value::from)
+        },
+    },
+    Kanal { ime: "product:slobodan", h: |b, a| product_slobodan(b, &a[0]) },
+    Kanal { ime: "dobavljac:getAll", h: |b, _| b.db().all("SELECT * FROM dobavljaci ORDER BY naziv", p![]).map(Value::from) },
+    Kanal { ime: "dobavljac:create", h: |b, a| dobavljac_create(b.db(), &a[0]) },
+    Kanal { ime: "dobavljac:update", h: |b, a| dobavljac_update(b.db(), &a[0], &a[1]) },
+    Kanal { ime: "dobavljac:delete", h: |b, a| dobavljac_delete(b.db(), &a[0]) },
+    Kanal { ime: "kupac:getAll", h: |b, _| b.db().all("SELECT * FROM kupci ORDER BY naziv", p![]).map(Value::from) },
+    Kanal { ime: "kupac:create", h: |b, a| kupac_create(b.db(), &a[0]) },
+    Kanal { ime: "kupac:update", h: |b, a| kupac_update(b.db(), &a[0], &a[1]) },
+    Kanal { ime: "kupac:delete", h: |b, a| kupac_delete(b.db(), &a[0]) },
+];

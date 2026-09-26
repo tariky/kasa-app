@@ -23,7 +23,8 @@ use sha2::{Digest, Sha256};
 use crate::greska::{Greska, R};
 use crate::sesija::pristup;
 use crate::sql::Db;
-use crate::{Args, Backend};
+use crate::kanali::Kanal;
+use crate::Backend;
 
 const PREFIKS: &str = "PAZAR1";
 pub const UPOZORENJE_DANA: i64 = 7;
@@ -406,20 +407,18 @@ pub fn provjeri_kanal(b: &Backend, kanal: &str) -> R<()> {
     }
 }
 
-pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
-    // Ugovorni testovi rade s otključanom licencom (kao mock u tsBackend.ts).
-    if !b.provjera_licence {
-        return match kanal {
-            "licenca:stanje" | "licenca:aktiviraj" => Some(Ok(json!({ "stanje": "aktivna" }))),
-            _ => None,
-        };
-    }
-    Some(match kanal {
-        "licenca:stanje" => stanje_licence(b),
-        "licenca:aktiviraj" => aktiviraj_licencu(b, a[0].as_str().unwrap_or("")),
-        _ => return None,
-    })
+/// Ugovorni testovi rade s otključanom licencom (kao mock u tsBackend.ts).
+fn otkljucana() -> R<Value> {
+    Ok(json!({ "stanje": "aktivna" }))
 }
+
+pub const KANALI: &[Kanal] = &[
+    Kanal { ime: "licenca:stanje", h: |b, _| if b.provjera_licence { stanje_licence(b) } else { otkljucana() } },
+    Kanal {
+        ime: "licenca:aktiviraj",
+        h: |b, a| if b.provjera_licence { aktiviraj_licencu(b, a[0].as_str().unwrap_or("")) } else { otkljucana() },
+    },
+];
 
 #[cfg(test)]
 mod tests {

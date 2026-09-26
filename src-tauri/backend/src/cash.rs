@@ -11,7 +11,8 @@ use crate::js::{self, round2, to_number};
 use crate::sql::Db;
 use crate::stampa::Uredjaj;
 use crate::tring::{self, Odgovor};
-use crate::{baci, p, provjera_racuna, sesija, Args, Backend};
+use crate::kanali::Kanal;
+use crate::{baci, p, provjera_racuna, sesija, Backend};
 
 // ─── lib/drawer.ts ──────────────────────────────────────────
 
@@ -211,20 +212,16 @@ pub fn device_cash_in(b: &Backend, iznos: f64) -> R<()> {
     Ok(())
 }
 
-pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
-    if !matches!(kanal, "cash:add" | "cash:retry" | "cash:getToday" | "cash:lastPolog" | "cash:drawerState") {
-        return None;
-    }
-    let db = b.db();
-    Some(match kanal {
-        "cash:add" => sesija::korisnik(b).and_then(|k| add_cash_movement(b, &sesija::sa_korisnikom(&a[0], k.id))),
-        "cash:retry" => retry_cash_movement(b, &a[0]),
-        "cash:getToday" => get_today_movements(db),
-        "cash:lastPolog" => get_last_polog_iznos(db),
-        "cash:drawerState" => drawer_state(db),
-        _ => return None,
-    })
-}
+pub const KANALI: &[Kanal] = &[
+    Kanal {
+        ime: "cash:add",
+        h: |b, a| sesija::korisnik(b).and_then(|k| add_cash_movement(b, &sesija::sa_korisnikom(&a[0], k.id))),
+    },
+    Kanal { ime: "cash:retry", h: |b, a| retry_cash_movement(b, &a[0]) },
+    Kanal { ime: "cash:getToday", h: |b, _| get_today_movements(b.db()) },
+    Kanal { ime: "cash:lastPolog", h: |b, _| get_last_polog_iznos(b.db()) },
+    Kanal { ime: "cash:drawerState", h: |b, _| drawer_state(b.db()) },
+];
 
 #[cfg(test)]
 mod tests {

@@ -11,7 +11,8 @@ use crate::p;
 use crate::sql::Db;
 use crate::katalog::razlicito;
 use crate::zaliha::{self, Dokument, Smjer, TOLERANCIJA_ZALIHE};
-use crate::{audit, baci, Args, Backend};
+use crate::kanali::Kanal;
+use crate::{audit, baci, Backend};
 
 /// Tolerancija pri poređenju cijena (fening).
 const EPS: f64 = 0.001;
@@ -1259,33 +1260,52 @@ fn report_get_data(db: &Db, tip: &Value, from: &Value, to: &Value) -> R<Value> {
     baci!("Nepoznat tip izvještaja: {}", js::to_string(tip))
 }
 
-pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
-    let dan = Dan { danas: b.sat.danas(), godina: b.sat.godina(), korisnik: b.sesija.id() };
-    let db = b.db();
-    let dan = &dan;
-    Some(match kanal {
-        "primka:getAll" => db.all("SELECT * FROM primke ORDER BY datum DESC", p![]).map(Value::from),
-        "primka:get" => get(db, &a[0]),
-        "primka:nextBroj" => next_broj(db, dan),
-        "primka:create" => spremi_potvrdjeno(db, || unesi_primku(db, dan, &a[0]), bez_cijena_koje_ostaju, &a[1], None),
-        "primka:update" => {
-            let id = ili_null(polje(&a[0], "id"));
-            spremi_potvrdjeno(db, || izmijeni_primku(db, dan, &a[0]), || ostaju_pri_izmjeni(db, &a[0]), &a[1], Some(&id))
-        }
-        // Uspjeh bez povratne vrijednosti (kao i prije); samo odbijanje nosi pregled.
-        "primka:delete" => spremi_potvrdjeno(db, || obrisi_primku(db, dan, &a[0]), bez_cijena_koje_ostaju, &a[1], Some(&a[0])),
-        "primka:pregledUnosa" => bez_upisa(db, || unesi_primku(db, dan, &a[0]), bez_cijena_koje_ostaju, None),
-        "primka:pregledIzmjene" => {
-            let id = ili_null(polje(&a[0], "id"));
-            bez_upisa(db, || izmijeni_primku(db, dan, &a[0]), || ostaju_pri_izmjeni(db, &a[0]), Some(&id))
-        }
-        "primka:pregledBrisanja" => bez_upisa(db, || obrisi_primku(db, dan, &a[0]), bez_cijena_koje_ostaju, Some(&a[0])),
-        "nivelacija:getAll" => nivelacija_get_all(db, &a[0], &a[1]),
-        "nivelacija:get" => nivelacija_get(db, &a[0]),
-        "report:getData" => report_get_data(db, &a[0], &a[1], &a[2]),
-        _ => return None,
-    })
+/// "Danas" i prijavljeni korisnik ovog poziva.
+fn dan(b: &Backend) -> Dan {
+    Dan { danas: b.sat.danas(), godina: b.sat.godina(), korisnik: b.sesija.id() }
 }
+
+/// `data.id ?? null` primke koja se mijenja.
+fn id_primke(data: &Value) -> Value {
+    ili_null(polje(data, "id"))
+}
+
+pub const KANALI: &[Kanal] = &[
+    Kanal { ime: "primka:getAll", h: |b, _| b.db().all("SELECT * FROM primke ORDER BY datum DESC", p![]).map(Value::from) },
+    Kanal { ime: "primka:get", h: |b, a| get(b.db(), &a[0]) },
+    Kanal { ime: "primka:nextBroj", h: |b, _| next_broj(b.db(), &dan(b)) },
+    Kanal {
+        ime: "primka:create",
+        h: |b, a| spremi_potvrdjeno(b.db(), || unesi_primku(b.db(), &dan(b), &a[0]), bez_cijena_koje_ostaju, &a[1], None),
+    },
+    Kanal {
+        ime: "primka:update",
+        h: |b, a| {
+            let (db, id) = (b.db(), id_primke(&a[0]));
+            spremi_potvrdjeno(db, || izmijeni_primku(db, &dan(b), &a[0]), || ostaju_pri_izmjeni(db, &a[0]), &a[1], Some(&id))
+        },
+    },
+    // Uspjeh bez povratne vrijednosti (kao i prije); samo odbijanje nosi pregled.
+    Kanal {
+        ime: "primka:delete",
+        h: |b, a| spremi_potvrdjeno(b.db(), || obrisi_primku(b.db(), &dan(b), &a[0]), bez_cijena_koje_ostaju, &a[1], Some(&a[0])),
+    },
+    Kanal { ime: "primka:pregledUnosa", h: |b, a| bez_upisa(b.db(), || unesi_primku(b.db(), &dan(b), &a[0]), bez_cijena_koje_ostaju, None) },
+    Kanal {
+        ime: "primka:pregledIzmjene",
+        h: |b, a| {
+            let (db, id) = (b.db(), id_primke(&a[0]));
+            bez_upisa(db, || izmijeni_primku(db, &dan(b), &a[0]), || ostaju_pri_izmjeni(db, &a[0]), Some(&id))
+        },
+    },
+    Kanal {
+        ime: "primka:pregledBrisanja",
+        h: |b, a| bez_upisa(b.db(), || obrisi_primku(b.db(), &dan(b), &a[0]), bez_cijena_koje_ostaju, Some(&a[0])),
+    },
+    Kanal { ime: "nivelacija:getAll", h: |b, a| nivelacija_get_all(b.db(), &a[0], &a[1]) },
+    Kanal { ime: "nivelacija:get", h: |b, a| nivelacija_get(b.db(), &a[0]) },
+    Kanal { ime: "report:getData", h: |b, a| report_get_data(b.db(), &a[0], &a[1], &a[2]) },
+];
 
 #[cfg(test)]
 mod tests {

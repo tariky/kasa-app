@@ -100,7 +100,7 @@ fn main() {
             }
         };
         if z["meta"] == "kanali" {
-            posalji(&json!({ "id": z["id"], "ok": pazar_backend::kanali::SVI_KANALI }));
+            posalji(&json!({ "id": z["id"], "ok": *pazar_backend::kanali::SVI_KANALI }));
             continue;
         }
         {

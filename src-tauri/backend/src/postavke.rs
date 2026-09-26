@@ -8,7 +8,8 @@ use crate::js::{self, is_integer, nn, to_string};
 use crate::sql::Db;
 use crate::audit::{self, NovaPostavka};
 use crate::sesija::pristup;
-use crate::{baci, p, proizvodnja, Args, Backend};
+use crate::kanali::Kanal;
+use crate::{baci, p, proizvodnja, Backend};
 
 const UPSERT: &str = "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value";
 
@@ -217,25 +218,33 @@ fn spremi_skicu_fakture(db: &Db, id: &Value, naziv: &Value, podaci: &Value, ukup
     Ok(json!(r.last_insert_rowid))
 }
 
-pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
-    let db = b.db();
-    Some(match kanal {
-        "settings:getTring" => get_tring(db),
-        "settings:saveTring" => save_tring(b, &a[0]),
-        "settings:getFirma" => get_firma(db),
-        "settings:saveFirma" => save_firma(b, &a[0]),
-        "settings:get" => match a[0].as_str() {
-            Some(k) if pristup().tajne_postavke.contains(k) => Ok(Value::Null),
-            _ => db.val("SELECT value FROM settings WHERE key = ?", p![a[0]]),
-        },
-        "settings:set" => set(b, &a[0], &a[1]),
-        "savedCarts:list" => db.all("SELECT * FROM saved_carts ORDER BY id DESC", p![]).map(Value::from),
-        "savedCarts:save" => save_cart(db, &a[0], &a[1], &a[2]),
-        "savedCarts:delete" => db.run("DELETE FROM saved_carts WHERE id = ?", p![a[0]]).map(|_| json!({ "success": true })),
-        "fakturaSkice:list" => db.all("SELECT * FROM faktura_skice ORDER BY spremljeno DESC, id DESC", p![]).map(Value::from),
-        "fakturaSkice:save" => spremi_skicu_fakture(db, &a[0], &a[1], &a[2], &a[3]),
-        "fakturaSkice:delete" => db.run("DELETE FROM faktura_skice WHERE id = ?", p![a[0]]).map(|_| json!({ "success": true })),
-        "proizvodnja:setEnabled" => set_enabled(b, &a[0]),
-        _ => return None,
-    })
+/// `settings:get` — tajne postavke se ne vraćaju (null).
+fn get(db: &Db, kljuc: &Value) -> R<Value> {
+    match kljuc.as_str() {
+        Some(k) if pristup().tajne_postavke.contains(k) => Ok(Value::Null),
+        _ => db.val("SELECT value FROM settings WHERE key = ?", p![kljuc]),
+    }
 }
+
+fn uspjesno(r: R<crate::sql::Run>) -> R<Value> {
+    r.map(|_| json!({ "success": true }))
+}
+
+pub const KANALI: &[Kanal] = &[
+    Kanal { ime: "settings:getTring", h: |b, _| get_tring(b.db()) },
+    Kanal { ime: "settings:saveTring", h: |b, a| save_tring(b, &a[0]) },
+    Kanal { ime: "settings:getFirma", h: |b, _| get_firma(b.db()) },
+    Kanal { ime: "settings:get", h: |b, a| get(b.db(), &a[0]) },
+    Kanal { ime: "settings:set", h: |b, a| set(b, &a[0], &a[1]) },
+    Kanal { ime: "settings:saveFirma", h: |b, a| save_firma(b, &a[0]) },
+    Kanal { ime: "savedCarts:list", h: |b, _| b.db().all("SELECT * FROM saved_carts ORDER BY id DESC", p![]).map(Value::from) },
+    Kanal { ime: "savedCarts:save", h: |b, a| save_cart(b.db(), &a[0], &a[1], &a[2]) },
+    Kanal { ime: "savedCarts:delete", h: |b, a| uspjesno(b.db().run("DELETE FROM saved_carts WHERE id = ?", p![a[0]])) },
+    Kanal {
+        ime: "fakturaSkice:list",
+        h: |b, _| b.db().all("SELECT * FROM faktura_skice ORDER BY spremljeno DESC, id DESC", p![]).map(Value::from),
+    },
+    Kanal { ime: "fakturaSkice:save", h: |b, a| spremi_skicu_fakture(b.db(), &a[0], &a[1], &a[2], &a[3]) },
+    Kanal { ime: "fakturaSkice:delete", h: |b, a| uspjesno(b.db().run("DELETE FROM faktura_skice WHERE id = ?", p![a[0]])) },
+    Kanal { ime: "proizvodnja:setEnabled", h: |b, a| set_enabled(b, &a[0]) },
+];

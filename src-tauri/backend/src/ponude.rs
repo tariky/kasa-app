@@ -14,7 +14,8 @@ use crate::stampa::{self, Odstampan, UToku, Uredjaj};
 use crate::tring::uspjeh;
 use crate::tring_racun::build_tring_racun;
 use crate::sesija;
-use crate::{baci, p, provjera_racuna, Args, Backend};
+use crate::kanali::Kanal;
+use crate::{baci, p, provjera_racuna, Backend};
 
 /// Default rok važenja ponude (uobičajena "opcija 8 dana").
 pub const DEFAULT_ROK_DANA: i64 = 8;
@@ -455,25 +456,26 @@ fn create(db: &Db, data: &Value, danas: &str) -> R<Value> {
     db.tx(|| create_ponuda(db, data, danas))
 }
 
-pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
-    let db = b.db();
-    Some(match kanal {
-        "ponuda:getAll" => get_all(db),
-        "ponuda:get" => get(db, &a[0]),
-        "ponuda:nextBroj" => {
-            let godina = b.sat.godina();
-            next_broj_ponude(db, &json!(godina)).map(|broj| json!({ "broj": broj, "godina": godina }))
-        }
-        "ponuda:create" => sesija::korisnik(b).and_then(|k| create(db, &sesija::sa_korisnikom(&a[0], k.id), &b.sat.danas())),
-        "ponuda:update" => db.tx(|| update_ponuda(db, &a[0], &a[1])).map(|_| json!({ "success": true })),
-        "ponuda:setStatus" => set_status_ponude(db, &a[0], &a[1]).map(|_| json!({ "success": true })),
-        "ponuda:delete" => db.tx(|| delete_ponuda(db, &a[0])),
-        // Orkestracija (štampa → atomični upis) je u `konvertuj_ponudu`, isto
-        // kao što je u TS-u živjela u lib/ponuda.ts.
-        "ponuda:konvertuj" => sesija::korisnik(b).and_then(|k| {
-            let data = sesija::sa_korisnikom(&a[0], k.id);
-            konvertuj_ponudu(b, kanal, &data, None)
-        }),
-        _ => return None,
-    })
+fn next_broj(b: &Backend) -> R<Value> {
+    let godina = b.sat.godina();
+    next_broj_ponude(b.db(), &json!(godina)).map(|broj| json!({ "broj": broj, "godina": godina }))
 }
+
+pub const KANALI: &[Kanal] = &[
+    Kanal { ime: "ponuda:getAll", h: |b, _| get_all(b.db()) },
+    Kanal { ime: "ponuda:get", h: |b, a| get(b.db(), &a[0]) },
+    Kanal { ime: "ponuda:nextBroj", h: |b, _| next_broj(b) },
+    Kanal {
+        ime: "ponuda:create",
+        h: |b, a| sesija::korisnik(b).and_then(|k| create(b.db(), &sesija::sa_korisnikom(&a[0], k.id), &b.sat.danas())),
+    },
+    Kanal { ime: "ponuda:update", h: |b, a| b.db().tx(|| update_ponuda(b.db(), &a[0], &a[1])).map(|_| json!({ "success": true })) },
+    Kanal { ime: "ponuda:setStatus", h: |b, a| set_status_ponude(b.db(), &a[0], &a[1]).map(|_| json!({ "success": true })) },
+    Kanal { ime: "ponuda:delete", h: |b, a| b.db().tx(|| delete_ponuda(b.db(), &a[0])) },
+    // Orkestracija (štampa → atomični upis) je u `konvertuj_ponudu`, isto
+    // kao što je u TS-u živjela u lib/ponuda.ts.
+    Kanal {
+        ime: "ponuda:konvertuj",
+        h: |b, a| sesija::korisnik(b).and_then(|k| konvertuj_ponudu(b, "ponuda:konvertuj", &sesija::sa_korisnikom(&a[0], k.id), None)),
+    },
+];

@@ -17,7 +17,8 @@ use crate::prilog::{
     finalize_prilog_and_print, oznaci_ponudu_fakturisanom, prilog_naziv, save_prilog_stavke_in_transaction, PRILOG_SIFRA,
 };
 use crate::storno::{refund_and_print, refund_order_in_transaction};
-use crate::{audit, baci, fiskalni, korisnici, p, ponude, proizvodnja, provjera_racuna, racun, tring_racun, Args, Backend};
+use crate::kanali::Kanal;
+use crate::{audit, baci, fiskalni, korisnici, p, ponude, proizvodnja, provjera_racuna, racun, tring_racun, Backend};
 
 // ─── Pomoćne ────────────────────────────────────────────────
 
@@ -457,66 +458,56 @@ fn set_zadnji_broj(b: &Backend, broj: &Value) -> R<Value> {
     Ok(json!({ "success": true, "predvidjeni": fiskalni::predvidjeni_fiskalni_broj(db)? }))
 }
 
-const KANALI: [&str; 16] = [
-    "order:getAll", "order:get", "order:createManual", "order:finalize", "order:finalizePrilog",
-    "order:setDatumValute", "order:refundAndPrint",
-    "order:getFiscalGaps", "order:dismissFiscalGap",
-    "pending:list", "pending:resolve", "pending:discard",
-    "prilog:getStavke", "prilog:saveStavke",
-    "fiscal:getNumeracija", "fiscal:setZadnjiBroj",
-];
+/// Fiskalni niz: račun po prilogu mora znati broj isječka prije nego ga odštampa.
+fn numeracija(db: &Db) -> R<Value> {
+    Ok(json!({
+        "zadnjiUBazi": fiskalni::zadnji_fiskalni_broj(db)?,
+        "zadnjiUpisani": fiskalni::zadnji_upisani_fiskalni_broj(db)?,
+        "predvidjeni": fiskalni::predvidjeni_fiskalni_broj(db)?,
+    }))
+}
 
-pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
-    if !KANALI.contains(&kanal) {
-        return None;
-    }
-    let db = b.db();
-    Some(match kanal {
-        "order:getAll" => get_all(db),
-        "order:get" => get(db, &a[0]),
-        "order:createManual" => create_manual(b, &a[0]),
-        "order:finalize" => finalize(b, &a[0]),
-        // Račun po prilogu: jedna zbirna stavka na fiskalnom računu, stvarne stavke
-        // se dodjeljuju naknadno.
-        "order:finalizePrilog" => sesija::korisnik(b).and_then(|k| {
-            let data = sesija::sa_korisnikom(&a[0], k.id);
-            finalize_prilog_and_print(b, &data)
-        }),
-        // Fiskalni niz: račun po prilogu mora znati broj isječka prije nego ga odštampa.
-        "fiscal:getNumeracija" => (|| {
-            Ok(json!({
-                "zadnjiUBazi": fiskalni::zadnji_fiskalni_broj(db)?,
-                "zadnjiUpisani": fiskalni::zadnji_upisani_fiskalni_broj(db)?,
-                "predvidjeni": fiskalni::predvidjeni_fiskalni_broj(db)?,
-            }))
-        })(),
-        "fiscal:setZadnjiBroj" => set_zadnji_broj(b, &a[0]),
-        "prilog:getStavke" => db
-            .all(
-                "
+fn prilog_stavke(db: &Db, order_id: &Value) -> R<Value> {
+    db.all(
+        "
       SELECT ps.*, p.naziv AS productNaziv, p.jm AS productJm, p.sifra AS productSifra, p.tip AS productTip
       FROM prilog_stavke ps
       LEFT JOIN products p ON p.id = ps.productId
       WHERE ps.orderId = ?
       ORDER BY ps.id
     ",
-                p![a[0]],
-            )
-            .map(Value::from),
-        "prilog:saveStavke" => db
-            .tx(|| save_prilog_stavke_in_transaction(db, &a[0], &a[1]))
-            .map(|_| json!({ "success": true })),
-        "order:setDatumValute" => postavi_datum_valute(db, &a[0], &a[1]).map(|d| json!({ "datumValute": d })),
-        // Orkestracija (štampa → atomični upis) je u `refund_and_print`.
-        "order:refundAndPrint" => storno(b, &a[0]),
-        "pending:list" => pending_list(db),
-        "pending:resolve" => pending_resolve(b, &a[0]),
-        "pending:discard" => pending_discard(b, &a[0]),
-        "order:getFiscalGaps" => get_fiscal_gaps(db),
-        "order:dismissFiscalGap" => dismiss_fiscal_gap(b, &a[0]),
-        _ => return None,
-    })
+        p![order_id],
+    )
+    .map(Value::from)
 }
+
+pub const KANALI: &[Kanal] = &[
+    Kanal { ime: "order:getAll", h: |b, _| get_all(b.db()) },
+    Kanal { ime: "order:get", h: |b, a| get(b.db(), &a[0]) },
+    Kanal { ime: "order:createManual", h: |b, a| create_manual(b, &a[0]) },
+    Kanal { ime: "order:finalize", h: |b, a| finalize(b, &a[0]) },
+    // Račun po prilogu: jedna zbirna stavka na fiskalnom računu, stvarne stavke
+    // se dodjeljuju naknadno.
+    Kanal {
+        ime: "order:finalizePrilog",
+        h: |b, a| sesija::korisnik(b).and_then(|k| finalize_prilog_and_print(b, &sesija::sa_korisnikom(&a[0], k.id))),
+    },
+    Kanal { ime: "fiscal:getNumeracija", h: |b, _| numeracija(b.db()) },
+    Kanal { ime: "fiscal:setZadnjiBroj", h: |b, a| set_zadnji_broj(b, &a[0]) },
+    Kanal { ime: "prilog:getStavke", h: |b, a| prilog_stavke(b.db(), &a[0]) },
+    Kanal {
+        ime: "prilog:saveStavke",
+        h: |b, a| b.db().tx(|| save_prilog_stavke_in_transaction(b.db(), &a[0], &a[1])).map(|_| json!({ "success": true })),
+    },
+    Kanal { ime: "order:setDatumValute", h: |b, a| postavi_datum_valute(b.db(), &a[0], &a[1]).map(|d| json!({ "datumValute": d })) },
+    // Orkestracija (štampa → atomični upis) je u `refund_and_print`.
+    Kanal { ime: "order:refundAndPrint", h: |b, a| storno(b, &a[0]) },
+    Kanal { ime: "pending:list", h: |b, _| pending_list(b.db()) },
+    Kanal { ime: "pending:resolve", h: |b, a| pending_resolve(b, &a[0]) },
+    Kanal { ime: "pending:discard", h: |b, a| pending_discard(b, &a[0]) },
+    Kanal { ime: "order:getFiscalGaps", h: |b, _| get_fiscal_gaps(b.db()) },
+    Kanal { ime: "order:dismissFiscalGap", h: |b, a| dismiss_fiscal_gap(b, &a[0]) },
+];
 
 #[cfg(test)]
 mod tests {

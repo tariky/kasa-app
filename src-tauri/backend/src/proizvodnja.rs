@@ -15,7 +15,8 @@ use crate::sql::Db;
 use crate::stampa::{self, Odstampan, UToku, Uredjaj};
 use crate::tring::uspjeh;
 use crate::tring_racun::build_tring_racun;
-use crate::{baci, p, provjera_racuna, sesija, Args, Backend};
+use crate::kanali::Kanal;
+use crate::{baci, p, provjera_racuna, sesija, Backend};
 
 /// Usluga preko koje se prodaje rad po mjeri — kreira se pri uključivanju modula.
 pub const PRODAJNA_USLUGA_SIFRA: &str = "NAMJ";
@@ -1017,41 +1018,53 @@ fn set_status(b: &Backend, data: &Value) -> R<Value> {
     Ok(json!({ "success": true }))
 }
 
-pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
-    let db = b.db();
-    let ok = |r: R<()>| r.map(|_| json!({ "success": true }));
-    Some(match kanal {
-        "nalog:getAll" => list_nalozi(db, &a[0]),
-        "nalog:get" => get_nalog(db, &a[0]),
-        "nalog:nextBroj" => {
-            let godina = b.sat.godina();
-            next_broj_naloga(db, &json!(godina)).map(|broj| json!({ "broj": broj, "godina": godina }))
-        }
-        "nalog:create" => sesija::korisnik(b).and_then(|k| {
-            let data = sesija::sa_korisnikom(&a[0], k.id);
-            let danas = b.sat.danas();
-            db.tx(|| create_nalog(db, &data, &danas))
-        }),
-        // Drugi argument je izbor proizvoda (niz); raniji pozivi su tu slali
-        // korisnikId — to se ignoriše i važi zadani izbor.
-        "nalog:createIzPonude" => sesija::korisnik(b).and_then(|k| {
-            let danas = b.sat.danas();
-            db.tx(|| create_nalog_iz_ponude(db, &a[0], &json!(k.id), &a[1], &danas))
-        }),
-        "nalog:zaPonudu" => nalog_za_ponudu(db, &a[0]),
-        "nalog:proizvodiPonude" => proizvodi_ponude(db, &a[0]).map(Value::from),
-        "nalog:setProizvodi" => ok(db.tx(|| set_proizvodi_naloga(db, &a[0], &a[1]))),
-        "nalog:update" => ok(update_nalog(db, &a[0], &a[1])),
-        "nalog:replaceStavke" => ok(db.tx(|| replace_stavke(db, &a[0], &a[1]))),
-        "nalog:setStatus" => set_status(b, &a[0]),
-        "nalog:delete" => ok(db.tx(|| delete_nalog(db, &a[0]))),
-        "nalog:kalkulacija" => kalkulacija_naloga(db, &a[0]),
-        "nalog:izdajRacun" => sesija::korisnik(b).and_then(|k| {
-            let data = sesija::sa_korisnikom(&a[0], k.id);
-            izdaj_racun_za_nalog(b, kanal, &data)
-        }),
-        "normativ:get" => get_normativ(db, &a[0]).map(Value::from),
-        "normativ:save" => ok(db.tx(|| save_normativ(db, &a[0], &a[1]))),
-        _ => return None,
-    })
+fn next_broj(b: &Backend) -> R<Value> {
+    let godina = b.sat.godina();
+    next_broj_naloga(b.db(), &json!(godina)).map(|broj| json!({ "broj": broj, "godina": godina }))
 }
+
+/// `{ success: true }` kad je radnja prošla.
+fn uspjesno(r: R<()>) -> R<Value> {
+    r.map(|_| json!({ "success": true }))
+}
+
+pub const KANALI: &[Kanal] = &[
+    Kanal { ime: "nalog:getAll", h: |b, a| list_nalozi(b.db(), &a[0]) },
+    Kanal { ime: "nalog:get", h: |b, a| get_nalog(b.db(), &a[0]) },
+    Kanal { ime: "nalog:nextBroj", h: |b, _| next_broj(b) },
+    Kanal {
+        ime: "nalog:create",
+        h: |b, a| {
+            sesija::korisnik(b).and_then(|k| {
+                let data = sesija::sa_korisnikom(&a[0], k.id);
+                let danas = b.sat.danas();
+                b.db().tx(|| create_nalog(b.db(), &data, &danas))
+            })
+        },
+    },
+    // Drugi argument je izbor proizvoda (niz); raniji pozivi su tu slali
+    // korisnikId — to se ignoriše i važi zadani izbor.
+    Kanal {
+        ime: "nalog:createIzPonude",
+        h: |b, a| {
+            sesija::korisnik(b).and_then(|k| {
+                let danas = b.sat.danas();
+                b.db().tx(|| create_nalog_iz_ponude(b.db(), &a[0], &json!(k.id), &a[1], &danas))
+            })
+        },
+    },
+    Kanal { ime: "nalog:zaPonudu", h: |b, a| nalog_za_ponudu(b.db(), &a[0]) },
+    Kanal { ime: "nalog:update", h: |b, a| uspjesno(update_nalog(b.db(), &a[0], &a[1])) },
+    Kanal { ime: "nalog:proizvodiPonude", h: |b, a| proizvodi_ponude(b.db(), &a[0]).map(Value::from) },
+    Kanal { ime: "nalog:setProizvodi", h: |b, a| uspjesno(b.db().tx(|| set_proizvodi_naloga(b.db(), &a[0], &a[1]))) },
+    Kanal { ime: "nalog:replaceStavke", h: |b, a| uspjesno(b.db().tx(|| replace_stavke(b.db(), &a[0], &a[1]))) },
+    Kanal { ime: "nalog:setStatus", h: |b, a| set_status(b, &a[0]) },
+    Kanal { ime: "nalog:delete", h: |b, a| uspjesno(b.db().tx(|| delete_nalog(b.db(), &a[0]))) },
+    Kanal { ime: "nalog:kalkulacija", h: |b, a| kalkulacija_naloga(b.db(), &a[0]) },
+    Kanal {
+        ime: "nalog:izdajRacun",
+        h: |b, a| sesija::korisnik(b).and_then(|k| izdaj_racun_za_nalog(b, "nalog:izdajRacun", &sesija::sa_korisnikom(&a[0], k.id))),
+    },
+    Kanal { ime: "normativ:get", h: |b, a| get_normativ(b.db(), &a[0]).map(Value::from) },
+    Kanal { ime: "normativ:save", h: |b, a| uspjesno(b.db().tx(|| save_normativ(b.db(), &a[0], &a[1]))) },
+];
