@@ -381,6 +381,32 @@ describe('nalog:izdajRacun — write-ahead (samostalni nalog)', () => {
     expect(nalog(id).status).toBe('u_izradi');
   });
 
+  // Kanalima se nalog s računom u nezavršenim ne može vratiti u izradu (test
+  // iznad); upis iz dijaloga ipak sam provjerava nalog — stanje promijenjeno
+  // mimo programa (ručno u bazi, stara verzija) ne smije dati račun.
+  test('resolve odbija nalog koji više nije završena narudžba i ništa ne upisuje; red ostaje', async () => {
+    const id = await zavrsenNalog();
+    await uredjajBezPotvrde();
+    await izdajNalog(id);
+    const pid = await pendingId();
+    const resolve = () => b.call('pending:resolve', { id: pid, brojFiskalnogRacuna: '600', createdAt: DATUM });
+    const nistaUpisano = () => {
+      expect(brojRacuna()).toBe(0);
+      expect(baza.broj("SELECT COUNT(*) FROM products WHERE sifra = 'NAMJ'")).toBe(0);
+      expect(pending()).toHaveLength(1);
+    };
+
+    b.db.prepare("UPDATE radni_nalozi SET status = 'u_izradi', zavrsenAt = NULL WHERE id = ?").run(id);
+    await expect(resolve()).rejects.toThrow('Nalog mora biti završen prije izdavanja računa');
+    expect(nalog(id)).toEqual({ status: 'u_izradi', racunId: null });
+    nistaUpisano();
+
+    b.db.prepare("UPDATE radni_nalozi SET status = 'zavrsen', vrsta = 'zaliha' WHERE id = ?").run(id);
+    await expect(resolve()).rejects.toThrow('Račun se izdaje samo za nalog po narudžbi');
+    expect(nalog(id)).toEqual({ status: 'zavrsen', racunId: null });
+    nistaUpisano();
+  });
+
   test('red riješen tokom štampe: vecEvidentiran, samo jedan račun', async () => {
     const id = await zavrsenNalog();
     const stampa = b.tring.zadrzi('/sfr');

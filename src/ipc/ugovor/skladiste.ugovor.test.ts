@@ -1341,6 +1341,72 @@ describe('primka: protunivelacija', () => {
   });
 });
 
+// Materijal nema prodajnu cijenu (lib/skladiste.ts promjeneUProdaji): kad
+// artikal poslije primke postane materijal, brisanje ili izmjena primke mu
+// vrati cijenu bez nivelacije — javlja se među promjenama bez zalihe.
+describe('primka: artikal koji je postao materijal', () => {
+  async function primkaDvaArtikla() {
+    const x = baza.artikal({ sifra: 'MX', cijena: 10, stanje: 5 });
+    const y = baza.artikal({ sifra: 'MY', cijena: 10, stanje: 5 });
+    const { id } = spremljena(await b.pozovi('primka:create', primka('U-1', [stavkaPrimke(x, 2, 12), stavkaPrimke(y, 2, 12)])));
+    expect(nivelacijeDok().map(n => n.stavke.map(s => s.productId))).toEqual([[x, y]]);
+    await b.call('product:update', y, { tip: 'materijal' });
+    return { id, x, y };
+  }
+
+  test('brisanje primke: protunivelacija samo za artikal, materijalu cijena vraćena bez nje', async () => {
+    const { id, x, y } = await primkaDvaArtikla();
+
+    const pregled = await b.pozovi('primka:pregledBrisanja', id);
+    expect(pregled.dokumenti.map(d => [d.vrsta, d.stavke.map(s => [s.productId, s.staraCijena, s.novaCijena])]))
+      .toEqual([['protunivelacija', [[x, 12, 10]]]]);
+    expect(pregled.bezZalihe.map(c => [c.productId, c.staraCijena, c.novaCijena])).toEqual([[y, 12, 10]]);
+    expect(await b.pozovi('primka:delete', id, pregled)).toBeNull();
+
+    expect(nivelacijeDok().map(n => n.stavke.map(s => [s.productId, s.stara, s.nova]))).toEqual([[[x, 10, 12], [y, 10, 12]], [[x, 12, 10]]]);
+    expect([cijena(x), cijena(y)]).toEqual([10, 10]);
+  });
+
+  test('izmjena cijene na primci: nivelacija samo za artikal, materijal ne dobija novu cijenu', async () => {
+    const { id, x, y } = await primkaDvaArtikla();
+    const data = { id, ...primka('U-1', [stavkaPrimke(x, 2, 14), stavkaPrimke(y, 2, 14)]) };
+
+    const pregled = await b.pozovi('primka:pregledIzmjene', data);
+    expect(pregled.dokumenti.map(d => [d.vrsta, d.stavke.map(s => [s.productId, s.staraCijena, s.novaCijena])]))
+      .toEqual([['nivelacija', [[x, 12, 14]]]]);
+    expect(pregled.bezZalihe.map(c => [c.productId, c.staraCijena, c.novaCijena])).toEqual([[y, 12, 10]]);
+    expect(spremljena(await b.pozovi('primka:update', data, pregled))).toEqual({ id, nivelacijaCreated: true });
+
+    expect(nivelacijeDok().map(n => n.stavke.map(s => [s.productId, s.stara, s.nova]))).toEqual([[[x, 10, 12], [y, 10, 12]], [[x, 12, 14]]]);
+    expect([cijena(x), cijena(y)]).toEqual([14, 10]);
+  });
+});
+
+// Artikli primke su njene stavke i artikli čiju je cijenu upisala u historiju
+// (lib/skladiste.ts artikliPrimke, UNION). Kanalima stavka ne nestaje bez
+// poništenja svoje promjene cijene; u bazi starije verzije promjena može
+// ostati bez stavke — brisanje primke je ipak vraća i dokumentuje.
+describe('primka: promjena cijene u historiji bez stavke', () => {
+  test('brisanje primke vraća i dokumentuje cijenu artikla koji je samo u historiji', async () => {
+    const a = baza.artikal({ sifra: 'HA', cijena: 5, stanje: 1 });
+    const h = baza.artikal({ sifra: 'HB', cijena: 10, stanje: 5 });
+    const { id } = spremljena(await b.pozovi('primka:create', primka('U-1', [stavkaPrimke(a, 1, 5), stavkaPrimke(h, 2, 12)])));
+    // Stavka i ulaz artikla nestali (stara verzija), promjena cijene 10 → 12 ostala.
+    b.db.prepare('DELETE FROM primka_stavke WHERE primkaId = ? AND productId = ?').run(id, h);
+    b.db.prepare("DELETE FROM stock_movements WHERE referenceType = 'primka' AND referenceId = ? AND productId = ?").run(id, h);
+    expect(baza.redovi("SELECT productId, novaCijena, ponistena FROM cijena_historija WHERE izvor = 'primka' AND izvorId = ?", id))
+      .toEqual([{ productId: h, novaCijena: 12, ponistena: 0 }]);
+
+    const pregled = await b.pozovi('primka:pregledBrisanja', id);
+    expect(pregled.dokumenti.map(d => [d.vrsta, d.stavke.map(s => [s.productId, s.kolicina, s.staraCijena, s.novaCijena])]))
+      .toEqual([['protunivelacija', [[h, 5, 12, 10]]]]);
+    expect(await b.pozovi('primka:delete', id, pregled)).toBeNull();
+
+    expect(cijena(h)).toBe(10);
+    expect(nivelacijeDok().at(-1)?.stavke).toEqual([{ productId: h, kolicina: 5, stara: 12, nova: 10, ukupno: -10 }]);
+  });
+});
+
 /** Pomoćni artikal bez veze s testom (primka mora imati bar jednu stavku). */
 function q0(): number {
   return baza.artikal({ sifra: `Q${Math.random().toString(36).slice(2, 8)}`, cijena: 1 });
