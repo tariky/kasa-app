@@ -1,6 +1,6 @@
 import type { SqlDb } from './sqldb';
 import type { NeuspjehUredjaja } from './fiskalniUredjaj';
-import { NACINI_PLACANJA, raspodjelaPlacanja } from './placanje';
+import { NACINI_PLACANJA, jsonObjekat, raspodjelaPlacanja } from './placanje';
 
 /**
  * Write-ahead zapis računa (pending_receipts, vidi
@@ -8,7 +8,7 @@ import { NACINI_PLACANJA, raspodjelaPlacanja } from './placanje';
  * upiše prije štampe, a briše tek kad je ishod poznat — neuspjeh sa sigurnim
  * ishodom ga briše, nepoznat ishod ga ostavlja za dijalog nezavršenih
  * računa, a uspjeh ga briše u istoj transakciji s upisom računa.
- * Rust: `neuspjela_stampa`, `preuzmi_pending_red` i `vec_evidentiran` u racuni.rs.
+ * Rust: `stampa::neuspjeh`, a `preuzmi_pending_red` i `vec_evidentiran` u pending_racun.rs.
  */
 
 export interface NeuspjehStampe {
@@ -160,15 +160,6 @@ export function provjeriNacinPlacanjaSnapshota(nacin: unknown): string {
     if (jsonObjekat(nacin) && raspodjelaPlacanja(nacin, 0).poznat) return nacin;
   }
   throw new Error(`Nepoznat način plaćanja: "${String(nacin ?? '')}"`);
-}
-
-function jsonObjekat(tekst: string): boolean {
-  try {
-    const json: unknown = JSON.parse(tekst);
-    return !!json && typeof json === 'object' && !Array.isArray(json);
-  } catch {
-    return false;
-  }
 }
 
 /** Write-ahead: snapshot se upiše (odmah, van transakcije) prije štampe. */

@@ -41,8 +41,8 @@ impl<'a> Uredjaj<'a> {
         Ok(Uredjaj { b, operator_id: t.operator_id, operator_password })
     }
 
-    /// `if (Tring.isLoggingEnabled()) console.log(...)`. Ide na stderr: stdout
-    /// ugovor-servera je kanal odgovora.
+    /// Ispis u konzolu uz `dev.logging` (TS ispisuje u services/tring.ts). Ide
+    /// na stderr: stdout ugovor-servera je kanal odgovora.
     fn dnevnik(&self, sta: &str, v: &Value) {
         if self.b.tring.is_logging_enabled() {
             eprintln!("[Tring] {sta}: {}", js::stringify(v));

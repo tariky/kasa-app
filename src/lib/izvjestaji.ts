@@ -52,12 +52,6 @@ export function formatRucPct(rucPct: number): string {
   return rucPct.toFixed(1).replace('.', ',');
 }
 
-/** RUC jedne primke — isti broj koji pokazuje kalkulacija te primke. */
-export function rucPrimke(primka: { stavke?: StavkaZaKalkulaciju[] }): { ruc: number; rucPct: number } {
-  const { ruc, rucPct } = sumePrimke([primka]);
-  return { ruc, rucPct };
-}
-
 export interface SumePrometa {
   /** Zbir izvršenih računa, sa PDV-om. */
   ukupno: number;

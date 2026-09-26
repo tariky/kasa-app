@@ -1,5 +1,5 @@
 import { test, expect, describe } from 'bun:test';
-import { sumePrimke, rucPrimke, sumePrometa, sumeNivelacija, razlikePoZnaku, formatRucPct } from './izvjestaji';
+import { sumePrimke, sumePrometa, sumeNivelacija, razlikePoZnaku, formatRucPct } from './izvjestaji';
 import { kalkulacijaPrimke, type StavkaZaKalkulaciju } from './kalkulacija';
 import { formatKM } from './utils';
 import { round2 } from './novac';
@@ -21,7 +21,6 @@ function blizu(dobiveno: object, ocekivano: Record<string, number>) {
 describe('RUC primki', () => {
   test('nabavna 100, MP 117 sa PDV-om (E 17 %) → RUC 0, ne +17 %', () => {
     const p = { stavke: [st({ kolicina: 1, nabavnaCijena: 100, cijena: 117 })] };
-    expect(rucPrimke(p)).toEqual({ ruc: 0, rucPct: 0 });
     expect(sumePrimke([p])).toEqual({
       nabavna: 100, nabavnaArtikala: 100, prodajnaBezPdv: 100, prodajnaSaPdv: 117, ruc: 0, rucPct: 0,
     });
@@ -41,7 +40,6 @@ describe('RUC primki', () => {
     expect(s.prodajnaSaPdv).toBe(234);
     expect(s.ruc).toBe(100);
     expect(s.rucPct).toBe(100); // a ne 100 / 208
-    expect(rucPrimke(p)).toEqual({ ruc: 100, rucPct: 100 });
   });
 
   test('rabat i zavisni troškovi ulaze u nabavnu, pa i u RUC', () => {
@@ -70,7 +68,6 @@ describe('RUC primki', () => {
       ruc: k.ruc,
       rucPct: k.rucPct,
     });
-    expect(rucPrimke({ stavke })).toEqual({ ruc: k.ruc, rucPct: k.rucPct });
     expect(k.ruc).not.toBe(0);
   });
 
@@ -83,7 +80,7 @@ describe('RUC primki', () => {
     ];
     const k = kalkulacijaPrimke(stavke);
     expect(k.rucPct.toFixed(1)).toBe('6.7'); // UlazDialog: `RUC · ${k.rucPct.toFixed(1)} %`
-    expect(rucPrimke({ stavke }).rucPct).toBe(k.rucPct);
+    expect(sumePrimke([{ stavke }]).rucPct).toBe(k.rucPct);
     expect(formatRucPct(sumePrimke([{ stavke }]).rucPct)).toBe('6,7');
     expect(formatRucPct(-0.04)).toBe('-0,0');
   });
@@ -103,8 +100,8 @@ describe('RUC primki', () => {
   test('više primki: zbir iznosa, a stopa RUC iz zbira (ne prosjek stopa)', () => {
     const p1 = { stavke: [st({ kolicina: 1, nabavnaCijena: 100, cijena: 175.5 })] }; // bez PDV 150 → RUC 50 (50 %)
     const p2 = { stavke: [st({ kolicina: 1, nabavnaCijena: 300, cijena: 386.1 })] }; // bez PDV 330 → RUC 30 (10 %)
-    blizu(rucPrimke(p1), { ruc: 50, rucPct: 50 });
-    blizu(rucPrimke(p2), { ruc: 30, rucPct: 10 });
+    blizu(sumePrimke([p1]), { nabavna: 100, nabavnaArtikala: 100, prodajnaBezPdv: 150, prodajnaSaPdv: 175.5, ruc: 50, rucPct: 50 });
+    blizu(sumePrimke([p2]), { nabavna: 300, nabavnaArtikala: 300, prodajnaBezPdv: 330, prodajnaSaPdv: 386.1, ruc: 30, rucPct: 10 });
     blizu(sumePrimke([p1, p2]), {
       nabavna: 400, nabavnaArtikala: 400, prodajnaBezPdv: 480, prodajnaSaPdv: 561.6, ruc: 80, rucPct: 20,
     });
@@ -114,15 +111,14 @@ describe('RUC primki', () => {
     const nule = { nabavna: 0, nabavnaArtikala: 0, prodajnaBezPdv: 0, prodajnaSaPdv: 0, ruc: 0, rucPct: 0 };
     expect(sumePrimke([])).toEqual(nule);
     expect(sumePrimke([{ stavke: [] }, {}])).toEqual(nule);
-    expect(rucPrimke({})).toEqual({ ruc: 0, rucPct: 0 });
+    expect(sumePrimke([{}])).toEqual(nule);
     const samoMaterijal = { stavke: [st({ kolicina: 4, nabavnaCijena: 25, cijena: 0 })] };
     expect(sumePrimke([samoMaterijal])).toEqual({ ...nule, nabavna: 100 });
-    expect(rucPrimke(samoMaterijal)).toEqual({ ruc: 0, rucPct: 0 });
   });
 
   test('prodaja ispod nabavne daje negativan RUC', () => {
     const p = { stavke: [st({ kolicina: 2, nabavnaCijena: 50, cijena: 46.8 })] }; // bez PDV 40 × 2 = 80, nabavna 100
-    expect(rucPrimke(p)).toEqual({ ruc: -20, rucPct: -20 });
+    expect(sumePrimke([p])).toMatchObject({ ruc: -20, rucPct: -20 });
   });
 });
 

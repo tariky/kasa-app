@@ -82,7 +82,7 @@ export const nulaPlacanja = (): Placanja => ({ gotovina: 0, kartica: 0, virman: 
 const km = (n: number) => n.toFixed(2).replace('.', ',');
 
 /** JSON objekat iz upisanog načina plaćanja; `null` kad to nije. */
-function jsonObjekat(nacin: string): Record<string, unknown> | null {
+export function jsonObjekat(nacin: string): Record<string, unknown> | null {
   let json: unknown = null;
   try { json = JSON.parse(nacin); } catch { /* nije JSON */ }
   return json && typeof json === 'object' && !Array.isArray(json) ? json as Record<string, unknown> : null;

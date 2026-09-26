@@ -2,7 +2,7 @@
 import { test, expect, describe, beforeEach, afterEach, setSystemTime } from 'bun:test';
 import { otvoriBackend, prijavi, ADMIN_PIN, type Backend } from './backend';
 import { scenarij, danas, primka, stavkaPrimke, spremljena, postoji } from './scenarij';
-import { rucPrimke, sumePrimke } from '../../lib/izvjestaji';
+import { sumePrimke } from '../../lib/izvjestaji';
 
 let b: Backend;
 const baza = scenarij(() => b);
@@ -607,10 +607,10 @@ describe('report:getData', () => {
     ]);
     // Artikal: nabavna 100 − 20 + 5 = 85, prodajna bez PDV-a 23,40 / 1,17 × 10 = 200 → RUC 115.
     // Materijal (108) je u nabavnoj, ali ne u RUC-u.
-    const { ruc, rucPct } = rucPrimke(r);
+    const { ruc, rucPct, nabavna } = sumePrimke([r]);
     expect(ruc).toBeCloseTo(115, 9);
     expect(rucPct).toBeCloseTo(135.294, 3); // 115 / 85 × 100
-    expect(sumePrimke([r]).nabavna).toBe(193);
+    expect(nabavna).toBe(193);
   });
 
   test('nepoznat tip izvještaja je greška', async () => {

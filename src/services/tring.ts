@@ -36,10 +36,6 @@ export function setLoggingEnabled(enabled: boolean): void {
   loggingEnabled = enabled;
 }
 
-export function isLoggingEnabled(): boolean {
-  return loggingEnabled;
-}
-
 export function getLogs(): TringLogEntry[] {
   return logEntries;
 }

@@ -17,7 +17,7 @@ import * as zaliha from './zaliha';
  * obrnuto nakon prodaje. `datum` = datum storna (bez njega: sada).
  * Rust: `vrati_zalihu_racuna` u storno.rs.
  */
-export function vratiZalihuRacuna(db: SqlDb, orderId: number, datum: string | null = null): void {
+function vratiZalihuRacuna(db: SqlDb, orderId: number, datum: string | null = null): void {
   const izlazi = db.prepare(
     "SELECT productId, kolicina FROM stock_movements WHERE tip = 'izlaz' AND referenceType IN ('order', 'prilog') AND referenceId = ? ORDER BY id"
   ).all(orderId) as Array<{ productId: number; kolicina: number }>;
