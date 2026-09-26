@@ -12,10 +12,10 @@ use serde_json::Value;
 pub const SVI_KANALI: &[&str] = &[
     "licenca:stanje", "licenca:aktiviraj",
     "user:login", "user:logout", "user:promijeniSvojPin", "user:getAll", "user:create", "user:update", "user:delete",
-    "product:getAll", "product:get", "product:create", "product:update", "product:delete", "product:adjustStock", "product:search",
+    "product:getAll", "product:get", "product:create", "product:update", "product:delete", "product:adjustStock",
     "product:getDobavljacSifre", "product:setDobavljacSifre", "product:findByDobavljacSifra", "dobavljac:getSifre", "product:slobodan",
-    "materijal:search", "dobavljac:getAll", "dobavljac:create", "dobavljac:update", "dobavljac:delete",
-    "kupac:getAll", "kupac:search", "kupac:create", "kupac:update", "kupac:delete",
+    "dobavljac:getAll", "dobavljac:create", "dobavljac:update", "dobavljac:delete",
+    "kupac:getAll", "kupac:create", "kupac:update", "kupac:delete",
     "primka:getAll", "primka:get", "primka:nextBroj", "primka:create", "primka:update", "primka:delete",
     "primka:pregledUnosa", "primka:pregledIzmjene", "primka:pregledBrisanja", "nivelacija:getAll", "nivelacija:get",
     "order:getAll", "order:get", "order:createManual", "order:finalize", "order:finalizePrilog",
@@ -50,7 +50,7 @@ pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> R<Value> {
         "licenca" => licenca::obradi(b, kanal, a),
         "user" => korisnici::obradi(b, kanal, a),
         "settings" | "savedCarts" | "fakturaSkice" | "proizvodnja" => postavke::obradi(b, kanal, a),
-        "product" | "materijal" | "dobavljac" | "kupac" => katalog::obradi(b, kanal, a),
+        "product" | "dobavljac" | "kupac" => katalog::obradi(b, kanal, a),
         "primka" | "nivelacija" | "report" => skladiste::obradi(b, kanal, a),
         "order" | "pending" | "prilog" | "fiscal" => racuni::obradi(b, kanal, a),
         "cash" => cash::obradi(b, kanal, a),
@@ -78,8 +78,8 @@ mod tests {
     }
 
     /// Svaki kanal sa liste ima domenu koja ga obrađuje, a uklonjeni kanali
-    /// (sirovi račun, storno, reklamacija, upis artikla, provjera admin PIN-a)
-    /// ne postoje ni kad ih domena više ne zna.
+    /// (sirovi račun, storno, reklamacija, upis artikla, provjera admin PIN-a,
+    /// pretrage) ne postoje ni kad ih domena više ne zna.
     #[test]
     fn svaki_kanal_ima_handler() {
         let dir = std::env::temp_dir().join(format!("kasa-kanali-test-{}", std::process::id()));
@@ -95,7 +95,7 @@ mod tests {
         }
         for kanal in [
             "order:create", "order:refund", "order:updateReklamacija", "tring:printReceipt", "tring:printRefund",
-            "tring:writeArticle", "user:verifyAdminPin", "audit:getAll",
+            "tring:writeArticle", "user:verifyAdminPin", "audit:getAll", "product:search", "kupac:search", "materijal:search",
         ] {
             assert_eq!(b.call(kanal, vec![Value::Null]), Err(format!("Kanal ne postoji: {kanal}")));
         }

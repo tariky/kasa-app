@@ -1,73 +1,49 @@
 // Ko smije zvati koji kanal. Main proces drži prijavljenog korisnika (sesiju) i
-// sam odlučuje — renderer ne šalje ni korisnikId ni ulogu. Isti skupovi važe
-// za Rust backend (src-tauri), pa su ovdje kao podaci, ne razbacani po handlerima.
+// sam odlučuje — renderer ne šalje ni korisnikId ni ulogu. Liste su u
+// pristup.json da ih Rust backend (src-tauri) čita iste (`include_str!`).
 import type { JavniKorisnik } from '../lib/korisnici';
-import { KLJUCEVI_DOKUMENATA } from '../lib/dokumentPostavke';
+import pristup from './pristup.json';
 
 export const PORUKA_NISTE_PRIJAVLJENI = 'Niste prijavljeni';
 export const PORUKA_SAMO_ADMIN = 'Ovu radnju može izvršiti samo administrator';
 export const PORUKA_ZADANI_PIN = 'Prije rada promijenite zadani PIN 0000';
 
 /** Jedini kanali (uz KANALI_BEZ_PRIJAVE) dok prijavljeni korisnik još ima zadani PIN. */
-export const KANALI_SA_ZADANIM_PINOM: ReadonlySet<string> = new Set(['user:promijeniSvojPin', 'user:logout']);
+export const KANALI_SA_ZADANIM_PINOM: ReadonlySet<string> = new Set(pristup.kanaliSaZadanimPinom);
 
-/** Kanali koji rade i bez prijave (ekran za prijavu i aktivaciju licence). */
-export const KANALI_BEZ_PRIJAVE: ReadonlySet<string> = new Set([
-  'licenca:stanje', 'licenca:aktiviraj',
-  'user:login', 'user:logout',
-  // LoginScreen: naziv firme u lijevom panelu.
-  'settings:getFirma',
-  // settings:get samo za ključeve iz POSTAVKE_BEZ_PRIJAVE (vidi provjeriPristup).
-  'settings:get',
-]);
+/**
+ * Kanali koji rade i bez prijave: ekran za prijavu i aktivacija licence,
+ * settings:getFirma (naziv firme na LoginScreenu) i settings:get samo za
+ * ključeve iz POSTAVKE_BEZ_PRIJAVE (vidi provjeriPristup).
+ */
+export const KANALI_BEZ_PRIJAVE: ReadonlySet<string> = new Set(pristup.kanaliBezPrijave);
 
 /** Postavke koje renderer čita prije prijave (skala ekrana, moduli na LoginScreenu). */
-export const POSTAVKE_BEZ_PRIJAVE: ReadonlySet<string> = new Set([
-  'ui.skala', 'proizvodnja.enabled', 'ui.showGenerator',
-]);
+export const POSTAVKE_BEZ_PRIJAVE: ReadonlySet<string> = new Set(pristup.postavke.bezPrijave);
 
 /**
  * Kanali koji mijenjaju stanje, a UI ih nudi samo administratoru (Postavke,
- * Knjigovođa tab) ili su sami po sebi administratorski.
+ * Knjigovođa tab) ili su sami po sebi administratorski. Tu su i ručno
+ * pokretanje automatskog backup-a (backup:info smije svaki prijavljeni) i
+ * dijagnostika fiskalnog uređaja — log sadrži i lozinku operatera.
  */
-export const ADMIN_KANALI: ReadonlySet<string> = new Set([
-  'user:create', 'user:update', 'user:delete',
-  'settings:saveFirma', 'settings:saveTring',
-  'proizvodnja:setEnabled',
-  'fiscal:setZadnjiBroj', 'order:dismissFiscalGap', 'pending:discard',
-  'db:backup', 'db:restore',
-  // Automatski backup: ručno pokretanje (Postavke); backup:info smije svaki prijavljeni.
-  'backup:sada',
-  'izvoz:knjigovodja',
-  // Dijagnostika fiskalnog uređaja (Postavke → Fiskalni); log sadrži i lozinku operatera.
-  'tring:init', 'tring:getLogs', 'tring:clearLogs',
-]);
+export const ADMIN_KANALI: ReadonlySet<string> = new Set(pristup.adminKanali);
 
 /** settings:set — ključevi koje smije postaviti svaki prijavljeni korisnik (KasaScreen). */
-export const POSTAVKE_ZA_SVE: ReadonlySet<string> = new Set([
-  'kasa.scanMode',
-]);
+export const POSTAVKE_ZA_SVE: ReadonlySet<string> = new Set(pristup.postavke.zaSve);
 
-/** settings:set — ključevi iz Postavki (samo administrator). Sve ostalo se odbija. */
-export const POSTAVKE_ZA_ADMINA: ReadonlySet<string> = new Set([
-  // KasaGrupa
-  'kasa.pologPrompt', 'kasa.allowZeroStock', 'kasa.kusurKalkulacija', 'kasa.requirePinRefund',
-  'kasa.showDailyTotal', 'cijene.unosBezPdv',
-  // FiskalniGrupa
-  'racun.napomena', 'dev.logging',
-  // SistemGrupa
-  'ui.skala',
-  // LicencaGrupa
-  'ui.showGenerator',
-  // Postavke › Dokumenti (i nastavak numeracije iz starog programa)
-  ...KLJUCEVI_DOKUMENATA,
-]);
+/**
+ * settings:set — ključevi iz Postavki (samo administrator), uključujući sve
+ * KLJUCEVI_DOKUMENATA (Postavke › Dokumenti; pristup.test.ts to provjerava).
+ * Sve ostalo se odbija.
+ */
+export const POSTAVKE_ZA_ADMINA: ReadonlySet<string> = new Set(pristup.postavke.zaAdmina);
 
 /**
  * Postavke koje settings:get nikad ne vraća (ide null). Stanje blokade PIN-a
  * je interno: ni čitanje ni upis (settings:set ga ionako odbija, nije na listi).
  */
-export const TAJNE_POSTAVKE: ReadonlySet<string> = new Set(['tring.operatorPassword', 'sigurnost.pinBlokada']);
+export const TAJNE_POSTAVKE: ReadonlySet<string> = new Set(pristup.postavke.tajne);
 
 /**
  * Baca grešku ako `korisnik` (null = niko nije prijavljen) ne smije zvati

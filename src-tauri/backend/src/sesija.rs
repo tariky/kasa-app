@@ -8,8 +8,8 @@
 //! upis, nikad preko štampe na Tringu ili dijaloga (petlja se tada otpušta i
 //! drugi pozivi rade — vidi petlja.rs).
 
-use std::collections::HashMap;
-use std::sync::{Mutex, MutexGuard};
+use std::collections::{HashMap, HashSet};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use serde_json::{json, Map, Value};
 
@@ -22,68 +22,51 @@ pub const PORUKA_NISTE_PRIJAVLJENI: &str = "Niste prijavljeni";
 pub const PORUKA_SAMO_ADMIN: &str = "Ovu radnju može izvršiti samo administrator";
 pub const PORUKA_ZADANI_PIN: &str = "Prije rada promijenite zadani PIN 0000";
 
-/// Jedini kanali (uz KANALI_BEZ_PRIJAVE) dok prijavljeni korisnik još ima zadani PIN.
-pub const KANALI_SA_ZADANIM_PINOM: &[&str] = &["user:promijeniSvojPin", "user:logout"];
+/// Liste pristupa iz `src/ipc/pristup.json` — isti fajl čita sesija.ts, pa su
+/// pravila ista u oba backenda.
+pub struct Pristup {
+    /// Kanali koji rade i bez prijave (ekran za prijavu i aktivaciju licence);
+    /// settings:get samo za ključeve iz `postavke_bez_prijave` (vidi provjeri_pristup).
+    pub kanali_bez_prijave: HashSet<String>,
+    /// Jedini kanali (uz `kanali_bez_prijave`) dok prijavljeni korisnik još ima zadani PIN.
+    pub kanali_sa_zadanim_pinom: HashSet<String>,
+    /// Kanali koji mijenjaju stanje, a UI ih nudi samo administratoru (Postavke,
+    /// Knjigovođa tab) ili su sami po sebi administratorski.
+    pub admin_kanali: HashSet<String>,
+    /// Kanali koji prave nove dokumente ili mijenjaju stanje zaliha — bez važeće
+    /// licence blokirani (licenca.rs).
+    pub blokirani_bez_licence: HashSet<String>,
+    /// Postavke koje renderer čita prije prijave (skala ekrana, moduli na LoginScreenu).
+    pub postavke_bez_prijave: HashSet<String>,
+    /// settings:set — ključevi koje smije postaviti svaki prijavljeni korisnik (KasaScreen).
+    pub postavke_za_sve: HashSet<String>,
+    /// settings:set — ključevi iz Postavki (samo administrator). Sve ostalo se odbija.
+    pub postavke_za_admina: HashSet<String>,
+    /// Postavke koje settings:get nikad ne vraća (ide null). Stanje blokade PIN-a
+    /// je interno: ni čitanje ni upis (settings:set ga ionako odbija, nije na listi).
+    pub tajne_postavke: HashSet<String>,
+}
 
-/// Kanali koji rade i bez prijave (ekran za prijavu i aktivaciju licence).
-pub const KANALI_BEZ_PRIJAVE: &[&str] = &[
-    "licenca:stanje", "licenca:aktiviraj",
-    "user:login", "user:logout",
-    // LoginScreen: naziv firme u lijevom panelu.
-    "settings:getFirma",
-    // settings:get samo za ključeve iz POSTAVKE_BEZ_PRIJAVE (vidi provjeri_pristup).
-    "settings:get",
-];
-
-/// Postavke koje renderer čita prije prijave (skala ekrana, moduli na LoginScreenu).
-pub const POSTAVKE_BEZ_PRIJAVE: &[&str] = &["ui.skala", "proizvodnja.enabled", "ui.showGenerator"];
-
-/// Kanali koji mijenjaju stanje, a UI ih nudi samo administratoru (Postavke,
-/// Knjigovođa tab) ili su sami po sebi administratorski.
-pub const ADMIN_KANALI: &[&str] = &[
-    "user:create", "user:update", "user:delete",
-    "settings:saveFirma", "settings:saveTring",
-    "proizvodnja:setEnabled",
-    "fiscal:setZadnjiBroj", "order:dismissFiscalGap", "pending:discard",
-    "db:backup", "db:restore",
-    "izvoz:knjigovodja",
-    // Dijagnostika fiskalnog uređaja (Postavke → Fiskalni); log sadrži i lozinku operatera.
-    "tring:init", "tring:getLogs", "tring:clearLogs",
-];
-
-/// settings:set — ključevi koje smije postaviti svaki prijavljeni korisnik (KasaScreen).
-pub const POSTAVKE_ZA_SVE: &[&str] = &["kasa.scanMode"];
-
-/// settings:set — ključevi iz Postavki (samo administrator). Sve ostalo se odbija.
-pub const POSTAVKE_ZA_ADMINA: &[&str] = &[
-    // KasaGrupa
-    "kasa.pologPrompt", "kasa.allowZeroStock", "kasa.kusurKalkulacija", "kasa.requirePinRefund",
-    "kasa.showDailyTotal", "cijene.unosBezPdv",
-    // FiskalniGrupa
-    "racun.napomena", "dev.logging",
-    // SistemGrupa
-    "ui.skala",
-    // LicencaGrupa
-    "ui.showGenerator",
-    // Postavke › Dokumenti (i nastavak numeracije iz starog programa) — isto što i
-    // KLJUCEVI_DOKUMENATA u src/lib/dokumentPostavke.ts; ugovorni test ih provjerava sve.
-    "dokumenti.faktura.rokDana", "dokumenti.faktura.nacinPlacanja", "dokumenti.faktura.napomena",
-    "dokumenti.ponuda.vaziDana", "dokumenti.ponuda.uslovi", "dokumenti.ponuda.nacinPlacanja", "dokumenti.ponuda.prefiks",
-    "dokumenti.ponuda.cifara", "dokumenti.ponuda.nastavakBroj", "dokumenti.ponuda.nastavakGodina",
-    "dokumenti.nalog.prefiks", "dokumenti.nalog.nastavakBroj", "dokumenti.nalog.nastavakGodina",
-    "dokumenti.podnozje", "dokumenti.pecat", "dokumenti.pecatVelicina",
-    "dokumenti.kolone.sifra", "dokumenti.kolone.jm",
-    "dokumenti.potpis.faktura.lijevo", "dokumenti.potpis.faktura.desno",
-    "dokumenti.potpis.ponuda.lijevo", "dokumenti.potpis.ponuda.desno",
-    "dokumenti.potpis.otpremnica.lijevo", "dokumenti.potpis.otpremnica.desno",
-    "dokumenti.potpis.racun.lijevo", "dokumenti.potpis.racun.desno",
-    "dokumenti.potpis.nalog.lijevo", "dokumenti.potpis.nalog.desno",
-    "dokumenti.pecat.faktura", "dokumenti.pecat.ponuda", "dokumenti.pecat.otpremnica", "dokumenti.pecat.racun",
-];
-
-/// Postavke koje settings:get nikad ne vraća (ide null). Stanje blokade PIN-a
-/// je interno: ni čitanje ni upis (settings:set ga ionako odbija, nije na listi).
-pub const TAJNE_POSTAVKE: &[&str] = &["tring.operatorPassword", "sigurnost.pinBlokada"];
+pub fn pristup() -> &'static Pristup {
+    static P: OnceLock<Pristup> = OnceLock::new();
+    P.get_or_init(|| {
+        let v: Value = serde_json::from_str(include_str!("../../../src/ipc/pristup.json")).expect("ispravan pristup.json");
+        let lista = |put: &str| -> HashSet<String> {
+            let niz = v.pointer(put).and_then(Value::as_array).unwrap_or_else(|| panic!("pristup.json nema liste {put}"));
+            niz.iter().map(|x| x.as_str().unwrap_or_else(|| panic!("pristup.json {put}: {x} nije string")).to_owned()).collect()
+        };
+        Pristup {
+            kanali_bez_prijave: lista("/kanaliBezPrijave"),
+            kanali_sa_zadanim_pinom: lista("/kanaliSaZadanimPinom"),
+            admin_kanali: lista("/adminKanali"),
+            blokirani_bez_licence: lista("/blokiraniBezLicence"),
+            postavke_bez_prijave: lista("/postavke/bezPrijave"),
+            postavke_za_sve: lista("/postavke/zaSve"),
+            postavke_za_admina: lista("/postavke/zaAdmina"),
+            tajne_postavke: lista("/postavke/tajne"),
+        }
+    })
+}
 
 /// Korisnik kako ga vide kanali — nikad s PIN-om ni hešom.
 #[derive(Debug, Clone)]
@@ -186,21 +169,22 @@ pub fn sa_korisnikom(unos: &Value, korisnik_id: i64) -> Value {
 /// korisnik se prijavio PIN-om 0000 i još ga nije promijenio: smije samo ono
 /// što smije neprijavljen, plus promjenu svog PIN-a i odjavu.
 pub fn provjeri_pristup(kanal: &str, args: &[Value], korisnik: Option<&Korisnik>, zadani_pin: bool) -> R<()> {
+    let p = pristup();
     let Some(k) = korisnik.filter(|_| !zadani_pin) else {
-        if korisnik.is_some() && KANALI_SA_ZADANIM_PINOM.contains(&kanal) {
+        if korisnik.is_some() && p.kanali_sa_zadanim_pinom.contains(kanal) {
             return Ok(());
         }
         let poruka = if korisnik.is_some() { PORUKA_ZADANI_PIN } else { PORUKA_NISTE_PRIJAVLJENI };
-        if !KANALI_BEZ_PRIJAVE.contains(&kanal) {
+        if !p.kanali_bez_prijave.contains(kanal) {
             return Err(Greska(poruka.into()));
         }
         let kljuc = args.first().and_then(Value::as_str);
-        if kanal == "settings:get" && !kljuc.is_some_and(|k| POSTAVKE_BEZ_PRIJAVE.contains(&k)) {
+        if kanal == "settings:get" && !kljuc.is_some_and(|k| p.postavke_bez_prijave.contains(k)) {
             return Err(Greska(poruka.into()));
         }
         return Ok(());
     };
-    if ADMIN_KANALI.contains(&kanal) && !k.je_admin() {
+    if p.admin_kanali.contains(kanal) && !k.je_admin() {
         return Err(Greska(PORUKA_SAMO_ADMIN.into()));
     }
     if kanal == "settings:set" {
@@ -211,10 +195,11 @@ pub fn provjeri_pristup(kanal: &str, args: &[Value], korisnik: Option<&Korisnik>
 
 fn provjeri_upis_postavke(kljuc: &Value, korisnik: &Korisnik) -> R<()> {
     let k = kljuc.as_str().unwrap_or("");
-    if POSTAVKE_ZA_SVE.contains(&k) {
+    let p = pristup();
+    if p.postavke_za_sve.contains(k) {
         return Ok(());
     }
-    if !POSTAVKE_ZA_ADMINA.contains(&k) {
+    if !p.postavke_za_admina.contains(k) {
         return Err(Greska(format!("Postavka \"{k}\" se ne može mijenjati")));
     }
     if !korisnik.je_admin() {
@@ -426,6 +411,24 @@ mod tests {
             greska(provjeri_pristup("settings:set", &[json!(7)], Some(&admin), false)).as_deref(),
             Some("Postavka \"\" se ne može mijenjati")
         );
+    }
+
+    #[test]
+    fn pristup_json_se_parsira() {
+        // `super::`: test `pristup` iznad zasjenjuje funkciju.
+        let p = super::pristup();
+        for (ime, lista) in [
+            ("kanaliBezPrijave", &p.kanali_bez_prijave),
+            ("kanaliSaZadanimPinom", &p.kanali_sa_zadanim_pinom),
+            ("adminKanali", &p.admin_kanali),
+            ("blokiraniBezLicence", &p.blokirani_bez_licence),
+            ("postavke.bezPrijave", &p.postavke_bez_prijave),
+            ("postavke.zaSve", &p.postavke_za_sve),
+            ("postavke.zaAdmina", &p.postavke_za_admina),
+            ("postavke.tajne", &p.tajne_postavke),
+        ] {
+            assert!(!lista.is_empty(), "{ime} je prazna");
+        }
     }
 
     #[test]

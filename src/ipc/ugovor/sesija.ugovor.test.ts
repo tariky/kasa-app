@@ -65,10 +65,10 @@ async function greska(p: Promise<unknown>): Promise<string> {
 const SVI_KANALI = [
   'licenca:stanje', 'licenca:aktiviraj',
   'user:login', 'user:logout', 'user:promijeniSvojPin', 'user:getAll', 'user:create', 'user:update', 'user:delete',
-  'product:getAll', 'product:get', 'product:create', 'product:update', 'product:delete', 'product:adjustStock', 'product:search',
+  'product:getAll', 'product:get', 'product:create', 'product:update', 'product:delete', 'product:adjustStock',
   'product:getDobavljacSifre', 'product:setDobavljacSifre', 'product:findByDobavljacSifra', 'dobavljac:getSifre', 'product:slobodan',
-  'materijal:search', 'dobavljac:getAll', 'dobavljac:create', 'dobavljac:update', 'dobavljac:delete',
-  'kupac:getAll', 'kupac:search', 'kupac:create', 'kupac:update', 'kupac:delete',
+  'dobavljac:getAll', 'dobavljac:create', 'dobavljac:update', 'dobavljac:delete',
+  'kupac:getAll', 'kupac:create', 'kupac:update', 'kupac:delete',
   'primka:getAll', 'primka:get', 'primka:nextBroj', 'primka:create', 'primka:update', 'primka:delete',
   'primka:pregledUnosa', 'primka:pregledIzmjene', 'primka:pregledBrisanja', 'nivelacija:getAll', 'nivelacija:get',
   'order:getAll', 'order:get', 'order:createManual', 'order:finalize', 'order:finalizePrilog',

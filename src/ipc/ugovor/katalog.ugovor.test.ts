@@ -1,4 +1,4 @@
-// Ugovor za kanale product:*, materijal:search, dobavljac:* i kupac:* — vidi backend.ts.
+// Ugovor za kanale product:*, dobavljac:* i kupac:* — vidi backend.ts.
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
 import { otvoriBackend, prijavi, ADMIN_PIN, type Backend } from './backend';
 
@@ -445,45 +445,6 @@ describe('product:adjustStock', () => {
   });
 });
 
-// ─── product:search ─────────────────────────────────────────
-
-describe('product:search', () => {
-  test('traži po nazivu, šifri i barkodu (podstring), sa stanjem', async () => {
-    dodajArtikal('KAF-01', { naziv: 'Kafa mljevena', barkod: '3870001', stanje: 7 });
-    dodajArtikal('CAJ-01', { naziv: 'Čaj od nane', barkod: '3870002' });
-    dodajArtikal('SEC-01', { naziv: 'Šećer', barkod: '5550003' });
-
-    const poNazivu = await b.call('product:search', 'mljev');
-    expect(sifre(poNazivu)).toEqual(['KAF-01']);
-    expect(poNazivu[0].stanje).toBe(7);
-    expect(sifre(await b.call('product:search', 'CAJ'))).toEqual(['CAJ-01']);
-    expect(sifre(await b.call('product:search', '5550'))).toEqual(['SEC-01']);
-    // Više pogodaka dolazi sortirano po nazivu, binarno (UTF-8): "Kafa" ide prije "Čaj".
-    expect(sifre(await b.call('product:search', '387'))).toEqual(['KAF-01', 'CAJ-01']);
-  });
-
-  test('ASCII pretraga ne razlikuje velika i mala slova', async () => {
-    dodajArtikal('A1', { naziv: 'Kafa' });
-    expect(sifre(await b.call('product:search', 'KAFA'))).toEqual(['A1']);
-    expect(sifre(await b.call('product:search', 'a1'))).toEqual(['A1']);
-  });
-
-  test('ne vraća materijal, ali vraća usluge', async () => {
-    dodajArtikal('A1', { naziv: 'Ploča artikal' });
-    dodajArtikal('U1', { naziv: 'Ploča rezanje', tip: 'usluga' });
-    dodajArtikal('M1', { naziv: 'Ploča iverica', tip: 'materijal' });
-    expect(sifre(await b.call('product:search', 'Ploča'))).toEqual(['A1', 'U1']);
-  });
-
-  test('prazan upit vraća sve osim materijala; bez pogodaka vraća prazan niz', async () => {
-    dodajArtikal('A1', { naziv: 'B' });
-    dodajArtikal('A2', { naziv: 'A' });
-    dodajArtikal('M1', { naziv: 'C', tip: 'materijal' });
-    expect(sifre(await b.call('product:search', ''))).toEqual(['A2', 'A1']);
-    expect(await b.call('product:search', 'nema')).toEqual([]);
-  });
-});
-
 // ─── product:slobodan ───────────────────────────────────────
 
 describe('product:slobodan', () => {
@@ -549,13 +510,12 @@ describe('product:slobodan', () => {
     expect(broj('SELECT COUNT(*) AS n FROM products')).toBe(0);
   });
 
-  test('slobodni artikli se ne vide u šifarniku ni pretrazi, ali product:get ih vraća', async () => {
+  test('slobodni artikli se ne vide u šifarniku, ali product:get ih vraća', async () => {
     dodajArtikal('U1', { naziv: 'Popravak jakne', tip: 'usluga' });
     const p = await b.call('product:slobodan', slobodna());
 
     expect(sifre(await b.call('product:getAll'))).toEqual(['U1']);
     expect(sifre(await b.call('product:getAll', 'usluga'))).toEqual(['U1']);
-    expect(sifre(await b.call('product:search', 'popravak'))).toEqual(['U1']);
     expect((await b.call('product:get', p.id)).naziv).toBe('Popravak rajsferšlusa');
   });
 });
@@ -680,8 +640,8 @@ describe('dobavljac:getSifre', () => {
   });
 });
 
-describe('šifre dobavljača u pretrazi i šifarniku', () => {
-  test('product:getAll i product:search nose šifre dobavljača; pretraga ih pretražuje', async () => {
+describe('šifre dobavljača u šifarniku', () => {
+  test('product:getAll nosi šifre dobavljača', async () => {
     const a = dodajArtikal('A1', { naziv: 'Kafa' });
     dodajArtikal('A2', { naziv: 'Čaj' });
     const alfa = dodajDobavljaca('Alfa');
@@ -691,8 +651,6 @@ describe('šifre dobavljača u pretrazi i šifarniku', () => {
 
     const lista = await b.call('product:getAll');
     expect(lista.map((p: any) => [p.sifra, p.sifreDobavljaca])).toEqual([['A1', 'XK-100'], ['A2', null]]);
-    expect(sifre(await b.call('product:search', 'xk-1'))).toEqual(['A1']);
-    expect((await b.call('product:search', 'xk-1'))[0].sifreDobavljaca).toBe('XK-100');
   });
 
   test('product:delete briše i šifre dobavljača artikla', async () => {
@@ -709,31 +667,6 @@ describe('šifre dobavljača u pretrazi i šifarniku', () => {
     dodajSifru(a, alfa, null);
     await expect(b.call('dobavljac:delete', alfa)).rejects.toThrow('Dobavljač je vezan za artikle i ne može biti obrisan');
     expect(broj('SELECT COUNT(*) AS n FROM dobavljaci')).toBe(1);
-  });
-});
-
-// ─── materijal:search ───────────────────────────────────────
-
-describe('materijal:search', () => {
-  test('traži samo materijal po nazivu i šifri, sa stanjem', async () => {
-    dodajArtikal('IV-18', { naziv: 'Iverica 18mm', tip: 'materijal', barkod: '777', stanje: 12 });
-    dodajArtikal('KS-1', { naziv: 'Kant traka', tip: 'materijal' });
-    dodajArtikal('A1', { naziv: 'Iverica komad', tip: 'artikal' });
-
-    const r = await b.call('materijal:search', 'iverica');
-    expect(sifre(r)).toEqual(['IV-18']);
-    expect(r[0]).toMatchObject({ naziv: 'Iverica 18mm', tip: 'materijal', stanje: 12 });
-    expect(sifre(await b.call('materijal:search', 'ks-'))).toEqual(['KS-1']);
-    // Barkod se ne pretražuje.
-    expect(await b.call('materijal:search', '777')).toEqual([]);
-  });
-
-  test('vraća najviše 30 rezultata, sortirano po nazivu', async () => {
-    for (let i = 0; i < 35; i++) dodajArtikal(`M${String(i).padStart(2, '0')}`, { naziv: `Mat ${String(34 - i).padStart(2, '0')}`, tip: 'materijal' });
-    const r = await b.call('materijal:search', '');
-    expect(r).toHaveLength(30);
-    expect(r[0].naziv).toBe('Mat 00');
-    expect(r[29].naziv).toBe('Mat 29');
   });
 });
 
@@ -842,7 +775,7 @@ describe('dobavljac:delete', () => {
   });
 });
 
-// ─── kupac:getAll / search ──────────────────────────────────
+// ─── kupac:getAll ───────────────────────────────────────────
 
 describe('kupac:getAll', () => {
   test('vraća sve kupce sortirane po nazivu', async () => {
@@ -855,21 +788,6 @@ describe('kupac:getAll', () => {
       naziv: 'Alfa', idBroj: '4200000000001', pdvBroj: null, adresa: null, postanskiBroj: null, grad: null, kontakt: null,
     });
     expect(typeof lista[0].id).toBe('number');
-  });
-});
-
-describe('kupac:search', () => {
-  test('traži po nazivu, JIB-u i kontaktu, sortirano po nazivu', async () => {
-    dodajKupca('Zeta d.o.o.', '4200000000002', 'zeta@mail.ba');
-    dodajKupca('Alfa d.o.o.', '4200000000001', '061 222 333');
-    dodajKupca('Beta', '4300000000001');
-
-    expect((await b.call('kupac:search', 'd.o.o')).map((k: any) => k.naziv)).toEqual(['Alfa d.o.o.', 'Zeta d.o.o.']);
-    expect((await b.call('kupac:search', '43000')).map((k: any) => k.naziv)).toEqual(['Beta']);
-    expect((await b.call('kupac:search', 'ZETA@')).map((k: any) => k.naziv)).toEqual(['Zeta d.o.o.']);
-    expect((await b.call('kupac:search', '222 3')).map((k: any) => k.naziv)).toEqual(['Alfa d.o.o.']);
-    expect(await b.call('kupac:search', 'nema')).toEqual([]);
-    expect(await b.call('kupac:search', '')).toHaveLength(3);
   });
 });
 
@@ -1060,5 +978,15 @@ describe('kupac:delete', () => {
     await expect(b.call('kupac:delete', saNalogom)).rejects.toThrow('Kupac se koristi u radnim nalozima i ne može biti obrisan');
 
     expect(broj('SELECT COUNT(*) AS n FROM kupci')).toBe(2);
+  });
+});
+
+// ─── Uklonjeni kanali ───────────────────────────────────────
+
+describe('uklonjeni kanali pretrage', () => {
+  test('product:search, kupac:search i materijal:search ne postoje', async () => {
+    const uklonjeni = ['product:search', 'kupac:search', 'materijal:search'];
+    expect((await b.kanali()).filter(k => uklonjeni.includes(k))).toEqual([]);
+    for (const kanal of uklonjeni) await expect(b.call(kanal, '')).rejects.toThrow();
   });
 });
