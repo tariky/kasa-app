@@ -115,9 +115,27 @@ CREATE TABLE radni_nalog_stavke (
 );
 ```
 
+**`radni_nalog_proizvodi`** — stavke ponude koje nalog iz ponude izrađuje
+(dopuna 2026-09-26, `docs/superpowers/plans/2026-09-26-zalihe-popravke.md`):
+
+```sql
+CREATE TABLE radni_nalog_proizvodi (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  radniNalogId INTEGER NOT NULL,
+  productId INTEGER NOT NULL,              -- artikal sa ponude naloga
+  kolicina REAL NOT NULL,                  -- > 0, ne više od količine na ponudi
+  FOREIGN KEY (radniNalogId) REFERENCES radni_nalozi(id),
+  FOREIGN KEY (productId) REFERENCES products(id)
+);
+```
+
+Idempotentna migracija u oba backenda; stari nalozi iz ponude nemaju redova i
+ponašaju se kao ranije (bez ulaza proizvoda).
+
 **`stock_movements`** — bez izmjene sheme. Novi `referenceType = 'radni_nalog'`,
-`referenceId = radni_nalozi.id`: `izlaz` po stavci utroška, `ulaz` gotovog
-proizvoda samo za vrstu `zaliha`.
+`referenceId = radni_nalozi.id`: `izlaz` po stavci utroška; `ulaz` gotovog
+proizvoda za vrstu `zaliha` (`productId` × `kolicina`) i za nalog iz ponude
+(svaki red `radni_nalog_proizvodi`).
 
 **`settings`** — `proizvodnja.enabled` = `'true'` uključuje modul.
 
@@ -133,9 +151,19 @@ Indeksi: `radni_nalog_stavke(radniNalogId)`, `radni_nalozi(status)`,
   `ponudaId` iz koje se izvuče kupac) i `opis`; zaliha traži `productId` tipa
   `artikal` i `kolicina > 0`. Za zalihu, ako postoji normativ, stavke se
   popune `normativ × kolicina`.
-- `createNalogIzPonude(db, ponudaId, korisnikId)` — kupac iz ponude, opis =
-  nazivi stavki ponude spojeni zarezom, `dogovorenaCijena = ponuda.ukupno`.
-  Odbija ako ponuda nije `prihvacena` ili već ima nalog.
+- `createNalogIzPonude(db, ponudaId, korisnikId, proizvodi?)` — kupac iz
+  ponude, opis = nazivi stavki ponude spojeni zarezom,
+  `dogovorenaCijena = ponuda.ukupno`. Odbija ako ponuda nije `prihvacena` ili
+  već ima nalog. `proizvodi` je izbor stavki koje nalog **izrađuje** (dijalog:
+  checkbox po stavci); bez izbora važi zadani iz `proizvodiPonude`.
+- `proizvodiPonude(db, ponudaId)` — stavke ponude koje se mogu izrađivati
+  (artikli, ne `usluga` ni `materijal`) s trenutnim stanjem; `zadano` je
+  označeno kad stanje nije dovoljno za količinu stavke (tolerancija
+  `TOLERANCIJA_ZALIHE`), neoznačeno ako je roba na zalihi (preprodaja).
+- `setProizvodiNaloga(db, id, proizvodi)` — mijenja izbor dok je nalog
+  `otvoren`/`u_izradi`, samo za nalog iz ponude. Validacija (i pri kreiranju):
+  artikal je na ponudi naloga, nije usluga/materijal, količina > 0 (na 4
+  decimale), zbir po artiklu ne veći od količine na ponudi.
 - `updateNalog(db, id, input)` i `replaceStavke(db, id, stavke)` — dozvoljeno
   samo u statusu `otvoren` ili `u_izradi`.
 - `setStatus(db, id, status)` — prelazi: `otvoren → u_izradi`,
@@ -144,15 +172,32 @@ Indeksi: `radni_nalog_stavke(radniNalogId)`, `radni_nalozi(status)`,
   (= `fakturisiNalog`, samo narudžba).
 - `zavrsiNalog(db, id)` — jedna transakcija: za svaku stavku upiše
   `nabavnaCijena = getProsjecnaNabavna(db, materijalId)` i `izlaz` u
-  `stock_movements`; za zalihu upiše `ulaz` `kolicina` komada `productId`;
-  postavi `status = 'zavrsen'`, `zavrsenAt`. Nalog bez stavki se ne može
-  završiti. Negativno stanje materijala **ne blokira** (upozorenje u UI-u).
+  `stock_movements`; za zalihu upiše `ulaz` `kolicina` komada `productId`; za
+  nalog iz ponude `ulaz` svakog izabranog proizvoda; postavi
+  `status = 'zavrsen'`, `zavrsenAt`. Nalog bez stavki se ne može završiti.
+  Prihvaćena ponuda se i dalje može mijenjati, pa se izbor proizvoda pri
+  završetku **ponovo provjeri** prema ponudi kakva je sada; ako više ne
+  odgovara, završetak se odbija („Ponuda je mijenjana nakon izbora proizvoda —
+  …"). Negativno stanje materijala **ne blokira** (upozorenje u UI-u).
 - `vratiUIzradu(db, id)` — obriše sve `stock_movements` sa
   `referenceType = 'radni_nalog'` za taj nalog, postavi `nabavnaCijena = NULL`
-  na stavkama, `status = 'u_izradi'`, `zavrsenAt = NULL`. Odbija ako je
-  `fakturisan`.
-- `fakturisiNalog(db, id, racunId)` — postavi `racunId` i `status`.
-- `deleteNalog(db, id)` — samo `otvoren`/`u_izradi`.
+  na stavkama, `status = 'u_izradi'`, `zavrsenAt = NULL`. Samo za `zavrsen`
+  nalog; odbija (redom):
+  - `fakturisan` nalog;
+  - dok račun za nalog ili za ponudu naloga čeka u nezavršenim računima
+    (`pending_receipts` s `nalogId` ili `ponudaId`) — kad se riješi, ponuda je
+    fakturisana, a nalog fakturisan;
+  - nalog čija je ponuda `konvertovana` (fakturisana na ekranu Ponude) —
+    utrošak materijala za fakturisan posao ne smije nestati;
+  - nalog čiji je izrađeni proizvod već prodan/izdat: za svaki artikal koji je
+    nalog uveo `ulaz`-om trenutno stanje mora biti ≥ ulazna količina
+    (tolerancija 1e-9), inače „Proizvod … je već prodan/izdat — nalog se ne
+    može vratiti u izradu (na stanju X, nalog je uveo Y)".
+- `fakturisiNalog(db, id, racunId)` — postavi `racunId` i `status`; samo
+  završen nalog po narudžbi.
+- `deleteNalog(db, id)` — samo `otvoren`/`u_izradi`; odbija i dok račun za
+  nalog ili njegovu ponudu čeka u nezavršenim računima (ta provjera je prva) i
+  nalog čija je ponuda `konvertovana`. Briše i izbor proizvoda.
 - `getProsjecnaNabavna(db, materijalId)` —
   `SUM(kolicina × nabavnaCijena) / SUM(kolicina)` iz `primka_stavke`; `0` ako
   nema primki.
@@ -202,7 +247,8 @@ Indeksi: `radni_nalog_stavke(radniNalogId)`, `radni_nalozi(status)`,
 `nalog:getAll (filter status?)`, `nalog:get`, `nalog:nextBroj`,
 `nalog:create`, `nalog:createIzPonude`, `nalog:update`,
 `nalog:replaceStavke`, `nalog:setStatus`, `nalog:delete`,
-`nalog:kalkulacija`, `nalog:fakturisi`,
+`nalog:kalkulacija`, `nalog:fakturisi`, `nalog:proizvodiPonude (ponudaId)`,
+`nalog:setProizvodi (id, proizvodi)`, `nalog:izdajRacun`,
 `normativ:get (productId)`, `normativ:save (productId, stavke)`,
 `materijal:prosjecnaNabavna (materijalId)`.
 
@@ -243,8 +289,15 @@ izmjenu cijene po stavci, a prelaz između ekrana s prenesenom korpom ne
 postoji, pa se račun fiskalizuje **direktno iz detalja naloga**, isto kao što
 `konvertujPonudu` fiskalizuje iz ponude:
 
-- Ako nalog ima `ponudaId`: poziva se postojeći `ponuda:konvertuj` (ponuda već
-  nosi stvarne stavke i cijene), a nalog upiše `racunId = ponuda.racunId`.
+- Ako nalog ima `ponudaId`: poziva se postojeći `konvertujPonudu` (ponuda već
+  nosi stvarne stavke i cijene) s `nalogId`, pa se u **istoj transakciji** s
+  računom ponuda označi `konvertovana` i nalog `fakturisan`
+  (`racunId = ponuda.racunId`). Ako je ponuda već fakturisana na ekranu
+  Ponude, „Izdaj račun" samo poveže nalog s tim računom — bez nove štampe.
+  Račun skida **sve** ne-usluga stavke ponude: izrađeni proizvod je završetkom
+  ušao na stanje pa je ulaz − izlaz = 0, a roba sa zalihe (preprodaja) je
+  skinuta. Ishod je isti bez obzira da li je ponuda fakturisana prije ili
+  poslije završetka naloga (prije završetka proizvod privremeno ide u minus).
 - Ako je samostalan: dijalog s načinom plaćanja (gotovina/kartica) i pregledom
   jedne stavke: usluga **"Namještaj po mjeri"** (šifra `NAMJ`, tip `usluga`,
   PDV `E`, jm `kom`), količina 1, cijena = `dogovorenaCijena`, kupac iz
@@ -255,8 +308,16 @@ postoji, pa se račun fiskalizuje **direktno iz detalja naloga**, isto kao što
   `fiskalizujIUpisi(db, transaction, print, {korisnikId, kupac, stavke,
   nacinPlacanja})` u `racun.ts`, koju zovu i ponuda i nalog. Nakon uspjeha
   `fakturisiNalog(db, id, orderId)`.
-- Storno takvog računa (postojeći `order:refund`) ne dira nalog; nalog ostaje
+- Oba puta idu kroz write-ahead red (`pending_receipts`, snapshot `vrsta:
+  'ponuda'` s `nalogId`, odnosno `vrsta: 'nalog'`) — vidi
+  `2026-07-06-crash-safe-racuni-design.md`. Dok red čeka (nepoznat ishod
+  štampe), novo izdavanje, vraćanje u izradu i brisanje naloga se odbijaju;
+  razrješavanje reda iz dijaloga upiše račun i fakturiše nalog isto kao
+  uspješna štampa.
+- Storno takvog računa (`order:refundAndPrint`) ne dira nalog; nalog ostaje
   `fakturisan` s vezom na stornirani račun i prikazuje badge "stornirano".
+  Storno vraća tačno ono što je račun skinuo (izrađeni proizvod i robu sa
+  zalihe), a „Vrati u izradu" ostaje odbijen jer je nalog fakturisan.
 
 ### 6. Print — `RadniNalogPdf.tsx` (A4)
 
