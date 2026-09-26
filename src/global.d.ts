@@ -11,6 +11,9 @@ interface Window {
     getLicenca: () => Promise<import('./lib/licencaTipovi').LicencaInfo>;
     aktivirajLicencu: (token: string) => Promise<import('./lib/licencaTipovi').LicencaInfo>;
     onLicencaBlokirano: (cb: () => void) => () => void;
+    getBackupInfo: () => Promise<import('./lib/backupRaspored').BackupInfo>;
+    backupSada: () => Promise<import('./lib/backupRaspored').BackupInfo>;
+    onBackupStanje: (cb: (d: import('./lib/backupRaspored').BackupDogadjaj) => void) => () => void;
     login: (pin: string) => Promise<(import('./types').User & { zadaniPin: boolean }) | null>;
     logout: () => Promise<{ success: boolean }>;
     promijeniSvojPin: (stari: string, novi: string) => Promise<{ success: boolean }>;

@@ -3,9 +3,9 @@ import { napraviApi } from './ipc/api';
 
 contextBridge.exposeInMainWorld('api', napraviApi(
   (kanal, ...args) => ipcRenderer.invoke(kanal, ...args),
-  (cb) => {
-    const l = () => cb();
-    ipcRenderer.on('licenca:blokirano', l);
-    return () => { ipcRenderer.removeListener('licenca:blokirano', l); };
+  (ime, cb) => {
+    const l = (_e: unknown, podaci: unknown) => cb(podaci);
+    ipcRenderer.on(ime, l);
+    return () => { ipcRenderer.removeListener(ime, l); };
   },
 ));

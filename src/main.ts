@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url';
 import started from 'electron-squirrel-startup';
 import { registerIpcHandlers } from './ipc/handlers';
 import { closeDb } from './database/db';
+import { pokreniRaspored, zaustaviRaspored } from './ipc/backup';
 import { APP_SEMA, APP_URL, CSP_ELECTRON, imaDebugPrekidac, jeDozvoljenaNavigacija, jeDozvoljenaNavigacijaPopupa, jeDozvoljenPopup, meniSablon, putanjaZaZahtjev } from './ljuska/sigurnost';
 
 // Upakovana aplikacija se ne pokreće s udaljenim debagovanjem: preko CDP-a bi
@@ -138,6 +139,7 @@ app.on('ready', () => {
 
   if (!MAIN_WINDOW_VITE_DEV_SERVER_URL) posluziRenderer();
   registerIpcHandlers();
+  pokreniRaspored();
   createWindow();
 });
 
@@ -154,5 +156,6 @@ app.on('activate', () => {
 });
 
 app.on('before-quit', () => {
+  zaustaviRaspored();
   closeDb();
 });
