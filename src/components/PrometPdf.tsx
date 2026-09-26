@@ -5,6 +5,7 @@ import { POTPIS_AUTORA } from '@/lib/brend';
 import { kontaktFirme } from '@/lib/firma';
 import { opisPlacanja } from '@/lib/placanje';
 import { PDV_STOPA_E_PCT } from '@/lib/pdv';
+import { sumePrometa } from '@/lib/izvjestaji';
 
 export interface PrometPdfProps {
   orders: any[];
@@ -63,12 +64,7 @@ const s = StyleSheet.create({
 });
 
 export function PrometPdf({ orders, dateFrom, dateTo, firma }: PrometPdfProps) {
-  const completed = orders.filter(o => o.status === 'completed');
-  const refunded = orders.filter(o => o.status === 'refunded');
-  const ukupnaProdaja = completed.reduce((sum, o) => sum + o.ukupno, 0);
-  const ukupniPDV = completed.reduce((sum, o) => sum + o.pdvIznos, 0);
-  const ukupnaOsnovica = ukupnaProdaja - ukupniPDV;
-  const ukupneReklamacije = refunded.reduce((sum, o) => sum + o.ukupno, 0);
+  const sume = sumePrometa(orders);
 
   const pad = (n: number) => String(n).padStart(2, '0');
   const d = new Date();
@@ -157,9 +153,9 @@ export function PrometPdf({ orders, dateFrom, dateTo, firma }: PrometPdfProps) {
             <Text style={[s.tTotalCell, s.cKasir]} />
             <Text style={[s.tTotalCell, s.cFisk]} />
             <Text style={[s.tTotalCell, s.cPlacanje]}>UKUPNO:</Text>
-            <Text style={[s.tTotalCell, s.cOsnovica]}>{fmt(ukupnaOsnovica)}</Text>
-            <Text style={[s.tTotalCell, s.cPdv]}>{fmt(ukupniPDV)}</Text>
-            <Text style={[s.tTotalCell, s.cUkupno]}>{fmt(ukupnaProdaja)}</Text>
+            <Text style={[s.tTotalCell, s.cOsnovica]}>{fmt(sume.bezPdv)}</Text>
+            <Text style={[s.tTotalCell, s.cPdv]}>{fmt(sume.pdv)}</Text>
+            <Text style={[s.tTotalCell, s.cUkupno]}>{fmt(sume.ukupno)}</Text>
             <Text style={[s.tTotalCell, s.cStatus, { borderRight: 'none' }]} />
           </View>
         </View>
@@ -168,29 +164,29 @@ export function PrometPdf({ orders, dateFrom, dateTo, firma }: PrometPdfProps) {
           <View style={s.summaryTable}>
             <View style={s.summaryLine}>
               <Text style={s.summaryLabel}>Ukupna prodaja:</Text>
-              <Text style={s.summaryValue}>{fmt(ukupnaProdaja)} KM</Text>
+              <Text style={s.summaryValue}>{fmt(sume.ukupno)} KM</Text>
             </View>
             <View style={s.summaryLine}>
               <Text style={s.summaryLabel}>Osnovica (bez PDV):</Text>
-              <Text style={s.summaryValue}>{fmt(ukupnaOsnovica)} KM</Text>
+              <Text style={s.summaryValue}>{fmt(sume.bezPdv)} KM</Text>
             </View>
             <View style={s.summaryLine}>
               <Text style={s.summaryLabel}>{`PDV (${PDV_STOPA_E_PCT}%):`}</Text>
-              <Text style={s.summaryValue}>{fmt(ukupniPDV)} KM</Text>
+              <Text style={s.summaryValue}>{fmt(sume.pdv)} KM</Text>
             </View>
             <View style={s.summaryLine}>
               <Text style={s.summaryLabel}>Broj računa:</Text>
-              <Text style={s.summaryValue}>{completed.length}</Text>
+              <Text style={s.summaryValue}>{sume.brojRacuna}</Text>
             </View>
-            {refunded.length > 0 && (
+            {sume.brojReklamacija > 0 && (
               <View style={s.summaryLine}>
                 <Text style={[s.summaryLabel, s.refunded]}>Reklamacije:</Text>
-                <Text style={[s.summaryValue, s.refunded]}>{fmt(ukupneReklamacije)} KM ({refunded.length})</Text>
+                <Text style={[s.summaryValue, s.refunded]}>{fmt(sume.reklamacije)} KM ({sume.brojReklamacija})</Text>
               </View>
             )}
             <View style={s.summaryLineBold}>
               <Text style={[s.summaryLabel, { fontFamily: FB, fontWeight: 700 }]}>Neto promet:</Text>
-              <Text style={s.summaryValue}>{fmt(ukupnaProdaja - ukupneReklamacije)} KM</Text>
+              <Text style={s.summaryValue}>{fmt(sume.ukupno - sume.reklamacije)} KM</Text>
             </View>
           </View>
         </View>

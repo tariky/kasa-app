@@ -1,6 +1,7 @@
 // Ugovor za kanale primka:*, nivelacija:* i report:getData — vidi backend.ts.
 import { test, expect, describe, beforeEach, afterEach, setSystemTime } from 'bun:test';
 import { otvoriBackend, prijavi, ADMIN_PIN, type Backend } from './backend';
+import { rucPrimke, sumePrimke } from '../../lib/izvjestaji';
 
 let b: Backend;
 
@@ -642,6 +643,29 @@ describe('report:getData', () => {
     expect(r[0].stavke).toHaveLength(1);
     const prodajna = r.flatMap(x => x.stavke).reduce((s: number, x: any) => s + x.kolicina * x.cijena, 0);
     expect(prodajna).toBe(70);
+  });
+
+  test('primke: stavke nose sve što treba kalkulaciji — RUC u izvještaju je RUC kalkulacije primke', async () => {
+    const p = dodajArtikal('R1', 23.4);
+    const m = dodajArtikal('M1', 0, { tip: 'materijal' });
+    await b.call('primka:create', primka('U-1', [
+      stavka(p, 10, 23.4, { nabavnaCijena: 10, rabat: 20, zavisniTroskovi: 5 }),
+      stavka(m, 4, 0, { nabavnaCijena: 25, zavisniTroskovi: 8 }),
+    ], { datum: '2026-02-10' }));
+
+    const [r]: any[] = await b.call('report:getData', 'primke', '2026-02-01', '2026-02-28');
+    expect(r.stavke.map((s: any) => ({
+      kolicina: s.kolicina, nabavnaCijena: s.nabavnaCijena, rabat: s.rabat, zavisniTroskovi: s.zavisniTroskovi, cijena: s.cijena, pdvStopa: s.pdvStopa,
+    }))).toEqual([
+      { kolicina: 10, nabavnaCijena: 10, rabat: 20, zavisniTroskovi: 5, cijena: 23.4, pdvStopa: 'E' },
+      { kolicina: 4, nabavnaCijena: 25, rabat: 0, zavisniTroskovi: 8, cijena: 0, pdvStopa: 'E' },
+    ]);
+    // Artikal: nabavna 100 − 20 + 5 = 85, prodajna bez PDV-a 23,40 / 1,17 × 10 = 200 → RUC 115.
+    // Materijal (108) je u nabavnoj, ali ne u RUC-u.
+    const { ruc, rucPct } = rucPrimke(r);
+    expect(ruc).toBeCloseTo(115, 9);
+    expect(rucPct).toBeCloseTo(135.294, 3); // 115 / 85 × 100
+    expect(sumePrimke([r]).nabavna).toBe(193);
   });
 
   test('nepoznat tip izvještaja je greška', async () => {

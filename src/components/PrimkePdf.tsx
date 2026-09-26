@@ -3,7 +3,7 @@ import { Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
 import { PDF_FONT_FAMILY, PDF_FONT_FAMILY_BOLD } from './pdf-fonts';
 import { POTPIS_AUTORA } from '@/lib/brend';
 import { kontaktFirme } from '@/lib/firma';
-import { nabavnaVrijednost } from '@/lib/kalkulacija';
+import { formatRucPct, sumePrimke } from '@/lib/izvjestaji';
 
 export interface PrimkePdfProps {
   primke: any[];
@@ -60,13 +60,8 @@ const s = StyleSheet.create({
 });
 
 export function PrimkePdf({ primke, dateFrom, dateTo, firma }: PrimkePdfProps) {
-  const totalNabavna = primke.reduce(
-    (sum, p) => sum + (p.stavke || []).reduce((s: number, st: any) => s + nabavnaVrijednost(st), 0), 0
-  );
-  const totalProdajna = primke.reduce(
-    (sum, p) => sum + (p.stavke || []).reduce((s: number, st: any) => s + st.cijena * st.kolicina, 0), 0
-  );
-  const marza = totalNabavna > 0 ? ((totalProdajna - totalNabavna) / totalNabavna * 100) : 0;
+  // RUC kao na kalkulaciji: bez PDV-a, samo artikli (materijal je samo u nabavnoj).
+  const ukupno = sumePrimke(primke);
 
   const pad = (n: number) => String(n).padStart(2, '0');
   const d = new Date();
@@ -130,8 +125,7 @@ export function PrimkePdf({ primke, dateFrom, dateTo, firma }: PrimkePdfProps) {
           </View>
 
           {primke.map((primka, i) => {
-            const nab = (primka.stavke || []).reduce((s: number, st: any) => s + nabavnaVrijednost(st), 0);
-            const prod = (primka.stavke || []).reduce((s: number, st: any) => s + st.cijena * st.kolicina, 0);
+            const red = sumePrimke([primka]);
             return (
               <View key={primka.id} style={s.tRow}>
                 <Text style={[s.tCell, s.cRb, { textAlign: 'center' }]}>{i + 1}</Text>
@@ -140,8 +134,8 @@ export function PrimkePdf({ primke, dateFrom, dateTo, firma }: PrimkePdfProps) {
                 <Text style={[s.tCellLeft, s.cDobavljac]}>{primka.dobavljacNaziv || '—'}</Text>
                 <Text style={[s.tCellLeft, s.cFaktura]}>{primka.brojFakture || '—'}</Text>
                 <Text style={[s.tCell, s.cStavki, { textAlign: 'center' }]}>{primka.stavke?.length ?? 0}</Text>
-                <Text style={[s.tCell, s.cNabavna]}>{fmt(nab)}</Text>
-                <Text style={[s.tCell, s.cProdajna, { borderRight: 'none' }]}>{fmt(prod)}</Text>
+                <Text style={[s.tCell, s.cNabavna]}>{fmt(red.nabavna)}</Text>
+                <Text style={[s.tCell, s.cProdajna, { borderRight: 'none' }]}>{fmt(red.prodajnaSaPdv)}</Text>
               </View>
             );
           })}
@@ -153,8 +147,8 @@ export function PrimkePdf({ primke, dateFrom, dateTo, firma }: PrimkePdfProps) {
             <Text style={[s.tTotalCell, s.cDobavljac]} />
             <Text style={[s.tTotalCell, s.cFaktura]} />
             <Text style={[s.tTotalCell, s.cStavki]}>UKUPNO:</Text>
-            <Text style={[s.tTotalCell, s.cNabavna]}>{fmt(totalNabavna)}</Text>
-            <Text style={[s.tTotalCell, s.cProdajna, { borderRight: 'none' }]}>{fmt(totalProdajna)}</Text>
+            <Text style={[s.tTotalCell, s.cNabavna]}>{fmt(ukupno.nabavna)}</Text>
+            <Text style={[s.tTotalCell, s.cProdajna, { borderRight: 'none' }]}>{fmt(ukupno.prodajnaSaPdv)}</Text>
           </View>
         </View>
 
@@ -162,19 +156,19 @@ export function PrimkePdf({ primke, dateFrom, dateTo, firma }: PrimkePdfProps) {
           <View style={s.summaryTable}>
             <View style={s.summaryLine}>
               <Text style={s.summaryLabel}>Ukupna nabavna vrijednost:</Text>
-              <Text style={s.summaryValue}>{fmt(totalNabavna)} KM</Text>
+              <Text style={s.summaryValue}>{fmt(ukupno.nabavna)} KM</Text>
             </View>
             <View style={s.summaryLine}>
               <Text style={s.summaryLabel}>Ukupna prodajna vrijednost:</Text>
-              <Text style={s.summaryValue}>{fmt(totalProdajna)} KM</Text>
+              <Text style={s.summaryValue}>{fmt(ukupno.prodajnaSaPdv)} KM</Text>
             </View>
             <View style={s.summaryLine}>
               <Text style={s.summaryLabel}>Broj primki:</Text>
               <Text style={s.summaryValue}>{primke.length}</Text>
             </View>
             <View style={s.summaryLineBold}>
-              <Text style={[s.summaryLabel, { fontFamily: FB, fontWeight: 700 }]}>Marža:</Text>
-              <Text style={s.summaryValue}>{fmt(totalProdajna - totalNabavna)} KM ({marza.toFixed(1).replace('.', ',')}%)</Text>
+              <Text style={[s.summaryLabel, { fontFamily: FB, fontWeight: 700 }]}>RUC:</Text>
+              <Text style={s.summaryValue}>{fmt(ukupno.ruc)} KM ({formatRucPct(ukupno.rucPct)}%)</Text>
             </View>
           </View>
         </View>
