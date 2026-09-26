@@ -46,7 +46,7 @@ export const POSTAVKE_ZA_SVE: ReadonlySet<string> = new Set(pristup.postavke.zaS
  * - Sistem (SistemGrupa): ui.skala
  * - Licenca (LicencaGrupa): ui.showGenerator
  * - Dokumenti (Postavke › Dokumenti, i nastavak numeracije iz starog programa):
- *   svi KLJUCEVI_DOKUMENATA (pristup.test.ts to provjerava)
+ *   svi KLJUCEVI_DOKUMENATA (ugovor/kanali.ugovor.test.ts to provjerava)
  */
 export const POSTAVKE_ZA_ADMINA: ReadonlySet<string> = new Set(pristup.postavke.zaAdmina);
 
