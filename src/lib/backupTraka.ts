@@ -1,5 +1,6 @@
 // Šta BackupTraka prikazuje za događaj backup:stanje ili stanje pri pokretanju.
-// Čisto, da bi se tekstovi i vremena testirali bez Reacta.
+// Trajnu grešku (`uPostavke`) ne crta traka nego stavka BackupUpozorenje u
+// lijevom meniju. Čisto, da bi se tekstovi i vremena testirali bez Reacta.
 import { trajnaGreska, ukupniProcenat, type BackupDogadjaj, type BackupInfo } from './backupRaspored';
 
 export interface PrikazTrake {
@@ -7,7 +8,7 @@ export interface PrikazTrake {
   sirina: number;
   ton: 'rad' | 'uspjeh' | 'greska';
   tekst: string;
-  /** Pilula vodi u Postavke (trajna greška). */
+  /** Trajna greška: prikazuje je upozorenje u lijevom meniju (vodi u Postavke), ne traka. */
   uPostavke: boolean;
   /** Za koliko ms traka nestaje; undefined = ostaje. */
   nestajeZaMs?: number;
