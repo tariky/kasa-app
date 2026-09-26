@@ -84,6 +84,9 @@ export const UPITI = {
     WHERE rn.status IN ('zavrsen', 'fakturisan') AND date(rn.zavrsenAt) BETWEEN :od AND :do
     ORDER BY rn.zavrsenAt, rn.id, s.id
   `,
+  // Prodajna cijena na kraju dana "do" iz historije cijena, sa poništenim
+  // redovima (za izvoz je historija samo-dodavanje); cijenaUProdaji je cijena
+  // koja je stvarno važila kad je lanac poslije ispravljen izmjenom primke.
   zalihe: `
     SELECT p.sifra, p.naziv, p.jm, p.tip,
       COALESCE((
@@ -92,7 +95,7 @@ export const UPITI = {
         WHERE sm.productId = p.id AND date(sm.createdAt) <= :do
       ), 0) AS kolicina,
       COALESCE(
-        (SELECT ch.novaCijena FROM cijena_historija ch
+        (SELECT COALESCE(ch.cijenaUProdaji, ch.novaCijena) FROM cijena_historija ch
           WHERE ch.productId = p.id AND date(ch.createdAt) <= :do ORDER BY ch.id DESC LIMIT 1),
         (SELECT ch.staraCijena FROM cijena_historija ch
           WHERE ch.productId = p.id AND date(ch.createdAt) > :do ORDER BY ch.id LIMIT 1),

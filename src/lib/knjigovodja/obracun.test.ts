@@ -1,6 +1,7 @@
 import { test, expect, describe } from 'bun:test';
 import { obracunaj, raspodjelaPlacanja } from './obracun';
 import type { KnjigovodjaPodaci, IzvozRacun } from './tipovi';
+import { TOLERANCIJA_ZALIHE } from '../skladiste';
 
 const SVI = { skladiste: true, proizvodnja: true };
 
@@ -153,6 +154,15 @@ describe('obracunaj', () => {
 
     const bezProizvodnje = obracunaj(p, { moduli: { skladiste: true, proizvodnja: false } });
     expect(bezProizvodnje.zalihe.map(z => z.sifra)).toEqual(['A', 'C']);
+  });
+
+  test('zalihe: ostatak zaokruživanja (0,1 + 0,2 − 0,3) je nula — ista tolerancija kao u skladištu', () => {
+    const p = prazno();
+    const red = (sifra: string, kolicina: number) => ({ sifra, naziv: sifra, jm: 'kom', tip: 'artikal', kolicina, cijena: 1, nabavnaVrijednost: 0, nabavnaKolicina: 0 });
+    p.zalihe = [red('A', 0.1 + 0.2 - 0.3), red('B', -(0.1 + 0.2 - 0.3)), red('C', TOLERANCIJA_ZALIHE)];
+    const r = obracunaj(p, { moduli: SVI });
+    expect(r.zalihe.map(z => z.sifra)).toEqual(['C']);
+    expect(r.upozorenja).toEqual([]);
   });
 
   test('isključeni moduli daju prazne listove i nule', () => {

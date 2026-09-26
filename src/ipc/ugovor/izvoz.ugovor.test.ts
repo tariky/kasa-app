@@ -177,6 +177,40 @@ describe('izvoz:knjigovodja', () => {
     expect(r.zalihe[0].cijena).toBe(14);
   });
 
+  // Historija cijena je samo-dodavanje: brisanje ili izmjena primke danas ne
+  // smije promijeniti "Zalihe na dan" za period koji je već predat knjigovođi
+  // (nivelacija tog perioda i dalje stoji u izvozu).
+  test('brisanje primke kasnije ne mijenja prodajnu cijenu zaliha za raniji period', async () => {
+    const a = artikal('A', 10);
+    const { id } = await b.call('primka:create', {
+      brojPrimke: 'U-1', datum: '2026-01-20', stavke: [{ productId: a, kolicina: 5, cijena: 15, nabavnaCijena: 5, rabat: 0, pdvStopa: 'E' }],
+    });
+    b.db.prepare("UPDATE cijena_historija SET createdAt = '2026-01-20 10:00:00'").run();
+    const cijenaA = async (od: string, doDatum: string) => (await izvoz(od, doDatum)).zalihe.find((z: any) => z.sifra === 'A').cijena;
+    expect(await cijenaA('2026-01-01', '2026-01-31')).toBe(15);
+
+    expect(await b.call('primka:delete', id)).toBeNull();
+    expect(await cijenaA('2026-01-01', '2026-01-31')).toBe(15);
+    // Vraćena cijena važi od danas.
+    expect(await cijenaA('2099-12-01', '2099-12-31')).toBe(10);
+  });
+
+  test('izmjena cijene na primci koju je poslije promijenilo nešto drugo ne mijenja raniji period', async () => {
+    const a = artikal('A', 10);
+    const stavke = (cijena: number) => [{ productId: a, kolicina: 5, cijena, nabavnaCijena: 5, rabat: 0, pdvStopa: 'E' }];
+    const { id } = await b.call('primka:create', { brojPrimke: 'U-1', datum: '2026-01-20', stavke: stavke(15) });
+    b.db.prepare("UPDATE cijena_historija SET createdAt = '2026-01-20 10:00:00'").run();
+    await b.call('product:update', a, { cijena: 20 });
+    b.db.prepare("UPDATE cijena_historija SET createdAt = '2026-02-10 10:00:00' WHERE izvor = 'rucno'").run();
+    const cijenaA = async (od: string, doDatum: string) => (await izvoz(od, doDatum)).zalihe.find((z: any) => z.sifra === 'A').cijena;
+
+    await b.call('primka:update', { id, brojPrimke: 'U-1', datum: '2026-01-20', stavke: stavke(18) });
+    expect(await cijenaA('2026-01-01', '2026-01-31')).toBe(15);
+    expect(await cijenaA('2026-02-01', '2026-02-28')).toBe(20);
+    // Lanac je ispravljen: bez ručne izmjene važila bi nova cijena primke.
+    expect(b.db.prepare("SELECT staraCijena FROM cijena_historija WHERE izvor = 'rucno'").get()).toEqual({ staraCijena: 18 });
+  });
+
   test('prazan period vraća prazne liste', async () => {
     expect(await izvoz(...SEP)).toEqual({
       od: '2026-09-01', do: '2026-09-30', racuni: [], reklamacije: [], stavkeRacuna: [], primke: [], primkaStavke: [],

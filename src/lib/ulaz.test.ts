@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test';
-import { redStatus, praznaStavka, ulazTotali, nedostajeOpis, uPayload, redNabavnaPoJed, prodajnaPrikaz, prodajnaIzUnosa, redRucPosto, type UlazRed } from './ulaz';
+import { redStatus, praznaStavka, ulazTotali, nedostajeOpis, uPayload, redNabavnaPoJed, prodajnaPrikaz, prodajnaIzUnosa, redRucPosto, redIzBaze, porukaUpozorenja, type UlazRed } from './ulaz';
 
 const artikal = { id: 1, sifra: 'A-1', naziv: 'Artikal', jm: 'kom', cijena: 10, pdvStopa: 'E', tip: 'artikal', stanje: 3 } as any;
 const ploca = { id: 11, sifra: 'IV', naziv: 'Iverica', jm: 'm²', cijena: 0, pdvStopa: 'E', tip: 'materijal', plocaSirina: 2000, plocaVisina: 1000, stanje: 0 } as any;
@@ -118,4 +118,63 @@ test('RUC reda: na nabavnu nakon rabata, iz prodajne bez PDV-a', () => {
   expect(redRucPosto(red({ productId: 1, kolicina: '1', nabavnaCijena: '100', rabat: '20', cijena: '117' }), artikal)).toBe(25);
   expect(redRucPosto(red({ productId: 1, kolicina: '1', nabavnaCijena: '', cijena: '117' }), artikal)).toBeNull();
   expect(redRucPosto(red({ productId: 12, kolicina: '1', nabavnaCijena: '2', cijena: '' }), kant)).toBeNull();
+});
+
+// Spremljena primka s pločom: baza vodi m², forma prikazuje komade. Preračun
+// m² → kom → m² je zaokružen, pa spremanje bez izmjene ne smije dirati m².
+const ivericaStd = { id: 13, sifra: 'IV18', naziv: 'Iverica 18', jm: 'm²', cijena: 0, pdvStopa: 'E', tip: 'materijal', plocaSirina: 2800, plocaVisina: 2070, stanje: 0 } as any;
+const saIvericom = [...products, ivericaStd];
+const stavkaBaze = (kolicina: number, nabavnaCijena: number) => ({ productId: 13, kolicina, nabavnaCijena, rabat: 0, cijena: 0 });
+
+test('ploča iz baze: nepromijenjena količina i nabavna se spremaju tačno kako su bile (10 m² ostaje 10 m²)', () => {
+  const r = redIzBaze(ivericaStd, stavkaBaze(10, 20.7));
+  expect([r.kolicina, r.nabavnaCijena]).toEqual(['1.725', '119.98']);
+  const [s] = uPayload([r], saIvericom, '');
+  expect(s.kolicina).toBe(10);
+  expect(s.nabavnaCijena).toBe(20.7);
+  // Izmjena drugog polja (rabat) ne dira količinu ni nabavnu.
+  const [s2] = uPayload([{ ...r, rabat: '5' }], saIvericom, '');
+  expect([s2.kolicina, s2.nabavnaCijena, s2.rabat]).toEqual([10, 20.7, 5]);
+});
+
+test('ploča iz baze: promijenjeno polje se preračunava iz komada, nepromijenjeno ostaje', () => {
+  const r = redIzBaze(ivericaStd, stavkaBaze(10, 20.7));
+  const [s] = uPayload([{ ...r, kolicina: '2' }], saIvericom, '');
+  expect([s.kolicina, s.nabavnaCijena]).toEqual([11.592, 20.7]);
+  const [n] = uPayload([{ ...r, nabavnaCijena: '120' }], saIvericom, '');
+  expect([n.kolicina, n.nabavnaCijena]).toEqual([10, 20.7039]);
+  // Drugi artikal u istom redu: vrijednosti iz baze više ne važe.
+  const [d] = uPayload([{ ...r, productId: 11 }], saIvericom, '');
+  expect([d.kolicina, d.nabavnaCijena]).toEqual([3.45, 59.99]);
+});
+
+test('ploča: unos u komadima s 3 decimale ne gubi preciznost pri ponovnom spremanju', () => {
+  const [prvi] = uPayload([red({ productId: 13, kolicina: '2.125', nabavnaCijena: '120' })], saIvericom, '');
+  const r = redIzBaze(ivericaStd, { ...prvi, cijena: 0 });
+  expect(r.kolicina).toBe('2.125');
+  const [drugi] = uPayload([r], saIvericom, '');
+  expect([drugi.kolicina, drugi.nabavnaCijena]).toEqual([prvi.kolicina, prvi.nabavnaCijena]);
+});
+
+test('porukaUpozorenja: svako upozorenje pregleda u jednom redu, pa pitanje', () => {
+  const u = [
+    { vrsta: 'minus' as const, productId: 1, productNaziv: 'Kafa', stanjePrije: 2, stanjePoslije: -8 },
+    { vrsta: 'prodano' as const, productId: 1, productNaziv: 'Kafa', stanjePrije: 2, stanjePoslije: -8 },
+    { vrsta: 'minus' as const, productId: 2, productNaziv: 'Iverica', stanjePrije: 0.5, stanjePoslije: -1.25 },
+  ];
+  expect(porukaUpozorenja(u, 'brisanje')).toBe(
+    'Brisanje ulaza — provjerite prije potvrde:\n\n'
+    + '• Kafa: stanje 2 → -8 (u minusu)\n'
+    + '• Kafa: roba s ovog ulaza je već prodavana po staroj cijeni; cijena se mijenja bez nivelacije\n'
+    + '• Iverica: stanje 0.5 → -1.25 (u minusu)\n\n'
+    + 'Nastaviti?',
+  );
+  expect(porukaUpozorenja(u.slice(0, 1), 'izmjena').startsWith('Izmjena ulaza — ')).toBe(true);
+});
+
+test('obični artikal iz baze: redIzBaze prenosi vrijednosti i prodajnu cijenu', () => {
+  const r = redIzBaze(artikal, { productId: 1, kolicina: 0.3, nabavnaCijena: 1.15, rabat: 2, cijena: 12.5 });
+  expect([r.productId, r.kolicina, r.nabavnaCijena, r.rabat, r.cijena]).toEqual([1, '0.3', '1.15', '2', '12.5']);
+  expect(redIzBaze(artikal, { productId: 1, kolicina: 1, nabavnaCijena: 1, rabat: 0, cijena: 1 }).rabat).toBe('');
+  expect(uPayload([r], saIvericom, '')[0]).toMatchObject({ kolicina: 0.3, nabavnaCijena: 1.15, rabat: 2, cijena: 12.5 });
 });

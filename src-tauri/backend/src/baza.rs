@@ -200,6 +200,17 @@ pub fn run_migrations(db: &Db) -> R<()> {
     if !ima(&products2, "slobodan") {
         db.exec("ALTER TABLE products ADD COLUMN slobodan INTEGER NOT NULL DEFAULT 0")?;
     }
+
+    // Historija cijena je samo-dodavanje za izvoz: poništena promjena se označi
+    // (ne briše), a cijena iz prodaje ostaje zapamćena kad se lanac ispravi.
+    // (Bez tabele nema šta dorađivati — schema je pravi s novim kolonama.)
+    let historija = kolone(db, "cijena_historija")?;
+    if !historija.is_empty() && !ima(&historija, "ponistena") {
+        db.exec("ALTER TABLE cijena_historija ADD COLUMN ponistena INTEGER NOT NULL DEFAULT 0")?;
+    }
+    if !historija.is_empty() && !ima(&historija, "cijenaUProdaji") {
+        db.exec("ALTER TABLE cijena_historija ADD COLUMN cijenaUProdaji REAL")?;
+    }
     Ok(())
 }
 
