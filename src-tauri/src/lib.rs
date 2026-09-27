@@ -104,8 +104,17 @@ impl Platforma for TauriPlatforma {
         });
     }
 
-    fn licenca_blokirana(&self) {
-        let _ = self.app.emit("licenca:blokirano", ());
+    fn dogadjaj(&self, ime: &str, podaci: Value) {
+        let _ = self.app.emit(ime, podaci);
+    }
+
+    fn u_pozadini(&self, posao: Box<dyn FnOnce(&Backend) + Send>) {
+        let app = self.app.clone();
+        std::thread::spawn(move || {
+            if let Some(b) = app.try_state::<Backend>() {
+                posao(b.inner());
+            }
+        });
     }
 }
 

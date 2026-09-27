@@ -39,6 +39,7 @@ impl Platforma for BezDijaloga {
         0
     }
     fn restartuj_za(&self, _: u64) {}
+    fn u_pozadini(&self, _: Box<dyn FnOnce(&Backend) + Send>) {}
 }
 
 /// Aktivna baza (schema, migracije, seed) u privremenom folderu.

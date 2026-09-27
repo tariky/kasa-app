@@ -8,7 +8,7 @@ use std::sync::LazyLock;
 use serde_json::Value;
 
 use crate::greska::{Greska, R};
-use crate::{cash, izvoz, katalog, korisnici, licenca, ponude, postavke, proizvodnja, racuni, skladiste, uredjaj};
+use crate::{backup, cash, izvoz, katalog, korisnici, licenca, ponude, postavke, proizvodnja, racuni, skladiste, uredjaj};
 use crate::{Args, Backend};
 
 /// Kanal i njegov handler. Argumenti su redom kako ih šalje renderer.
@@ -20,6 +20,7 @@ pub struct Kanal {
 /// Tabele domena, redom kao u handlers.ts.
 const DOMENE: &[&[Kanal]] = &[
     licenca::KANALI,
+    backup::KANALI,
     korisnici::KANALI,
     katalog::KANALI,
     skladiste::KANALI,

@@ -106,14 +106,22 @@ export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
     return odgovor;
   }
 
+  let backupR2: import('../../lib/licenca').R2Podaci | null = null;
+  /** R2 podaci "licence" (bez odgovora — server ih obradi prije sljedećeg zahtjeva). */
+  function posaljiBackupLicencu() {
+    proc.stdin.write(JSON.stringify({ meta: 'backupLicenca', r2: backupR2 }) + '\n');
+    proc.stdin.flush();
+  }
+
   const backend: Backend = {
     db,
     tring,
     dijalog,
     otvoreniDijalozi,
     dogadjaji,
-    postaviBackupLicencu() {
-      throw new Error('Rust backend još nema automatski backup (faza 4, vidi spec)');
+    postaviBackupLicencu(r2) {
+      backupR2 = r2;
+      posaljiBackupLicencu();
     },
     async r2IzTokena(token) {
       return ((await zahtjev({ meta: 'r2IzTokena', token })).ok ?? null) as import('../../lib/licenca').R2Podaci | null;
@@ -129,6 +137,7 @@ export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
       // sesija i budžet promjena PIN-a počinju iz početka (blokada je u bazi).
       await ugasi(proc);
       proc = await pokreni();
+      if (backupR2) posaljiBackupLicencu();
     },
     // Isti poziv; tipove argumenata i rezultata daje Backend.pozovi.
     pozovi: (kanal, ...args) => (backend.call as unknown as (kanal: string, ...args: unknown[]) => Promise<never>)(kanal, ...args),

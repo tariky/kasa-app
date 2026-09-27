@@ -95,20 +95,23 @@ fn backup_bucket(b: &Value) -> Option<&str> {
 /// ko rastavi program — pravu zaštitu nose pravila bucketa.
 fn backup_kljuc() -> &'static [u8; 32] {
     static K: OnceLock<[u8; 32]> = OnceLock::new();
-    K.get_or_init(|| {
-        const TS: &str = include_str!("../../../src/lib/backupKljuc.ts");
-        let hex = Regex::new(r"'([0-9a-f]{64})'").unwrap().captures(TS).expect("backupKljuc.ts mora imati ključ od 64 hex znaka")[1].to_string();
-        let mut k = [0u8; 32];
-        for (i, b) in k.iter_mut().enumerate() {
-            *b = u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).unwrap();
-        }
-        k
-    })
+    K.get_or_init(|| kljuc_iz_ts(include_str!("../../../src/lib/backupKljuc.ts")).expect("backupKljuc.ts mora imati ključ od 64 hex znaka"))
+}
+
+/// Ključ iz `'<64 hex znaka>'` u TS izvoru — mala ili velika slova, kao Node
+/// `Buffer.from(hex, 'hex')`.
+fn kljuc_iz_ts(ts: &str) -> Option<[u8; 32]> {
+    let hex = Regex::new(r"'([0-9a-fA-F]{64})'").unwrap().captures(ts)?.get(1)?.as_str();
+    let mut k = [0u8; 32];
+    for (i, b) in k.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).ok()?;
+    }
+    Some(k)
 }
 
 /// R2 pristup (token samo za bucket klijenta) i javni age ključ kojim se
 /// backup šifruje (`R2Podaci`). Nikad ne ide rendereru.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct R2Podaci {
     pub account_id: String,
     pub access_key_id: String,
@@ -116,6 +119,19 @@ pub struct R2Podaci {
     pub bucket: String,
     /// `age1…` — privatni par je samo kod izdavača.
     pub primalac: String,
+}
+
+/// Bez kredencijala: `{:?}` ili panika ne smiju ispisati ključ ni tajnu.
+impl std::fmt::Debug for R2Podaci {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("R2Podaci")
+            .field("account_id", &self.account_id)
+            .field("access_key_id", &"…")
+            .field("secret", &"…")
+            .field("bucket", &self.bucket)
+            .field("primalac", &self.primalac)
+            .finish()
+    }
 }
 
 impl R2Podaci {
@@ -495,7 +511,12 @@ pub const KANALI: &[Kanal] = &[
     Kanal { ime: "licenca:stanje", h: |b, _| if b.provjera_licence { stanje_licence(b) } else { otkljucana() } },
     Kanal {
         ime: "licenca:aktiviraj",
-        h: |b, a| if b.provjera_licence { aktiviraj_licencu(b, a[0].as_str().unwrap_or("")) } else { otkljucana() },
+        h: |b, a| {
+            let info = if b.provjera_licence { aktiviraj_licencu(b, a[0].as_str().unwrap_or(""))? } else { otkljucana()? };
+            // Nova licenca s backup-om: prvi backup odmah (handlers.ts: backupNakonAktivacije).
+            crate::backup::nakon_aktivacije(b);
+            Ok(info)
+        },
     },
 ];
 
@@ -744,5 +765,45 @@ mod tests {
         assert_eq!(backup_podaci("PAZAR1.x.y"), None);
         assert_eq!(R2Podaci::iz_json(&json!({"accountId": "a"})), None);
         assert_eq!(R2Podaci::iz_json(&Value::Null), None);
+    }
+
+    #[test]
+    fn r2_podaci_debug_bez_kredencijala() {
+        let r2 = R2Podaci {
+            account_id: "acc".into(), access_key_id: "KLJUC-KOJI-SE-NE-VIDI".into(), secret: "tajna-koja-se-ne-vidi".into(),
+            bucket: "pazar-pekara".into(), primalac: "age1primalac".into(),
+        };
+        let d = format!("{r2:?}");
+        assert!(d.contains("acc") && d.contains("pazar-pekara") && d.contains("age1primalac"), "{d}");
+        assert!(!d.contains("KLJUC-KOJI-SE-NE-VIDI") && !d.contains("tajna-koja-se-ne-vidi"), "{d}");
+    }
+
+    #[test]
+    fn backup_kljuc_mala_i_velika_slova() {
+        let mala = format!("export const BACKUP_KLJUC = '{}';", "0a1b2c3d4e5f".repeat(5) + "6f7e");
+        let velika = mala.replace("0a1b2c3d4e5f", "0A1B2C3D4E5F").replace("6f7e", "6F7E");
+        let k = kljuc_iz_ts(&mala).unwrap();
+        assert_eq!(&k[..6], &[0x0a, 0x1b, 0x2c, 0x3d, 0x4e, 0x5f]);
+        assert_eq!(&k[30..], &[0x6f, 0x7e]);
+        assert_eq!(kljuc_iz_ts(&velika), Some(k));
+        assert_eq!(kljuc_iz_ts("export const BACKUP_KLJUC = 'abc';"), None);
+    }
+
+    /// Bez licence ili s licencom koju ovaj program nije izdao nema backup-a, i
+    /// kad `b` u tokenu daje ispravne R2 podatke (pozitivan put traži pravi ključ
+    /// izdavača — ručna provjera u Tauri aplikaciji).
+    #[test]
+    fn backup_pristup_bez_vazece_licence() {
+        let p = crate::proba::proba("backup-pristup");
+        let b = p.b();
+        assert_eq!(backup_pristup(b), None);
+
+        let k = SigningKey::from_bytes(&[7u8; 32]);
+        let x = x_za(r#"{"a":"acc","k":"kid","s":"tajna","r":"age1primalac"}"#);
+        let t = token_s_b(&k, &format!(r#"{{"c":"pazar-pekara","x":"{x}"}}"#));
+        assert!(backup_podaci(&t).is_some());
+        std::fs::write(b.user_data().join("licenca.json"), json!({ "token": t }).to_string()).unwrap();
+        assert_eq!(stanje_licence(b).unwrap(), sa_uredjajem(json!({"stanje": "neispravna", "razlog": "potpis"})));
+        assert_eq!(backup_pristup(b), None);
     }
 }

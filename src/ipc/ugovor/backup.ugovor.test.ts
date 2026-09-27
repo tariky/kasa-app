@@ -1,11 +1,11 @@
 // Ugovor automatskog backup-a: backup:info, backup:sada i događaj
-// backup:stanje, protiv lažnog S3 (PAZAR_BACKUP_ENDPOINT). Tijelo se
-// dešifruje JS age-om i otvara kao baza — za Rust (faza 4) to je i interop.
+// backup:stanje, protiv lažnog S3 (PAZAR_BACKUP_ENDPOINT), nad oba backenda.
+// Tijelo se dešifruje JS age-om i otvara kao baza — za Rust je to i interop.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { generateIdentity, identityToRecipient } from 'age-encryption';
 import { generateKeyPairSync } from 'node:crypto';
-import { readdirSync, writeFileSync } from 'node:fs';
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { desifrujBackup } from '../../lib/backupFajl';
@@ -17,8 +17,7 @@ import { scenarij } from './scenarij';
 
 const IME = /^[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}\/\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z\.db\.age$/;
 
-// Rust backend dobija backup:* u fazi 4 — do tada ovaj ugovor važi samo za TS.
-describe.skipIf(process.env.KASA_BACKEND === 'rust')('backup:*', () => {
+describe('backup:*', () => {
   let b: Backend;
   const baza = scenarij(() => b);
   let s3: LaziS3;
@@ -63,6 +62,8 @@ describe.skipIf(process.env.KASA_BACKEND === 'rust')('backup:*', () => {
     const z = s3.zahtjevi[0];
     expect(z).toMatchObject({ metoda: 'PUT', bucket: 'pazar-ugovor', potpisIspravan: true, hashIspravan: true });
     expect(z.kljuc).toMatch(IME);
+    // R2 odbija chunked PUT: dužina mora ići unaprijed (lažni S3 bi primio i chunked).
+    expect(z.duzina).toBe(z.tijelo.length);
 
     const fajl = path.join(b.radniFolder, 'vraceno.db');
     writeFileSync(fajl, await desifrujBackup(z.tijelo, identitet));
@@ -137,6 +138,40 @@ describe.skipIf(process.env.KASA_BACKEND === 'rust')('backup:*', () => {
     expect((await b.pozovi('backup:info')).aktivan).toBe(true);
     await expect(b.call('backup:sada')).rejects.toThrow(PORUKA_SAMO_ADMIN);
     expect(s3.zahtjevi).toHaveLength(0);
+  });
+
+  test('dok backup šalje, kasa radi (slanje ne drži red poziva)', async () => {
+    b.postaviBackupLicencu(r2);
+    s3.odgodaMs = 1500;
+    let gotov = false;
+    const backup = b.pozovi('backup:sada').then(i => { gotov = true; return i; });
+    for (let i = 0; i < 200 && !stanjaBackupa().some(s => s.faza === 'slanje'); i++) await Bun.sleep(10);
+    expect(stanjaBackupa().some(s => s.faza === 'slanje')).toBe(true);
+
+    expect(await b.pozovi('user:getAll')).toBeArray();
+    expect(gotov).toBe(false);
+    expect((await backup).greska).toBeUndefined();
+  });
+
+  const fajlStanja = () => path.join(b.radniFolder, '..', 'backup-stanje.json');
+
+  test('backup-stanje.json iz Electron verzije: raspored se nastavlja', async () => {
+    const uspjeh = new Date(Date.now() - 60 * 60_000).toISOString();
+    writeFileSync(fajlStanja(), JSON.stringify({ zadnjiUspjeh: uspjeh, zadnjiPokusaj: uspjeh }, null, 2));
+    b.postaviBackupLicencu(r2);
+    const info = await b.pozovi('backup:info');
+    expect(info.zadnjiUspjeh).toBe(uspjeh);
+    expect(info.sljedeci).toBe(new Date(Date.parse(uspjeh) + 3 * 60 * 60_000).toISOString());
+    expect(info.greska).toBeUndefined();
+  });
+
+  test('pokvaren backup-stanje.json: kao da backup-a nije bilo, backup prolazi i prepiše ga', async () => {
+    writeFileSync(fajlStanja(), '{pokvaren');
+    b.postaviBackupLicencu(r2);
+    expect((await b.pozovi('backup:info')).zadnjiUspjeh).toBeUndefined();
+    const info = await b.pozovi('backup:sada');
+    expect(info.greska).toBeUndefined();
+    expect(JSON.parse(readFileSync(fajlStanja(), 'utf8'))).toEqual({ zadnjiUspjeh: info.zadnjiUspjeh, zadnjiPokusaj: expect.any(String) });
   });
 });
 

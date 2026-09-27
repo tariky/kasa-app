@@ -10,11 +10,6 @@ import { otvoriBackend, type Backend } from './backend';
 import { primka, scenarij, spremljena, stavkaPrimke } from './scenarij';
 import { KLJUCEVI_DOKUMENATA } from '../../lib/dokumentPostavke';
 
-/** Kanali koje ima samo Electron (automatski backup, faza 4) — Rust ih nema. */
-const SAMO_ELECTRON = ['backup:info', 'backup:sada'];
-const preskoci = (kanali: string[]) =>
-  process.env.KASA_BACKEND === 'rust' ? kanali.filter(k => !SAMO_ELECTRON.includes(k)) : kanali;
-
 const LISTE_KANALA: Record<string, string[]> = {
   kanaliBezPrijave: pristup.kanaliBezPrijave,
   kanaliSaZadanimPinom: pristup.kanaliSaZadanimPinom,
@@ -44,13 +39,13 @@ describe('spisak kanala', () => {
   afterEach(async () => { await b.close(); });
 
   test('window.api zove tačno kanale koje backend registruje', async () => {
-    expect(preskoci(await kanaliIzApi())).toEqual(await b.kanali());
+    expect(await kanaliIzApi()).toEqual(await b.kanali());
   });
 
   test('svaki kanal s liste pristupa postoji u backendu', async () => {
     const postoje = new Set(await b.kanali());
     const nepostojeci = Object.entries(LISTE_KANALA).flatMap(([lista, kanali]) =>
-      preskoci(kanali).filter(k => !postoje.has(k)).map(k => `${lista}: ${k}`));
+      kanali.filter(k => !postoje.has(k)).map(k => `${lista}: ${k}`));
     expect(nepostojeci).toEqual([]);
   });
 });

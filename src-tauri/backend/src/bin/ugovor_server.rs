@@ -14,15 +14,19 @@
 //! kanale backenda (`Backend.kanali()` u harnessu).
 //! `{"id":3,"meta":"r2IzTokena","token":"PAZAR1…"}` vraća R2 podatke iz
 //! tokena (`Backend.r2IzTokena`) ili `null`.
+//! Događaji backenda (`backup:stanje`, `licenca:blokirano`) stižu kao
+//! `{"dogadjaj":"backup:stanje","podaci":{…}}`. Meta `{"meta":"backupLicenca",
+//! "r2":{…}|null}` (bez odgovora) postavi R2 podatke koje "licenca" daje backup-u.
 //!
 //! Svaki zahtjev radi u svojoj niti, s mjestom u redu uzetim pri čitanju:
 //! kao u Electronu, drugi poziv može raditi dok prvi čeka uređaj.
 
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::thread::ThreadId;
 
+use pazar_backend::licenca::R2Podaci;
 use pazar_backend::sat::Sat;
 use pazar_backend::{Backend, Platforma};
 use serde_json::{json, Value};
@@ -38,6 +42,8 @@ struct Stanje {
 
 struct TestPlatforma {
     stanje: Arc<Mutex<Stanje>>,
+    /// Backend za poslove u pozadini — postavlja se čim je napravljen.
+    backend: Arc<OnceLock<Weak<Backend>>>,
 }
 
 fn posalji(v: &Value) {
@@ -70,6 +76,17 @@ impl Platforma for TestPlatforma {
             posalji(&json!({ "dogadjaj": "restart" }));
         });
     }
+    fn dogadjaj(&self, ime: &str, podaci: Value) {
+        posalji(&json!({ "dogadjaj": ime, "podaci": podaci }));
+    }
+    fn u_pozadini(&self, posao: Box<dyn FnOnce(&Backend) + Send>) {
+        let b = self.backend.get().and_then(Weak::upgrade);
+        std::thread::spawn(move || {
+            if let Some(b) = b {
+                posao(&b);
+            }
+        });
+    }
 }
 
 fn main() {
@@ -79,13 +96,15 @@ fn main() {
     // Licenca je u ugovornim testovima otključana (kao mock u tsBackend.ts);
     // KASA_UGOVOR_LICENCA=1 uključi pravu provjeru (licenca.json u userData).
     let licenca = std::env::var("KASA_UGOVOR_LICENCA").is_ok_and(|v| v == "1");
-    let b = match Backend::novi(&user_data, Box::new(TestPlatforma { stanje: stanje.clone() }), sat.clone(), licenca) {
+    let ja = Arc::new(OnceLock::new());
+    let b = match Backend::novi(&user_data, Box::new(TestPlatforma { stanje: stanje.clone(), backend: ja.clone() }), sat.clone(), licenca) {
         Ok(b) => Arc::new(b),
         Err(e) => {
             posalji(&json!({ "spreman": false, "greska": e.0 }));
             std::process::exit(1);
         }
     };
+    let _ = ja.set(Arc::downgrade(&b));
     posalji(&json!({ "spreman": true }));
 
     let mut niti = Vec::new();
@@ -108,6 +127,11 @@ fn main() {
         if z["meta"] == "r2IzTokena" {
             let r2 = pazar_backend::licenca::backup_podaci(z["token"].as_str().unwrap_or(""));
             posalji(&json!({ "id": z["id"], "ok": r2.map(|r| r.u_json()) }));
+            continue;
+        }
+        if z["meta"] == "backupLicenca" {
+            // Bez odgovora: obradi se prije sljedećeg zahtjeva (redom sa stdin-a).
+            b.backup.postavi_testni_pristup(R2Podaci::iz_json(&z["r2"]));
             continue;
         }
         {

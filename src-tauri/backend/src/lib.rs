@@ -5,7 +5,7 @@
 //! `ipcRenderer.invoke(kanal, ...args)`. Tauri aplikacija ga zove iz komande
 //! `api`, a ugovorni testovi (`src/ipc/ugovor`, `KASA_BACKEND=rust`) preko
 //! `ugovor-server` binarija. Sve što zavisi od okruženja (dijalozi, restart,
-//! obavijest o licenci) ide kroz [`Platforma`].
+//! događaji prozoru, posao u pozadini) ide kroz [`Platforma`].
 
 // `if !(x > 0.0)` je namjerno isto kao TS `if (!(x > 0))`: NaN ne prolazi provjeru.
 #![allow(clippy::neg_cmp_op_on_partial_ord)]
@@ -74,8 +74,12 @@ pub trait Platforma: Send + Sync {
     /// Zatvori program i pokreni ga ponovo nakon `ms` milisekundi (renderer
     /// za to vrijeme dobije odgovor).
     fn restartuj_za(&self, ms: u64);
-    /// Licenca je blokirala kanal — renderer prikazuje dijalog (`licenca:blokirano`).
-    fn licenca_blokirana(&self) {}
+    /// Događaj prozoru (`webContents.send(ime, podaci)`): `licenca:blokirano`,
+    /// `backup:stanje`.
+    fn dogadjaj(&self, _ime: &str, _podaci: Value) {}
+    /// Posao nad backendom u pozadini (u Electronu `void promise`) — prvi
+    /// backup nakon aktivacije licence. Posao sam čeka red (`Backend::u_redu`).
+    fn u_pozadini(&self, posao: Box<dyn FnOnce(&Backend) + Send>);
 }
 
 /// Argumenti poziva; nepostojeći argument je `null` (JS `undefined`).
@@ -112,12 +116,15 @@ pub struct Backend {
     pub datum_iz_baze: licenca::DatumIzBaze,
     /// Dokumenti čija je štampa u toku (zaštita od dvoklika, stampa.rs).
     u_toku: stampa::UTokuSkup,
+    /// Automatski backup na R2 (backup.rs).
+    pub backup: backup::Backup,
 }
 
 impl Backend {
     pub fn novi(user_data: &Path, platforma: Box<dyn Platforma>, sat: Sat, provjera_licence: bool) -> R<Backend> {
         std::fs::create_dir_all(user_data)?;
         let petlja = Arc::new(Petlja::nova());
+        let start = sat.ms();
         Ok(Backend {
             db: baza::otvori(&user_data.join("kasa.db"), petlja.clone())?,
             user_data: user_data.to_path_buf(),
@@ -130,6 +137,7 @@ impl Backend {
             sesija: sesija::Sesija::default(),
             datum_iz_baze: licenca::DatumIzBaze::default(),
             u_toku: stampa::UTokuSkup::default(),
+            backup: backup::Backup::novi(start),
         })
     }
 
@@ -185,7 +193,28 @@ impl Backend {
     }
 
     pub fn licenca_blokirana(&self) {
-        self.platforma.licenca_blokirana();
+        self.platforma.dogadjaj("licenca:blokirano", Value::Null);
+    }
+
+    /// Događaj prozoru (vidi `Platforma::dogadjaj`).
+    pub fn dogadjaj(&self, ime: &str, podaci: Value) {
+        self.platforma.dogadjaj(ime, podaci);
+    }
+
+    pub fn u_pozadini(&self, posao: Box<dyn FnOnce(&Backend) + Send>) {
+        self.platforma.u_pozadini(posao);
+    }
+
+    /// Posao izvan IPC poziva (raspored backup-a, posao u pozadini): čeka red
+    /// kao poziv i drži petlju dok radi.
+    pub fn u_redu<T>(&self, f: impl FnOnce() -> T) -> T {
+        let _z = self.petlja.uzmi(self.tiket());
+        f()
+    }
+
+    /// Otpusti petlju dok se čeka nešto spolja (slanje backup-a) — `Petlja::odmor`.
+    pub(crate) fn odmor(&self) -> petlja::Odmor<'_> {
+        self.petlja.odmor()
     }
 
     /// Mjesto u redu poziva; uzmi ga čim poziv stigne, da redoslijed ostane
