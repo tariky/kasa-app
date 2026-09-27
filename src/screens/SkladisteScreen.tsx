@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { Product, Primka, Dobavljac } from '@/types';
 import { cn, formatKM, formatDate, parseDecimal, porukaGreske } from '@/lib/utils';
 import { useCijenaUnos } from '@/hooks/useCijenaUnos';
@@ -10,9 +10,6 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { DecimalInput } from '@/components/ui/decimal-input';
 import { Label } from '@/components/ui/label';
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
-} from '@/components/ui/dialog';
 import {
   FullDialog, FullDialogContent, FullDialogHeader, FullDialogFooter, FullDialogNotice, FooterBtn, LegendKey,
 } from '@/components/ui/full-dialog';
@@ -29,6 +26,11 @@ import {
   Lock, RefreshCw,
 } from 'lucide-react';
 import { potvrdi, obavijesti } from '@/lib/dijalog';
+import { useIpcPodaci } from '@/hooks/useIpcPodaci';
+import { GreskaUcitavanja } from '@/components/GreskaUcitavanja';
+import { useLedgerLista } from '@/hooks/useLedgerLista';
+import { usePreciceListe } from '@/hooks/usePreciceListe';
+import { useCuvarIzmjena } from '@/hooks/useCuvarIzmjena';
 
 type SkladisteTab = 'artikli' | 'primke';
 
@@ -74,7 +76,6 @@ function ArtikalDialog({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [dirty, setDirty] = useState(false);
-  const [odbaciOpen, setOdbaciOpen] = useState(false);
   const cijena = useCijenaUnos(open, product, form.pdvStopa);
   const [dobavljaci, setDobavljaci] = useState<Dobavljac[]>([]);
   const [sifreRedovi, setSifreRedovi] = useState<SifraRed[]>([]);
@@ -83,6 +84,12 @@ function ArtikalDialog({
   // Artikal kreiran u ovom otvaranju dijaloga: ako padnu šifre dobavljača, ponovno
   // spremanje ga ažurira umjesto da pravi duplikat.
   const kreiranId = useRef<number | null>(null);
+  const isEdit = !!product;
+  const cuvar = useCuvarIzmjena(dirty, {
+    onClose: () => onOpenChange(false),
+    naslov: 'Nespremljene izmjene',
+    opis: isEdit ? 'Artikal ima izmjene koje nisu spremljene.' : 'Novi artikal nije spremljen.',
+  });
 
   const setForm = (izmjena: Partial<ArtikalFormData>) => {
     setFormState(f => ({ ...f, ...izmjena }));
@@ -107,7 +114,7 @@ function ArtikalDialog({
     if (!open) return;
     setError('');
     setDirty(false);
-    setOdbaciOpen(false);
+    cuvar.ponisti();
     if (product) {
       setFormState({
         sifra: product.sifra,
@@ -122,7 +129,7 @@ function ArtikalDialog({
     }
     // Fokus na naziv tek kad se sadržaj montira (FullDialog fokusira sebe na otvaranju).
     requestAnimationFrame(() => nazivRef.current?.focus());
-  }, [open, product]);
+  }, [open, product, cuvar.ponisti]);
 
   const cijenaOk = cijena.spremno && cijena.unos !== '' && !isNaN(cijena.bruto);
   const mozeSpremiti = !saving && !!form.sifra && !!form.naziv && cijenaOk;
@@ -172,13 +179,12 @@ function ArtikalDialog({
 
   const zatvori = () => {
     if (saving) return;
-    if (dirty) { setOdbaciOpen(true); return; }
-    onOpenChange(false);
+    cuvar.zatrazi();
   };
 
   // ⌘↵ sprema iz bilo kojeg polja.
   useEffect(() => {
-    if (!open || odbaciOpen) return;
+    if (!open || cuvar.otvoren) return;
     const onKey = (e: KeyboardEvent) => {
       if (!contentRef.current?.contains(e.target as Node)) return;
       if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
@@ -190,7 +196,6 @@ function ArtikalDialog({
     return () => window.removeEventListener('keydown', onKey);
   });
 
-  const isEdit = !!product;
   const stanjeBroj = parseDecimal(form.stanje);
   const promjenaStanja = isEdit && !isNaN(stanjeBroj) && stanjeBroj !== (product.stanje ?? 0)
     ? stanjeBroj - (product.stanje ?? 0) : 0;
@@ -347,23 +352,7 @@ function ArtikalDialog({
         </FullDialogFooter>
       </FullDialogContent>
 
-      <Dialog open={odbaciOpen} onOpenChange={setOdbaciOpen}>
-        <DialogContent className="sm:max-w-[420px]">
-          <DialogHeader>
-            <DialogTitle>Nespremljene izmjene</DialogTitle>
-            <DialogDescription>
-              {isEdit ? 'Artikal ima izmjene koje nisu spremljene.' : 'Novi artikal nije spremljen.'}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex justify-between items-center gap-2 pt-2">
-            <Button variant="ghost" className="text-rose-600 hover:text-rose-700 hover:bg-rose-50"
-              onClick={() => { setOdbaciOpen(false); onOpenChange(false); }}>
-              Odbaci izmjene
-            </Button>
-            <Button variant="ghost" autoFocus onClick={() => setOdbaciOpen(false)}>Ostani</Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {cuvar.dijalog}
     </FullDialog>
   );
 }
@@ -429,9 +418,12 @@ function razinaZalihe(p: Product): ZalihaFilter {
 
 function ArtikliTab({
   products,
+  ucitano,
   onReload,
 }: {
   products: Product[];
+  /** false dok artikli nisu učitani — tada nema poruke „Nema artikala“. */
+  ucitano: boolean;
   onReload: () => void;
 }) {
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -476,21 +468,7 @@ function ArtikliTab({
     });
 
   // "/" pretraga, "N" novi artikal — isto kao na ulazu robe.
-  useEffect(() => {
-    if (dialogOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) {
-        if (t === searchRef.current && e.key === 'Escape') { setSearch(''); t.blur(); }
-        return;
-      }
-      if (e.key === '/') { e.preventDefault(); searchRef.current?.focus(); return; }
-      if (e.key.toLowerCase() === 'n') { e.preventDefault(); handleNew(); }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [dialogOpen]);
+  usePreciceListe({ aktivno: !dialogOpen, searchRef, onPretraga: setSearch, onNovi: handleNew, preskociIzbornike: false });
 
   const td = 'py-2.5 border-b border-slate-100';
 
@@ -526,7 +504,7 @@ function ArtikliTab({
         </Button>
       </div>
 
-      {filtered.length === 0 ? (
+      {filtered.length === 0 ? ucitano && (
         <div className="flex-1 flex flex-col items-center justify-center text-slate-400 select-none">
           <div className="w-12 h-12 rounded-2xl bg-slate-50 flex items-center justify-center mb-3"><Package size={20} className="text-slate-300" /></div>
           <p className="text-[13px] font-medium text-slate-500">
@@ -642,79 +620,31 @@ const poljaPrimke = (p: Primka): PoljaPretrage => ({
 });
 
 function PrimkeTab({ products, dobavljaci, onReloadProducts }: { products: Product[]; dobavljaci: Dobavljac[]; onReloadProducts: () => void }) {
-  const [primke, setPrimke] = useState<Primka[]>([]);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const { podaci, greska, osvjezi: loadPrimke } = useIpcPodaci(() => window.api.getPrimke(), []);
+  const primke: Primka[] = podaci ?? [];
   const [stanje, setStanje] = useState<UlazStanje>({ kind: 'zatvoren' });
   const [search, setSearch] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
-  const rowRefs = useRef<(HTMLTableRowElement | null)[]>([]);
   const searchRef = useRef<HTMLInputElement>(null);
-
-  const loadPrimke = useCallback(async () => { setPrimke(await window.api.getPrimke()); }, []);
-  useEffect(() => { loadPrimke(); }, [loadPrimke]);
 
   const visible = useMemo(() => {
     return filtriraj(primke, search, poljaPrimke);
   }, [primke, search]);
   const visibleIds = useMemo(() => visible.map(p => p.id), [visible]);
-  const selIndex = visible.findIndex(p => p.id === selectedId);
-
-  const focusRow = useCallback((index: number) => {
-    const p = visible[index];
-    if (!p) return;
-    setSelectedId(p.id);
-    const el = rowRefs.current[index];
-    el?.focus(); el?.scrollIntoView({ block: 'nearest' });
-  }, [visible]);
-
-  const otvori = (id: number) => { setSelectedId(id); setStanje({ kind: 'pregled', id }); };
+  const lista = useLedgerLista(visible, { onOtvori: id => setStanje({ kind: 'pregled', id }) });
+  const selIndex = lista.izabraniIndeks;
   const novi = () => setStanje({ kind: 'novi' });
 
-  const handleListKeyDown = (e: React.KeyboardEvent<HTMLTableSectionElement>) => {
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
-    const current = selIndex < 0 ? -1 : selIndex;
-    const last = visible.length - 1;
-    const go = (i: number) => { e.preventDefault(); focusRow(Math.max(0, Math.min(last, i))); };
-    switch (e.key) {
-      case 'ArrowDown': return go(current + 1);
-      case 'ArrowUp': return go(current < 0 ? 0 : current - 1);
-      case 'PageDown': return go(current + 10);
-      case 'PageUp': return go(current < 0 ? 0 : current - 10);
-      case 'Home': return go(0);
-      case 'End': return go(last);
-      case 'Enter': case ' ':
-        if (selectedId != null) { e.preventDefault(); otvori(selectedId); }
-        return;
-      default:
-    }
-  };
-
   const dialogOpen = stanje.kind !== 'zatvoren';
-  useEffect(() => {
-    if (dialogOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      const t = e.target as HTMLElement | null;
-      const uPolju = !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
-      if (uPolju) {
-        // Iz pretrage ↓ vodi na listu, esc briše upit.
-        if (t === searchRef.current && e.key === 'ArrowDown') { e.preventDefault(); focusRow(selIndex < 0 ? 0 : selIndex); }
-        if (t === searchRef.current && e.key === 'Escape') { setSearch(''); (t as HTMLInputElement).blur(); }
-        return;
-      }
-      if (e.key === '/') { e.preventDefault(); searchRef.current?.focus(); return; }
-      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { if (!t?.closest('tbody')) { e.preventDefault(); focusRow(selIndex < 0 ? 0 : selIndex); } return; }
-      if (e.key.toLowerCase() === 'n') { e.preventDefault(); novi(); return; }
-      if (e.key.toLowerCase() === 'r') { e.preventDefault(); loadPrimke(); return; }
-      if (e.key === 'Enter' && selectedId != null) { e.preventDefault(); otvori(selectedId); }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [dialogOpen, selectedId, selIndex, focusRow, loadPrimke]);
+  // Iz pretrage ↓ vodi na izabrani ulaz (ili prvi), esc briše upit.
+  usePreciceListe({
+    aktivno: !dialogOpen, lista, searchRef, onPretraga: setSearch, onNovi: novi, onOsvjezi: loadPrimke,
+    izPretrage: 'izabrani', preskociIzbornike: false,
+  });
 
   const zatvori = () => {
     setStanje({ kind: 'zatvoren' });
-    requestAnimationFrame(() => { const i = visible.findIndex(p => p.id === selectedId); if (i >= 0) rowRefs.current[i]?.focus(); });
+    lista.vratiFokus();
   };
 
   const td = 'py-2.5 border-b border-slate-100';
@@ -745,6 +675,8 @@ function PrimkeTab({ products, dobavljaci, onReloadProducts }: { products: Produ
         </div>
       </div>
 
+      <GreskaUcitavanja greska={greska} onPonovo={loadPrimke} />
+
       {msg && (
         <div className="flex-shrink-0 flex items-center gap-2 px-6 py-2 border-b border-emerald-100 bg-emerald-50/60 text-[12px] font-medium text-emerald-700">
           <PackagePlus className="h-3.5 w-3.5" /> {msg}
@@ -752,7 +684,7 @@ function PrimkeTab({ products, dobavljaci, onReloadProducts }: { products: Produ
         </div>
       )}
 
-      {visible.length === 0 ? (
+      {visible.length === 0 ? podaci && (
         <div className="flex-1 flex flex-col items-center justify-center text-slate-400 select-none">
           <div className="w-12 h-12 rounded-2xl bg-slate-50 flex items-center justify-center mb-3"><FileText size={20} className="text-slate-300" /></div>
           <p className="text-[13px] font-medium text-slate-500">{search ? 'Nema rezultata pretrage' : 'Nema ulaza robe'}</p>
@@ -770,16 +702,13 @@ function PrimkeTab({ products, dobavljaci, onReloadProducts }: { products: Produ
                 { label: 'Napomena', className: 'text-left px-3 w-[32%] hidden xl:table-cell' },
                 { label: '', className: 'pr-6 pl-2 w-[1%]' },
               ]} />
-              <tbody onKeyDown={handleListKeyDown}>
+              <tbody onKeyDown={lista.onTbodyKeyDown}>
                 {visible.map((p, i) => {
-                  const isSel = selectedId === p.id;
+                  const isSel = lista.izabranId === p.id;
                   return (
                     <tr key={p.id}
-                      ref={el => { rowRefs.current[i] = el; }}
-                      tabIndex={isSel || (selIndex < 0 && i === 0) ? 0 : -1}
-                      aria-selected={isSel}
-                      onClick={() => otvori(p.id)}
-                      onFocus={() => setSelectedId(p.id)}
+                      {...lista.rowProps(i)}
+                      onClick={() => lista.otvori(p.id)}
                       className={cn('group cursor-pointer transition-colors',
                         'focus:outline focus:outline-2 focus:-outline-offset-2 focus:outline-blue-500',
                         isSel ? 'bg-blue-50/70' : 'hover:bg-slate-50')}>
@@ -827,9 +756,9 @@ function PrimkeTab({ products, dobavljaci, onReloadProducts }: { products: Produ
         dobavljaci={dobavljaci}
         redoslijed={visibleIds}
         onClose={zatvori}
-        onNavigate={otvori}
-        onSaved={async (id) => { await loadPrimke(); onReloadProducts(); if (id) { setSelectedId(id); setStanje({ kind: 'pregled', id }); } else setStanje({ kind: 'zatvoren' }); }}
-        onDeleted={async (p) => { setStanje({ kind: 'zatvoren' }); setSelectedId(null); await loadPrimke(); onReloadProducts(); setMsg(`Ulaz ${p.brojPrimke} obrisan`); }}
+        onNavigate={lista.otvori}
+        onSaved={async (id) => { await loadPrimke(); onReloadProducts(); if (id) lista.otvori(id); else setStanje({ kind: 'zatvoren' }); }}
+        onDeleted={async (p) => { setStanje({ kind: 'zatvoren' }); lista.postaviIzabran(null); await loadPrimke(); onReloadProducts(); setMsg(`Ulaz ${p.brojPrimke} obrisan`); }}
       />
     </div>
   );
@@ -840,26 +769,16 @@ function PrimkeTab({ products, dobavljaci, onReloadProducts }: { products: Produ
 // ---------------------------------------------------------------------------
 
 export default function SkladisteScreen() {
-  const [products, setProducts] = useState<Product[]>([]);
-  const [dobavljaci, setDobavljaci] = useState<Dobavljac[]>([]);
   const [activeTab, setActiveTab] = useState<SkladisteTab>('artikli');
   const proizvodnja = useProizvodnja();
 
-  const loadProducts = useCallback(async () => {
+  const proizvodi = useIpcPodaci(async () => {
     const artikli = await window.api.getProducts('artikal');
     const materijal = proizvodnja ? await window.api.getProducts('materijal') : [];
-    setProducts([...artikli, ...materijal]);
+    return [...artikli, ...materijal];
   }, [proizvodnja]);
-
-  const loadDobavljaci = useCallback(async () => {
-    const data = await window.api.getDobavljaci();
-    setDobavljaci(data);
-  }, []);
-
-  useEffect(() => {
-    loadProducts();
-    loadDobavljaci();
-  }, [loadProducts, loadDobavljaci]);
+  const dobavljaci = useIpcPodaci(() => window.api.getDobavljaci(), []);
+  const products = proizvodi.podaci ?? [];
 
   const tabs: { id: SkladisteTab; label: string; icon: typeof Package }[] = [
     { id: 'artikli', label: 'Artikli', icon: Package },
@@ -893,10 +812,15 @@ export default function SkladisteScreen() {
         </div>
       </div>
 
+      <GreskaUcitavanja
+        greska={proizvodi.greska ?? dobavljaci.greska}
+        onPonovo={() => { proizvodi.osvjezi(); dobavljaci.osvjezi(); }}
+      />
+
       {/* Content */}
       <div className="flex-1 min-h-0 overflow-hidden">
-        {activeTab === 'artikli' && <ArtikliTab products={products} onReload={loadProducts} />}
-        {activeTab === 'primke' && <PrimkeTab products={products} dobavljaci={dobavljaci} onReloadProducts={loadProducts} />}
+        {activeTab === 'artikli' && <ArtikliTab products={products} ucitano={proizvodi.podaci !== undefined} onReload={proizvodi.osvjezi} />}
+        {activeTab === 'primke' && <PrimkeTab products={products} dobavljaci={dobavljaci.podaci ?? []} onReloadProducts={proizvodi.osvjezi} />}
       </div>
     </div>
   );

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -9,6 +9,10 @@ import { filtriraj, type PoljaPretrage } from '@/lib/pretraga';
 import { Key, LedgerHead, SegmentedFilter } from '@/components/ui/ledger';
 import DodajRacunDialog from '@/components/DodajRacunDialog';
 import { RacunDetailDialog } from '@/components/racuni/RacunDetailDialog';
+import { useIpcPodaci } from '@/hooks/useIpcPodaci';
+import { GreskaUcitavanja } from '@/components/GreskaUcitavanja';
+import { useLedgerLista } from '@/hooks/useLedgerLista';
+import { usePreciceListe } from '@/hooks/usePreciceListe';
 
 type Filter = 'sve' | 'aktivni' | 'storno';
 
@@ -37,30 +41,19 @@ const poljaRacuna = (o: Order): PoljaPretrage => ({
 });
 
 export default function NarudzbeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
-  const [orders, setOrders] = useState<Order[]>([]);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const racuni = useIpcPodaci(() => window.api.getOrders(), []);
+  const praznine = useIpcPodaci(() => window.api.getFiscalGaps(), []);
+  const orders = useMemo(() => racuni.podaci ?? [], [racuni.podaci]);
+  const gaps = praznine.podaci ?? [];
+  const loadOrders = racuni.osvjezi;
+  const loadGaps = praznine.osvjezi;
   const [openId, setOpenId] = useState<number | null>(null);
   const [filter, setFilter] = useState<Filter>('sve');
   const [dodajOpen, setDodajOpen] = useState(false);
-  const [gaps, setGaps] = useState<number[]>([]);
   const [prefillBroj, setPrefillBroj] = useState<string | undefined>(undefined);
   const [search, setSearch] = useState('');
 
-  const rowRefs = useRef<(HTMLTableRowElement | null)[]>([]);
   const searchRef = useRef<HTMLInputElement>(null);
-
-  const loadOrders = useCallback(async () => {
-    setOrders(await window.api.getOrders());
-  }, []);
-
-  const loadGaps = async () => {
-    setGaps(await window.api.getFiscalGaps());
-  };
-
-  useEffect(() => {
-    loadOrders();
-    loadGaps();
-  }, [loadOrders]);
 
   const isRefunded = (status: Order['status']) => status === 'refunded';
 
@@ -80,85 +73,22 @@ export default function NarudzbeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) 
     storno: trazeni.filter(o => o.status === 'refunded').length,
   }), [trazeni]);
 
-  const selIndex = visible.findIndex(o => o.id === selectedId);
-
-  /** Pomjera izbor u listi i drži fokus na redu — osnova za tastaturnu navigaciju. */
-  const focusRow = useCallback((index: number) => {
-    const o = visible[index];
-    if (!o) return;
-    setSelectedId(o.id);
-    const el = rowRefs.current[index];
-    el?.focus();
-    el?.scrollIntoView({ block: 'nearest' });
-  }, [visible]);
-
-  const otvori = (id: number) => { setSelectedId(id); setOpenId(id); };
+  const lista = useLedgerLista(visible, { onOtvori: setOpenId });
+  const selIndex = lista.izabraniIndeks;
 
   // Po zatvaranju dijaloga fokus se vraća na red računa da ↑↓ odmah rade dalje.
   const zatvori = () => {
     setOpenId(null);
-    requestAnimationFrame(() => { const i = visible.findIndex(o => o.id === selectedId); if (i >= 0) rowRefs.current[i]?.focus(); });
+    lista.vratiFokus();
   };
-
-  const handleListKeyDown = (e: React.KeyboardEvent<HTMLTableSectionElement>) => {
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
-    const current = selIndex < 0 ? -1 : selIndex;
-    const last = visible.length - 1;
-    const go = (i: number) => { e.preventDefault(); focusRow(Math.max(0, Math.min(last, i))); };
-
-    switch (e.key) {
-      case 'ArrowDown': return go(current + 1);
-      case 'ArrowUp': return go(current < 0 ? 0 : current - 1);
-      case 'PageDown': return go(current + 10);
-      case 'PageUp': return go(current < 0 ? 0 : current - 10);
-      case 'Home': return go(0);
-      case 'End': return go(last);
-      case 'Enter': case ' ':
-        if (selectedId != null) { e.preventDefault(); otvori(selectedId); }
-        return;
-      default:
-    }
-  };
-
-  const anyDialogOpen = dodajOpen || openId != null;
 
   // Prečice ekrana — dijalog računa ima svoje, pa se ove gase dok je otvoren.
-  useEffect(() => {
-    if (anyDialogOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) {
-        if (t === searchRef.current) {
-          if (e.key === 'Escape') { setSearch(''); t.blur(); }
-          // ↓ iz pretrage vodi pravo na prvi pronađeni račun.
-          if (e.key === 'ArrowDown' && visible.length > 0) { e.preventDefault(); focusRow(0); }
-        }
-        return;
-      }
-      if (t && t.closest('[role="combobox"], [role="listbox"]')) return;
-      if (e.key === '/') { e.preventDefault(); searchRef.current?.focus(); return; }
-      if (e.key.toLowerCase() === 'n') { e.preventDefault(); setDodajOpen(true); return; }
-
-      const cycleFilter = (step: number) => {
-        e.preventDefault();
-        const i = FILTERS.findIndex(f => f.id === filter);
-        setFilter(FILTERS[(i + step + FILTERS.length) % FILTERS.length].id);
-      };
-      // Strelice rade na svakom rasporedu; zagrade su alias jer na bosanskom traže AltGr.
-      if (e.key === 'ArrowLeft' || e.key === '[') return cycleFilter(-1);
-      if (e.key === 'ArrowRight' || e.key === ']') return cycleFilter(1);
-      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-        // Fokus nije na listi — uvedi ga na selektovani ili prvi red.
-        if (!t?.closest('tbody')) { e.preventDefault(); focusRow(selIndex < 0 ? 0 : selIndex); }
-        return;
-      }
-      if (t?.closest('tbody')) return;
-      if (e.key === 'Enter' && selectedId != null) { e.preventDefault(); otvori(selectedId); }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [anyDialogOpen, filter, selectedId, selIndex, focusRow, visible.length]);
+  usePreciceListe({
+    aktivno: !dodajOpen && openId == null,
+    lista, searchRef, onPretraga: setSearch,
+    onNovi: () => setDodajOpen(true),
+    filteri: { opcije: FILTERS, vrijednost: filter, postavi: setFilter },
+  });
 
   const td = 'py-2.5 border-b border-slate-100';
 
@@ -194,6 +124,11 @@ export default function NarudzbeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) 
           </Button>
         </div>
       </div>
+
+      <GreskaUcitavanja
+        greska={racuni.greska ?? praznine.greska}
+        onPonovo={() => { loadOrders(); loadGaps(); }}
+      />
 
       {gaps.length > 0 && (
         <div className="flex-shrink-0 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-amber-200 bg-amber-50/70 px-6 py-2.5">
@@ -233,7 +168,7 @@ export default function NarudzbeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) 
       )}
 
       {/* ── Lista ── */}
-      {visible.length === 0 ? (
+      {visible.length === 0 ? racuni.podaci && (
         <div className="flex-1 flex flex-col items-center justify-center text-slate-400 select-none">
           <div className="w-12 h-12 rounded-2xl bg-slate-50 flex items-center justify-center mb-3">
             <Receipt size={20} className="text-slate-300" strokeWidth={1.5} />
@@ -264,23 +199,20 @@ export default function NarudzbeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) 
                   { label: 'Status', className: 'text-left pl-3 pr-6 w-[1%] whitespace-nowrap' },
                 ]}
               />
-              <tbody onKeyDown={handleListKeyDown}>
+              <tbody onKeyDown={lista.onTbodyKeyDown}>
                 {visible.map((order, i) => {
                   const refunded = isRefunded(order.status);
-                  const selected = selectedId === order.id;
+                  const selected = lista.izabranId === order.id;
                   return (
                     <tr
                       key={order.id}
-                      ref={el => { rowRefs.current[i] = el; }}
-                      tabIndex={selected || (selIndex < 0 && i === 0) ? 0 : -1}
-                      aria-selected={selected}
+                      {...lista.rowProps(i)}
                       className={cn(
                         'group cursor-pointer transition-colors',
                         'focus:outline focus:outline-2 focus:-outline-offset-2 focus:outline-blue-500',
                         selected ? 'bg-blue-50/80' : 'hover:bg-slate-50',
                       )}
-                      onClick={() => otvori(order.id)}
-                      onFocus={() => setSelectedId(order.id)}
+                      onClick={() => lista.otvori(order.id)}
                     >
                       <td
                         className={cn(
@@ -364,7 +296,7 @@ export default function NarudzbeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) 
         redoslijed={visibleIds}
         uloga={uloga}
         onClose={zatvori}
-        onNavigate={otvori}
+        onNavigate={lista.otvori}
         onChanged={loadOrders}
       />
     </div>

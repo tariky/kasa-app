@@ -1,8 +1,17 @@
 import * as http from "node:http";
+import * as net from "node:net";
 
 const DEFAULT_HOST = "localhost";
 const DEFAULT_PORT = 8085;
 const TIMEOUT_MS = 30_000;
+/**
+ * Koliko se čeka TCP veza s uređajem. Kraće od TIMEOUT_MS: dok veza nije
+ * uspostavljena, zahtjev sigurno nije poslan, pa ugašen uređaj na mreži (SYN
+ * bez odgovora) brzo daje običnu grešku umjesto nepoznatog ishoda. Uređaj je
+ * na localhostu/LAN-u — 5 s je višestruko više od stvarnog povezivanja.
+ * Rust: CONNECT_TIMEOUT u tring.rs.
+ */
+const CONNECT_TIMEOUT_MS = 5_000;
 const MAX_LOG_ENTRIES = 200;
 
 let requestCounter = 0;
@@ -25,10 +34,6 @@ let loggingEnabled = false;
 
 export function setLoggingEnabled(enabled: boolean): void {
   loggingEnabled = enabled;
-}
-
-export function isLoggingEnabled(): boolean {
-  return loggingEnabled;
 }
 
 export function getLogs(): TringLogEntry[] {
@@ -54,6 +59,10 @@ function addLog(entry: Omit<TringLogEntry, 'id' | 'timestamp'>): void {
 export interface TringConfig {
   host?: string;
   port?: number;
+  /** Koliko se čeka uređaj (ms); zadano 30 s — kraće samo u testovima. */
+  timeoutMs?: number;
+  /** Koliko se čeka TCP veza (ms); zadano 5 s — kraće samo u testovima. */
+  connectTimeoutMs?: number;
 }
 
 export interface TringResponse {
@@ -63,6 +72,12 @@ export interface TringResponse {
   error?: string;
   /** HTTP status odgovora; null kad veza nije ni uspostavljena. */
   statusCode?: number | null;
+  /**
+   * Zahtjev je stigao do uređaja, ali odgovor izostao ili nije razumljiv
+   * (timeout, prekid veze, neparsiran odgovor) — račun je možda odštampan.
+   * Nema ga kad je neuspjeh siguran. Vidi `ishodNepoznat()`.
+   */
+  ishodNepoznat?: boolean;
 }
 
 export interface Artikal {
@@ -124,88 +139,167 @@ function nextRequestNumber(): number {
   return ++requestCounter;
 }
 
+/**
+ * Greške veze kod kojih zahtjev sigurno nije stigao do uređaja (veza nije ni
+ * uspostavljena) — račun nije odštampan. Svaka druga greška nakon što je
+ * zahtjev krenuo (timeout, prekid veze, neparsiran odgovor) znači da je
+ * uređaj možda štampao: ishod nije poznat. Rust: `nije_poslano` u tring.rs.
+ *
+ * Lista važi samo dok zahtjev nije preuzeo vezu: u Electronu (Node) zahtjev
+ * ide preko veze koju `postXml` sam uspostavi, i tada je SVAKA greška —
+ * uključujući EHOSTUNREACH/ENETUNREACH kad LAN pukne dok se čeka odgovor —
+ * nepoznat ishod. Bez preuzete veze (Bun u testovima: `node:http` ne koristi
+ * `createConnection` nego otvara svoju vezu) mrežni kodovi su greške
+ * povezivanja te druge veze.
+ */
+const NIJE_POSLANO = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'EHOSTDOWN', 'ENETUNREACH', 'EADDRNOTAVAIL']);
+
+/**
+ * Da li greška HTTP zahtjeva (poslije uspostavljene probne veze) znači
+ * nepoznat ishod. `vezaPreuzeta` — zahtjev ide baš preko veze koja je već
+ * uspostavljena, pa je mogao stići do uređaja. Rust: `nije_poslano`.
+ */
+export function greskaZahtjevaNepoznata(kod: string | undefined, vezaPreuzeta: boolean): boolean {
+  return vezaPreuzeta || !NIJE_POSLANO.has(kod ?? "");
+}
+
+/** Odgovor uređaja ima `<VrstaOdgovora>` (OK/Greska) ili `<Greska>` (greska.xsd). */
+function odgovorUredjaja(xml: string): boolean {
+  return /<VrstaOdgovora>/.test(xml) || /<Greska>/.test(xml);
+}
+
+/**
+ * Uređaj nije potvrdio ni uspjeh ni grešku, a zahtjev je do njega stigao —
+ * račun je možda odštampan. Pozivalac tada NE smije brisati write-ahead red
+ * (pending_receipts); operater ishod razrješava ručno.
+ */
+export function ishodNepoznat(r: TringResponse | null | undefined): boolean {
+  return !!r && !r.success && r.ishodNepoznat === true;
+}
+
+/**
+ * XML zahtjeva za ispis u konzolu: lozinka operatera (/inicijalizacija) se ne
+ * ispisuje. Lozinka u XML-u prolazi kroz escape, pa u njoj nema `<`.
+ */
+export function bezLozinke(xml: string): string {
+  return xml.replace(/<Lozinka>[^<]*<\/Lozinka>/g, '<Lozinka>***</Lozinka>');
+}
+
 function postXml(urlPath: string, body: string): Promise<TringResponse> {
   const host = config.host ?? DEFAULT_HOST;
   const port = config.port ?? DEFAULT_PORT;
   const startTime = Date.now();
 
   return new Promise((resolve) => {
-    const req = http.request(
-      {
-        hostname: host,
-        port,
-        path: urlPath,
+    // Timeout i prekid veze mogu stići oba (req.destroy() izazove i 'error') —
+    // prvi ishod je konačan, i u dnevniku ostaje jedan zapis.
+    let gotovo = false;
+    const zavrsi = (result: TringResponse, responseXml: string) => {
+      if (gotovo) return;
+      gotovo = true;
+      const durationMs = Date.now() - startTime;
+      addLog({
         method: "POST",
-        headers: {
-          "Content-Type": "text/xml",
-          "Content-Length": Buffer.byteLength(body, "utf-8"),
-        },
-        timeout: TIMEOUT_MS,
-      },
-      (res) => {
-        const chunks: Buffer[] = [];
-        res.on("data", (chunk: Buffer) => chunks.push(chunk));
-        res.on("end", () => {
-          const xml = Buffer.concat(chunks).toString("utf-8");
-          const parsed = parseResponse(xml);
-          parsed.statusCode = res.statusCode ?? null;
-          addLog({
-            method: "POST",
-            path: urlPath,
-            requestXml: body,
-            responseXml: xml,
-            statusCode: res.statusCode ?? null,
-            parsed,
-            durationMs: Date.now() - startTime,
-          });
-          resolve(parsed);
-        });
+        path: urlPath,
+        requestXml: body,
+        responseXml,
+        statusCode: result.statusCode ?? null,
+        parsed: result,
+        durationMs,
+      });
+      // Jedino mjesto ispisa u konzolu (dev.logging) — pozivaoci ne loguju.
+      if (loggingEnabled) {
+        console.log(`[Tring] POST ${urlPath} (${durationMs} ms) zahtjev: ${bezLozinke(body)} odgovor: ${JSON.stringify(result)}`);
       }
-    );
-
-    req.on("timeout", () => {
-      req.destroy();
-      const result: TringResponse = {
-        success: false,
-        vrstaOdgovora: "Greska",
-        odgovori: {},
-        error: "Request timed out",
-        statusCode: null,
-      };
-      addLog({
-        method: "POST",
-        path: urlPath,
-        requestXml: body,
-        responseXml: "",
-        statusCode: null,
-        parsed: result,
-        durationMs: Date.now() - startTime,
-      });
       resolve(result);
+    };
+    const neuspjeh = (error: string, nepoznat: boolean, statusCode: number | null = null): TringResponse => ({
+      success: false,
+      vrstaOdgovora: "Greska",
+      odgovori: {},
+      error,
+      statusCode,
+      ...(nepoznat ? { ishodNepoznat: true } : {}),
     });
 
-    req.on("error", (err) => {
-      const result: TringResponse = {
-        success: false,
-        vrstaOdgovora: "Greska",
-        odgovori: {},
-        error: err.message,
-        statusCode: null,
-      };
-      addLog({
-        method: "POST",
-        path: urlPath,
-        requestXml: body,
-        responseXml: "",
-        statusCode: null,
-        parsed: result,
-        durationMs: Date.now() - startTime,
-      });
-      resolve(result);
+    // 1. Veza. Dok TCP veza nije uspostavljena, zahtjev sigurno nije poslan:
+    // svaka greška (odbijena, nepoznat host, Windowsov ETIMEDOUT) i isteklo
+    // vrijeme povezivanja su siguran neuspjeh — ugašen uređaj na mreži ne
+    // smije otvoriti dijalog nezavršenih računa.
+    let spojeno = false;
+    const veza = net.connect({ host, port });
+    const tajmer = setTimeout(() => {
+      veza.destroy();
+      zavrsi(neuspjeh(`connect ETIMEDOUT ${host}:${port}`, false), "");
+    }, config.connectTimeoutMs ?? CONNECT_TIMEOUT_MS);
+    veza.once("error", (err: NodeJS.ErrnoException & { errors?: Error[] }) => {
+      if (spojeno) return; // poslije povezivanja greške vodi HTTP zahtjev
+      clearTimeout(tajmer);
+      // "localhost" → više adresa: greška je AggregateError s praznom porukom.
+      const poruka = err.message || err.errors?.[0]?.message || `connect ${err.code ?? "greška"} ${host}:${port}`;
+      zavrsi(neuspjeh(poruka, false), "");
+    });
+    veza.once("connect", () => {
+      spojeno = true;
+      clearTimeout(tajmer);
+      if (!gotovo) posaljiZahtjev();
     });
 
-    req.write(body);
-    req.end();
+    // 2. Zahtjev preko uspostavljene veze — od sada je ishod nepoznat osim
+    // kad uređaj odgovori.
+    const posaljiZahtjev = () => {
+      let vezaPreuzeta = false;
+      const req = http.request(
+        {
+          hostname: host,
+          port,
+          path: urlPath,
+          method: "POST",
+          headers: {
+            "Content-Type": "text/xml",
+            "Content-Length": Buffer.byteLength(body, "utf-8"),
+          },
+          // Bez agenta: jedna veza po zahtjevu (Connection: close), i to baš ova.
+          createConnection: () => { vezaPreuzeta = true; return veza; },
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (chunk: Buffer) => chunks.push(chunk));
+          res.on("end", () => {
+            const xml = Buffer.concat(chunks).toString("utf-8");
+            const parsed = parseResponse(xml);
+            parsed.statusCode = res.statusCode ?? null;
+            if (!odgovorUredjaja(xml)) {
+              parsed.error ??= "Neispravan odgovor fiskalnog uređaja";
+              parsed.ishodNepoznat = true;
+            }
+            zavrsi(parsed, xml);
+          });
+          // Veza prekinuta usred odgovora — bez ovoga obećanje nikad ne završi.
+          res.on("error", (err) => {
+            zavrsi(neuspjeh(err.message, true, res.statusCode ?? null), Buffer.concat(chunks).toString("utf-8"));
+          });
+        }
+      );
+
+      // Opcija `timeout` bi išla samo u net.createConnection, a veza je već
+      // uspostavljena — zato na zahtjevu (tišina na vezi duža od timeouta).
+      req.setTimeout(config.timeoutMs ?? TIMEOUT_MS);
+      req.on("timeout", () => {
+        req.destroy();
+        zavrsi(neuspjeh("Request timed out", true), "");
+      });
+
+      req.on("error", (err: NodeJS.ErrnoException) => {
+        zavrsi(neuspjeh(err.message, greskaZahtjevaNepoznata(err.code, vezaPreuzeta)), "");
+      });
+
+      // Bun ignoriše createConnection i otvara svoju vezu — probna se zatvara.
+      if (!vezaPreuzeta) veza.destroy();
+
+      req.write(body);
+      req.end();
+    };
   });
 }
 
@@ -349,7 +443,11 @@ function posalji(sastavi: () => string, posaljiTijelo: (body: string) => Promise
   try {
     body = sastavi();
   } catch (e) {
-    if (e instanceof NevaljanZahtjev) return Promise.resolve(odbijeno(e));
+    if (e instanceof NevaljanZahtjev) {
+      const r = odbijeno(e);
+      if (loggingEnabled) console.log(`[Tring] ${r.error}`);
+      return Promise.resolve(r);
+    }
     throw e;
   }
   return posaljiTijelo(body);
@@ -428,14 +526,6 @@ export function inicijalizacija(
     `</Operator>`;
 
   return postXml("/inicijalizacija", body);
-}
-
-// POST /ua - VrstaZahtjeva=105
-export function upisiArtikal(artikal: Artikal): Promise<TringResponse> {
-  return posalji(() => {
-    const noviObjekat = artikalToXml(artikal);
-    return racunZahtjev(105, noviObjekat);
-  }, (body) => postXml("/ua", body));
 }
 
 // POST /sfr - VrstaZahtjeva=0

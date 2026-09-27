@@ -14,6 +14,11 @@ test('kom → m² i nazad se poklapaju', () => {
   expect(m2UKom(29, 2800, 2070)).toBe(5); // ≈ 5.003 → 2 decimale
 });
 
+test('m² → kom: pola stotinke se zaokružuje naviše (round2 iz novac.ts)', () => {
+  expect(m2UKom(1.005, 1000, 1000)).toBe(1.01);
+  expect(m2UKom(2.345, 1000, 1000)).toBe(2.35);
+});
+
 test('elementi → m² zbraja sve komade', () => {
   const m2 = elementiUM2([
     { sirina: 600, visina: 720, kom: 2 },

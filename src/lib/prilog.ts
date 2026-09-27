@@ -1,12 +1,15 @@
-import type * as Tring from '@/services/tring';
 import type { SqlDb } from './sqldb';
+import type { FiskalniUredjaj } from './fiskalniUredjaj';
+import { fiskalizuj } from './fiskalizacija';
 import { parseFiskalniBroj, predvidjeniFiskalniBroj } from './fiskalni';
 import { validanDatumValute } from './valuta';
 import { round2 } from './novac';
-import { iznosStavke, izracunajTotale } from './racun';
+import { iznosStavke, izracunajTotale, upisiRacun } from './racun';
 import { buildTringRacun } from './tringRacun';
-import { provjeriIznoseStavke, provjeriKupca } from './provjeraRacuna';
+import { provjeriIznoseStavke, provjeriKupca, type KupacRacuna } from './provjeraRacuna';
 import { provjeriNacinPlacanja } from './placanje';
+import { baciAkoCekaNezavrsen } from './pendingRacun';
+import * as zaliha from './zaliha';
 
 /**
  * Račun po prilogu: fiskalno se kuca jedna zbirna stavka, a stvarne stavke se
@@ -67,23 +70,19 @@ export function prilogKompletan(ukupno: number, stavke: PrilogStavkaUnos[]): boo
 }
 
 /**
- * Provjeri stavke priloga i vrati tip proizvoda po id-u (usluge ne diraju
- * zalihu). Odvojeno od upisa da se stavke mogu odbiti i prije štampe —
- * greška poslije štampe znači papir bez pokrića.
+ * Provjeri stavke priloga (proizvod mora postojati). Odvojeno od upisa da se
+ * stavke mogu odbiti i prije štampe — greška poslije štampe znači papir bez
+ * pokrića.
  */
-export function validirajPrilogStavke(db: SqlDb, stavke: PrilogStavkaUnos[]): Map<number, string> {
-  const tipovi = new Map<number, string>();
+function validirajPrilogStavke(db: SqlDb, stavke: PrilogStavkaUnos[]): void {
   for (const s of stavke) {
     if (!s || typeof s !== 'object') throw new Error('Neispravna stavka računa');
     provjeriIznoseStavke(s);
     if (s.pdvStopa !== 'E') {
       throw new Error('U prilog smiju samo stavke sa PDV stopom E (zbirna stavka je fiskalizovana sa E)');
     }
-    const product = db.prepare('SELECT tip FROM products WHERE id = ?').get(s.productId) as { tip: string } | undefined;
-    if (!product) throw new Error(`Proizvod #${s.productId} ne postoji`);
-    tipovi.set(s.productId, product.tip);
+    if (!db.prepare('SELECT 1 FROM products WHERE id = ?').get(s.productId)) throw new Error(`Proizvod #${s.productId} ne postoji`);
   }
-  return tipovi;
 }
 
 /**
@@ -92,6 +91,8 @@ export function validirajPrilogStavke(db: SqlDb, stavke: PrilogStavkaUnos[]): Ma
  * Poziva se unutar transakcije (handler omotava u db.transaction). Diff je
  * najjednostavniji mogući: obriši stara kretanja tipa 'prilog' pa upiši nova —
  * neto efekat na zalihu je isti kao ručni diff, a nema stanja za greške.
+ * Kretanja nose datum računa, ne dan dodjele — „Zalihe na dan" inače skidaju
+ * robu na pogrešan datum.
  *
  * Sve provjere idu prije prvog upisa da poziv bez transakcije (testovi) ne
  * ostavi pola stavki u bazi.
@@ -101,8 +102,8 @@ export function savePrilogStavkeInTransaction(
   orderId: number,
   stavke: PrilogStavkaUnos[]
 ): void {
-  const order = db.prepare('SELECT prilogBroj, status, ukupno FROM orders WHERE id = ?').get(orderId) as
-    { prilogBroj: number | null; status: string; ukupno: number } | undefined;
+  const order = db.prepare('SELECT prilogBroj, status, ukupno, createdAt FROM orders WHERE id = ?').get(orderId) as
+    { prilogBroj: number | null; status: string; ukupno: number; createdAt: string } | undefined;
   if (!order) throw new Error('Račun ne postoji');
   if (order.prilogBroj == null) throw new Error('Ovo nije račun po prilogu');
   if (order.status !== 'completed') throw new Error('Račun je storniran — prilog se ne može mijenjati');
@@ -113,22 +114,18 @@ export function savePrilogStavkeInTransaction(
     throw new Error('Faktura je završena — stavke se ne mogu mijenjati');
   }
 
-  const tipovi = validirajPrilogStavke(db, stavke);
+  validirajPrilogStavke(db, stavke);
 
+  const dokument = { vrsta: 'prilog', id: orderId };
   db.prepare('DELETE FROM prilog_stavke WHERE orderId = ?').run(orderId);
-  db.prepare("DELETE FROM stock_movements WHERE referenceType = 'prilog' AND referenceId = ?").run(orderId);
+  zaliha.ponisti(db, dokument);
 
   const insertStavka = db.prepare(
     'INSERT INTO prilog_stavke (orderId, productId, kolicina, cijena, rabat, pdvStopa) VALUES (?, ?, ?, ?, ?, ?)'
   );
-  const insertStock = db.prepare(
-    "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'izlaz', ?, 'prilog', ?)"
-  );
-
-  for (const s of stavke) {
-    insertStavka.run(orderId, s.productId, s.kolicina, s.cijena, s.rabat ?? 0, s.pdvStopa);
-    if (tipovi.get(s.productId) !== 'usluga') insertStock.run(s.productId, s.kolicina, orderId);
-  }
+  for (const s of stavke) insertStavka.run(orderId, s.productId, s.kolicina, s.cijena, s.rabat ?? 0, s.pdvStopa);
+  // Usluga ne razdužuje (pravilo je u knjizi zalihe).
+  zaliha.knjizi(db, dokument, 'izlaz', stavke, { datum: order.createdAt });
 }
 
 /** Zbirna stavka kako se šalje fiskalnom uređaju (i sintetizuje u prikazima). */
@@ -150,7 +147,7 @@ export function buildPrilogFiskalnaStavka(prilogBroj: number | null, iznos: numb
  * Datum valute, napomena i ponuda se provjeravaju prije štampe — greška poslije
  * štampe znači papir bez zapisa. Vraća normalizovane vrijednosti za upis.
  */
-export function provjeriDodatkeFakture(
+function provjeriDodatkeFakture(
   db: SqlDb,
   data: { datumValute?: string | null; napomena?: string | null; ponudaId?: number | null },
 ): { datumValute: string | null; napomena: string | null; ponudaId: number | null } {
@@ -181,10 +178,10 @@ export function oznaciPonuduFakturisanom(db: SqlDb, ponudaId: number, orderId: n
 
 export interface FinalizePrilogDeps {
   db: SqlDb;
-  /** Štampa fiskalni račun na uređaju. */
-  print: (racun: Tring.Racun) => Promise<Tring.TringResponse | null>;
+  /** Fiskalni uređaj (lib/fiskalniUredjaj.ts). */
+  uredjaj: Pick<FiskalniUredjaj, 'stampajRacun'>;
   /** Omotač koji izvrši callback u SQL transakciji. */
-  transaction: (fn: () => void) => () => void;
+  transaction: <T>(fn: () => T) => () => T;
 }
 
 export interface FinalizePrilogResult {
@@ -194,6 +191,10 @@ export interface FinalizePrilogResult {
   brojFiskalnogRacuna?: string | null;
   /** Stvarni BF se razišao sa onim odštampanim u nazivu stavke. */
   upozorenje?: string;
+  /** Račun je odštampan, ali već upisan iz dijaloga nezavršenih računa (lib/pendingRacun.ts). */
+  vecEvidentiran?: boolean;
+  /** Uređaj nije potvrdio račun — red ostaje za dijalog nezavršenih računa. */
+  ishodNepoznat?: boolean;
   error?: string;
   odgovori?: Record<string, string>;
 }
@@ -207,7 +208,7 @@ export interface FinalizePrilogResult {
  * stanja u kojem je račun fiskalizovan a stavke izgubljene.
  *
  * Isti write-ahead obrazac kao order:finalize — snapshot u pending_receipts
- * prije štampe, pa atomični upis ordera + brisanje pending reda.
+ * prije štampe, pa atomični upis ordera + brisanje pending reda (lib/fiskalizacija.ts).
  */
 export async function finalizePrilogAndPrint(
   deps: FinalizePrilogDeps,
@@ -216,7 +217,7 @@ export async function finalizePrilogAndPrint(
     /** Ručno ukucan iznos; ignoriše se kad su poslate stavke. */
     iznos?: number;
     nacinPlacanja: string;
-    kupac?: { naziv?: string; idBroj?: string; adresa?: string; grad?: string; postanskiBroj?: string };
+    kupac?: KupacRacuna | null;
     /** Stavke unesene odmah na kasi — iznos se računa iz njih. */
     stavke?: PrilogStavkaUnos[];
     /** Uvodni dio naziva zbirne stavke ("CNC obrada"); prazno = "Stavke". */
@@ -229,9 +230,14 @@ export async function finalizePrilogAndPrint(
     napomena?: string | null;
     /** Ponuda iz koje je faktura nastala — označava se konvertovanom u istoj transakciji. */
     ponudaId?: number | null;
+    /**
+     * Skica iz koje je faktura nastala: briše se kad račun postoji u bazi (i
+     * kad se nezavršeni račun riješi kao odštampan), da se ne fiskalizuje ponovo.
+     */
+    skicaId?: number | null;
   }
 ): Promise<FinalizePrilogResult> {
-  const { db, print, transaction } = deps;
+  const { db, uredjaj } = deps;
   if (!data.korisnikId) throw new Error('Korisnik nije prijavljen');
 
   const stavke = data.stavke ?? [];
@@ -243,6 +249,11 @@ export async function finalizePrilogAndPrint(
   const nacinPlacanja = provjeriNacinPlacanja(data.nacinPlacanja);
   const kupac = provjeriKupca(data.kupac);
   const { datumValute, napomena, ponudaId } = provjeriDodatkeFakture(db, data);
+  // Faktura iz ponude čiji račun još čeka u nezavršenim bila bi drugi račun za isti posao.
+  if (ponudaId != null) baciAkoCekaNezavrsen(db, 'ponudaId', ponudaId, 'Račun po ovoj ponudi');
+  const skicaId = Number.isInteger(data.skicaId) ? data.skicaId as number : null;
+  // Skica ostaje dok je ishod fakture nepoznat — ponovna fiskalizacija bila bi drugi račun za isti posao.
+  if (skicaId != null) baciAkoCekaNezavrsen(db, 'skicaId', skicaId, 'Račun po ovoj skici');
 
   // Naziv stavke mora nositi broj isječka na koji se kuca, a njega uređaj vrati
   // tek nakon štampe — zato predviđanje iz fiskalnog niza. Poslije štampe se
@@ -267,68 +278,37 @@ export async function finalizePrilogAndPrint(
     nacinPlacanja, kupac,
     stavke: [], prilogBroj: predvidjeniBroj, prilogNaziv: naziv, prilogStavke: stavke,
     datumValute, napomena, ponudaId,
+    // Samo kad postoji — stari snapshoti i računi bez skice ostaju isti.
+    ...(skicaId != null ? { skicaId } : {}),
   };
-  const pending = db
-    .prepare('INSERT INTO pending_receipts (korisnikId, snapshot) VALUES (?, ?)')
-    .run(data.korisnikId, JSON.stringify(snapshot));
-  const pendingId = pending.lastInsertRowid as number;
-
-  let result: Tring.TringResponse | null;
-  try {
-    result = await print(buildTringRacun({
-      ukupno, nacinPlacanja, kupac, items: [stavka],
-    }));
-  } catch (err) {
-    // Izuzetak iz štampe — ništa nije odštampano, počisti write-ahead red.
-    db.prepare('DELETE FROM pending_receipts WHERE id = ?').run(pendingId);
-    throw err;
-  }
-
-  if (!result || !result.success) {
-    db.prepare('DELETE FROM pending_receipts WHERE id = ?').run(pendingId);
-    return {
-      success: false,
-      error: result?.error || result?.vrstaOdgovora || 'Nepoznata greška',
-      odgovori: result?.odgovori ?? {},
-    };
-  }
-
-  const brojFiskalnogRacuna = result.odgovori?.BrojFiskalnogRacuna || null;
   // Faktura nosi isti broj kao fiskalni isječak uz koji ide. Kad uređaj vrati
   // broj različit od predviđenog, papir već nosi pogrešan broj u nazivu stavke —
   // faktura ide po stvarnom, a operater to mora saznati odmah.
-  const prilogBroj = parseFiskalniBroj(brojFiskalnogRacuna) ?? predvidjeniBroj;
+  const prilogBrojIz = (bf: string | null) => parseFiskalniBroj(bf) ?? predvidjeniBroj;
+
+  const racun = buildTringRacun({ ukupno, nacinPlacanja, kupac, items: [stavka] });
+  const r = await fiskalizuj(deps, {
+    snapshot,
+    stampaj: () => uredjaj.stampajRacun(racun),
+    upisi: bf => {
+      const orderId = upisiRacun(db, {
+        korisnikId: data.korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna: bf, kupac,
+        stavke: [], prilogBroj: prilogBrojIz(bf), prilogNaziv: naziv, datumValute, napomena,
+      });
+      if (stavke.length > 0) savePrilogStavkeInTransaction(db, orderId, stavke);
+      if (ponudaId != null) oznaciPonuduFakturisanom(db, ponudaId, orderId);
+      if (skicaId != null) db.prepare('DELETE FROM faktura_skice WHERE id = ?').run(skicaId);
+      return orderId;
+    },
+    dokument: bf => `Fiskalni račun po prilogu br. ${prilogBrojIz(bf)} (BF ${bf ?? '?'})`,
+  });
+  if (!r.success) return r;
+
+  const brojFiskalnogRacuna = r.brojFiskalnogRacuna;
+  const prilogBroj = prilogBrojIz(brojFiskalnogRacuna);
   const upozorenje = prilogBroj !== predvidjeniBroj
     ? `Na isječku je odštampan br. ${predvidjeniBroj}, a uređaj je vratio BF ${brojFiskalnogRacuna}. ` +
       `Faktura nosi br. ${prilogBroj} — provjerite isječak.`
     : undefined;
-  let orderId = 0;
-  try {
-    transaction(() => {
-      const r = db.prepare(`
-        INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, status,
-          kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj, isManual, prilogBroj, prilogNaziv,
-          datumValute, napomena)
-        VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
-      `).run(
-        data.korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna,
-        kupac?.naziv || null, kupac?.idBroj || null, kupac?.adresa || null,
-        kupac?.grad || null, kupac?.postanskiBroj || null, prilogBroj, naziv,
-        datumValute, napomena
-      );
-      orderId = Number(r.lastInsertRowid);
-      if (stavke.length > 0) savePrilogStavkeInTransaction(db, orderId, stavke);
-      if (ponudaId != null) oznaciPonuduFakturisanom(db, ponudaId, orderId);
-      db.prepare('DELETE FROM pending_receipts WHERE id = ?').run(pendingId);
-    })();
-  } catch (err: any) {
-    // Račun je već na papiru; pending red namjerno ostaje da se može riješiti
-    // kroz pending:resolve, ali operater to mora znati odmah.
-    throw new Error(
-      `Fiskalni račun po prilogu br. ${prilogBroj} (BF ${brojFiskalnogRacuna ?? '?'}) JE odštampan, ` +
-      `ali nije zabilježen u bazi: ${err?.message || 'nepoznata greška'}. Riješite ga kroz nezavršene račune.`
-    );
-  }
-
-  return { success: true, id: orderId, prilogBroj, brojFiskalnogRacuna, upozorenje, odgovori: result.odgovori };
+  return { success: true, id: r.id, prilogBroj, brojFiskalnogRacuna, upozorenje, odgovori: r.odgovori };
 }

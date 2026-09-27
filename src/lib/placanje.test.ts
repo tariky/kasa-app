@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test';
-import { opisPlacanja, raspodjelaPlacanja, pripremiPlacanje } from './placanje';
+import { kanonskiNacinPlacanja, opisPlacanja, raspodjelaPlacanja, pripremiPlacanje, prikazPlacanja } from './placanje';
 
 test('opisPlacanja: stari tekstualni oblici ostaju, razbijeno plaćanje po vrstama s iznosima', () => {
   expect(opisPlacanja('Gotovina', 10)).toBe('Gotovina');
@@ -19,4 +19,52 @@ test('opisPlacanja: stari tekstualni oblici ostaju, razbijeno plaćanje po vrsta
 test('ono što pripremiPlacanje upiše, raspodjelaPlacanja pročita kao iste iznose', () => {
   const { nacinPlacanja } = pripremiPlacanje('Gotovina', [{ oznaka: 'Gotovina', iznos: 3 }, { oznaka: 'Ček', iznos: 2 }], 5);
   expect(raspodjelaPlacanja(nacinPlacanja, 5).iznosi).toEqual({ gotovina: 3, kartica: 0, virman: 0, cek: 2 });
+});
+
+test('raspodjelaPlacanja: imena iz prototipa objekta nisu vrste plaćanja', () => {
+  expect(raspodjelaPlacanja('constructor', 5).poznat).toBe(false);
+  expect(raspodjelaPlacanja('__proto__', 5).poznat).toBe(false);
+  expect(raspodjelaPlacanja('{"gotovina":5,"constructor":1}', 6).poznat).toBe(false);
+});
+
+test('kanonskiNacinPlacanja: tekst i JSON ključevi u kanonski oblik, iznosi nepromijenjeni', () => {
+  expect(kanonskiNacinPlacanja('gotovina')).toBe('Gotovina');
+  expect(kanonskiNacinPlacanja(' Gotovina ')).toBe('Gotovina');
+  expect(kanonskiNacinPlacanja('KARTICA')).toBe('Kartica');
+  expect(kanonskiNacinPlacanja('virman ')).toBe('Virman');
+  expect(kanonskiNacinPlacanja('cek')).toBe('Ček');
+  expect(kanonskiNacinPlacanja('Cek')).toBe('Ček');
+  expect(kanonskiNacinPlacanja('ček')).toBe('Ček');
+  expect(kanonskiNacinPlacanja('{"Gotovina":5,"Kartica":3}')).toBe('{"gotovina":5,"kartica":3}');
+  expect(kanonskiNacinPlacanja(' {"KARTICA": 2.50, "Ček": 1} ')).toBe('{"kartica":2.5,"cek":1}');
+  expect(kanonskiNacinPlacanja('{"gotovina":3,"cek":2}')).toBe('{"gotovina":3,"cek":2}');
+  // Isti ključ dvaput: JSON.parse zadrži zadnji (kao serde_json u Rustu).
+  expect(kanonskiNacinPlacanja('{"gotovina":3,"gotovina":2}')).toBe('{"gotovina":2}');
+});
+
+test('kanonskiNacinPlacanja: oblik koji parser ne razumije ostaje kakav jeste', () => {
+  for (const nacin of [
+    'Bitcoin', ' Bitcoin ', '', '5', 'null', '[1,2]', '"Gotovina"',
+    '{"gotovina":5,"zlato":3}', '{"gotovina":"5"}', '{"Gotovina":3,"gotovina":2}', '{"constructor":1}',
+  ]) {
+    expect(kanonskiNacinPlacanja(nacin)).toBe(nacin);
+  }
+});
+
+test('kanonskiNacinPlacanja je idempotentna i ne mijenja ono što parser pročita', () => {
+  for (const nacin of ['gotovina', ' Ček ', 'cek', '{"Gotovina":5,"kartica":3}', '{"VIRMAN":1.25}', 'Bitcoin']) {
+    const kanonski = kanonskiNacinPlacanja(nacin);
+    expect(kanonskiNacinPlacanja(kanonski)).toBe(kanonski);
+    expect(raspodjelaPlacanja(kanonski, 8)).toEqual(raspodjelaPlacanja(nacin, 8));
+  }
+});
+
+test('prikazPlacanja: vrste s iznosom za ikone na ekranu računa; nepoznat oblik nije gotovina', () => {
+  expect(prikazPlacanja('Gotovina', 10)).toEqual({ opis: 'Gotovina', poznat: true, vrste: ['gotovina'] });
+  expect(prikazPlacanja('{"gotovina":3,"kartica":2}', 5))
+    .toEqual({ opis: 'Gotovina 3,00 KM + Kartica 2,00 KM', poznat: true, vrste: ['gotovina', 'kartica'] });
+  // Nepoznat oblik ide kako je upisan i bez ijedne vrste — raspodjela ga
+  // interno knjiži kao gotovinu (Kontrola), ali ladica ga ne broji.
+  expect(prikazPlacanja('Bitcoin', 10)).toEqual({ opis: 'Bitcoin', poznat: false, vrste: [] });
+  expect(prikazPlacanja('{"zlato":4}', 4)).toEqual({ opis: '{"zlato":4}', poznat: false, vrste: [] });
 });

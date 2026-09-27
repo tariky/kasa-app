@@ -14,6 +14,14 @@ export function ziroRacuniPozicija(firma: { ziroRacuniPozicija?: unknown }): Zir
   return firma.ziroRacuniPozicija === 'podnozje' ? 'podnozje' : 'zaglavlje';
 }
 
+/**
+ * Gdje dokument prema kupcu (račun, faktura, ponuda, otpremnica) ispisuje žiro račune:
+ * po postavci u zaglavlju ili podnožju, a nigdje kad firma nema nijedan račun.
+ */
+export function mjestoZiroRacuna(firma: { ziroRacuniPozicija?: unknown; bankAccounts: readonly unknown[] }): ZiroRacuniPozicija | null {
+  return firma.bankAccounts.length > 0 ? ziroRacuniPozicija(firma) : null;
+}
+
 /** "web · email" za zaglavlje dokumenta; prazan string ako ništa nije uneseno. */
 export function kontaktFirme(firma: Pick<Partial<FirmaSettings>, 'web' | 'email'>): string {
   return [firma.web, firma.email].map(s => s?.trim() ?? '').filter(Boolean).join(' · ');

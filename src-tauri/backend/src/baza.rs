@@ -1,9 +1,12 @@
 //! Otvaranje baze: schema + migracije + početni podaci (`database/db.ts`).
 
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+
+use serde_json::Value;
 
 use crate::greska::R;
+use crate::provjera_racuna::{kanonski_nacin_placanja, NACINI_PLACANJA};
 use crate::{korisnici, p};
 use crate::petlja::Petlja;
 use crate::sql::Db;
@@ -39,9 +42,8 @@ pub(crate) fn inicijalizuj(db: &Db) -> R<()> {
         db.pragma(p)?;
     }
     db.exec(schema())?;
+    // Uključujući heširanje PIN-ova iz starijih verzija (migracije.json).
     run_migrations(db)?;
-    // PIN-ovi iz starijih verzija (i uvezenih backup-a) su bili čist tekst.
-    korisnici::hesiraj_stare_pinove(db)?;
     seed_defaults(db)?;
     Ok(())
 }
@@ -54,153 +56,96 @@ fn kolone(db: &Db, tabela: &str) -> R<Vec<String>> {
         .collect())
 }
 
+/// Korak iz `src/database/migracije.json` — isti fajl čita migrations.ts, pa su
+/// migracije i njihov redoslijed isti u oba backenda (`KorakMigracije`).
+enum Korak {
+    /// Izvrši `sql` kad tabeli nedostaje `kolona` (bez nje uvijek: CREATE … IF NOT
+    /// EXISTS); `samo_ako_tabela_postoji` preskače korak kad tabele nema.
+    Sql { tabela: String, kolona: Option<String>, sql: Vec<String>, samo_ako_tabela_postoji: bool },
+    /// Migracija koja nije čist SQL (čita podatke) — funkcija iz `KOD_MIGRACIJA`.
+    Kod(Migracija),
+}
+
+type Migracija = fn(&Db) -> R<()>;
+
+const MIGRACIJE_JSON: &str = include_str!("../../../src/database/migracije.json");
+
+/// Koraci koji nisu čist SQL: ime iz migracije.json → funkcija (`KOD_MIGRACIJA` u migrations.ts).
+const KOD_MIGRACIJA: [(&str, Migracija); 2] = [
+    ("normalizujNacinPlacanja", normalizuj_nacin_placanja),
+    ("hesirajStarePinove", |db| korisnici::hesiraj_stare_pinove(db).map(|_| ())),
+];
+
+fn koraci() -> &'static [Korak] {
+    static K: OnceLock<Vec<Korak>> = OnceLock::new();
+    K.get_or_init(|| {
+        let v: Value = serde_json::from_str(MIGRACIJE_JSON).expect("ispravan migracije.json");
+        v.as_array().expect("migracije.json mora biti lista koraka").iter().map(korak).collect()
+    })
+}
+
+fn korak(k: &Value) -> Korak {
+    if let Some(ime) = k.get("kod") {
+        let ime = ime.as_str().unwrap_or_else(|| panic!("migracije.json: kod {ime} nije string"));
+        let (_, f) = KOD_MIGRACIJA.iter().find(|(i, _)| *i == ime).unwrap_or_else(|| panic!("migracije.json: nema funkcije za korak {ime}"));
+        return Korak::Kod(*f);
+    }
+    let sql = k["sql"].as_array().unwrap_or_else(|| panic!("migracije.json: korak {k} nema sql"));
+    Korak::Sql {
+        tabela: k["tabela"].as_str().unwrap_or_else(|| panic!("migracije.json: korak {k} nema tabelu")).to_owned(),
+        kolona: k["kolona"].as_str().map(str::to_owned),
+        sql: sql.iter().map(|s| s.as_str().unwrap_or_else(|| panic!("migracije.json: {s} nije SQL")).to_owned()).collect(),
+        samo_ako_tabela_postoji: k["samoAkoTabelaPostoji"].as_bool().unwrap_or(false),
+    }
+}
+
 /// Idempotentne migracije za baze iz starijih verzija programa (uključujući
-/// uvezene backup-e) — `database/migrations.ts`.
+/// uvezene backup-e) — `database/migrations.ts`, redom iz migracije.json.
 pub fn run_migrations(db: &Db) -> R<()> {
-    let ima = |k: &Vec<String>, c: &str| k.iter().any(|x| x == c);
-
-    let stavke = kolone(db, "primka_stavke")?;
-    if !ima(&stavke, "nabavnaCijena") {
-        db.exec("ALTER TABLE primka_stavke ADD COLUMN nabavnaCijena REAL NOT NULL DEFAULT 0")?;
-    }
-    if !ima(&stavke, "rabat") {
-        db.exec("ALTER TABLE primka_stavke ADD COLUMN rabat REAL NOT NULL DEFAULT 0")?;
-    }
-    if !ima(&stavke, "zavisniTroskovi") {
-        db.exec("ALTER TABLE primka_stavke ADD COLUMN zavisniTroskovi REAL NOT NULL DEFAULT 0")?;
-    }
-    if !ima(&stavke, "staraCijena") {
-        db.exec("ALTER TABLE primka_stavke ADD COLUMN staraCijena REAL")?;
-    }
-
-    let primke = kolone(db, "primke")?;
-    if !ima(&primke, "dobavljacNaziv") {
-        db.exec("ALTER TABLE primke ADD COLUMN dobavljacNaziv TEXT")?;
-    }
-    if !ima(&primke, "dobavljacId") {
-        db.exec("ALTER TABLE primke ADD COLUMN dobavljacId TEXT")?;
-    }
-    if !ima(&primke, "dobavljacAdresa") {
-        db.exec("ALTER TABLE primke ADD COLUMN dobavljacAdresa TEXT")?;
-    }
-
-    db.exec(
-        "CREATE TABLE IF NOT EXISTS dobavljaci (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      naziv TEXT NOT NULL,
-      idBroj TEXT,
-      pdvBroj TEXT,
-      adresa TEXT,
-      kontakt TEXT,
-      createdAt TEXT DEFAULT (datetime('now','localtime'))
-    )",
-    )?;
-
-    let products = kolone(db, "products")?;
-    if !ima(&products, "tip") {
-        db.exec("ALTER TABLE products ADD COLUMN tip TEXT NOT NULL DEFAULT 'artikal'")?;
-    }
-
-    db.exec(
-        "CREATE TABLE IF NOT EXISTS kupci (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      naziv TEXT NOT NULL,
-      idBroj TEXT NOT NULL,
-      pdvBroj TEXT,
-      adresa TEXT,
-      postanskiBroj TEXT,
-      grad TEXT,
-      kontakt TEXT,
-      createdAt TEXT DEFAULT (datetime('now','localtime'))
-    )",
-    )?;
-
-    // Zadane vrijednosti za dokumente po kupcu (NULL = globalna postavka)
-    let kupci = kolone(db, "kupci")?;
-    if !ima(&kupci, "rokPlacanjaDana") {
-        db.exec("ALTER TABLE kupci ADD COLUMN rokPlacanjaDana INTEGER")?;
-    }
-    if !ima(&kupci, "nacinPlacanja") {
-        db.exec("ALTER TABLE kupci ADD COLUMN nacinPlacanja TEXT")?;
-    }
-    if !ima(&kupci, "rabat") {
-        db.exec("ALTER TABLE kupci ADD COLUMN rabat REAL")?;
-    }
-
-    if !ima(&primke, "brojFakture") {
-        db.exec("ALTER TABLE primke ADD COLUMN brojFakture TEXT")?;
-    }
-
-    let orders = kolone(db, "orders")?;
-    if !ima(&orders, "kupacNaziv") {
-        db.exec("ALTER TABLE orders ADD COLUMN kupacNaziv TEXT")?;
-        db.exec("ALTER TABLE orders ADD COLUMN kupacIdBroj TEXT")?;
-        db.exec("ALTER TABLE orders ADD COLUMN kupacAdresa TEXT")?;
-        db.exec("ALTER TABLE orders ADD COLUMN kupacGrad TEXT")?;
-        db.exec("ALTER TABLE orders ADD COLUMN kupacPostanskiBroj TEXT")?;
-    }
-    if !ima(&orders, "isManual") {
-        db.exec("ALTER TABLE orders ADD COLUMN isManual INTEGER NOT NULL DEFAULT 0")?;
-    }
-    if !ima(&orders, "refundedAt") {
-        db.exec("ALTER TABLE orders ADD COLUMN refundedAt TEXT")?;
-    }
-    if !ima(&orders, "prilogBroj") {
-        db.exec("ALTER TABLE orders ADD COLUMN prilogBroj INTEGER")?;
-    }
-    if !ima(&orders, "prilogNaziv") {
-        db.exec("ALTER TABLE orders ADD COLUMN prilogNaziv TEXT")?;
-    }
-    if !ima(&orders, "datumValute") {
-        db.exec("ALTER TABLE orders ADD COLUMN datumValute TEXT")?;
-    }
-
-    db.exec(
-        "CREATE TABLE IF NOT EXISTS prilog_stavke (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      orderId INTEGER NOT NULL,
-      productId INTEGER NOT NULL,
-      kolicina REAL NOT NULL,
-      cijena REAL NOT NULL,
-      pdvStopa TEXT NOT NULL,
-      FOREIGN KEY (orderId) REFERENCES orders(id),
-      FOREIGN KEY (productId) REFERENCES products(id)
-    )",
-    )?;
-    db.exec("CREATE INDEX IF NOT EXISTS idx_prilog_stavke_orderId ON prilog_stavke(orderId)")?;
-
-    // Rabat po stavci fakture (postotak, kao na order_items)
-    if !ima(&kolone(db, "prilog_stavke")?, "rabat") {
-        db.exec("ALTER TABLE prilog_stavke ADD COLUMN rabat REAL NOT NULL DEFAULT 0")?;
-    }
-
-    // Napomena ispod stavki fakture
-    if !ima(&orders, "napomena") {
-        db.exec("ALTER TABLE orders ADD COLUMN napomena TEXT")?;
-    }
-
-    db.exec(
-        "CREATE TABLE IF NOT EXISTS pending_receipts (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      korisnikId INTEGER NOT NULL,
-      snapshot TEXT NOT NULL,
-      createdAt TEXT DEFAULT (datetime('now','localtime')),
-      FOREIGN KEY (korisnikId) REFERENCES users(id)
-    )",
-    )?;
-
-    let products2 = kolone(db, "products")?;
-    if !ima(&products2, "plocaSirina") {
-        db.exec("ALTER TABLE products ADD COLUMN plocaSirina INTEGER")?;
-    }
-    if !ima(&products2, "plocaVisina") {
-        db.exec("ALTER TABLE products ADD COLUMN plocaVisina INTEGER")?;
-    }
-    // Slobodna stavka na kasi: skriveni artikal bez šifarnika (product:slobodan).
-    if !ima(&products2, "slobodan") {
-        db.exec("ALTER TABLE products ADD COLUMN slobodan INTEGER NOT NULL DEFAULT 0")?;
+    for k in koraci() {
+        match k {
+            Korak::Kod(migracija) => migracija(db)?,
+            Korak::Sql { tabela, kolona, sql, samo_ako_tabela_postoji } => {
+                if treba_izvrsiti(db, tabela, kolona.as_deref(), *samo_ako_tabela_postoji)? {
+                    for s in sql {
+                        db.exec(s)?;
+                    }
+                }
+            }
+        }
     }
     Ok(())
+}
+
+fn treba_izvrsiti(db: &Db, tabela: &str, kolona: Option<&str>, samo_ako_tabela_postoji: bool) -> R<bool> {
+    if kolona.is_none() && !samo_ako_tabela_postoji {
+        return Ok(true);
+    }
+    let kolone = kolone(db, tabela)?;
+    if samo_ako_tabela_postoji && kolone.is_empty() {
+        return Ok(false);
+    }
+    Ok(kolona.is_none_or(|c| !kolone.iter().any(|x| x == c)))
+}
+
+/// Stari zapisi načina plaćanja ('gotovina', ' Gotovina ', 'cek',
+/// '{"Gotovina":5}') u kanonski oblik (`kanonski_nacin_placanja`), da ladica,
+/// izvoz i ekran vide isto. Oblik koji parser ne razumije ostaje kakav jeste.
+/// Idempotentno (`normalizujNacinPlacanja` u migrations.ts).
+fn normalizuj_nacin_placanja(db: &Db) -> R<()> {
+    let lista: Vec<Value> = NACINI_PLACANJA.iter().map(|n| Value::from(*n)).collect();
+    let mjesta = vec!["?"; lista.len()].join(", ");
+    let redovi = db.all(&format!("SELECT id, nacinPlacanja FROM orders WHERE nacinPlacanja NOT IN ({mjesta})"), &lista)?;
+    db.tx(|| {
+        for r in &redovi {
+            let Some(nacin) = r["nacinPlacanja"].as_str() else { continue };
+            let kanonski = kanonski_nacin_placanja(nacin);
+            if kanonski != nacin {
+                db.run("UPDATE orders SET nacinPlacanja = ? WHERE id = ?", p![kanonski, r["id"]])?;
+            }
+        }
+        Ok(())
+    })
 }
 
 fn seed_defaults(db: &Db) -> R<()> {
@@ -216,4 +161,74 @@ fn seed_defaults(db: &Db) -> R<()> {
         db.run("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", p![k, v])?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Stara baza iz `src/ipc/ugovor/staraBaza.ts` — ista polazna tačka kao TS testovi.
+    fn stara_shema() -> &'static str {
+        const TS: &str = include_str!("../../../src/ipc/ugovor/staraBaza.ts");
+        TS.split('`').nth(1).expect("staraBaza.ts mora imati template string")
+    }
+
+    #[test]
+    fn svaki_kod_korak_ima_funkciju_i_svaka_funkcija_je_korak() {
+        let v: Value = serde_json::from_str(MIGRACIJE_JSON).unwrap();
+        let mut u_jsonu: Vec<&str> = v.as_array().unwrap().iter().filter_map(|k| k.get("kod")?.as_str()).collect();
+        let mut funkcije: Vec<&str> = KOD_MIGRACIJA.iter().map(|(ime, _)| *ime).collect();
+        u_jsonu.sort();
+        funkcije.sort();
+        assert_eq!(u_jsonu, funkcije);
+        // Svaki korak se parsira (nepoznat kod ili neispravan korak = panic).
+        assert_eq!(koraci().len(), v.as_array().unwrap().len());
+    }
+
+    #[test]
+    fn stara_baza_postaje_nova_a_drugi_prolaz_ne_mijenja_nista() {
+        let dir = std::env::temp_dir().join(format!("kasa-migracije-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let putanja = dir.join("kasa.db");
+        {
+            let c = rusqlite::Connection::open(&putanja).unwrap();
+            c.execute_batch(stara_shema()).unwrap();
+            c.execute_batch(
+                "INSERT INTO users (ime, pin, uloga) VALUES ('Stari Kasir', '1234', 'kasir');
+                 INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, status) VALUES (1, 8, 0, 'cek', 'completed');",
+            )
+            .unwrap();
+        }
+
+        let db = Db::aktivna(&putanja, Arc::new(Petlja::nova())).unwrap();
+        // Kolone se dodaju redom migracija (migracije.json).
+        assert_eq!(
+            kolone(&db, "orders").unwrap(),
+            [
+                "id", "korisnikId", "ukupno", "pdvIznos", "nacinPlacanja", "brojFiskalnogRacuna", "brojReklamacije", "status",
+                "createdAt", "kupacNaziv", "kupacIdBroj", "kupacAdresa", "kupacGrad", "kupacPostanskiBroj", "isManual",
+                "refundedAt", "prilogBroj", "prilogNaziv", "datumValute", "napomena",
+            ]
+        );
+        assert_eq!(kolone(&db, "products").unwrap()[10..], ["tip", "plocaSirina", "plocaVisina", "slobodan"]);
+        // Koraci u kodu: način plaćanja kanonski, PIN heš.
+        assert_eq!(db.val("SELECT nacinPlacanja FROM orders", p![]).unwrap(), "Ček");
+        let pin = db.val("SELECT pin FROM users", p![]).unwrap();
+        assert!(korisnici::provjeri_pin(&json!("1234"), pin.as_str().unwrap()));
+
+        let stanje = || {
+            (
+                db.all("SELECT type, name, sql FROM sqlite_master ORDER BY type, name", p![]).unwrap(),
+                db.val("SELECT total_changes()", p![]).unwrap(),
+            )
+        };
+        let prije = stanje();
+        inicijalizuj(&db).unwrap();
+        assert_eq!(stanje(), prije);
+
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

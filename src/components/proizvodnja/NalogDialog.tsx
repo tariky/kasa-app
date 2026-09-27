@@ -1,21 +1,21 @@
 // src/components/proizvodnja/NalogDialog.tsx
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { Kupac, Product, RadniNalog, NalogVrsta } from '@/types';
+import type { Kupac, Product, RadniNalog, NalogVrsta, NormativStavka } from '@/types';
 import { cn, formatKM, formatDate, parseDecimal } from '@/lib/utils';
 import { localDateStr } from '@/lib/novac';
-import { formatBrojNaloga } from '@/lib/proizvodnja';
+import { formatBrojNaloga, stavkeIzNormativa } from '@/lib/proizvodnja';
 import { useDokumentPostavke } from '@/components/DokumentPostavkeProvider';
 import { rokOznaka } from '@/lib/nalogPrikaz';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { DecimalInput } from '@/components/ui/decimal-input';
 import { DatePicker } from '@/components/ui/date-picker';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Eyebrow, mod } from '@/components/ui/ledger';
 import { FullDialog, FullDialogContent, FullDialogHeader, FullDialogFooter, FullDialogNotice, FooterBtn, Fact, LegendKey } from '@/components/ui/full-dialog';
 import { PretragaStavki, type PretragaStavkiHandle } from '@/components/ui/pretraga-stavki';
 import { PretragaProizvoda } from '@/components/PretragaProizvoda';
-import { User, Package, X, Save, FolderPlus, Lock } from 'lucide-react';
+import { useCuvarIzmjena } from '@/hooks/useCuvarIzmjena';
+import { User, Package, X, Save, FolderPlus, Lock, AlertTriangle, RefreshCw } from 'lucide-react';
 
 const ROK_TONE = { ok: 'bg-emerald-50 text-emerald-700', warn: 'bg-amber-50 text-amber-700', late: 'bg-rose-50 text-rose-700' } as const;
 
@@ -63,9 +63,11 @@ const poljaKupca = (k: Kupac) => ({ naziv: k.naziv, dodatno: [k.idBroj, k.pdvBro
  * Zaglavlje nosi vrstu naloga, tijelo kupca/proizvod (fuzzy pretraga) i rokove, desno
  * pregled onoga što će nalog biti. ⌘↵ sprema, esc pita ako ima izmjena.
  */
-export function NalogDialog({ open, onOpenChange, nalog, onSaved }: {
+export function NalogDialog({ open, onOpenChange, nalog, onSaved, stavkeNespremljene }: {
   open: boolean; onOpenChange: (v: boolean) => void;
   nalog: RadniNalog | null; onSaved: (id: number) => void;
+  /** Utrošak na detalju naloga ima nespremljene izmjene — preračun bi ih pregazio. */
+  stavkeNespremljene?: boolean;
 }) {
   const { postavke } = useDokumentPostavke();
   const [forma, setForma] = useState<Forma>(prazna);
@@ -73,7 +75,9 @@ export function NalogDialog({ open, onOpenChange, nalog, onSaved }: {
   const [kupci, setKupci] = useState<Kupac[] | null>(null);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
-  const [odbaciOpen, setOdbaciOpen] = useState(false);
+  // Normativ proizvoda naloga za zalihu — za preračun utroška kad se promijeni količina.
+  const [normativ, setNormativ] = useState<NormativStavka[]>([]);
+  const [preracunaj, setPreracunaj] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const kupacRef = useRef<PretragaStavkiHandle>(null);
   const proizvodRef = useRef<PretragaStavkiHandle>(null);
@@ -81,6 +85,13 @@ export function NalogDialog({ open, onOpenChange, nalog, onSaved }: {
   const isEdit = !!nalog;
   const zavrsen = nalog?.status === 'zavrsen';
   const set = <K extends keyof Forma>(k: K, v: Forma[K]) => setForma(f => ({ ...f, [k]: v }));
+  const dirty = open && pocetna !== '' && JSON.stringify(forma) !== pocetna;
+  const cuvar = useCuvarIzmjena(dirty && !saving, {
+    onClose: () => onOpenChange(false),
+    naslov: isEdit ? 'Odbaciti izmjene?' : 'Odbaciti novi nalog?',
+    opis: isEdit ? 'Izmjene naloga nisu spremljene.' : 'Upisani podaci nisu spremljeni i nalog neće biti otvoren.',
+    odbaci: 'Odbaci', ostani: 'Nastavi uređivanje',
+  });
 
   const fokusirajIzbor = useCallback((vrsta: NalogVrsta) => {
     requestAnimationFrame(() => (vrsta === 'narudzba' ? kupacRef : proizvodRef).current?.focus());
@@ -90,10 +101,13 @@ export function NalogDialog({ open, onOpenChange, nalog, onSaved }: {
     if (!open) return;
     const f = nalog ? izNaloga(nalog) : prazna();
     setForma(f); setPocetna(JSON.stringify(f));
-    setError(''); setOdbaciOpen(false);
+    setError(''); cuvar.ponisti(); setPreracunaj(false); setNormativ([]);
     window.api.getKupci().then(setKupci).catch(() => setKupci([]));
+    if (nalog?.vrsta === 'zaliha' && nalog.productId && nalog.status !== 'zavrsen') {
+      window.api.getNormativ(nalog.productId).then(setNormativ).catch(() => setNormativ([]));
+    }
     if (!nalog) fokusirajIzbor(f.vrsta);
-  }, [open, nalog, fokusirajIzbor]);
+  }, [open, nalog, fokusirajIzbor, cuvar.ponisti]);
 
   const kupac = useMemo(() => kupci?.find(k => k.id === forma.kupacId) ?? null, [kupci, forma.kupacId]);
   // Kupac naloga koji se uređuje poznat je iz JOIN polja i prije nego se lista kupaca učita.
@@ -103,14 +117,16 @@ export function NalogDialog({ open, onOpenChange, nalog, onSaved }: {
 
   const kolicinaBroj = parseDecimal(forma.kolicina);
   const cijenaBroj = forma.cijena ? parseDecimal(forma.cijena) : null;
-  const dirty = open && pocetna !== '' && JSON.stringify(forma) !== pocetna;
+  // Backend ne preračunava stavke pri promjeni količine — korisnik to bira ovdje.
+  const kolicinaPromijenjena = isEdit && !zavrsen && forma.vrsta === 'zaliha' && kolicinaBroj > 0 && kolicinaBroj !== nalog!.kolicina;
+  const ponudiPreracun = kolicinaPromijenjena && normativ.length > 0;
 
   const fali = forma.vrsta === 'narudzba'
     ? (!forma.kupacId ? 'Izaberite kupca' : !forma.opis.trim() ? 'Upišite opis narudžbe' : null)
     : (!forma.proizvod ? 'Izaberite proizvod' : !(kolicinaBroj > 0) ? 'Upišite količinu' : null);
 
   const zatvori = () => onOpenChange(false);
-  const zatraziZatvaranje = () => { if (dirty && !saving) setOdbaciOpen(true); else zatvori(); };
+  const zatraziZatvaranje = () => cuvar.zatrazi();
 
   const promijeniVrstu = (v: NalogVrsta) => {
     if (v === forma.vrsta) return;
@@ -133,7 +149,10 @@ export function NalogDialog({ open, onOpenChange, nalog, onSaved }: {
         else { payload.productId = forma.proizvod!.id; payload.kolicina = kolicinaBroj; }
       }
       let id: number;
-      if (isEdit) { await window.api.updateNalog(nalog!.id, payload); id = nalog!.id; }
+      if (isEdit) {
+        await window.api.updateNalog(nalog!.id, payload); id = nalog!.id;
+        if (ponudiPreracun && preracunaj) await window.api.saveNalogStavke(id, stavkeIzNormativa(normativ, kolicinaBroj));
+      }
       else { const r = await window.api.createNalog({ ...payload, vrsta: forma.vrsta }); id = r.id; }
       zatvori();
       onSaved(id);
@@ -143,7 +162,7 @@ export function NalogDialog({ open, onOpenChange, nalog, onSaved }: {
 
   // ⌘↵ sprema iz bilo kojeg polja; pretraga bez "nove stavke" pušta ⌘↵ roditelju.
   useEffect(() => {
-    if (!open || odbaciOpen) return;
+    if (!open || cuvar.otvoren) return;
     const onKey = (e: KeyboardEvent) => {
       if (!contentRef.current?.contains(e.target as Node)) return;
       if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) { e.preventDefault(); spremi(); }
@@ -197,6 +216,28 @@ export function NalogDialog({ open, onOpenChange, nalog, onSaved }: {
         {zavrsen && (
           <div role="status" className="flex-shrink-0 flex items-center gap-2 px-6 py-2 text-[12px] font-medium border-b bg-amber-50 border-amber-100 text-amber-700">
             <Lock size={12} /> Nalog je završen, pa se mijenjaju samo cijena, rok i napomena.
+          </div>
+        )}
+        {ponudiPreracun && (
+          <div role="status" className="flex-shrink-0 flex items-center gap-3 px-6 py-2 text-[12px] font-medium border-b bg-amber-50 border-amber-100 text-amber-700">
+            <AlertTriangle size={13} className="flex-shrink-0" />
+            <span className="min-w-0 flex-1">
+              {preracunaj
+                ? `Pri spremanju stavke utroška se zamjenjuju normativom × ${forma.kolicina} — ručne izmjene stavki se gube.`
+                : stavkeNespremljene
+                  ? 'Stavke utroška nisu preračunate za novu količinu. Prvo spremite izmjene utroška da biste ih preračunali po normativu.'
+                  : 'Stavke utroška nisu preračunate za novu količinu.'}
+            </span>
+            {preracunaj ? (
+              <Button size="sm" variant="ghost" className="h-7 px-2.5 text-[12px] text-amber-800 hover:bg-amber-100" onClick={() => setPreracunaj(false)}>
+                Ne preračunavaj
+              </Button>
+            ) : (
+              <Button size="sm" variant="outline" className="h-7 gap-1.5 px-2.5 text-[12px] border-amber-300 bg-white text-amber-800 hover:bg-amber-100"
+                onClick={() => setPreracunaj(true)} disabled={stavkeNespremljene}>
+                <RefreshCw size={12} /> Preračunaj po normativu
+              </Button>
+            )}
           </div>
         )}
 
@@ -363,18 +404,7 @@ export function NalogDialog({ open, onOpenChange, nalog, onSaved }: {
         </FullDialogFooter>
       </FullDialogContent>
 
-      <Dialog open={odbaciOpen} onOpenChange={setOdbaciOpen}>
-        <DialogContent className="sm:max-w-[420px]">
-          <DialogHeader>
-            <DialogTitle>{isEdit ? 'Odbaciti izmjene?' : 'Odbaciti novi nalog?'}</DialogTitle>
-            <DialogDescription>{isEdit ? 'Izmjene naloga nisu spremljene.' : 'Upisani podaci nisu spremljeni i nalog neće biti otvoren.'}</DialogDescription>
-          </DialogHeader>
-          <div className="flex justify-between items-center gap-2 pt-2">
-            <Button variant="ghost" className="text-rose-600 hover:text-rose-700 hover:bg-rose-50" onClick={() => { setOdbaciOpen(false); zatvori(); }}>Odbaci</Button>
-            <Button variant="ghost" onClick={() => setOdbaciOpen(false)}>Nastavi uređivanje</Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {cuvar.dijalog}
     </FullDialog>
   );
 }

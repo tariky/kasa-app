@@ -1,20 +1,22 @@
 import { test, expect, beforeEach } from 'bun:test';
-import { Database } from 'bun:sqlite';
-import { schema } from '@/database/schema';
+import { testnaBaza, type TestnaBaza } from './testnaBaza';
 import { addCashMovement, retryCashMovement, getTodayMovements, getDrawerState } from './cash';
-import type { SqlDb } from './sqldb';
 import type { TringResponse } from '@/services/tring';
+import { uredjajIzFunkcija } from './fiskalniUredjaj';
 
-let db: SqlDb & Database;
+let db: TestnaBaza;
 
 beforeEach(() => {
-  db = new Database(':memory:') as SqlDb & Database;
-  db.exec(schema);
-  db.prepare("INSERT INTO users (id, ime, pin, uloga) VALUES (1, 'Kasir', '1234', 'kasir')").run();
+  db = testnaBaza({ kasir: true });
 });
 
 const ok: TringResponse = { success: true, vrstaOdgovora: 'OK', odgovori: {} };
 const greska: TringResponse = { success: false, vrstaOdgovora: 'Greska', odgovori: {}, error: 'printer ne radi' };
+
+/** Uređaj čiji UnosNovca i PovratNovca vrate `odgovor`. */
+function uredjajKoji(odgovor: () => Promise<TringResponse>) {
+  return uredjajIzFunkcija({ unosNovca: odgovor, povratNovca: odgovor });
+}
 
 function dodajRacun(nacinPlacanja: string, ukupno: number, opts: { createdAt?: string; refundedAt?: string } = {}): void {
   db.prepare(`
@@ -30,7 +32,7 @@ function dodajRacun(nacinPlacanja: string, ukupno: number, opts: { createdAt?: s
 
 test('nepoznat tip ili nepostojeći korisnik se odbija prije slanja printeru', async () => {
   let poslano = 0;
-  const deps = { db, send: async () => { poslano++; return ok; } };
+  const deps = { db, uredjaj: uredjajKoji(async () => { poslano++; return ok; }) };
 
   await expect(addCashMovement(deps, { tip: 'xyz' as any, iznos: 50, korisnikId: 1 }))
     .rejects.toThrow('Nepoznata vrsta unosa gotovine: xyz');
@@ -42,7 +44,7 @@ test('nepoznat tip ili nepostojeći korisnik se odbija prije slanja printeru', a
 });
 
 test('polog se upiše sa statusom ok kad printer potvrdi', async () => {
-  const r = await addCashMovement({ db, send: async () => ok }, { tip: 'polog', iznos: 50, korisnikId: 1 });
+  const r = await addCashMovement({ db, uredjaj: uredjajKoji(async () => ok) }, { tip: 'polog', iznos: 50, korisnikId: 1 });
   expect(r.tringStatus).toBe('ok');
 
   const row = db.prepare('SELECT * FROM cash_movements WHERE id = ?').get(r.id) as any;
@@ -52,7 +54,7 @@ test('polog se upiše sa statusom ok kad printer potvrdi', async () => {
 });
 
 test('polog se upiše i kad slanje na printer ne uspije', async () => {
-  const r = await addCashMovement({ db, send: async () => greska }, { tip: 'polog', iznos: 50, korisnikId: 1 });
+  const r = await addCashMovement({ db, uredjaj: uredjajKoji(async () => greska) }, { tip: 'polog', iznos: 50, korisnikId: 1 });
   expect(r.tringStatus).toBe('error');
   expect(r.error).toBe('printer ne radi');
 
@@ -61,21 +63,21 @@ test('polog se upiše i kad slanje na printer ne uspije', async () => {
 });
 
 test('bez fiskalne integracije status je skipped', async () => {
-  const r = await addCashMovement({ db, send: async () => null }, { tip: 'povrat', iznos: 20, korisnikId: 1 });
+  const r = await addCashMovement({ db, uredjaj: null }, { tip: 'povrat', iznos: 20, korisnikId: 1 });
   expect(r.tringStatus).toBe('skipped');
 });
 
 test('nevalidan iznos baca grešku i ništa ne upisuje', async () => {
-  await expect(addCashMovement({ db, send: async () => ok }, { tip: 'polog', iznos: 0, korisnikId: 1 }))
+  await expect(addCashMovement({ db, uredjaj: uredjajKoji(async () => ok) }, { tip: 'polog', iznos: 0, korisnikId: 1 }))
     .rejects.toThrow('Iznos');
-  await expect(addCashMovement({ db, send: async () => ok }, { tip: 'polog', iznos: NaN, korisnikId: 1 }))
+  await expect(addCashMovement({ db, uredjaj: uredjajKoji(async () => ok) }, { tip: 'polog', iznos: NaN, korisnikId: 1 }))
     .rejects.toThrow('Iznos');
   expect((db.prepare('SELECT COUNT(*) c FROM cash_movements').get() as any).c).toBe(0);
 });
 
 test('retry šalje ponovo i prebacuje error u ok', async () => {
-  const r = await addCashMovement({ db, send: async () => greska }, { tip: 'polog', iznos: 50, korisnikId: 1 });
-  const retry = await retryCashMovement({ db, send: async () => ok }, r.id);
+  const r = await addCashMovement({ db, uredjaj: uredjajKoji(async () => greska) }, { tip: 'polog', iznos: 50, korisnikId: 1 });
+  const retry = await retryCashMovement({ db, uredjaj: uredjajKoji(async () => ok) }, r.id);
   expect(retry.tringStatus).toBe('ok');
 
   const row = db.prepare('SELECT tringStatus FROM cash_movements WHERE id = ?').get(r.id) as any;
@@ -83,12 +85,12 @@ test('retry šalje ponovo i prebacuje error u ok', async () => {
 });
 
 test('retry odbija zapis koji nije u error statusu', async () => {
-  const r = await addCashMovement({ db, send: async () => ok }, { tip: 'polog', iznos: 50, korisnikId: 1 });
-  await expect(retryCashMovement({ db, send: async () => ok }, r.id)).rejects.toThrow();
+  const r = await addCashMovement({ db, uredjaj: uredjajKoji(async () => ok) }, { tip: 'polog', iznos: 50, korisnikId: 1 });
+  await expect(retryCashMovement({ db, uredjaj: uredjajKoji(async () => ok) }, r.id)).rejects.toThrow();
 });
 
 test('getTodayMovements vraća samo današnja kretanja', async () => {
-  await addCashMovement({ db, send: async () => ok }, { tip: 'polog', iznos: 50, korisnikId: 1 });
+  await addCashMovement({ db, uredjaj: uredjajKoji(async () => ok) }, { tip: 'polog', iznos: 50, korisnikId: 1 });
   db.prepare(`
     INSERT INTO cash_movements (tip, iznos, korisnikId, tringStatus, createdAt)
     VALUES ('polog', 99, 1, 'ok', '2020-01-01 08:00:00')
@@ -120,7 +122,7 @@ test('getLastPologIznos vraća null kad pologa nema', async () => {
 });
 
 test('getDrawerState kombinuje pologe, promet, reklamacije za danas', async () => {
-  await addCashMovement({ db, send: async () => ok }, { tip: 'polog', iznos: 50, korisnikId: 1 });
+  await addCashMovement({ db, uredjaj: uredjajKoji(async () => ok) }, { tip: 'polog', iznos: 50, korisnikId: 1 });
   dodajRacun('Gotovina', 20);                                    // danas, gotovina → +20
   dodajRacun('Kartica', 99);                                     // kartica → 0
   dodajRacun('Gotovina', 15, { createdAt: '2020-01-01 10:00:00', refundedAt: nowStr() }); // jučer prodan, danas storniran → −15

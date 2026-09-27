@@ -1,0 +1,84 @@
+[
+  { "tabela": "primka_stavke", "kolona": "nabavnaCijena", "sql": ["ALTER TABLE primka_stavke ADD COLUMN nabavnaCijena REAL NOT NULL DEFAULT 0"] },
+  { "tabela": "primka_stavke", "kolona": "rabat", "sql": ["ALTER TABLE primka_stavke ADD COLUMN rabat REAL NOT NULL DEFAULT 0"] },
+  { "tabela": "primka_stavke", "kolona": "zavisniTroskovi", "sql": ["ALTER TABLE primka_stavke ADD COLUMN zavisniTroskovi REAL NOT NULL DEFAULT 0"] },
+  {
+    "opis": "Stara prodajna cijena artikla bez zalihe (primka je mijenja bez nivelacije). Postojeće stavke ostaju NULL — za njih se cijena pri brisanju ne vraća.",
+    "tabela": "primka_stavke", "kolona": "staraCijena", "sql": ["ALTER TABLE primka_stavke ADD COLUMN staraCijena REAL"]
+  },
+  {
+    "opis": "Dobavljač na primci.",
+    "tabela": "primke", "kolona": "dobavljacNaziv", "sql": ["ALTER TABLE primke ADD COLUMN dobavljacNaziv TEXT"]
+  },
+  { "tabela": "primke", "kolona": "dobavljacId", "sql": ["ALTER TABLE primke ADD COLUMN dobavljacId TEXT"] },
+  { "tabela": "primke", "kolona": "dobavljacAdresa", "sql": ["ALTER TABLE primke ADD COLUMN dobavljacAdresa TEXT"] },
+  { "tabela": "dobavljaci", "sql": ["CREATE TABLE IF NOT EXISTS dobavljaci (\n      id INTEGER PRIMARY KEY AUTOINCREMENT,\n      naziv TEXT NOT NULL,\n      idBroj TEXT,\n      pdvBroj TEXT,\n      adresa TEXT,\n      kontakt TEXT,\n      createdAt TEXT DEFAULT (datetime('now','localtime'))\n    )"] },
+  {
+    "opis": "Artikal ili usluga.",
+    "tabela": "products", "kolona": "tip", "sql": ["ALTER TABLE products ADD COLUMN tip TEXT NOT NULL DEFAULT 'artikal'"]
+  },
+  { "tabela": "kupci", "sql": ["CREATE TABLE IF NOT EXISTS kupci (\n      id INTEGER PRIMARY KEY AUTOINCREMENT,\n      naziv TEXT NOT NULL,\n      idBroj TEXT NOT NULL,\n      pdvBroj TEXT,\n      adresa TEXT,\n      postanskiBroj TEXT,\n      grad TEXT,\n      kontakt TEXT,\n      createdAt TEXT DEFAULT (datetime('now','localtime'))\n    )"] },
+  {
+    "opis": "Zadane vrijednosti za dokumente po kupcu (NULL = globalna postavka).",
+    "tabela": "kupci", "kolona": "rokPlacanjaDana", "sql": ["ALTER TABLE kupci ADD COLUMN rokPlacanjaDana INTEGER"]
+  },
+  { "tabela": "kupci", "kolona": "nacinPlacanja", "sql": ["ALTER TABLE kupci ADD COLUMN nacinPlacanja TEXT"] },
+  { "tabela": "kupci", "kolona": "rabat", "sql": ["ALTER TABLE kupci ADD COLUMN rabat REAL"] },
+  { "tabela": "primke", "kolona": "brojFakture", "sql": ["ALTER TABLE primke ADD COLUMN brojFakture TEXT"] },
+  {
+    "opis": "Kupac na računu: pet kolona odjednom, provjerava se samo prva (kupacNaziv).",
+    "tabela": "orders", "kolona": "kupacNaziv", "sql": ["ALTER TABLE orders ADD COLUMN kupacNaziv TEXT", "ALTER TABLE orders ADD COLUMN kupacIdBroj TEXT", "ALTER TABLE orders ADD COLUMN kupacAdresa TEXT", "ALTER TABLE orders ADD COLUMN kupacGrad TEXT", "ALTER TABLE orders ADD COLUMN kupacPostanskiBroj TEXT"]
+  },
+  { "tabela": "orders", "kolona": "isManual", "sql": ["ALTER TABLE orders ADD COLUMN isManual INTEGER NOT NULL DEFAULT 0"] },
+  { "tabela": "orders", "kolona": "refundedAt", "sql": ["ALTER TABLE orders ADD COLUMN refundedAt TEXT"] },
+  {
+    "opis": "Račun po prilogu: interni broj priloga (NULL = običan račun).",
+    "tabela": "orders", "kolona": "prilogBroj", "sql": ["ALTER TABLE orders ADD COLUMN prilogBroj INTEGER"]
+  },
+  {
+    "opis": "Naziv zbirne stavke priloga kako je otišao na fiskalni uređaj (NULL = stari računi, naziv se rekonstruiše iz zadanih dijelova).",
+    "tabela": "orders", "kolona": "prilogNaziv", "sql": ["ALTER TABLE orders ADD COLUMN prilogNaziv TEXT"]
+  },
+  {
+    "opis": "Datum valute (rok plaćanja) — upisuje se naknadno, nakon izdavanja računa.",
+    "tabela": "orders", "kolona": "datumValute", "sql": ["ALTER TABLE orders ADD COLUMN datumValute TEXT"]
+  },
+  {
+    "opis": "Stavke priloga (specifikacija uz fiskalni račun).",
+    "tabela": "prilog_stavke", "sql": ["CREATE TABLE IF NOT EXISTS prilog_stavke (\n      id INTEGER PRIMARY KEY AUTOINCREMENT,\n      orderId INTEGER NOT NULL,\n      productId INTEGER NOT NULL,\n      kolicina REAL NOT NULL,\n      cijena REAL NOT NULL,\n      pdvStopa TEXT NOT NULL,\n      FOREIGN KEY (orderId) REFERENCES orders(id),\n      FOREIGN KEY (productId) REFERENCES products(id)\n    )", "CREATE INDEX IF NOT EXISTS idx_prilog_stavke_orderId ON prilog_stavke(orderId)"]
+  },
+  {
+    "opis": "Rabat po stavci fakture (postotak, kao na order_items).",
+    "tabela": "prilog_stavke", "kolona": "rabat", "sql": ["ALTER TABLE prilog_stavke ADD COLUMN rabat REAL NOT NULL DEFAULT 0"]
+  },
+  {
+    "opis": "Napomena ispod stavki fakture.",
+    "tabela": "orders", "kolona": "napomena", "sql": ["ALTER TABLE orders ADD COLUMN napomena TEXT"]
+  },
+  {
+    "opis": "Nezavršeni računi (zapis namjere prije štampe).",
+    "tabela": "pending_receipts", "sql": ["CREATE TABLE IF NOT EXISTS pending_receipts (\n      id INTEGER PRIMARY KEY AUTOINCREMENT,\n      korisnikId INTEGER NOT NULL,\n      snapshot TEXT NOT NULL,\n      createdAt TEXT DEFAULT (datetime('now','localtime')),\n      FOREIGN KEY (korisnikId) REFERENCES users(id)\n    )"]
+  },
+  {
+    "opis": "Proizvodnja: dimenzija ploče (mm) na materijalu u m² — kom ↔ m² preračun.",
+    "tabela": "products", "kolona": "plocaSirina", "sql": ["ALTER TABLE products ADD COLUMN plocaSirina INTEGER"]
+  },
+  { "tabela": "products", "kolona": "plocaVisina", "sql": ["ALTER TABLE products ADD COLUMN plocaVisina INTEGER"] },
+  {
+    "opis": "Slobodna stavka na kasi: skriveni artikal bez šifarnika (product:slobodan).",
+    "tabela": "products", "kolona": "slobodan", "sql": ["ALTER TABLE products ADD COLUMN slobodan INTEGER NOT NULL DEFAULT 0"]
+  },
+  {
+    "opis": "Historija cijena je samo-dodavanje za izvoz: poništena promjena se označi (ne briše), a cijena iz prodaje ostaje zapamćena kad se lanac ispravi. Bez tabele nema šta dorađivati — schema je pravi s novim kolonama.",
+    "tabela": "cijena_historija", "kolona": "ponistena", "sql": ["ALTER TABLE cijena_historija ADD COLUMN ponistena INTEGER NOT NULL DEFAULT 0"], "samoAkoTabelaPostoji": true
+  },
+  { "tabela": "cijena_historija", "kolona": "cijenaUProdaji", "sql": ["ALTER TABLE cijena_historija ADD COLUMN cijenaUProdaji REAL"], "samoAkoTabelaPostoji": true },
+  {
+    "opis": "Stari zapisi načina plaćanja ('gotovina', ' Gotovina ', 'cek', '{\"Gotovina\":5}') u kanonski oblik, da ladica, izvoz i ekran vide isto.",
+    "kod": "normalizujNacinPlacanja"
+  },
+  {
+    "opis": "PIN-ovi iz starijih verzija (i uvezenih backup-a) su bili čist tekst.",
+    "kod": "hesirajStarePinove"
+  }
+]

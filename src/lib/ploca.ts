@@ -2,6 +2,7 @@
  * Preračuni za pločasti materijal (iverica, MDF, lesonit). Ploča se kupuje
  * po komadu, a troši u m²; da unos ostane jednostavan, app radi preračun.
  */
+import { round2 } from './novac';
 
 export const JM_PLOCA = 'm²';
 
@@ -12,7 +13,6 @@ export interface Element {
 }
 
 const round4 = (n: number) => Math.round(n * 10000) / 10000;
-const round2 = (n: number) => Math.round(n * 100) / 100;
 
 /** Ploča = materijal u m² sa upisanom dimenzijom. Bez dimenzije je običan m² materijal. */
 export function jePloca(p: { jm: string; plocaSirina?: number | null; plocaVisina?: number | null }): boolean {
@@ -76,14 +76,18 @@ export function uBazuPrimke(
   };
 }
 
-/** Inverz od uBazuPrimke — za prikaz postojeće primke u formi (komadi, nabavna po komadu). */
+/**
+ * Inverz od uBazuPrimke — za prikaz postojeće primke u formi (komadi, nabavna po
+ * komadu). Komadi na 3 decimale, da se unos poput 2,125 kom prikaže kako je
+ * ukucan; spremljeni m² se ionako ne preračunava dok se polje ne dira (ulaz.ts).
+ */
 export function izBazePrimke(
   p: PlocaLike | undefined, kolicina: number, nabavnaCijena: number
 ): { kolicina: string; nabavnaCijena: string } {
   if (!p || !jePloca(p)) return { kolicina: String(kolicina), nabavnaCijena: String(nabavnaCijena) };
   const poPloci = m2PoPloci(p.plocaSirina!, p.plocaVisina!);
   return {
-    kolicina: String(m2UKom(kolicina, p.plocaSirina!, p.plocaVisina!)),
+    kolicina: String(Math.round((kolicina / poPloci) * 1000) / 1000),
     nabavnaCijena: String(round2(nabavnaCijena * poPloci)),
   };
 }

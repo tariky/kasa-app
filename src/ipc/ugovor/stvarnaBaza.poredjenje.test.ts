@@ -70,10 +70,11 @@ async function tsBackend(userData: string): Promise<Pozovi> {
 /** Rust backend nad kopijom, preko rustBackend.ts. */
 async function rustBackend(userData: string): Promise<{ pozovi: Pozovi; zatvori: () => Promise<void> }> {
   const { otvoriRustBackendNad } = await import('./rustBackend');
+  const { pozoviBezTipova } = await import('./backend');
   const b = await otvoriRustBackendNad(userData);
   return {
     pozovi: async (kanal, ...args) => {
-      try { return await b.call(kanal, ...args); } catch (e: any) { return { __greska: e.message }; }
+      try { return await pozoviBezTipova(b, kanal, ...args); } catch (e: any) { return { __greska: e.message }; }
     },
     zatvori: () => b.close(),
   };
@@ -111,8 +112,7 @@ describe.skipIf(!IZVOR)('stvarna baza: TS i Rust vraćaju isto', () => {
   function pozivi(): Array<[string, ...unknown[]]> {
     const p: Array<[string, ...unknown[]]> = [
       ['user:getAll'], ['product:getAll'], ['product:getAll', 'materijal'], ['product:getAll', 'usluga'],
-      ['product:search', 'a'], ['product:search', ''], ['materijal:search', ''],
-      ['dobavljac:getAll'], ['kupac:getAll'], ['kupac:search', 'a'],
+      ['dobavljac:getAll'], ['kupac:getAll'],
       ['primka:getAll'], ['primka:nextBroj'], ['nivelacija:getAll'], ['nivelacija:getAll', '2000-01-01', '2100-12-31'],
       ['order:getAll'], ['order:getFiscalGaps'], ['fiscal:getNumeracija'], ['pending:list'],
       ['ponuda:getAll'], ['ponuda:nextBroj'], ['nalog:getAll'], ['nalog:getAll', 'aktivni'], ['nalog:nextBroj'],

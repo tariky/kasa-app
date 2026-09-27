@@ -1,4 +1,5 @@
 import { izracunajTotale } from './racun';
+import { round2 } from './novac';
 import type { Product } from '@/types';
 
 export interface GeneratedStavka {
@@ -40,11 +41,6 @@ export interface GenerateResult {
   target: number;
   /** Koliko je nedostajalo do cilja (0 ako je cilj dostignut). */
   manjak: number;
-}
-
-/** Zaokruži na 2 decimale (fene) da izbjegnemo akumulaciju float greške. */
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
 }
 
 /**

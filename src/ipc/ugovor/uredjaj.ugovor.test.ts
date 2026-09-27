@@ -4,39 +4,20 @@ import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { copyFileSync, existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { otvoriBackend, type Backend } from './backend';
+import { ADMIN_PIN, otvoriBackend, prijavi, type Backend } from './backend';
+import { tag } from './laziTring';
+import { scenarij, ADMIN, sada, postoji, neuspjehStampe } from './scenarij';
 
 let b: Backend;
+const baza = scenarij(() => b);
 
 beforeEach(async () => { b = await otvoriBackend(); });
 afterEach(async () => { await b.close(); });
-
-const ADMIN = 1; // getDb seeduje admina s PIN-om 0000
-
-function red(sql: string, ...params: any[]): any {
-  return b.db.prepare(sql).get(...params);
-}
-
-function postavka(kljuc: string, vrijednost: string) {
-  b.db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(kljuc, vrijednost);
-}
-
-/** Vrijednost prvog XML taga u tijelu zahtjeva. */
-function tag(xml: string, naziv: string): string | undefined {
-  return xml.match(new RegExp(`<${naziv}>([\\s\\S]*?)</${naziv}>`))?.[1];
-}
 
 function zadnji() {
   const z = b.tring.zahtjevi.at(-1);
   if (!z) throw new Error('Nijedan zahtjev nije poslan uređaju');
   return z;
-}
-
-function dodajRacun(ukupno: number, nacinPlacanja: string, opts: { createdAt?: string; refundedAt?: string } = {}) {
-  b.db.prepare(`
-    INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, status, refundedAt, createdAt)
-    VALUES (?, ?, 0, ?, ?, ?, COALESCE(?, datetime('now','localtime')))
-  `).run(ADMIN, ukupno, nacinPlacanja, opts.refundedAt ? 'refunded' : 'completed', opts.refundedAt ?? null, opts.createdAt ?? null);
 }
 
 /** Otvara aktivnu bazu posebnom konekcijom — nakon uvoza `b.db` gleda stari fajl. */
@@ -50,26 +31,17 @@ const kasaStavka = { sifra: 'A1', naziv: 'Kafa & mlijeko', jm: 'kom', cijena: 2.
 
 /** Artikal iz kasaStavka u šifarniku — račun (order:finalize) ga upisuje u stavke. */
 function kasaArtikal() {
-  const productId = Number(b.db.prepare(
-    "INSERT INTO products (sifra, naziv, jm, cijena, pdvStopa, plu) VALUES ('A1', 'Kafa & mlijeko', 'kom', 2.5, 'E', 7)"
-  ).run().lastInsertRowid);
+  const productId = baza.artikal({ sifra: 'A1', naziv: 'Kafa & mlijeko', cijena: 2.5, plu: 7 });
   return { ...kasaStavka, productId };
-}
-
-/** Sada kao lokalni "YYYY-MM-DD HH:MM:SS". */
-function sada(): string {
-  const d = new Date();
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
 // ─── tring:init ─────────────────────────────────────────────
 
 describe('tring:init', () => {
   test('šalje operatora i lozinku iz postavki na /inicijalizacija', async () => {
-    postavka('tring.operatorId', '5');
-    postavka('tring.operatorPassword', 'tajna');
-    const r = await b.call('tring:init');
+    baza.postavka('tring.operatorId', '5');
+    baza.postavka('tring.operatorPassword', 'tajna');
+    const r = await b.pozovi('tring:init');
 
     expect(r).toEqual(OK);
     expect(zadnji().putanja).toBe('/inicijalizacija');
@@ -78,15 +50,15 @@ describe('tring:init', () => {
   });
 
   test('bez veze s uređajem vraća neuspjeh, ne baca grešku', async () => {
-    postavka('tring.port', '1'); // niko ne sluša
-    const r = await b.call('tring:init');
+    baza.postavka('tring.port', '1'); // niko ne sluša
+    const r = await b.pozovi('tring:init');
 
     expect(r.success).toBe(false);
     expect(r.vrstaOdgovora).toBe('Greska');
     expect(r.odgovori).toEqual({});
     expect(r.statusCode).toBeNull();
     expect(typeof r.error).toBe('string');
-    expect(r.error.length).toBeGreaterThan(0);
+    expect(postoji(r.error).length).toBeGreaterThan(0);
   });
 });
 
@@ -96,7 +68,7 @@ describe('tring:init', () => {
 
 describe('order:finalize → /sfr', () => {
   test('štampa račun i vraća broj fiskalnog računa', async () => {
-    const r = await b.call('order:finalize', { stavke: [kasaArtikal()], ukupno: 5, pdvIznos: 0.73, nacinPlacanja: 'Gotovina' });
+    const r = await b.pozovi('order:finalize', { stavke: [kasaArtikal()], ukupno: 5, pdvIznos: 0.73, nacinPlacanja: 'Gotovina' });
 
     expect(r).toMatchObject({ success: true, brojFiskalnogRacuna: '101', odgovori: { BrojFiskalnogRacuna: '101' } });
     const { putanja, tijelo } = zadnji();
@@ -134,24 +106,24 @@ describe('order:finalize → /sfr', () => {
 
   test('greška uređaja se vraća kao rezultat, ne baca', async () => {
     b.tring.greskaNa('/sfr', 'Suma plaćanja', 524);
-    const r = await b.call('order:finalize', { stavke: [kasaArtikal()], ukupno: 5, pdvIznos: 0.73, nacinPlacanja: 'Gotovina' });
+    const r = await b.pozovi('order:finalize', { stavke: [kasaArtikal()], ukupno: 5, pdvIznos: 0.73, nacinPlacanja: 'Gotovina' });
     expect(r).toEqual({ success: false, odgovori: {}, error: 'Ukupna suma plaćanja veća od sume računa (Suma plaćanja) [524]' });
   });
 
   test('nepoznat TFS kod: poruka uređaja i kod', async () => {
     b.tring.greskaNa('/sfr', 'Nema papira', 901);
-    const r = await b.call('order:finalize', { stavke: [kasaArtikal()], ukupno: 5, pdvIznos: 0.73, nacinPlacanja: 'Gotovina' });
-    expect(r.error).toBe('Nema papira [901]');
+    const r = await b.pozovi('order:finalize', { stavke: [kasaArtikal()], ukupno: 5, pdvIznos: 0.73, nacinPlacanja: 'Gotovina' });
+    expect(neuspjehStampe(r).error).toBe('Nema papira [901]');
   });
 });
 
 describe('order:refundAndPrint → /srr', () => {
   test('šalje reklamaciju s brojem originalnog računa i Gotovina/0', async () => {
     const stavka = kasaArtikal();
-    const { id } = await b.call('order:createManual', {
+    const { id } = await b.pozovi('order:createManual', {
       stavke: [stavka], ukupno: 5, pdvIznos: 0.73, nacinPlacanja: 'Gotovina', brojFiskalnogRacuna: '101', createdAt: sada(),
     });
-    const r = await b.call('order:refundAndPrint', { id });
+    const r = await b.pozovi('order:refundAndPrint', { id });
 
     expect(r).toMatchObject({ success: true, brojReklamacije: 'R-1' });
     const { putanja, tijelo } = zadnji();
@@ -168,18 +140,18 @@ describe('order:refundAndPrint → /srr', () => {
 
 describe('tring:xReport / tring:zReport', () => {
   test('presjek stanja ide na /sps, dnevni izvještaj na /sdi', async () => {
-    expect(await b.call('tring:xReport')).toEqual(OK);
+    expect(await b.pozovi('tring:xReport')).toEqual(OK);
     expect(zadnji().putanja).toBe('/sps');
     expect(tag(zadnji().tijelo, 'VrstaZahtjeva')).toBe('3');
 
-    expect(await b.call('tring:zReport')).toEqual(OK);
+    expect(await b.pozovi('tring:zReport')).toEqual(OK);
     expect(zadnji().putanja).toBe('/sdi');
     expect(tag(zadnji().tijelo, 'VrstaZahtjeva')).toBe('4');
   });
 
   test('greška uređaja se vraća kao rezultat', async () => {
     b.tring.greskaNa('/sdi', 'Z već urađen', 900);
-    const r = await b.call('tring:zReport');
+    const r = await b.pozovi('tring:zReport');
     expect(r.success).toBe(false);
     expect(r.error).toBe('Z već urađen [900]');
   });
@@ -187,7 +159,7 @@ describe('tring:xReport / tring:zReport', () => {
 
 describe('tring:periodicReport', () => {
   test('datume YYYY-MM-DD šalje kao d.M.yyyy od ponoći do 23:59:59', async () => {
-    expect(await b.call('tring:periodicReport', '2026-01-05', '2026-02-10')).toEqual(OK);
+    expect(await b.pozovi('tring:periodicReport', '2026-01-05', '2026-02-10')).toEqual(OK);
     const { putanja, tijelo } = zadnji();
     expect(putanja).toBe('/spi');
     expect(tag(tijelo, 'VrstaZahtjeva')).toBe('5');
@@ -207,13 +179,13 @@ describe('polja koja idu uređaju', () => {
   });
 
   test('lozinka operatora ide kroz escape', async () => {
-    postavka('tring.operatorPassword', 'a<b>&"\'</Lozinka>');
-    expect(await b.call('tring:init')).toEqual(OK);
+    baza.postavka('tring.operatorPassword', 'a<b>&"\'</Lozinka>');
+    expect(await b.pozovi('tring:init')).toEqual(OK);
     expect(zadnji().tijelo).toContain('<Lozinka>a&lt;b&gt;&amp;&quot;&apos;&lt;/Lozinka&gt;</Lozinka>');
   });
 
   test('periodični izvještaj prima samo GGGG-MM-DD', async () => {
-    expect(await b.call('tring:periodicReport', '2026</Vrijednost><X>-01-05', '2026-02-10'))
+    expect(await b.pozovi('tring:periodicReport', '2026</Vrijednost><X>-01-05', '2026-02-10'))
       .toEqual(odbijeno('neispravan datum (očekuje se GGGG-MM-DD)'));
     expect(await b.call('tring:periodicReport', '2026-01-05', 20260210))
       .toEqual(odbijeno('neispravan datum (očekuje se GGGG-MM-DD)'));
@@ -225,9 +197,9 @@ describe('polja koja idu uređaju', () => {
 
 describe('tring:getLogs / tring:clearLogs', () => {
   test('uz dev.logging bilježi zahtjev i odgovor; clearLogs prazni log', async () => {
-    postavka('dev.logging', 'true');
+    baza.postavka('dev.logging', 'true');
     const log = console.log;
-    console.log = () => undefined; // handler uz dev.logging ispisuje svaki odgovor
+    console.log = () => undefined; // uz dev.logging svaki zahtjev ide i u konzolu
     try {
       await provjeriLogove();
     } finally {
@@ -236,11 +208,11 @@ describe('tring:getLogs / tring:clearLogs', () => {
   });
 
   async function provjeriLogove() {
-    expect(await b.call('tring:clearLogs')).toEqual({ success: true });
-    expect(await b.call('tring:getLogs')).toEqual([]);
+    expect(await b.pozovi('tring:clearLogs')).toEqual({ success: true });
+    expect(await b.pozovi('tring:getLogs')).toEqual([]);
 
     await b.call('tring:xReport');
-    const logovi = await b.call('tring:getLogs');
+    const logovi = await b.pozovi('tring:getLogs');
     expect(logovi).toHaveLength(1);
     const l = logovi[0];
     expect(Object.keys(l).sort()).toEqual(
@@ -255,14 +227,14 @@ describe('tring:getLogs / tring:clearLogs', () => {
     expect(typeof l.id).toBe('number');
     expect(typeof l.timestamp).toBe('string');
 
-    expect(await b.call('tring:clearLogs')).toEqual({ success: true });
-    expect(await b.call('tring:getLogs')).toEqual([]);
+    expect(await b.pozovi('tring:clearLogs')).toEqual({ success: true });
+    expect(await b.pozovi('tring:getLogs')).toEqual([]);
   }
 
   test('bez dev.logging ništa se ne bilježi', async () => {
     await b.call('tring:clearLogs');
     await b.call('tring:xReport');
-    expect(await b.call('tring:getLogs')).toEqual([]);
+    expect(await b.pozovi('tring:getLogs')).toEqual([]);
   });
 });
 
@@ -270,7 +242,7 @@ describe('tring:getLogs / tring:clearLogs', () => {
 
 describe('cash:add', () => {
   test('polog šalje UnosNovca (7) na /unosnovca i upisuje zapis sa statusom ok', async () => {
-    const r = await b.call('cash:add', { tip: 'polog', iznos: 50.555, korisnikId: ADMIN, napomena: 'jutro' });
+    const r = await b.pozovi('cash:add', { tip: 'polog', iznos: 50.555, napomena: 'jutro' });
 
     expect(Object.keys(r).sort()).toEqual(['id', 'tringStatus']);
     expect(r.tringStatus).toBe('ok');
@@ -279,7 +251,7 @@ describe('cash:add', () => {
     expect(tag(tijelo, 'VrstaZahtjeva')).toBe('7');
     expect(tag(tijelo, 'Oznaka')).toBe('Gotovina');
     expect(tag(tijelo, 'Iznos')).toBe('50.56');
-    expect(red('SELECT tip, iznos, korisnikId, tringStatus, napomena FROM cash_movements WHERE id = ?', r.id))
+    expect(baza.red('SELECT tip, iznos, korisnikId, tringStatus, napomena FROM cash_movements WHERE id = ?', r.id))
       .toEqual({ tip: 'polog', iznos: 50.56, korisnikId: ADMIN, tringStatus: 'ok', napomena: 'jutro' });
   });
 
@@ -287,31 +259,31 @@ describe('cash:add', () => {
     b.tring.bez('/unosnovca');
     b.tring.bez('/povratnovca');
 
-    expect((await b.call('cash:add', { tip: 'polog', iznos: 10, korisnikId: ADMIN })).tringStatus).toBe('ok');
-    expect((await b.call('cash:add', { tip: 'povrat', iznos: 5, korisnikId: ADMIN })).tringStatus).toBe('ok');
+    expect((await b.pozovi('cash:add', { tip: 'polog', iznos: 10 })).tringStatus).toBe('ok');
+    expect((await b.pozovi('cash:add', { tip: 'povrat', iznos: 5 })).tringStatus).toBe('ok');
 
     expect(b.tring.zahtjevi.map(z => z.putanja)).toEqual(['/unosnovca', '/un', '/povratnovca', '/pn']);
     expect(b.tring.zahtjevi[1].tijelo).toBe(b.tring.zahtjevi[0].tijelo);
   });
 
   test('povrat šalje PovratNovca (8) na /povratnovca', async () => {
-    const r = await b.call('cash:add', { tip: 'povrat', iznos: 20, korisnikId: ADMIN });
+    const r = await b.pozovi('cash:add', { tip: 'povrat', iznos: 20 });
 
     expect(r.tringStatus).toBe('ok');
     expect(zadnji().putanja).toBe('/povratnovca');
     expect(tag(zadnji().tijelo, 'VrstaZahtjeva')).toBe('8');
     expect(tag(zadnji().tijelo, 'Iznos')).toBe('20');
-    expect(red('SELECT tip, napomena FROM cash_movements WHERE id = ?', r.id)).toEqual({ tip: 'povrat', napomena: null });
+    expect(baza.red('SELECT tip, napomena FROM cash_movements WHERE id = ?', r.id)).toEqual({ tip: 'povrat', napomena: null });
   });
 
   test('greška uređaja ne sprečava upis — zapis dobije status error', async () => {
     b.tring.greskaNa('/unosnovca', 'Nema papira');
-    const r = await b.call('cash:add', { tip: 'polog', iznos: 100, korisnikId: ADMIN });
+    const r = await b.pozovi('cash:add', { tip: 'polog', iznos: 100 });
 
     // Lažni uređaj šalje poruku u <Odgovor>, ne u <Greska><Broj/>, pa error
     // padne na vrstaOdgovora.
     expect(r).toEqual({ id: r.id, tringStatus: 'error', error: 'Greska' });
-    expect(red('SELECT tringStatus FROM cash_movements WHERE id = ?', r.id).tringStatus).toBe('error');
+    expect(baza.red('SELECT tringStatus FROM cash_movements WHERE id = ?', r.id).tringStatus).toBe('error');
   });
 
   test('odbija iznos nula ili manji i ništa ne šalje', async () => {
@@ -319,24 +291,24 @@ describe('cash:add', () => {
     await expect(b.call('cash:add', { tip: 'povrat', iznos: -5, korisnikId: ADMIN })).rejects.toThrow('Iznos mora biti veći od nule');
     await expect(b.call('cash:add', { tip: 'polog', iznos: 0.001, korisnikId: ADMIN })).rejects.toThrow('Iznos mora biti veći od nule');
     expect(b.tring.zahtjevi).toHaveLength(0);
-    expect(red('SELECT COUNT(*) AS n FROM cash_movements').n).toBe(0);
+    expect(baza.red('SELECT COUNT(*) AS n FROM cash_movements').n).toBe(0);
   });
 
   test('nepoznat tip se odbija prije slanja uređaju', async () => {
     await expect(b.call('cash:add', { tip: 'xyz', iznos: 10, korisnikId: ADMIN })).rejects.toThrow('Nepoznata vrsta unosa gotovine: xyz');
     expect(b.tring.zahtjevi).toHaveLength(0);
-    expect(red('SELECT COUNT(*) AS n FROM cash_movements').n).toBe(0);
+    expect(baza.red('SELECT COUNT(*) AS n FROM cash_movements').n).toBe(0);
   });
 
   test('korisnikId iz payload-a se ignoriše; bez prijave se odbija prije slanja uređaju', async () => {
     const { id } = await b.call('cash:add', { tip: 'polog', iznos: 10, korisnikId: 999 });
-    expect(red('SELECT korisnikId FROM cash_movements WHERE id = ?', id).korisnikId).toBe(ADMIN);
+    expect(baza.red('SELECT korisnikId FROM cash_movements WHERE id = ?', id).korisnikId).toBe(ADMIN);
     expect(b.tring.zahtjevi).toHaveLength(1);
 
     await b.call('user:logout');
     await expect(b.call('cash:add', { tip: 'polog', iznos: 10 })).rejects.toThrow('Niste prijavljeni');
     expect(b.tring.zahtjevi).toHaveLength(1);
-    expect(red('SELECT COUNT(*) AS n FROM cash_movements').n).toBe(1);
+    expect(baza.red('SELECT COUNT(*) AS n FROM cash_movements').n).toBe(1);
   });
 });
 
@@ -345,25 +317,25 @@ describe('cash:add', () => {
 describe('cash:retry', () => {
   test('ponovo šalje isti tip i iznos i ažurira status', async () => {
     b.tring.greskaNa('/povratnovca', 'Nema papira');
-    const { id } = await b.call('cash:add', { tip: 'povrat', iznos: 12.3, korisnikId: ADMIN });
+    const { id } = await b.pozovi('cash:add', { tip: 'povrat', iznos: 12.3 });
 
     // Prvi pokušaj ponovo padne — status ostaje error.
     b.tring.greskaNa('/povratnovca', 'Nema papira');
-    expect(await b.call('cash:retry', id)).toEqual({ id, tringStatus: 'error', error: 'Greska' });
-    expect(red('SELECT tringStatus FROM cash_movements WHERE id = ?', id).tringStatus).toBe('error');
+    expect(await b.pozovi('cash:retry', id)).toEqual({ id, tringStatus: 'error', error: 'Greska' });
+    expect(baza.red('SELECT tringStatus FROM cash_movements WHERE id = ?', id).tringStatus).toBe('error');
 
     const prije = b.tring.zahtjevi.length;
-    expect(await b.call('cash:retry', id)).toEqual({ id, tringStatus: 'ok' });
+    expect(await b.pozovi('cash:retry', id)).toEqual({ id, tringStatus: 'ok' });
     expect(b.tring.zahtjevi.length).toBe(prije + 1);
     expect(zadnji().putanja).toBe('/povratnovca');
     expect(tag(zadnji().tijelo, 'Iznos')).toBe('12.3');
-    expect(red('SELECT tringStatus FROM cash_movements WHERE id = ?', id).tringStatus).toBe('ok');
-    expect(red('SELECT COUNT(*) AS n FROM cash_movements').n).toBe(1);
+    expect(baza.red('SELECT tringStatus FROM cash_movements WHERE id = ?', id).tringStatus).toBe('ok');
+    expect(baza.red('SELECT COUNT(*) AS n FROM cash_movements').n).toBe(1);
   });
 
   test('odbija nepostojeći zapis i zapis koji nije pao', async () => {
     await expect(b.call('cash:retry', 999)).rejects.toThrow('Zapis ne postoji');
-    const { id } = await b.call('cash:add', { tip: 'polog', iznos: 10, korisnikId: ADMIN });
+    const { id } = await b.pozovi('cash:add', { tip: 'polog', iznos: 10 });
     const prije = b.tring.zahtjevi.length;
     await expect(b.call('cash:retry', id)).rejects.toThrow('Samo neuspjela slanja se mogu ponoviti');
     expect(b.tring.zahtjevi.length).toBe(prije);
@@ -374,11 +346,11 @@ describe('cash:retry', () => {
 
 describe('cash:getToday', () => {
   test('vraća današnje zapise po redu, s imenom korisnika', async () => {
-    b.db.prepare("INSERT INTO cash_movements (tip, iznos, korisnikId, tringStatus, createdAt) VALUES ('polog', 999, ?, 'ok', '2020-01-01 08:00:00')").run(ADMIN);
-    const a = await b.call('cash:add', { tip: 'polog', iznos: 100, korisnikId: ADMIN, napomena: 'jutro' });
-    const c = await b.call('cash:add', { tip: 'povrat', iznos: 40, korisnikId: ADMIN });
+    baza.upisi('cash_movements', { tip: 'polog', iznos: 999, korisnikId: ADMIN, tringStatus: 'ok', createdAt: '2020-01-01 08:00:00' });
+    const a = await b.pozovi('cash:add', { tip: 'polog', iznos: 100, napomena: 'jutro' });
+    const c = await b.pozovi('cash:add', { tip: 'povrat', iznos: 40 });
 
-    const r = await b.call('cash:getToday');
+    const r = await b.pozovi('cash:getToday');
     expect(r.map((x: any) => x.id)).toEqual([a.id, c.id]);
     expect(Object.keys(r[0]).sort()).toEqual(['createdAt', 'id', 'iznos', 'korisnikId', 'korisnikIme', 'napomena', 'tip', 'tringStatus']);
     expect(r[0]).toMatchObject({ tip: 'polog', iznos: 100, korisnikId: ADMIN, korisnikIme: 'Admin', tringStatus: 'ok', napomena: 'jutro' });
@@ -387,22 +359,22 @@ describe('cash:getToday', () => {
   });
 
   test('bez zapisa vraća praznu listu', async () => {
-    expect(await b.call('cash:getToday')).toEqual([]);
+    expect(await b.pozovi('cash:getToday')).toEqual([]);
   });
 });
 
 describe('cash:lastPolog', () => {
   test('null bez pologa, inače iznos zadnjeg pologa bilo kojeg dana', async () => {
-    expect(await b.call('cash:lastPolog')).toBeNull();
-    b.db.prepare("INSERT INTO cash_movements (tip, iznos, korisnikId, tringStatus, createdAt) VALUES ('polog', 150, ?, 'ok', '2020-01-01 08:00:00')").run(ADMIN);
-    expect(await b.call('cash:lastPolog')).toBe(150);
+    expect(await b.pozovi('cash:lastPolog')).toBeNull();
+    baza.upisi('cash_movements', { tip: 'polog', iznos: 150, korisnikId: ADMIN, tringStatus: 'ok', createdAt: '2020-01-01 08:00:00' });
+    expect(await b.pozovi('cash:lastPolog')).toBe(150);
 
     await b.call('cash:add', { tip: 'povrat', iznos: 30, korisnikId: ADMIN });
-    expect(await b.call('cash:lastPolog')).toBe(150);
+    expect(await b.pozovi('cash:lastPolog')).toBe(150);
 
     b.tring.greskaNa('/unosnovca', 'x'); // i neuspjelo slanje se računa
     await b.call('cash:add', { tip: 'polog', iznos: 80, korisnikId: ADMIN });
-    expect(await b.call('cash:lastPolog')).toBe(80);
+    expect(await b.pozovi('cash:lastPolog')).toBe(80);
   });
 });
 
@@ -410,7 +382,7 @@ describe('cash:lastPolog', () => {
 
 describe('cash:drawerState', () => {
   test('prazna ladica', async () => {
-    expect(await b.call('cash:drawerState')).toEqual({
+    expect(await b.pozovi('cash:drawerState')).toEqual({
       polozi: 0, gotovinskiPromet: 0, povrati: 0, gotovinskeReklamacije: 0, ocekivanoStanje: 0,
     });
   });
@@ -419,13 +391,13 @@ describe('cash:drawerState', () => {
     await b.call('cash:add', { tip: 'polog', iznos: 100, korisnikId: ADMIN });
     b.tring.greskaNa('/povratnovca', 'x'); // status error se svejedno računa
     await b.call('cash:add', { tip: 'povrat', iznos: 30, korisnikId: ADMIN });
-    b.db.prepare("INSERT INTO cash_movements (tip, iznos, korisnikId, tringStatus, createdAt) VALUES ('polog', 999, ?, 'ok', '2020-01-01 08:00:00')").run(ADMIN);
+    baza.upisi('cash_movements', { tip: 'polog', iznos: 999, korisnikId: ADMIN, tringStatus: 'ok', createdAt: '2020-01-01 08:00:00' });
 
-    dodajRacun(50, 'Gotovina');
-    dodajRacun(20, 'Kartica');
-    dodajRacun(20, JSON.stringify({ gotovina: 15, kartica: 5 }));
-    dodajRacun(10, 'Gotovina', { refundedAt: '2099-01-01 00:00:00' }); // prodan danas; storno nije danas
-    dodajRacun(500, 'Gotovina', { createdAt: '2020-01-01 10:00:00' });
+    baza.racun({ ukupno: 50, nacinPlacanja: 'Gotovina' });
+    baza.racun({ ukupno: 20, nacinPlacanja: 'Kartica' });
+    baza.racun({ ukupno: 20, nacinPlacanja: JSON.stringify({ gotovina: 15, kartica: 5 }) });
+    baza.racun({ ukupno: 10, nacinPlacanja: 'Gotovina', refundedAt: '2099-01-01 00:00:00' }); // prodan danas; storno nije danas
+    baza.racun({ ukupno: 500, nacinPlacanja: 'Gotovina', createdAt: '2020-01-01 10:00:00' });
     // Prodan ranije, storniran danas — ulazi samo u reklamacije.
     b.db.prepare(`
       INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, status, refundedAt, createdAt)
@@ -437,13 +409,53 @@ describe('cash:drawerState', () => {
       VALUES (?, 4, 0, 'Gotovina', 'refunded', datetime('now','localtime'))
     `).run(ADMIN);
 
-    expect(await b.call('cash:drawerState')).toEqual({
+    expect(await b.pozovi('cash:drawerState')).toEqual({
       polozi: 100,
       gotovinskiPromet: 79, // 50 + 15 + 10 + 4
       povrati: 30,
       gotovinskeReklamacije: 11, // 7 + 4
       ocekivanoStanje: 138,
     });
+  });
+
+  // Stari zapisi (starija verzija, uvezen backup): mala slova, razmaci, JSON
+  // ključevi drugačijeg slova. Ladica ih čita kao izvoz knjigovođi, a
+  // pokretanje programa ih prepiše u kanonski oblik — iznos ostaje isti.
+  function stariZapisi() {
+    baza.racun({ ukupno: 10, nacinPlacanja: 'gotovina' });
+    baza.racun({ ukupno: 20, nacinPlacanja: ' Gotovina ' });
+    baza.racun({ ukupno: 8, nacinPlacanja: '{"Gotovina":5,"kartica":3}' });
+    baza.racun({ ukupno: 7, nacinPlacanja: 'cek' });
+    baza.racun({ ukupno: 6, nacinPlacanja: 'KARTICA' });
+    baza.racun({ ukupno: 3, nacinPlacanja: 'gotovina', refundedAt: sada() });
+  }
+  const STANJE_STARIH = {
+    polozi: 0,
+    gotovinskiPromet: 38, // 10 + 20 + 5 + 3
+    povrati: 0,
+    gotovinskeReklamacije: 3,
+    ocekivanoStanje: 35,
+  };
+
+  test('stari zapisi načina plaćanja: gotovina bez obzira na slova i razmake', async () => {
+    stariZapisi();
+    expect(await b.pozovi('cash:drawerState')).toEqual(STANJE_STARIH);
+  });
+
+  test('pokretanje programa normalizuje stare zapise; ladica daje isti iznos', async () => {
+    stariZapisi();
+    baza.racun({ ukupno: 4, nacinPlacanja: 'Bitcoin' }); // nepoznat oblik ostaje kakav jeste i ne nosi gotovinu
+    const nacini = () => (b.db.prepare('SELECT nacinPlacanja FROM orders ORDER BY id').all() as { nacinPlacanja: string }[])
+      .map(r => r.nacinPlacanja);
+
+    await b.ponovoPokreni();
+    await prijavi(b, ADMIN_PIN);
+    expect(nacini()).toEqual(['Gotovina', 'Gotovina', '{"gotovina":5,"kartica":3}', 'Ček', 'Kartica', 'Gotovina', 'Bitcoin']);
+    expect(await b.pozovi('cash:drawerState')).toEqual(STANJE_STARIH);
+
+    await b.ponovoPokreni();
+    await prijavi(b, ADMIN_PIN);
+    expect(nacini()).toEqual(['Gotovina', 'Gotovina', '{"gotovina":5,"kartica":3}', 'Ček', 'Kartica', 'Gotovina', 'Bitcoin']);
   });
 });
 
@@ -454,19 +466,19 @@ describe('dialog:saveFile / fs:writeFile', () => {
 
   test('otkazan dijalog vraća null', async () => {
     b.dijalog.sacuvaj = null;
-    expect(await b.call('dialog:saveFile', { defaultName: 'racun.pdf', filters: filteri })).toBeNull();
+    expect(await b.pozovi('dialog:saveFile', { defaultName: 'racun.pdf', filters: filteri })).toBeNull();
   });
 
   test('upis samo na odobrenu putanju i samo jednom', async () => {
     const cilj = path.join(b.radniFolder, 'racun.pdf');
     b.dijalog.sacuvaj = cilj;
-    expect(await b.call('dialog:saveFile', { defaultName: 'racun.pdf', filters: filteri })).toBe(cilj);
+    expect(await b.pozovi('dialog:saveFile', { defaultName: 'racun.pdf', filters: filteri })).toBe(cilj);
 
     const drugi = path.join(b.radniFolder, 'drugi.pdf');
     await expect(b.call('fs:writeFile', { path: drugi, buffer: [1, 2] })).rejects.toThrow('Write path not approved by save dialog');
     expect(existsSync(drugi)).toBe(false);
 
-    expect(await b.call('fs:writeFile', { path: cilj, buffer: [37, 80, 68, 70] })).toEqual({ success: true });
+    expect(await b.pozovi('fs:writeFile', { path: cilj, buffer: [37, 80, 68, 70] })).toEqual({ success: true });
     expect(readFileSync(cilj).toString()).toBe('%PDF');
 
     await expect(b.call('fs:writeFile', { path: cilj, buffer: [1] })).rejects.toThrow('Write path not approved by save dialog');
@@ -484,7 +496,7 @@ describe('dialog:saveFile / fs:writeFile', () => {
     await b.call('dialog:saveFile', { defaultName: 'c.pdf', filters: filteri });
 
     await expect(b.call('fs:writeFile', { path: a, buffer: [1] })).rejects.toThrow('Write path not approved by save dialog');
-    expect(await b.call('fs:writeFile', { path: c, buffer: [1] })).toEqual({ success: true });
+    expect(await b.pozovi('fs:writeFile', { path: c, buffer: [1] })).toEqual({ success: true });
     expect(existsSync(a)).toBe(false);
   });
 
@@ -493,7 +505,7 @@ describe('dialog:saveFile / fs:writeFile', () => {
     b.dijalog.sacuvaj = a;
     await b.call('dialog:saveFile', { defaultName: 'a.pdf', filters: filteri });
     b.dijalog.sacuvaj = null;
-    expect(await b.call('dialog:saveFile', { defaultName: 'a.pdf', filters: filteri })).toBeNull();
+    expect(await b.pozovi('dialog:saveFile', { defaultName: 'a.pdf', filters: filteri })).toBeNull();
 
     await expect(b.call('fs:writeFile', { path: a, buffer: [1] })).rejects.toThrow('Write path not approved by save dialog');
     expect(existsSync(a)).toBe(false);
@@ -537,7 +549,7 @@ describe('dialog:saveFile — ime, ekstenzija i filteri (kao Tauri ljuska)', () 
   test('odabrana putanja s nedozvoljenom ekstenzijom znači otkazano i ne odobrava upis', async () => {
     const zlo = path.join(b.radniFolder, 'launch.plist');
     b.dijalog.sacuvaj = zlo;
-    expect(await b.call('dialog:saveFile', { defaultName: 'a.pdf', filters: pdf })).toBeNull();
+    expect(await b.pozovi('dialog:saveFile', { defaultName: 'a.pdf', filters: pdf })).toBeNull();
     await expect(b.call('fs:writeFile', { path: zlo, buffer: [1] })).rejects.toThrow('Write path not approved by save dialog');
     expect(existsSync(zlo)).toBe(false);
   });
@@ -548,16 +560,16 @@ describe('dialog:saveFile — ime, ekstenzija i filteri (kao Tauri ljuska)', () 
 describe('db:backup', () => {
   test('otkazan dijalog vraća null i ne pravi fajl', async () => {
     b.dijalog.sacuvaj = null;
-    expect(await b.call('db:backup')).toBeNull();
+    expect(await b.pozovi('db:backup')).toBeNull();
     expect(readdirSync(b.radniFolder)).toEqual([]);
   });
 
   test('kopira bazu, sa svježim podacima, na odabranu putanju', async () => {
-    b.db.prepare("INSERT INTO products (sifra, naziv, jm, cijena, pdvStopa) VALUES ('B1', 'Backup artikal', 'kom', 3, 'E')").run();
+    baza.upisi('products', { sifra: 'B1', naziv: 'Backup artikal', jm: 'kom', cijena: 3, pdvStopa: 'E' });
     const cilj = path.join(b.radniFolder, 'kopija.db');
     b.dijalog.sacuvaj = cilj;
 
-    expect(await b.call('db:backup')).toBe(cilj);
+    expect(await b.pozovi('db:backup')).toBe(cilj);
     const kopija = new Database(cilj, { readonly: true });
     try {
       expect(kopija.prepare("SELECT naziv FROM products WHERE sifra = 'B1'").get()).toEqual({ naziv: 'Backup artikal' });
@@ -598,7 +610,7 @@ describe('db:backup', () => {
   test('odabrana putanja s nedozvoljenom ekstenzijom znači otkazano', async () => {
     const zlo = path.join(b.radniFolder, 'kopija.command');
     b.dijalog.sacuvaj = zlo;
-    expect(await b.call('db:backup')).toBeNull();
+    expect(await b.pozovi('db:backup')).toBeNull();
     expect(readdirSync(b.radniFolder)).toEqual([]);
   });
 
@@ -621,7 +633,7 @@ describe('db:restore', () => {
   }
 
   function brojArtikala(): number {
-    return red('SELECT COUNT(*) AS n FROM products').n;
+    return baza.red('SELECT COUNT(*) AS n FROM products').n;
   }
 
   function sigurnosneKopije(): string[] {
@@ -629,13 +641,13 @@ describe('db:restore', () => {
   }
 
   test('uvoz fajla napravljenog kroz db:backup vrati podatke iz backup-a', async () => {
-    b.db.prepare("INSERT INTO products (sifra, naziv, jm, cijena, pdvStopa) VALUES ('B1', 'Iz backup-a', 'kom', 3, 'E')").run();
+    baza.upisi('products', { sifra: 'B1', naziv: 'Iz backup-a', jm: 'kom', cijena: 3, pdvStopa: 'E' });
     const backup = await napraviBackup();
     b.db.prepare("DELETE FROM products WHERE sifra = 'B1'").run();
     b.dijalog.otvori = backup;
     b.dijalog.potvrda = 1;
 
-    expect((await b.call('db:restore')).source).toBe(backup);
+    expect(postoji(await b.pozovi('db:restore')).source).toBe(backup);
 
     const aktivna = aktivnaBaza();
     try {
@@ -650,7 +662,7 @@ describe('db:restore', () => {
 
   test('prihvata stari backup u WAL modu (goli copyFileSync aktivne baze) i ne ostavlja -wal/-shm pored njega', async () => {
     const backup = path.join(b.radniFolder, 'stari-backup.db');
-    b.db.prepare("INSERT INTO products (sifra, naziv, jm, cijena, pdvStopa) VALUES ('S1', 'Stari', 'kom', 1, 'E')").run();
+    baza.upisi('products', { sifra: 'S1', naziv: 'Stari', jm: 'kom', cijena: 1, pdvStopa: 'E' });
     b.db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
     copyFileSync(path.join(path.dirname(b.radniFolder), 'kasa.db'), backup);
     expect([...readFileSync(backup).subarray(18, 20)]).toEqual([2, 2]);
@@ -659,7 +671,7 @@ describe('db:restore', () => {
     b.dijalog.otvori = backup;
     b.dijalog.potvrda = 1;
 
-    expect((await b.call('db:restore')).source).toBe(backup);
+    expect(postoji(await b.pozovi('db:restore')).source).toBe(backup);
 
     expect(readdirSync(b.radniFolder)).toEqual(['stari-backup.db']);
     expect(readFileSync(backup).equals(prije)).toBe(true);
@@ -677,7 +689,7 @@ describe('db:restore', () => {
   test('otkazan izbor fajla vraća null', async () => {
     b.dijalog.otvori = null;
     b.dijalog.potvrda = 1;
-    expect(await b.call('db:restore')).toBeNull();
+    expect(await b.pozovi('db:restore')).toBeNull();
     expect(sigurnosneKopije()).toEqual([]);
     expect(b.restartovan()).toBe(false);
   });
@@ -732,11 +744,11 @@ describe('db:restore', () => {
 
   test('"Otkaži" u potvrdi vraća null i ne dira bazu', async () => {
     const backup = await napraviBackup();
-    b.db.prepare("INSERT INTO products (sifra, naziv, jm, cijena, pdvStopa) VALUES ('N1', 'Novi', 'kom', 1, 'E')").run();
+    baza.upisi('products', { sifra: 'N1', naziv: 'Novi', jm: 'kom', cijena: 1, pdvStopa: 'E' });
     b.dijalog.otvori = backup;
     b.dijalog.potvrda = 0;
 
-    expect(await b.call('db:restore')).toBeNull();
+    expect(await b.pozovi('db:restore')).toBeNull();
     expect(brojArtikala()).toBe(1);
     expect(sigurnosneKopije()).toEqual([]);
     expect(b.restartovan()).toBe(false);
@@ -753,11 +765,11 @@ describe('db:restore', () => {
 
   test('"Uvezi i restartuj" zamijeni bazu, sačuva sigurnosnu kopiju i restartuje', async () => {
     const backup = await napraviBackup();
-    b.db.prepare("INSERT INTO products (sifra, naziv, jm, cijena, pdvStopa) VALUES ('N1', 'Novi', 'kom', 1, 'E')").run();
+    baza.upisi('products', { sifra: 'N1', naziv: 'Novi', jm: 'kom', cijena: 1, pdvStopa: 'E' });
     b.dijalog.otvori = backup;
     b.dijalog.potvrda = 1;
 
-    const r = await b.call('db:restore');
+    const r = postoji(await b.pozovi('db:restore'));
     expect(Object.keys(r).sort()).toEqual(['safetyPath', 'source']);
     expect(r.source).toBe(backup);
     expect(path.dirname(r.safetyPath)).toBe(path.dirname(b.radniFolder));

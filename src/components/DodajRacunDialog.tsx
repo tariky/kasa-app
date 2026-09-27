@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
@@ -8,30 +8,22 @@ import { DecimalInput } from '@/components/ui/decimal-input';
 import { DateTimePicker } from '@/components/ui/date-time-picker';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
-  Trash2, Banknote, CreditCard, Landmark, FileCheck,
+  Trash2,
   ChevronRight, Building2, AlertTriangle, PackageOpen, CornerDownLeft, X,
 } from 'lucide-react';
-import { Kupac, Product } from '@/types';
-import { izracunajTotale, iznosStavke } from '@/lib/racun';
+import { Kupac } from '@/types';
+import { iznosStavke } from '@/lib/racun';
+import { uPayload } from '@/lib/stavkeDokumenta';
+import { useStavkeDokumenta } from '@/hooks/useStavkeDokumenta';
 import { cn, formatKM } from '@/lib/utils';
+import { localDateTimeInput } from '@/lib/novac';
+import { NACINI_PLACANJA, type NacinPlacanja } from '@/lib/placanje';
+import { IKONA_PLACANJA } from '@/components/NacinPlacanjaBirac';
+import { Eyebrow } from '@/components/ui/ledger';
 import { PretragaProizvoda } from '@/components/PretragaProizvoda';
-import { PretragaStavki } from '@/components/ui/pretraga-stavki';
-
-interface StavkaUnos {
-  product: Product;
-  kolicina: number;
-  rabat: number;
-  cijena: number;
-}
-
-type PaymentType = 'Gotovina' | 'Kartica' | 'Virman' | 'Ček';
-
-const PAYMENTS: { id: PaymentType; icon: typeof Banknote }[] = [
-  { id: 'Gotovina', icon: Banknote },
-  { id: 'Kartica', icon: CreditCard },
-  { id: 'Virman', icon: Landmark },
-  { id: 'Ček', icon: FileCheck },
-];
+import { PretragaKupaca } from '@/components/PretragaKupaca';
+import { KupacRacunaPolja } from '@/components/KupacRacunaPolja';
+import { PRAZAN_KUPAC, izKupca, zaSlanje, type KupacRacuna } from '@/lib/kupacRacuna';
 
 /** Kolone reda stavke — isti raster za zaglavlje i za redove. */
 const GRID = 'grid grid-cols-[minmax(0,1fr)_74px_96px_74px_100px_30px] gap-2 items-center';
@@ -43,35 +35,16 @@ interface Props {
   prefillBroj?: string;
 }
 
-function nowLocalInput(): string {
-  const d = new Date();
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-function Eyebrow({ children, className }: { children: React.ReactNode; className?: string }) {
-  return (
-    <span className={cn('text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400', className)}>
-      {children}
-    </span>
-  );
-}
-
-const poljaKupca = (k: Kupac) => ({ naziv: k.naziv, sifra: k.idBroj, dodatno: [k.adresa, k.grad].filter(Boolean).join(' ') });
-
 export default function DodajRacunDialog({ open, onOpenChange, onSaved, prefillBroj }: Props) {
   const [brojFiskalnog, setBrojFiskalnog] = useState('');
-  const [datum, setDatum] = useState(nowLocalInput());
-  const [nacinPlacanja, setNacinPlacanja] = useState<PaymentType>('Gotovina');
-  const [stavke, setStavke] = useState<StavkaUnos[]>([]);
+  const [datum, setDatum] = useState(localDateTimeInput);
+  const [nacinPlacanja, setNacinPlacanja] = useState<NacinPlacanja>('Gotovina');
+  const {
+    stavke, postavi: setStavke, dodaj: addProduct, izmijeni: updateStavka, ukloni: removeStavka, totali: { ukupno, pdvIznos },
+  } = useStavkeDokumenta();
   const [kupacOpen, setKupacOpen] = useState(false);
-  const [allKupci, setAllKupci] = useState<Kupac[] | null>(null);
   const [kupacIzSifarnika, setKupacIzSifarnika] = useState(false);
-  const [kupacNaziv, setKupacNaziv] = useState('');
-  const [kupacIdBroj, setKupacIdBroj] = useState('');
-  const [kupacAdresa, setKupacAdresa] = useState('');
-  const [kupacGrad, setKupacGrad] = useState('');
-  const [kupacPostanskiBroj, setKupacPostanskiBroj] = useState('');
+  const [kupac, setKupac] = useState<KupacRacuna>(PRAZAN_KUPAC);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -79,54 +52,22 @@ export default function DodajRacunDialog({ open, onOpenChange, onSaved, prefillB
     if (open && prefillBroj) setBrojFiskalnog(prefillBroj);
   }, [open, prefillBroj]);
 
-  // Šifarnik kupaca se učitava tek kad se sekcija otvori — većina ručnih računa je bez kupca.
-  useEffect(() => {
-    if (!kupacOpen) return;
-    window.api.getKupci().then(setAllKupci).catch(() => setAllKupci([]));
-  }, [kupacOpen]);
-
-  const { ukupno, pdvIznos } = useMemo(
-    () => izracunajTotale(stavke.map(s => ({
-      cijena: s.cijena, kolicina: s.kolicina, rabat: s.rabat, pdvStopa: s.product.pdvStopa,
-    }))),
-    [stavke]
-  );
-
-  const addProduct = (p: Product, kol: number | null) => {
-    const k = kol ?? 1;
-    setStavke(prev => {
-      const existing = prev.find(s => s.product.id === p.id);
-      if (existing) return prev.map(s => s.product.id === p.id ? { ...s, kolicina: Math.round((s.kolicina + k) * 1000) / 1000 } : s);
-      return [...prev, { product: p, kolicina: k, rabat: 0, cijena: p.cijena }];
-    });
-  };
-
-  const updateStavka = (id: number, patch: Partial<StavkaUnos>) => {
-    setStavke(prev => prev.map(s => s.product.id === id ? { ...s, ...patch } : s));
-  };
-  const removeStavka = (id: number) => setStavke(prev => prev.filter(s => s.product.id !== id));
-
   const pickKupac = (k: Kupac) => {
-    setKupacIdBroj(k.idBroj || '');
-    setKupacNaziv(k.naziv || '');
-    setKupacAdresa(k.adresa || '');
-    setKupacGrad(k.grad || '');
-    setKupacPostanskiBroj(k.postanskiBroj || '');
+    setKupac(izKupca(k));
     setKupacIzSifarnika(true);
   };
 
   const clearKupac = () => {
-    setKupacIdBroj(''); setKupacNaziv(''); setKupacAdresa('');
-    setKupacGrad(''); setKupacPostanskiBroj('');
+    setKupac(PRAZAN_KUPAC);
     setKupacIzSifarnika(false);
   };
 
   const reset = () => {
-    setBrojFiskalnog(''); setDatum(nowLocalInput()); setNacinPlacanja('Gotovina');
+    setBrojFiskalnog(''); setDatum(localDateTimeInput()); setNacinPlacanja('Gotovina');
     setStavke([]);
     setKupacOpen(false);
     setKupacIzSifarnika(false);
-    setKupacNaziv(''); setKupacIdBroj(''); setKupacAdresa(''); setKupacGrad(''); setKupacPostanskiBroj('');
+    setKupac(PRAZAN_KUPAC);
     setError('');
   };
 
@@ -137,18 +78,13 @@ export default function DodajRacunDialog({ open, onOpenChange, onSaved, prefillB
     if (!datum) { setError('Unesi datum i vrijeme računa'); return; }
 
     const createdAt = datum.replace('T', ' ') + ':00';
-    const kupac = kupacIdBroj.trim()
-      ? { idBroj: kupacIdBroj.trim(), naziv: kupacNaziv.trim(), adresa: kupacAdresa.trim(), grad: kupacGrad.trim(), postanskiBroj: kupacPostanskiBroj.trim() }
-      : undefined;
 
     setLoading(true);
     try {
       await window.api.createManualOrder({
         ukupno, pdvIznos, nacinPlacanja,
-        brojFiskalnogRacuna: brojFiskalnog.trim(), createdAt, kupac,
-        stavke: stavke.map(s => ({
-          productId: s.product.id, kolicina: s.kolicina, cijena: s.cijena, rabat: s.rabat, pdvStopa: s.product.pdvStopa,
-        })),
+        brojFiskalnogRacuna: brojFiskalnog.trim(), createdAt, kupac: zaSlanje(kupac),
+        stavke: uPayload(stavke),
       });
       reset();
       onOpenChange(false);
@@ -160,7 +96,7 @@ export default function DodajRacunDialog({ open, onOpenChange, onSaved, prefillB
     }
   };
 
-  const kupacPopunjen = Boolean(kupacIdBroj.trim() || kupacNaziv.trim());
+  const kupacPopunjen = Boolean(kupac.idBroj.trim() || kupac.naziv.trim());
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) reset(); onOpenChange(v); }}>
@@ -218,21 +154,24 @@ export default function DodajRacunDialog({ open, onOpenChange, onSaved, prefillB
           <div className="flex items-center gap-3 mt-4">
             <Eyebrow className="flex-shrink-0">Plaćanje</Eyebrow>
             <div className="inline-flex rounded-lg bg-slate-100 p-0.5">
-              {PAYMENTS.map(({ id, icon: Icon }) => (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => setNacinPlacanja(id)}
-                  className={cn(
-                    'flex items-center gap-1.5 rounded-[6px] px-2.5 h-7 text-[11.5px] font-medium transition-colors duration-150',
-                    'focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50',
-                    nacinPlacanja === id ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700',
-                  )}
-                >
-                  <Icon size={13} strokeWidth={1.75} />
-                  {id}
-                </button>
-              ))}
+              {NACINI_PLACANJA.map(id => {
+                const Icon = IKONA_PLACANJA[id];
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setNacinPlacanja(id)}
+                    className={cn(
+                      'flex items-center gap-1.5 rounded-[6px] px-2.5 h-7 text-[11.5px] font-medium transition-colors duration-150',
+                      'focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50',
+                      nacinPlacanja === id ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700',
+                    )}
+                  >
+                    <Icon size={13} strokeWidth={1.75} />
+                    {id}
+                  </button>
+                );
+              })}
             </div>
           </div>
         </div>
@@ -268,12 +207,12 @@ export default function DodajRacunDialog({ open, onOpenChange, onSaved, prefillB
                 </div>
                 <div className="divide-y divide-slate-100">
                   {stavke.map(s => (
-                    <div key={s.product.id} className={cn(GRID, 'px-3 py-2 hover:bg-slate-50/50 transition-colors')}>
+                    <div key={s.productId} className={cn(GRID, 'px-3 py-2 hover:bg-slate-50/50 transition-colors')}>
                       <div className="min-w-0">
-                        <p className="text-[12.5px] font-medium text-slate-700 truncate">{s.product.naziv}</p>
+                        <p className="text-[12.5px] font-medium text-slate-700 truncate">{s.naziv}</p>
                         <div className="flex items-center gap-1.5 mt-0.5">
-                          <span className="font-mono text-[10px] text-slate-400">{s.product.sifra}</span>
-                          {s.product.pdvStopa === 'K' && (
+                          <span className="font-mono text-[10px] text-slate-400">{s.sifra}</span>
+                          {s.pdvStopa === 'K' && (
                             <span className="inline-flex h-3.5 items-center rounded border border-slate-200 bg-slate-50 px-1 font-mono text-[8.5px] font-bold text-slate-500" title="Oslobođeno PDV-a">
                               K
                             </span>
@@ -283,26 +222,26 @@ export default function DodajRacunDialog({ open, onOpenChange, onSaved, prefillB
                       <DecimalInput
                         value={s.kolicina} maxDecimals={3}
                         className="h-8 text-right font-mono text-[12px] tabular-nums"
-                        onValueChange={(_, n) => updateStavka(s.product.id, { kolicina: n || 0 })}
+                        onValueChange={(_, n) => updateStavka(s.productId, { kolicina: n || 0 })}
                       />
                       <DecimalInput
                         value={s.cijena}
                         className="h-8 text-right font-mono text-[12px] tabular-nums"
-                        onValueChange={(_, n) => updateStavka(s.product.id, { cijena: n || 0 })}
+                        onValueChange={(_, n) => updateStavka(s.productId, { cijena: n || 0 })}
                       />
                       <DecimalInput
                         value={s.rabat}
                         className="h-8 text-right font-mono text-[12px] tabular-nums"
-                        onValueChange={(_, n) => updateStavka(s.product.id, { rabat: Math.min(100, n || 0) })}
+                        onValueChange={(_, n) => updateStavka(s.productId, { rabat: Math.min(100, n || 0) })}
                       />
                       <span className="text-right font-mono text-[12.5px] font-semibold text-slate-800 tabular-nums">
-                        {formatKM(iznosStavke({ cijena: s.cijena, kolicina: s.kolicina, rabat: s.rabat, pdvStopa: s.product.pdvStopa }))}
+                        {formatKM(iznosStavke({ cijena: s.cijena, kolicina: s.kolicina, rabat: s.rabat, pdvStopa: s.pdvStopa }))}
                       </span>
                       <button
                         type="button"
-                        onClick={() => removeStavka(s.product.id)}
-                        title={`Ukloni ${s.product.naziv}`}
-                        aria-label={`Ukloni ${s.product.naziv}`}
+                        onClick={() => removeStavka(s.productId)}
+                        title={`Ukloni ${s.naziv}`}
+                        aria-label={`Ukloni ${s.naziv}`}
                         className="w-7 h-7 flex items-center justify-center rounded-md text-slate-300 hover:bg-rose-50 hover:text-rose-500 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/50"
                       >
                         <Trash2 size={13} />
@@ -326,28 +265,18 @@ export default function DodajRacunDialog({ open, onOpenChange, onSaved, prefillB
                 <span className="text-[11px] text-slate-400">opciono</span>
                 {!kupacOpen && kupacPopunjen && (
                   <span className="ml-auto text-[11.5px] text-slate-500 truncate max-w-[45%]">
-                    {kupacNaziv || '—'}
-                    {kupacIdBroj && <span className="ml-1.5 font-mono text-[10px] text-slate-400">{kupacIdBroj}</span>}
+                    {kupac.naziv || '—'}
+                    {kupac.idBroj && <span className="ml-1.5 font-mono text-[10px] text-slate-400">{kupac.idBroj}</span>}
                   </span>
                 )}
               </button>
               {kupacOpen && (
                 <div className="border-t border-slate-100 px-3 py-3">
                   <Eyebrow className="mb-2 block">Iz šifarnika</Eyebrow>
-                  <PretragaStavki<Kupac>
-                    stavke={allKupci}
-                    polja={poljaKupca}
-                    kljuc={k => k.id}
+                  <PretragaKupaca
                     onIzaberi={pickKupac}
-                    sifre={false}
-                    kolicine={false}
                     nedavnoKljuc="kupci-rucni-racun"
-                    naslovSvih="Svi kupci"
-                    oznaka={k => (k.adresa || k.grad) ? [k.adresa, k.grad].filter(Boolean).join(', ') : null}
-                    meta={k => <span className="font-mono text-[11px] tabular-nums text-slate-400">{k.idBroj}</span>}
                     placeholder="Pretraži kupca po nazivu, JIB-u ili gradu…"
-                    ariaLabel="Pretraga kupaca"
-                    akcija="odaberi"
                     velicina="sm"
                   />
 
@@ -367,24 +296,7 @@ export default function DodajRacunDialog({ open, onOpenChange, onSaved, prefillB
                     </div>
                   )}
 
-                  <div className="grid grid-cols-2 gap-3 mt-3 pt-3 border-t border-slate-100">
-                    {([
-                      ['ID broj', kupacIdBroj, setKupacIdBroj, true],
-                      ['Naziv', kupacNaziv, setKupacNaziv, false],
-                      ['Adresa', kupacAdresa, setKupacAdresa, false],
-                      ['Grad', kupacGrad, setKupacGrad, false],
-                      ['Poštanski broj', kupacPostanskiBroj, setKupacPostanskiBroj, true],
-                    ] as [string, string, (v: string) => void, boolean][]).map(([label, value, setter, mono]) => (
-                      <div key={label} className="space-y-1">
-                        <Eyebrow>{label}</Eyebrow>
-                        <Input
-                          value={value}
-                          onChange={e => setter(e.target.value)}
-                          className={cn('h-9 text-[12.5px]', mono && 'font-mono tabular-nums')}
-                        />
-                      </div>
-                    ))}
-                  </div>
+                  <KupacRacunaPolja varijanta="oznake" className="mt-3 pt-3 border-t border-slate-100" value={kupac} onChange={setKupac} />
                 </div>
               )}
               {kupacOpen && (

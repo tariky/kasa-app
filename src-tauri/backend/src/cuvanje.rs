@@ -1,6 +1,6 @@
 //! Pravila dijaloga za spremanje (`dialog:saveFile`, `db:backup`,
-//! `fs:writeFile`) — `src/ipc/cuvanje.ts`, ista kao u Tauri ljusci
-//! (src-tauri/src/lib.rs): renderer predlaže samo ime fajla u folderu koji
+//! `fs:writeFile`) — `src/ipc/cuvanje.ts`; Tauri ljuska (src-tauri/src/lib.rs)
+//! koristi ova ista: renderer predlaže samo ime fajla u folderu koji
 //! bira korisnik, i samo vrste fajlova koje program zaista pravi. Pravila su u
 //! backendu (ne samo u ljusci), jer ugovor-server ima lažnu platformu.
 
@@ -132,5 +132,33 @@ mod tests {
             json!([{ "name": "PDF", "extensions": ["pdf"] }, { "name": "", "extensions": ["XLSX"] }])
         );
         assert_eq!(dozvoljeni_filteri(&json!(null)), json!([]));
+    }
+
+    /// Slučajevi iz nekadašnjih testova Tauri ljuske (isti kao `src/ipc/cuvanje.test.ts`).
+    #[test]
+    fn ime_za_cuvanje_separatori_postaju_crtice() {
+        for (predlog, ime) in [
+            ("Racun-1.pdf", "Racun-1.pdf"),
+            ("Faktura 12/2026.pdf", "Faktura 12-2026.pdf"),
+            ("/Users/x/Library/LaunchAgents/evil.pdf", "-Users-x-Library-LaunchAgents-evil.pdf"),
+            ("a/../../izvoz.zip", "a-..-..-izvoz.zip"),
+            ("C:\\Windows\\kasa-backup-2026-09-25.db", "C--Windows-kasa-backup-2026-09-25.db"),
+            ("C:izvoz.zip", "C-izvoz.zip"),
+            ("Izvjestaj.XLSX", "Izvjestaj.XLSX"),
+            ("promet.csv", "promet.csv"),
+        ] {
+            assert_eq!(ime_za_cuvanje(&json!(predlog)).as_deref(), Some(ime), "{predlog}");
+        }
+        for los in ["..\\..\\Startup\\izvoz.zip", "evil.exe", "skripta.sh", "x.pdf.bat", ".bashrc", ".skriveno.pdf", "bez-ekstenzije", "folder/", "..", "plist.plist", "tacka."] {
+            assert_eq!(ime_za_cuvanje(&json!(los)), None, "{los}");
+        }
+        assert_eq!(
+            dozvoljeni_filteri(&json!([
+                { "name": "PDF", "extensions": ["pdf"] },
+                { "name": "Sve", "extensions": ["exe", "zip"] },
+                { "name": "Skripte", "extensions": ["sh"] },
+            ])),
+            json!([{ "name": "PDF", "extensions": ["pdf"] }, { "name": "Sve", "extensions": ["zip"] }])
+        );
     }
 }

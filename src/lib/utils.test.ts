@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test';
-import { parseDecimal, mnozina } from './utils';
+import { parseDecimal, mnozina, porukaGreske, formatKolicina, formatDate, formatDateTime } from './utils';
 
 test('parsira tačku kao decimalni separator', () => {
   expect(parseDecimal('12.50')).toBe(12.5);
@@ -35,4 +35,32 @@ test('mnozina bira oblik po broju', () => {
   ]);
   expect(r(1)).toBe('račun');
   expect(r(3)).toBe('računa');
+});
+
+test('porukaGreske: poruka bez Electron omota, i za ne-Error vrijednosti', () => {
+  expect(porukaGreske(new Error("Error invoking remote method 'order:finalize': Error: Račun ne postoji"))).toBe('Račun ne postoji');
+  expect(porukaGreske(new Error('Račun ne postoji'))).toBe('Račun ne postoji');
+  expect(porukaGreske('tekst')).toBe('tekst');
+  expect(porukaGreske(undefined)).toBe('Nepoznata greška');
+});
+
+test('formatKolicina: zarez, najviše 3 decimale, bez suvišnih nula', () => {
+  expect(formatKolicina(2)).toBe('2');
+  expect(formatKolicina(2.5)).toBe('2,5');
+  expect(formatKolicina(0.1 + 0.2)).toBe('0,3');
+  expect(formatKolicina(1.23456)).toBe('1,235');
+  expect(formatKolicina(10.0271)).toBe('10,027');
+  expect(formatKolicina(0)).toBe('0');
+  expect(formatKolicina(-1.5)).toBe('-1,5');
+});
+
+test('formatDate: tekst iz baze ili Date (npr. danas u podnožju PDF-a)', () => {
+  expect(formatDate('2026-09-25 10:30:00')).toBe('25.09.2026');
+  expect(formatDate(new Date(2026, 0, 5, 23, 59))).toBe('05.01.2026');
+});
+
+test('formatDateTime: veznik po jeziku, prazan veznik je samo razmak', () => {
+  expect(formatDateTime('2026-09-25 09:05:00')).toBe('25.09.2026 u 09:05');
+  expect(formatDateTime(new Date(2026, 8, 25, 9, 5), 'at')).toBe('25.09.2026 at 09:05');
+  expect(formatDateTime('2026-09-25 09:05:00', '')).toBe('25.09.2026 09:05');
 });

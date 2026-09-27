@@ -1,6 +1,7 @@
 import type { SqlDb } from './sqldb';
 import { round2 } from './novac';
 import { PDV_FAKTOR_E } from './pdv';
+import * as zaliha from './zaliha';
 
 export interface RacunStavka {
   cijena: number;
@@ -54,39 +55,52 @@ export interface UpisRacunaInput {
     naziv?: string | null; idBroj?: string | null; adresa?: string | null;
     grad?: string | null; postanskiBroj?: string | null;
   } | null;
-  stavke: Array<{
-    productId: number; kolicina: number; cijena: number; rabat: number; pdvStopa: string;
-    /** 'usluga' ne razdužuje skladište. */
-    productTip?: string;
-  }>;
+  /** Račun po prilogu nema stavki (zbirna stavka živi samo na uređaju). */
+  stavke: Array<{ productId: number; kolicina: number; cijena: number; rabat: number; pdvStopa: string }>;
+  /** Račun upisan iz dijaloga nezavršenih računa: datum s papira, označen kao ručni. */
+  createdAt?: string;
+  isManual?: 0 | 1;
+  /** Račun po prilogu: interni broj priloga i naziv zbirne stavke. */
+  prilogBroj?: number | null;
+  prilogNaziv?: string | null;
+  /** Faktura: rok plaćanja; napomena fakture ili računa sa kase. */
+  datumValute?: string | null;
+  napomena?: string | null;
+}
+
+/** Kupac kolona u `orders`: bez vrijednosti ili prazan tekst (i samo razmaci) je NULL. */
+function kolonaKupca(v: string | null | undefined): string | null {
+  return v == null || (typeof v === 'string' && v.trim() === '') ? null : v;
 }
 
 /**
  * Upis već odštampanog fiskalnog računa: orders + order_items + izlaz
- * skladišta. Zajedničko za konverziju ponude i račun iz radnog naloga.
- * Poziva se u transakciji, tek nakon uspješne štampe.
+ * skladišta. Jedini INSERT u `orders` — kasa, ručni račun, faktura (prilog),
+ * ponuda, nalog i dijalog nezavršenih računa. Poziva se u transakciji, tek
+ * nakon uspješne štampe (ili s brojem s papira). Izlaz ide kroz knjigu zalihe
+ * (usluga ne razdužuje; tip artikla iz baze). Rust: `upisi_racun` u racun.rs.
  */
 export function upisiRacun(db: SqlDb, input: UpisRacunaInput): number {
   const k = input.kupac;
+  // Bez datuma: zadani datum kolone (sada), kao i ranije.
+  const createdAt = input.createdAt || null;
   const orderRes = db.prepare(`
     INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, status,
-      kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj)
-    VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?)
+      kupacNaziv, kupacIdBroj, kupacAdresa, kupacGrad, kupacPostanskiBroj, isManual, createdAt,
+      prilogBroj, prilogNaziv, datumValute, napomena)
+    VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now','localtime')), ?, ?, ?, ?)
   `).run(
     input.korisnikId, input.ukupno, input.pdvIznos, input.nacinPlacanja, input.brojFiskalnogRacuna,
-    k?.naziv ?? null, k?.idBroj ?? null, k?.adresa ?? null, k?.grad ?? null, k?.postanskiBroj ?? null
+    kolonaKupca(k?.naziv), kolonaKupca(k?.idBroj), kolonaKupca(k?.adresa), kolonaKupca(k?.grad),
+    kolonaKupca(k?.postanskiBroj), input.isManual ?? 0, createdAt,
+    input.prilogBroj ?? null, input.prilogNaziv ?? null, input.datumValute ?? null, input.napomena ?? null
   );
   const orderId = Number(orderRes.lastInsertRowid);
 
   const insertItem = db.prepare(
     'INSERT INTO order_items (orderId, productId, kolicina, cijena, rabat, pdvStopa) VALUES (?, ?, ?, ?, ?, ?)'
   );
-  const insertStock = db.prepare(
-    "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, 'izlaz', ?, 'order', ?)"
-  );
-  for (const s of input.stavke) {
-    insertItem.run(orderId, s.productId, s.kolicina, s.cijena, s.rabat, s.pdvStopa);
-    if (s.productTip !== 'usluga') insertStock.run(s.productId, s.kolicina, orderId);
-  }
+  for (const s of input.stavke) insertItem.run(orderId, s.productId, s.kolicina, s.cijena, s.rabat, s.pdvStopa);
+  zaliha.knjizi(db, { vrsta: 'order', id: orderId }, 'izlaz', input.stavke, { datum: createdAt ?? undefined });
   return orderId;
 }

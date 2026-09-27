@@ -1,63 +1,44 @@
 // Ugovor za kanal izvoz:knjigovodja — vidi backend.ts.
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
-import { otvoriBackend, type Backend } from './backend';
+import { otvoriBackend, pozoviBezTipova, type Backend } from './backend';
+import { scenarij, ADMIN, spremljena, postoji, danas, primka as unosPrimke, stavkaPrimke } from './scenarij';
+import { izracunajTotale } from '../../lib/racun';
 
 let b: Backend;
+const baza = scenarij(() => b);
 
 beforeEach(async () => { b = await otvoriBackend(); });
 afterEach(async () => { await b.close(); });
 
-const ADMIN = 1; // getDb seeduje admina 'Admin'
 const SEP = ['2026-09-01', '2026-09-30'] as const;
 
-function ins(sql: string, ...params: any[]): number {
-  return Number(b.db.prepare(sql).run(...params).lastInsertRowid);
-}
-
-function artikal(sifra: string, cijena: number, opts: { pdvStopa?: string; tip?: string; slobodan?: number } = {}): number {
-  return ins(
-    "INSERT INTO products (sifra, naziv, jm, cijena, pdvStopa, tip, slobodan) VALUES (?, ?, 'kom', ?, ?, ?, ?)",
-    sifra, `Artikal ${sifra}`, cijena, opts.pdvStopa ?? 'E', opts.tip ?? 'artikal', opts.slobodan ?? 0,
-  );
-}
-
-function racun(o: {
-  createdAt: string; ukupno?: number; pdvIznos?: number; broj?: string | null; nacin?: string;
-  refundedAt?: string | null; brojReklamacije?: string | null; prilogBroj?: number | null;
-}): number {
-  return ins(
-    `INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, brojFiskalnogRacuna, status, refundedAt, brojReklamacije, prilogBroj, createdAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ADMIN, o.ukupno ?? 10, o.pdvIznos ?? 0, o.nacin ?? 'Gotovina', o.broj ?? null,
-    o.refundedAt ? 'refunded' : 'completed', o.refundedAt ?? null, o.brojReklamacije ?? null, o.prilogBroj ?? null, o.createdAt,
-  );
-}
-
 function primka(broj: string, datum: string): number {
-  return ins("INSERT INTO primke (brojPrimke, datum, dobavljacNaziv, dobavljacId, brojFakture) VALUES (?, ?, 'Dobavljač', '4200000000000', 'F-1')", broj, datum);
+  return baza.upisi('primke', { brojPrimke: broj, datum, dobavljacNaziv: 'Dobavljač', dobavljacId: '4200000000000', brojFakture: 'F-1' });
 }
 
 function primkaStavka(primkaId: number, productId: number, kolicina: number, nabavnaCijena: number, extra: { rabat?: number; zavisni?: number; cijena?: number } = {}): void {
-  ins(
-    "INSERT INTO primka_stavke (primkaId, productId, kolicina, cijena, nabavnaCijena, rabat, zavisniTroskovi, pdvStopa) VALUES (?, ?, ?, ?, ?, ?, ?, 'E')",
-    primkaId, productId, kolicina, extra.cijena ?? 0, nabavnaCijena, extra.rabat ?? 0, extra.zavisni ?? 0,
-  );
+  baza.upisi('primka_stavke', {
+    primkaId, productId, kolicina, cijena: extra.cijena ?? 0, nabavnaCijena,
+    rabat: extra.rabat ?? 0, zavisniTroskovi: extra.zavisni ?? 0, pdvStopa: 'E',
+  });
 }
 
-function kretanje(productId: number, tip: 'ulaz' | 'izlaz', kolicina: number, createdAt: string): void {
-  ins("INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId, createdAt) VALUES (?, ?, ?, 'test', 0, ?)", productId, tip, kolicina, createdAt);
-}
-
-const izvoz = (od: string, doDatum: string) => b.call('izvoz:knjigovodja', od, doDatum);
+const izvoz = (od: string, doDatum: string) => b.pozovi('izvoz:knjigovodja', od, doDatum);
 
 describe('izvoz:knjigovodja', () => {
   test('računi po datumu prodaje, reklamacije po datumu reklamacije, granice uključive', async () => {
-    racun({ createdAt: '2026-08-31 23:59:59', broj: '1' });
-    const prvi = racun({ createdAt: '2026-09-01 00:00:00', broj: '2' });
-    const zadnji = racun({ createdAt: '2026-09-30 23:59:59', broj: '3' });
-    racun({ createdAt: '2026-10-01 00:00:00', broj: '4' });
-    const stariReklamiran = racun({ createdAt: '2026-08-20 10:00:00', broj: '5', refundedAt: '2026-09-05 11:00:00', brojReklamacije: 'R-1' });
-    const istiDan = racun({ createdAt: '2026-09-10 09:00:00', broj: '6', refundedAt: '2026-09-10 12:00:00', brojReklamacije: 'R-2' });
+    baza.racun({ createdAt: '2026-08-31 23:59:59', brojFiskalnogRacuna: '1' });
+    const prvi = baza.racun({ createdAt: '2026-09-01 00:00:00', brojFiskalnogRacuna: '2' });
+    const zadnji = baza.racun({ createdAt: '2026-09-30 23:59:59', brojFiskalnogRacuna: '3' });
+    baza.racun({ createdAt: '2026-10-01 00:00:00', brojFiskalnogRacuna: '4' });
+    const stariReklamiran = baza.racun({
+      createdAt: '2026-08-20 10:00:00', brojFiskalnogRacuna: '5', refundedAt: '2026-09-05 11:00:00',
+      brojReklamacije: 'R-1',
+    });
+    const istiDan = baza.racun({
+      createdAt: '2026-09-10 09:00:00', brojFiskalnogRacuna: '6', refundedAt: '2026-09-10 12:00:00',
+      brojReklamacije: 'R-2',
+    });
 
     const r = await izvoz(...SEP);
     expect(r.od).toBe('2026-09-01');
@@ -72,17 +53,17 @@ describe('izvoz:knjigovodja', () => {
   });
 
   test('stavke računa i priloga za prodane i reklamirane račune; rabat NULL je 0', async () => {
-    const a = artikal('A', 11.7);
-    const k = artikal('K', 5, { pdvStopa: 'K' });
-    const van = racun({ createdAt: '2026-08-01 10:00:00' });
-    const obican = racun({ createdAt: '2026-09-02 10:00:00' });
-    const prilog = racun({ createdAt: '2026-09-03 10:00:00', prilogBroj: 7 });
-    const reklamiran = racun({ createdAt: '2026-08-15 10:00:00', refundedAt: '2026-09-04 10:00:00' });
-    ins('INSERT INTO order_items (orderId, productId, kolicina, cijena, rabat, pdvStopa) VALUES (?, ?, 1, 1, 0, ?)', van, a, 'E');
-    ins('INSERT INTO order_items (orderId, productId, kolicina, cijena, rabat, pdvStopa) VALUES (?, ?, 2, 11.7, 10, ?)', obican, a, 'E');
-    ins('INSERT INTO order_items (orderId, productId, kolicina, cijena, rabat, pdvStopa) VALUES (?, ?, 1, 5, NULL, ?)', obican, k, 'K');
-    ins('INSERT INTO prilog_stavke (orderId, productId, kolicina, cijena, pdvStopa) VALUES (?, ?, 3, 5, ?)', prilog, k, 'K');
-    ins('INSERT INTO order_items (orderId, productId, kolicina, cijena, rabat, pdvStopa) VALUES (?, ?, 1, 11.7, 0, ?)', reklamiran, a, 'E');
+    const a = baza.artikal({ sifra: 'A', cijena: 11.7 });
+    const k = baza.artikal({ sifra: 'K', cijena: 5, pdvStopa: 'K' });
+    const van = baza.racun({ createdAt: '2026-08-01 10:00:00' });
+    const obican = baza.racun({ createdAt: '2026-09-02 10:00:00' });
+    const prilog = baza.racun({ createdAt: '2026-09-03 10:00:00', prilogBroj: 7 });
+    const reklamiran = baza.racun({ createdAt: '2026-08-15 10:00:00', refundedAt: '2026-09-04 10:00:00' });
+    baza.upisi('order_items', { orderId: van, productId: a, kolicina: 1, cijena: 1, rabat: 0, pdvStopa: 'E' });
+    baza.upisi('order_items', { orderId: obican, productId: a, kolicina: 2, cijena: 11.7, rabat: 10, pdvStopa: 'E' });
+    baza.upisi('order_items', { orderId: obican, productId: k, kolicina: 1, cijena: 5, rabat: null, pdvStopa: 'K' });
+    baza.upisi('prilog_stavke', { orderId: prilog, productId: k, kolicina: 3, cijena: 5, pdvStopa: 'K' });
+    baza.upisi('order_items', { orderId: reklamiran, productId: a, kolicina: 1, cijena: 11.7, rabat: 0, pdvStopa: 'E' });
 
     const r = await izvoz(...SEP);
     expect(r.stavkeRacuna).toEqual([
@@ -94,13 +75,16 @@ describe('izvoz:knjigovodja', () => {
   });
 
   test('primke, stavke primki i nivelacije po datumu dokumenta', async () => {
-    const a = artikal('A', 10);
+    const a = baza.artikal({ sifra: 'A', cijena: 10 });
     primkaStavka(primka('U-0', '2026-08-31'), a, 1, 1);
     const u1 = primka('U-1', '2026-09-30');
     primkaStavka(u1, a, 10, 5, { rabat: 10, zavisni: 5, cijena: 10 });
-    const n = ins("INSERT INTO nivelacije (brojNivelacije, datum) VALUES ('NIV-2026-001', '2026-09-15')");
-    ins("INSERT INTO nivelacija_stavke (nivelacijaId, productId, kolicina, staraCijena, novaCijena, razlika, ukupnaRazlika, pdvStopa) VALUES (?, ?, 4, 10, 12, 2, 8, 'E')", n, a);
-    ins("INSERT INTO nivelacije (brojNivelacije, datum) VALUES ('NIV-2026-002', '2026-10-01')");
+    const n = baza.upisi('nivelacije', { brojNivelacije: 'NIV-2026-001', datum: '2026-09-15' });
+    baza.upisi('nivelacija_stavke', {
+      nivelacijaId: n, productId: a, kolicina: 4, staraCijena: 10, novaCijena: 12, razlika: 2,
+      ukupnaRazlika: 8, pdvStopa: 'E',
+    });
+    baza.upisi('nivelacije', { brojNivelacije: 'NIV-2026-002', datum: '2026-10-01' });
 
     const r = await izvoz(...SEP);
     expect(r.primke).toEqual([{ id: u1, brojPrimke: 'U-1', datum: '2026-09-30', dobavljacNaziv: 'Dobavljač', dobavljacId: '4200000000000', brojFakture: 'F-1' }]);
@@ -113,9 +97,12 @@ describe('izvoz:knjigovodja', () => {
   });
 
   test('polog i povrat s imenom korisnika', async () => {
-    ins("INSERT INTO cash_movements (tip, iznos, korisnikId, tringStatus, napomena, createdAt) VALUES ('polog', 50, ?, 'ok', NULL, '2026-09-01 07:00:00')", ADMIN);
-    ins("INSERT INTO cash_movements (tip, iznos, korisnikId, tringStatus, napomena, createdAt) VALUES ('povrat', 20, ?, 'error', 'banka', '2026-09-30 20:00:00')", ADMIN);
-    ins("INSERT INTO cash_movements (tip, iznos, korisnikId, tringStatus, napomena, createdAt) VALUES ('polog', 50, ?, 'ok', NULL, '2026-10-01 07:00:00')", ADMIN);
+    baza.upisi('cash_movements', { tip: 'polog', iznos: 50, korisnikId: ADMIN, tringStatus: 'ok', napomena: null, createdAt: '2026-09-01 07:00:00' });
+    baza.upisi('cash_movements', {
+      tip: 'povrat', iznos: 20, korisnikId: ADMIN, tringStatus: 'error', napomena: 'banka',
+      createdAt: '2026-09-30 20:00:00',
+    });
+    baza.upisi('cash_movements', { tip: 'polog', iznos: 50, korisnikId: ADMIN, tringStatus: 'ok', napomena: null, createdAt: '2026-10-01 07:00:00' });
 
     const r = await izvoz(...SEP);
     expect(r.kretanjaNovca).toEqual([
@@ -125,21 +112,21 @@ describe('izvoz:knjigovodja', () => {
   });
 
   test('utrošak: samo završeni nalozi u periodu; prosječna nabavna do dana završetka', async () => {
-    const mat = artikal('M', 0, { tip: 'materijal' });
-    const proizvod = artikal('P', 100);
+    const mat = baza.artikal({ sifra: 'M', cijena: 0, tip: 'materijal' });
+    const proizvod = baza.artikal({ sifra: 'P', cijena: 100 });
     primkaStavka(primka('U-1', '2026-09-01'), mat, 10, 2);
     primkaStavka(primka('U-2', '2026-09-10'), mat, 10, 4);
     primkaStavka(primka('U-3', '2026-09-25'), mat, 10, 100);
-    const nalog = (broj: number, status: string, zavrsenAt: string | null) => ins(
-      "INSERT INTO radni_nalozi (broj, godina, datum, vrsta, opis, productId, status, korisnikId, zavrsenAt) VALUES (?, 2026, '2026-09-01', 'zaliha', ?, ?, ?, ?, ?)",
-      broj, `Nalog ${broj}`, proizvod, status, ADMIN, zavrsenAt,
-    );
+    const nalog = (broj: number, status: string, zavrsenAt: string | null) => baza.upisi('radni_nalozi', {
+      broj, godina: 2026, datum: '2026-09-01', vrsta: 'zaliha', opis: `Nalog ${broj}`, productId: proizvod,
+      status, korisnikId: ADMIN, zavrsenAt,
+    });
     const zamrznut = nalog(1, 'zavrsen', '2026-09-05 10:00:00');
     const bezCijene = nalog(2, 'fakturisan', '2026-09-20 10:00:00');
     const uIzradi = nalog(3, 'u_izradi', null);
     const kasni = nalog(4, 'zavrsen', '2026-10-02 10:00:00');
     for (const [n, cijena] of [[zamrznut, 7], [bezCijene, null], [uIzradi, 1], [kasni, 1]] as const) {
-      ins('INSERT INTO radni_nalog_stavke (radniNalogId, materijalId, kolicina, nabavnaCijena) VALUES (?, ?, 2, ?)', n, mat, cijena);
+      baza.upisi('radni_nalog_stavke', { radniNalogId: n, materijalId: mat, kolicina: 2, nabavnaCijena: cijena });
     }
 
     const r = await izvoz(...SEP);
@@ -150,17 +137,17 @@ describe('izvoz:knjigovodja', () => {
   });
 
   test('zalihe na kraju dana "do": kretanja, prodajna cijena tog dana, nabavna iz primki do tog dana', async () => {
-    const a = artikal('A', 15);
-    const bezPromjene = artikal('B', 9);
-    artikal('S', 1, { tip: 'usluga' });
-    artikal('F', 1, { slobodan: 1 });
-    kretanje(a, 'ulaz', 10, '2026-09-01 08:00:00');
-    kretanje(a, 'izlaz', 3, '2026-09-30 23:59:59');
-    kretanje(a, 'izlaz', 5, '2026-10-01 00:00:00');
+    const a = baza.artikal({ sifra: 'A', cijena: 15 });
+    const bezPromjene = baza.artikal({ sifra: 'B', cijena: 9 });
+    baza.artikal({ sifra: 'S', cijena: 1, tip: 'usluga' });
+    baza.artikal({ sifra: 'F', cijena: 1, slobodan: 1 });
+    baza.kretanje({ productId: a, tip: 'ulaz', kolicina: 10, createdAt: '2026-09-01 08:00:00' });
+    baza.kretanje({ productId: a, tip: 'izlaz', kolicina: 3, createdAt: '2026-09-30 23:59:59' });
+    baza.kretanje({ productId: a, tip: 'izlaz', kolicina: 5, createdAt: '2026-10-01 00:00:00' });
     primkaStavka(primka('U-1', '2026-09-01'), a, 10, 5, { rabat: 10, zavisni: 5 });
     primkaStavka(primka('U-2', '2026-10-01'), a, 10, 50);
-    ins("INSERT INTO cijena_historija (productId, izvor, staraCijena, novaCijena, createdAt) VALUES (?, 'rucno', 10, 12, '2026-09-10 10:00:00')", a);
-    ins("INSERT INTO cijena_historija (productId, izvor, staraCijena, novaCijena, createdAt) VALUES (?, 'rucno', 12, 15, '2026-10-05 10:00:00')", a);
+    baza.upisi('cijena_historija', { productId: a, izvor: 'rucno', staraCijena: 10, novaCijena: 12, createdAt: '2026-09-10 10:00:00' });
+    baza.upisi('cijena_historija', { productId: a, izvor: 'rucno', staraCijena: 12, novaCijena: 15, createdAt: '2026-10-05 10:00:00' });
 
     const r = await izvoz(...SEP);
     expect(r.zalihe.map((z: any) => z.sifra)).toEqual(['A', 'B']);
@@ -171,10 +158,44 @@ describe('izvoz:knjigovodja', () => {
   });
 
   test('cijena prije prve promjene je staraCijena te promjene', async () => {
-    const a = artikal('A', 20);
-    ins("INSERT INTO cijena_historija (productId, izvor, staraCijena, novaCijena, createdAt) VALUES (?, 'rucno', 14, 20, '2026-10-05 10:00:00')", a);
+    const a = baza.artikal({ sifra: 'A', cijena: 20 });
+    baza.upisi('cijena_historija', { productId: a, izvor: 'rucno', staraCijena: 14, novaCijena: 20, createdAt: '2026-10-05 10:00:00' });
     const r = await izvoz(...SEP);
     expect(r.zalihe[0].cijena).toBe(14);
+  });
+
+  // Historija cijena je samo-dodavanje: brisanje ili izmjena primke danas ne
+  // smije promijeniti "Zalihe na dan" za period koji je već predat knjigovođi
+  // (nivelacija tog perioda i dalje stoji u izvozu).
+  test('brisanje primke kasnije ne mijenja prodajnu cijenu zaliha za raniji period', async () => {
+    const a = baza.artikal({ sifra: 'A', cijena: 10 });
+    const { id } = spremljena(await b.pozovi('primka:create', {
+      brojPrimke: 'U-1', datum: '2026-01-20', stavke: [{ productId: a, kolicina: 5, cijena: 15, nabavnaCijena: 5, rabat: 0, pdvStopa: 'E' }],
+    }));
+    b.db.prepare("UPDATE cijena_historija SET createdAt = '2026-01-20 10:00:00'").run();
+    const cijenaA = async (od: string, doDatum: string) => postoji((await izvoz(od, doDatum)).zalihe.find(z => z.sifra === 'A')).cijena;
+    expect(await cijenaA('2026-01-01', '2026-01-31')).toBe(15);
+
+    expect(await b.pozovi('primka:delete', id)).toBeNull();
+    expect(await cijenaA('2026-01-01', '2026-01-31')).toBe(15);
+    // Vraćena cijena važi od danas.
+    expect(await cijenaA('2099-12-01', '2099-12-31')).toBe(10);
+  });
+
+  test('izmjena cijene na primci koju je poslije promijenilo nešto drugo ne mijenja raniji period', async () => {
+    const a = baza.artikal({ sifra: 'A', cijena: 10 });
+    const stavke = (cijena: number) => [{ productId: a, kolicina: 5, cijena, nabavnaCijena: 5, rabat: 0, pdvStopa: 'E' }];
+    const { id } = spremljena(await b.pozovi('primka:create', { brojPrimke: 'U-1', datum: '2026-01-20', stavke: stavke(15) }));
+    b.db.prepare("UPDATE cijena_historija SET createdAt = '2026-01-20 10:00:00'").run();
+    await b.call('product:update', a, { cijena: 20 });
+    b.db.prepare("UPDATE cijena_historija SET createdAt = '2026-02-10 10:00:00' WHERE izvor = 'rucno'").run();
+    const cijenaA = async (od: string, doDatum: string) => postoji((await izvoz(od, doDatum)).zalihe.find(z => z.sifra === 'A')).cijena;
+
+    await b.call('primka:update', { id, brojPrimke: 'U-1', datum: '2026-01-20', stavke: stavke(18) });
+    expect(await cijenaA('2026-01-01', '2026-01-31')).toBe(15);
+    expect(await cijenaA('2026-02-01', '2026-02-28')).toBe(20);
+    // Lanac je ispravljen: bez ručne izmjene važila bi nova cijena primke.
+    expect(b.db.prepare("SELECT staraCijena FROM cijena_historija WHERE izvor = 'rucno'").get()).toEqual({ staraCijena: 18 });
   });
 
   test('prazan period vraća prazne liste', async () => {
@@ -188,6 +209,40 @@ describe('izvoz:knjigovodja', () => {
     await expect(izvoz('2026-09-30', '2026-09-01')).rejects.toThrow('Neispravan period');
     await expect(izvoz('2026-9-1', '2026-09-30')).rejects.toThrow('Neispravan period');
     await expect(b.call('izvoz:knjigovodja', null, '2026-09-30')).rejects.toThrow('Neispravan period');
-    await expect(b.call('izvoz:knjigovodja')).rejects.toThrow('Neispravan period');
+    await expect(pozoviBezTipova(b, 'izvoz:knjigovodja')).rejects.toThrow('Neispravan period');
+  });
+});
+
+// „Zalihe na dan" (lib/knjigovodja/upiti.ts) računa količinu svojom kopijom
+// formule knjige zalihe, s datumom; za danas mora dati stanje artikla
+// (STANJE_SQL, product:getAll) — za svaki tok koji knjiži zalihu.
+describe('zalihe na dan i stanje artikla', () => {
+  test('za danas je količina svakog artikla i materijala jednaka stanju', async () => {
+    const dan = danas();
+    const a = baza.artikal({ sifra: 'A', cijena: 10 });
+    const m = baza.artikal({ sifra: 'M', cijena: 4, tip: 'materijal' });
+    const p = baza.artikal({ sifra: 'P', cijena: 50 });
+    const u = baza.artikal({ sifra: 'U', cijena: 20, tip: 'usluga' });
+    baza.artikal({ sifra: 'S', cijena: 1, slobodan: 1, stanje: 3 });
+    const prodaj = (stavke: ReturnType<typeof baza.kasaStavka>[]) =>
+      b.pozovi('order:finalize', { ...izracunajTotale(stavke), nacinPlacanja: 'Gotovina', stavke });
+
+    // Primka (ulaz na datum primke), prodaja, storno, korekcija, prilog i završen nalog.
+    spremljena(await b.pozovi('primka:create', unosPrimke('U-1', [stavkaPrimke(a, 10, 10), stavkaPrimke(m, 7.5, 4)], { datum: dan })));
+    await prodaj([baza.kasaStavka(a, 3, 10), baza.kasaStavka(u, 1, 20)]);
+    const vracen = await prodaj([baza.kasaStavka(a, 1, 10)]);
+    await b.call('order:refundAndPrint', { id: (vracen as { id: number }).id });
+    await b.call('product:adjustStock', m, 7.2);
+    await b.call('fiscal:setZadnjiBroj', 200);
+    await b.call('order:finalizePrilog', { nacinPlacanja: 'Virman', stavke: [{ productId: a, kolicina: 2, cijena: 10, rabat: 0, pdvStopa: 'E' }] });
+    await b.call('normativ:save', p, [{ materijalId: m, kolicina: 1.5 }]);
+    const { id: nalog } = await b.pozovi('nalog:create', { vrsta: 'zaliha', productId: p, kolicina: 2 });
+    await b.call('nalog:setStatus', { id: nalog, status: 'zavrsen' });
+
+    const stanje = new Map((await b.pozovi('product:getAll')).map(x => [x.sifra, x.stanje]));
+    const zalihe = (await izvoz(dan, dan)).zalihe;
+    expect(zalihe.map(z => z.sifra)).toEqual(['A', 'M', 'P']);
+    expect(zalihe.map(z => [z.sifra, stanje.get(z.sifra)])).toEqual(zalihe.map(z => [z.sifra, z.kolicina]));
+    expect(zalihe.map(z => z.kolicina)).toEqual([5, 4.2, 2]);
   });
 });

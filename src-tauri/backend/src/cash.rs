@@ -2,36 +2,26 @@
 //!
 //! Evidencija gotovine (polog/povrat) ide kroz Tring UnosNovca/PovratNovca;
 //! očekivano stanje ladice koristi i storno (`order:refundAndPrint`), pa su
-//! [`drawer_state`], [`deposit_cash`] i [`device_cash_in`] izloženi za `racuni.rs`.
+//! [`drawer_state`], [`deposit_cash`] i [`device_cash_in`] izloženi za `storno.rs`.
 
 use serde_json::{json, Map, Value};
 
 use crate::greska::R;
 use crate::js::{self, round2, to_number};
 use crate::sql::Db;
+use crate::stampa::Uredjaj;
 use crate::tring::{self, Odgovor};
-use crate::{baci, p, sesija, Args, Backend};
+use crate::kanali::Kanal;
+use crate::{baci, p, provjera_racuna, sesija, Backend};
 
 // ─── lib/drawer.ts ──────────────────────────────────────────
 
-/// Gotovinski dio jednog računa. `nacinPlacanja` je ili plain string
-/// ('Gotovina', 'Kartica'...) — tada je gotovina puni iznos ili ništa —
-/// ili JSON `{gotovina, kartica, ...}` s razbijenim iznosima.
+/// Gotovinski dio jednog računa, čitan istim parserom kao izvoz knjigovođi
+/// (`raspodjela_placanja`): tekst ('Gotovina', 'Kartica'...) — gotovina je puni
+/// iznos ili ništa — ili JSON `{gotovina, kartica, ...}` s razbijenim iznosima.
+/// Nepoznat oblik ne nosi gotovinu (izvoz ga označi kao nepoznat).
 pub fn gotovinski_iznos(nacin_placanja: &Value, ukupno: f64) -> f64 {
-    // JSON.parse(x) radi nad String(x); `null` iz JSON-a ili bilo šta bez
-    // `.gotovina` broja daje 0, a greška parsiranja pada na poređenje stringa.
-    let tekst = js::to_string(nacin_placanja);
-    match js::parse(&tekst) {
-        // `null.gotovina` baca u JS-u — catch grana, koja za "null" daje 0.
-        Ok(Value::Null) => 0.0,
-        Ok(parsed) => match &parsed["gotovina"] {
-            Value::Number(n) => n.as_f64().unwrap_or(0.0),
-            _ => 0.0,
-        },
-        Err(_) => {
-            if nacin_placanja.as_str() == Some("Gotovina") { ukupno } else { 0.0 }
-        }
-    }
+    provjera_racuna::raspodjela_placanja(&js::to_string(nacin_placanja), ukupno).map_or(0.0, |p| p.gotovina)
 }
 
 /// `prodaje` su računi prodani u periodu (bez obzira na kasniji storno —
@@ -71,12 +61,8 @@ pub fn ocekivano_stanje(movements: &[Value], prodaje: &[Value], reklamirani: &[V
 
 /// Pošalje UnosNovca/PovratNovca (`cashDeps().send`). U aplikaciji integracija
 /// uvijek odgovara, pa status 'skipped' (odgovor `null`) ovdje ne nastaje.
-fn send(b: &Backend, tip: &str, iznos: f64) -> Odgovor {
-    let result = if tip == "polog" { b.tring.unos_novca(iznos) } else { b.tring.povrat_novca(iznos) };
-    if b.tring.is_logging_enabled() {
-        eprintln!("[Tring] {tip}: {}", js::stringify(&result));
-    }
-    result
+fn send(uredjaj: &Uredjaj, tip: &str, iznos: f64) -> Odgovor {
+    if tip == "polog" { uredjaj.unos_novca(tip, iznos) } else { uredjaj.povrat_novca(tip, iznos) }
 }
 
 fn tring_status(result: &Odgovor) -> &'static str {
@@ -104,8 +90,8 @@ fn rezultat(id: Value, tring_status: &str, result: &Odgovor) -> Value {
 /// Kao `addCashMovement(cashDeps(), data)`: Tring postavke se učitaju prije
 /// provjera.
 pub fn add_cash_movement(b: &Backend, data: &Value) -> R<Value> {
-    b.load_tring_config()?;
-    let db = b.baza()?;
+    let uredjaj = Uredjaj::iz_postavki(b)?;
+    let db = b.db();
     // Sve provjere prije slanja: uređaj je fizički primio/izdao novac čim
     // odgovori, pa upis nakon toga ne smije pasti na CHECK ili FOREIGN KEY.
     let tip = match data["tip"].as_str() {
@@ -120,7 +106,7 @@ pub fn add_cash_movement(b: &Backend, data: &Value) -> R<Value> {
         baci!("Korisnik ne postoji");
     }
 
-    let result = send(b, tip, iznos);
+    let result = send(&uredjaj, tip, iznos);
     let tring_status = tring_status(&result);
 
     let r = db.run(
@@ -132,8 +118,8 @@ pub fn add_cash_movement(b: &Backend, data: &Value) -> R<Value> {
 }
 
 pub fn retry_cash_movement(b: &Backend, id: &Value) -> R<Value> {
-    b.load_tring_config()?;
-    let db = b.baza()?;
+    let uredjaj = Uredjaj::iz_postavki(b)?;
+    let db = b.db();
     let Some(row) = db.get("SELECT * FROM cash_movements WHERE id = ?", p![id])? else {
         baci!("Zapis ne postoji");
     };
@@ -142,7 +128,7 @@ pub fn retry_cash_movement(b: &Backend, id: &Value) -> R<Value> {
     }
 
     let tip = js::to_string(&row["tip"]);
-    let result = send(b, &tip, to_number(&row["iznos"]));
+    let result = send(&uredjaj, &tip, to_number(&row["iznos"]));
     let tring_status = tring_status(&result);
     db.run("UPDATE cash_movements SET tringStatus = ? WHERE id = ?", p![tring_status, id])?;
 
@@ -215,11 +201,7 @@ pub fn deposit_cash(b: &Backend, iznos: f64, napomena: &str, korisnik_id: &Value
 
 /// Pokriće koje fizički ne ulazi u ladicu — samo brojač uređaja.
 pub fn device_cash_in(b: &Backend, iznos: f64) -> R<()> {
-    b.load_tring_config()?;
-    let res = b.tring.unos_novca(iznos);
-    if b.tring.is_logging_enabled() {
-        eprintln!("[Tring] deviceCashIn: {}", js::stringify(&res));
-    }
+    let res = Uredjaj::iz_postavki(b)?.unos_novca("deviceCashIn", iznos);
     if !tring::uspjeh(&res) {
         baci!(
             "Unos novca od {} KM nije prihvaćen na printeru: {}",
@@ -230,24 +212,42 @@ pub fn device_cash_in(b: &Backend, iznos: f64) -> R<()> {
     Ok(())
 }
 
-pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
-    if !matches!(kanal, "cash:add" | "cash:retry" | "cash:getToday" | "cash:lastPolog" | "cash:drawerState") {
-        return None;
+pub const KANALI: &[Kanal] = &[
+    Kanal {
+        ime: "cash:add",
+        h: |b, a| sesija::korisnik(b).and_then(|k| add_cash_movement(b, &sesija::sa_korisnikom(&a[0], k.id))),
+    },
+    Kanal { ime: "cash:retry", h: |b, a| retry_cash_movement(b, &a[0]) },
+    Kanal { ime: "cash:getToday", h: |b, _| get_today_movements(b.db()) },
+    Kanal { ime: "cash:lastPolog", h: |b, _| get_last_polog_iznos(b.db()) },
+    Kanal { ime: "cash:drawerState", h: |b, _| drawer_state(b.db()) },
+];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gotovina_iz_starih_zapisa() {
+        let g = |n: &str, ukupno: f64| gotovinski_iznos(&json!(n), ukupno);
+        assert_eq!(g("Gotovina", 25.5), 25.5);
+        assert_eq!(g("gotovina", 25.5), 25.5);
+        assert_eq!(g(" Gotovina ", 25.5), 25.5);
+        assert_eq!(g(r#"{"Gotovina":5,"kartica":3}"#, 8.0), 5.0);
+        assert_eq!(g("cek", 100.0), 0.0);
+        assert_eq!(g("Kartica", 25.5), 0.0);
+        assert_eq!(g("Bitcoin", 100.0), 0.0);
+        assert_eq!(g(r#"{"gotovina":5,"zlato":3}"#, 8.0), 0.0);
+        assert_eq!(g(r#"{"gotovina":5,"constructor":3}"#, 8.0), 0.0);
+        assert_eq!(gotovinski_iznos(&Value::Null, 8.0), 0.0);
+
+        let stanje = ocekivano_stanje(
+            &[],
+            &[json!({ "nacinPlacanja": "gotovina", "ukupno": 10 }), json!({ "nacinPlacanja": r#"{"Gotovina":5,"kartica":3}"#, "ukupno": 8 })],
+            &[json!({ "nacinPlacanja": " Gotovina ", "ukupno": 4 })],
+        );
+        assert_eq!(stanje["gotovinskiPromet"], json!(15));
+        assert_eq!(stanje["gotovinskeReklamacije"], json!(4));
+        assert_eq!(stanje["ocekivanoStanje"], json!(11));
     }
-    if let Err(e) = b.otvori_db() {
-        return Some(Err(e));
-    }
-    let b: &Backend = b;
-    let db = match b.baza() {
-        Ok(db) => db,
-        Err(e) => return Some(Err(e)),
-    };
-    Some(match kanal {
-        "cash:add" => sesija::korisnik(b).and_then(|k| add_cash_movement(b, &sesija::sa_korisnikom(&a[0], k.id))),
-        "cash:retry" => retry_cash_movement(b, &a[0]),
-        "cash:getToday" => get_today_movements(db),
-        "cash:lastPolog" => get_last_polog_iznos(db),
-        "cash:drawerState" => drawer_state(db),
-        _ => return None,
-    })
 }

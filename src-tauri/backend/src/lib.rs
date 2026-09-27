@@ -7,6 +7,9 @@
 //! `ugovor-server` binarija. Sve što zavisi od okruženja (dijalozi, restart,
 //! obavijest o licenci) ide kroz [`Platforma`].
 
+// `if !(x > 0.0)` je namjerno isto kao TS `if (!(x > 0))`: NaN ne prolazi provjeru.
+#![allow(clippy::neg_cmp_op_on_partial_ord)]
+
 pub mod greska;
 pub mod js;
 pub mod sql;
@@ -16,20 +19,28 @@ pub mod tring;
 pub mod tring_racun;
 pub mod fiskalni;
 pub mod racun;
+pub mod stampa;
 pub mod licenca;
 pub mod kanali;
 pub mod petlja;
+pub mod pristup;
 pub mod sesija;
 pub mod audit;
 pub mod provjera_racuna;
 pub mod cuvanje;
+pub mod zaliha;
+#[cfg(test)]
+mod proba;
 
 // Domene (po grupama kanala)
 pub mod korisnici;
 pub mod postavke;
 pub mod katalog;
 pub mod skladiste;
+pub mod pending_racun;
 pub mod racuni;
+pub mod prilog;
+pub mod storno;
 pub mod cash;
 pub mod ponude;
 pub mod proizvodnja;
@@ -66,12 +77,17 @@ pub trait Platforma: Send + Sync {
 }
 
 /// Argumenti poziva; nepostojeći argument je `null` (JS `undefined`).
-pub struct Args(pub Vec<Value>);
+pub struct Args {
+    vrijednosti: Vec<Value>,
+    /// Admin koji je PIN-om odobrio storno ovog poziva (sesija.rs,
+    /// `odobri_storno`); `None` = odobrenje nije trebalo.
+    pub odobrio_admin_id: Option<i64>,
+}
 
 impl Index<usize> for Args {
     type Output = Value;
     fn index(&self, i: usize) -> &Value {
-        self.0.get(i).unwrap_or(&js::NULL)
+        self.vrijednosti.get(i).unwrap_or(&js::NULL)
     }
 }
 
@@ -92,6 +108,8 @@ pub struct Backend {
     pub sesija: sesija::Sesija,
     /// Najnoviji datum iz baze za licencu, jednom po otvaranju baze.
     pub datum_iz_baze: licenca::DatumIzBaze,
+    /// Dokumenti čija je štampa u toku (zaštita od dvoklika, stampa.rs).
+    u_toku: stampa::UTokuSkup,
 }
 
 impl Backend {
@@ -109,6 +127,7 @@ impl Backend {
             odobrena_putanja: Mutex::new(None),
             sesija: sesija::Sesija::default(),
             datum_iz_baze: licenca::DatumIzBaze::default(),
+            u_toku: stampa::UTokuSkup::default(),
         })
     }
 
@@ -121,13 +140,8 @@ impl Backend {
     }
 
     /// Aktivna baza (`getDb()`); zatvorena se otvori pri prvom upitu.
-    pub fn db(&self) -> R<&Db> {
-        Ok(&self.db)
-    }
-
-    /// Isto što i [`Backend::db`] (ostalo iz vremena kad je `db()` tražio `&mut`).
-    pub fn baza(&self) -> R<&Db> {
-        Ok(&self.db)
+    pub fn db(&self) -> &Db {
+        &self.db
     }
 
     /// Otvori aktivnu bazu odmah, s greškom ako schema/migracije puknu.
@@ -185,15 +199,15 @@ impl Backend {
 
     pub fn call_u_redu(&self, tiket: petlja::Tiket, kanal: &str, args: Vec<Value>) -> Result<Value, String> {
         let _z = self.petlja.uzmi(tiket);
-        let a = Args(args);
+        let mut a = Args { vrijednosti: args, odobrio_admin_id: None };
         // Panika (bug) u jednom pozivu je greška tog poziva, kao izuzetak u
         // Electron handleru — program i ostali pozivi rade dalje.
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             // Redom: kanal postoji, licenca, sesija i uloga (handle() u handlers.ts).
-            kanali::postoji(kanal)?;
+            let k = kanali::kanal(kanal)?;
             licenca::provjeri_kanal(self, kanal)?;
-            self.provjeri_sesiju(kanal, &a)?;
-            kanali::obradi(self, kanal, &a)
+            a.odobrio_admin_id = self.provjeri_sesiju(kanal, &a)?;
+            (k.h)(self, &a)
         }))
         .unwrap_or_else(|p| {
             let poruka = p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned());
@@ -207,33 +221,13 @@ impl Backend {
 
     /// Prijava i uloga za `kanal` (sesija.rs); korisnik se čita iz baze pri
     /// svakom pozivu, pa degradiran ili obrisan korisnik gubi pravo odmah.
-    fn provjeri_sesiju(&self, kanal: &str, a: &Args) -> R<()> {
+    /// Za storno još i admin PIN; vraća admina koji ga je odobrio.
+    fn provjeri_sesiju(&self, kanal: &str, a: &Args) -> R<Option<i64>> {
         let korisnik = sesija::trenutni(self)?;
-        sesija::provjeri_pristup(kanal, &a.0, korisnik.as_ref(), self.sesija.zadani_pin())
-    }
-
-    /// Tring postavke iz baze → klijent (`loadTringConfig`). Vraća operatora i lozinku.
-    pub fn load_tring_config(&self) -> R<(Value, Value)> {
-        let db = self.baza()?;
-        let rows = db.all("SELECT key, value FROM settings WHERE key LIKE 'tring.%'", p![])?;
-        let mut map = serde_json::Map::new();
-        for r in rows {
-            let k = r["key"].as_str().unwrap_or("").replacen("tring.", "", 1);
-            map.insert(k, r["value"].clone());
+        sesija::provjeri_pristup(kanal, &a.vrijednosti, korisnik.as_ref(), self.sesija.zadani_pin())?;
+        match korisnik {
+            Some(k) if kanal == "order:refundAndPrint" => sesija::odobri_storno(self, &a[0], &k),
+            _ => Ok(None),
         }
-        let g = |k: &str, zadano: &str| -> Value {
-            match map.get(k) {
-                Some(v) if !v.is_null() => v.clone(),
-                _ => Value::String(zadano.into()),
-            }
-        };
-        let host = js::to_string(&g("host", "localhost"));
-        let port = js::parse_int(&js::to_string(&g("port", "8085")));
-        self.tring.configure(&host, port);
-
-        let dev = db.val("SELECT value FROM settings WHERE key = 'dev.logging'", p![])?;
-        self.tring.set_logging_enabled(dev == "true");
-
-        Ok((js::parse_int_value(&g("operatorId", "0")), g("operatorPassword", "0")))
     }
 }

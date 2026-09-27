@@ -62,7 +62,6 @@ describe('ispravni ulazi daju isti XML kao ranije', () => {
     await Tring.stampatiFiskalniRacun(pun);
     await Tring.stampatiReklamiraniRacun({ ...pun, vrstePlacanja: [], brojRacuna: 101 });
     await Tring.stampatiFiskalniRacun({ stavke: [pun.stavke[0]], vrstePlacanja: [{ oznaka: 'Kartica', iznos: 5 }] });
-    await Tring.upisiArtikal({ sifra: 'S<1>', naziv: 'Sok', jm: 'l', cijena: 1.2, stopa: 'K', plu: 12 });
     await Tring.inicijalizacija(5, 'tajna');
     await Tring.stampatiPeriodicniIzvjestaj('2026-01-05', '2026-02-10');
     await Tring.unosNovca(120.33);
@@ -90,6 +89,32 @@ describe('lozinka operatora', () => {
     await Tring.inicijalizacija(5, `a<b>&"'</Lozinka>`);
     expect(poslano()).toContain('<Lozinka>a&lt;b&gt;&amp;&quot;&apos;&lt;/Lozinka&gt;</Lozinka></Operator>');
   });
+
+  test('ne ispisuje se u konzolu uz dev.logging (uređaj je dobije cijelu)', async () => {
+    const ispis: string[] = [];
+    const log = console.log;
+    console.log = (...a: unknown[]) => { ispis.push(a.join(' ')); };
+    Tring.setLoggingEnabled(true);
+    try {
+      await Tring.inicijalizacija(5, `tajna<&>'"</Lozinka>`);
+    } finally {
+      Tring.setLoggingEnabled(false);
+      Tring.clearLogs();
+      console.log = log;
+    }
+    expect(poslano()).toContain('<Lozinka>tajna&lt;&amp;&gt;&apos;&quot;&lt;/Lozinka&gt;</Lozinka>');
+    expect(ispis).toHaveLength(1);
+    expect(ispis[0]).toContain('<BrojOperatora>5</BrojOperatora><Lozinka>***</Lozinka></Operator>');
+    expect(ispis[0]).not.toContain('tajna');
+  });
+
+  test('bezLozinke mijenja samo sadržaj <Lozinka>', () => {
+    expect(Tring.bezLozinke('<Operator><BrojOperatora>1</BrojOperatora><Lozinka>0</Lozinka></Operator>'))
+      .toBe('<Operator><BrojOperatora>1</BrojOperatora><Lozinka>***</Lozinka></Operator>');
+    expect(Tring.bezLozinke('<Lozinka></Lozinka>')).toBe('<Lozinka>***</Lozinka>');
+    const racunXml = '<RacunZahtjev><NoviObjekat><Naziv>Lozinka</Naziv></NoviObjekat></RacunZahtjev>';
+    expect(Tring.bezLozinke(racunXml)).toBe(racunXml);
+  });
 });
 
 describe('stopa', () => {
@@ -97,11 +122,6 @@ describe('stopa', () => {
     ['E</Stopa><Stopa>K'], ['e'], ['A'], [''], [null], [1],
   ])('%p se odbija', async (stopa) => {
     odbijeno(await Tring.stampatiFiskalniRacun(racun({ stavke: [stavka({ stopa })] })),
-      'neispravna PDV stopa (dozvoljeno E ili K)');
-  });
-
-  test('i kod upisa artikla', async () => {
-    odbijeno(await Tring.upisiArtikal({ sifra: 'S', naziv: 'N', jm: 'l', cijena: 1, stopa: 'K</Stopa>' as any }),
       'neispravna PDV stopa (dozvoljeno E ili K)');
   });
 });
@@ -148,7 +168,7 @@ describe('cijeli brojevi', () => {
   });
 
   test.each([[-1], [2.5], ['3</Grupa>']])('grupa %p se odbija', async (grupa) => {
-    odbijeno(await Tring.upisiArtikal({ sifra: 'S', naziv: 'N', jm: 'l', cijena: 1, stopa: 'E', grupa: grupa as any }),
+    odbijeno(await Tring.stampatiFiskalniRacun(racun({ stavke: [stavka({ grupa })] })),
       'neispravna Grupa (mora biti cijeli broj od 0 do 999999)');
   });
 

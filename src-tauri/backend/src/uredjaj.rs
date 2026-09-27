@@ -11,54 +11,9 @@ use serde_json::{json, Value};
 use crate::greska::{Greska, R};
 use crate::js;
 use crate::sql::Db;
-use crate::tring::Odgovor;
-use crate::{audit, baci, baza, cuvanje, p, Args, Backend};
-
-// ─── Tring ──────────────────────────────────────────────
-
-/// `loadTringConfig()` — aktivna baza se otvori ako je zatvorena (getDb).
-fn load_tring_config(b: &Backend) -> R<(Value, Value)> {
-    b.db()?;
-    b.load_tring_config()
-}
-
-/// `if (Tring.isLoggingEnabled()) console.log(...)`. Ide na stderr: stdout
-/// ugovor-servera je kanal odgovora.
-fn loguj(b: &Backend, sta: &str, v: &Value) {
-    if b.tring.is_logging_enabled() {
-        eprintln!("[Tring] {sta}: {}", js::stringify(v));
-    }
-}
-
-fn init(b: &Backend) -> R<Odgovor> {
-    let (operator_id, operator_password) = load_tring_config(b)?;
-    // `parseInt` koji ne uspije je NaN, a `${NaN}` u XML-u je "NaN".
-    let operator_id = if operator_id.is_null() { json!("NaN") } else { operator_id };
-    let result = b.tring.inicijalizacija(&operator_id, &operator_password);
-    loguj(b, "init", &result);
-    Ok(result)
-}
-
-fn x_report(b: &Backend) -> R<Odgovor> {
-    load_tring_config(b)?;
-    let result = b.tring.stampati_presjek_stanja();
-    loguj(b, "xReport", &result);
-    Ok(result)
-}
-
-fn z_report(b: &Backend) -> R<Odgovor> {
-    load_tring_config(b)?;
-    let result = b.tring.stampati_dnevni_izvjestaj();
-    loguj(b, "zReport", &result);
-    Ok(result)
-}
-
-fn periodic_report(b: &Backend, from: &Value, to: &Value) -> R<Odgovor> {
-    load_tring_config(b)?;
-    let result = b.tring.stampati_periodicni_izvjestaj(from, to);
-    loguj(b, "periodicReport", &result);
-    Ok(result)
-}
+use crate::stampa::Uredjaj;
+use crate::kanali::Kanal;
+use crate::{audit, baci, baza, cuvanje, p, Backend};
 
 // ─── Dialog / File System ─────────────────────────────────
 
@@ -341,7 +296,7 @@ fn u_delete_mode(db: &Db) -> R<()> {
 /// Kopija aktivne baze kao jedan samostalan fajl (DELETE journal mode), koji
 /// SQLite otvara bilo kako, i read-only, bez -wal/-shm pored njega.
 fn samostalna_kopija(b: &Backend, db_path: &Path, cilj: &Path) -> R<()> {
-    b.db()?.pragma("wal_checkpoint(TRUNCATE)")?;
+    b.db().pragma("wal_checkpoint(TRUNCATE)")?;
     // Ostaci ranijeg fajla na istoj putanji bi se primijenili na novu kopiju.
     obrisi(&sa_sufiksom(cilj, "-wal"))?;
     obrisi(&sa_sufiksom(cilj, "-shm"))?;
@@ -400,21 +355,22 @@ fn replace_db_file(source_path: &Path, db_path: &Path) -> R<()> {
     Ok(())
 }
 
-pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
-    Some(match kanal {
-        "tring:init" => init(b),
-        "tring:xReport" => x_report(b),
-        "tring:zReport" => z_report(b),
-        "tring:periodicReport" => periodic_report(b, &a[0], &a[1]),
-        "tring:getLogs" => Ok(b.tring.get_logs()),
-        "tring:clearLogs" => {
+pub const KANALI: &[Kanal] = &[
+    // Postavke uređaja i dnevnik: `stampa::Uredjaj`.
+    Kanal { ime: "tring:init", h: |b, _| Uredjaj::iz_postavki(b).map(|u| u.inicijalizacija()) },
+    Kanal { ime: "tring:xReport", h: |b, _| Uredjaj::iz_postavki(b).map(|u| u.presjek_stanja()) },
+    Kanal { ime: "tring:zReport", h: |b, _| Uredjaj::iz_postavki(b).map(|u| u.dnevni_izvjestaj()) },
+    Kanal { ime: "tring:periodicReport", h: |b, a| Uredjaj::iz_postavki(b).map(|u| u.periodicni_izvjestaj(&a[0], &a[1])) },
+    Kanal { ime: "tring:getLogs", h: |b, _| Ok(b.tring.get_logs()) },
+    Kanal {
+        ime: "tring:clearLogs",
+        h: |b, _| {
             b.tring.clear_logs();
             Ok(json!({ "success": true }))
-        }
-        "dialog:saveFile" => save_file(b, &a[0]),
-        "fs:writeFile" => write_file(b, &a[0]),
-        "db:backup" => backup(b),
-        "db:restore" => restore(b),
-        _ => return None,
-    })
-}
+        },
+    },
+    Kanal { ime: "dialog:saveFile", h: |b, a| save_file(b, &a[0]) },
+    Kanal { ime: "fs:writeFile", h: |b, a| write_file(b, &a[0]) },
+    Kanal { ime: "db:backup", h: |b, _| backup(b) },
+    Kanal { ime: "db:restore", h: |b, _| restore(b) },
+];

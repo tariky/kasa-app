@@ -5,7 +5,8 @@
 //! `userData/licenca.json`, van baze. ID uređaja se računa isto kao u
 //! Electronu, pa licence izdane za Electron verziju važe i ovdje. Datum za
 //! istek je najveći od sata, `zadnjiDatum` i najnovijeg računa u bazi.
-//! Moduli i kanal → moduli: `src/lib/moduliKatalog.json`.
+//! Moduli i kanal → moduli: `src/lib/moduliKatalog.json`; kanali koji bez
+//! licence ne rade: `blokiraniBezLicence` u `src/ipc/pristup.json`.
 
 use std::sync::{Mutex, OnceLock};
 
@@ -20,24 +21,15 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::greska::{Greska, R};
+use crate::js;
+use crate::pristup::pristup;
 use crate::sql::Db;
-use crate::{Args, Backend};
+use crate::kanali::Kanal;
+use crate::Backend;
 
 const PREFIKS: &str = "PAZAR1";
 pub const UPOZORENJE_DANA: i64 = 7;
 pub const PERIOD_MILOSTI_DANA: i64 = 15;
-
-/// Kanali koji prave nove dokumente ili mijenjaju stanje zaliha.
-const BLOKIRANI_KANALI: &[&str] = &[
-    "order:create", "order:createManual", "order:finalize", "order:finalizePrilog",
-    "order:refund", "order:refundAndPrint",
-    "tring:printReceipt", "tring:printRefund",
-    "primka:create", "primka:update",
-    "product:adjustStock",
-    "ponuda:create", "ponuda:update", "ponuda:konvertuj",
-    "nalog:create", "nalog:createIzPonude", "nalog:update", "nalog:replaceStavke",
-    "nalog:setStatus", "nalog:izdajRacun",
-];
 
 /// Javni ključ iz `src/lib/licencaJavniKljuc.ts` (jedan izvor za oba backenda).
 fn javni_kljuc() -> &'static VerifyingKey {
@@ -87,11 +79,6 @@ fn potpis(s: &str) -> Option<Signature> {
     Signature::from_slice(&bajtovi).ok()
 }
 
-fn datum_ok(s: &str) -> bool {
-    thread_local!(static D: Regex = Regex::new(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$").unwrap());
-    D.with(|r| r.is_match(s))
-}
-
 /// `citajB`: bucket iz `b` kad su `c` ispravno ime i `x` string; pokvaren
 /// `b` znači "bez backup-a", ne neispravnu licencu.
 fn backup_bucket(b: &Value) -> Option<&str> {
@@ -109,8 +96,8 @@ pub fn procitaj_licencu(token: &str) -> Option<Value> {
     let bajtovi = base64url(dijelovi[1])?;
     let p: Value = serde_json::from_slice(&bajtovi).ok()?;
     let k = p["k"].as_str()?;
-    let d = p["d"].as_str().filter(|d| datum_ok(d))?;
-    let i = p["i"].as_str().filter(|i| datum_ok(i))?;
+    let d = p["d"].as_str().filter(|d| js::iso_datum(d))?;
+    let i = p["i"].as_str().filter(|i| js::iso_datum(i))?;
     // `u` koji nije string je neispravan token (kao u licenca.ts); prazan = bilo koji uređaj.
     if p.get("u").is_some_and(|u| !u.is_string()) {
         return None;
@@ -184,7 +171,7 @@ pub fn razlika_dana(od: &str, do_: &str) -> i64 {
 pub fn efektivni_danas(stvarni: &str, zadnji: Option<&str>, iz_baze: Option<&str>) -> String {
     let mut danas = stvarni;
     for d in [zadnji, iz_baze].into_iter().flatten() {
-        if datum_ok(d) && d > danas {
+        if js::iso_datum(d) && d > danas {
             danas = d;
         }
     }
@@ -202,13 +189,9 @@ const UPIT_NAJNOVIJI_DATUM: &str = "
       WHERE createdAt GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*'
   )";
 
-/// `najnovijiDatumIzBaze`: `YYYY-MM-DD` ili `None` (nedostupna baza nije greška).
-pub fn najnoviji_datum_iz_baze(db: &Db) -> Option<String> {
-    procitaj_datum(db).ok().flatten()
-}
-
+/// Najnoviji datum iz baze (`najnovijiDatumIzBaze`): `YYYY-MM-DD` ili `None`.
 fn procitaj_datum(db: &Db) -> R<Option<String>> {
-    Ok(db.val(UPIT_NAJNOVIJI_DATUM, &[])?.as_str().filter(|d| datum_ok(d)).map(str::to_string))
+    Ok(db.val(UPIT_NAJNOVIJI_DATUM, &[])?.as_str().filter(|d| js::iso_datum(d)).map(str::to_string))
 }
 
 /// `najnovijiDatumIzBazeJednom`: najnoviji datum iz baze, pročitan jednom po
@@ -236,7 +219,7 @@ impl DatumIzBaze {
 }
 
 fn danas_za_licencu(b: &Backend, z: &Value) -> String {
-    let iz_baze = b.db().ok().and_then(|db| b.datum_iz_baze.procitaj(db));
+    let iz_baze = b.datum_iz_baze.procitaj(b.db());
     efektivni_danas(&b.sat.danas(), z["zadnjiDatum"].as_str(), iz_baze.as_deref())
 }
 
@@ -384,13 +367,13 @@ fn kanal_modula(kanal: &str) -> bool {
 
 /// `kanalPodLicencom`: kanal koji pravi dokumente ili pripada modulu.
 fn pod_licencom(kanal: &str) -> bool {
-    BLOKIRANI_KANALI.contains(&kanal) || kanal_modula(kanal)
+    pristup().blokirani_bez_licence.contains(kanal) || kanal_modula(kanal)
 }
 
 /// `razlogBlokade`: `Some((istekla, poruka))` kad licenca ne dozvoljava kanal.
 /// Bez važeće licence (samo pregled) i kanali modula su blokirani; čitanja nisu.
 pub fn razlog_blokade(s: &Value, kanal: &str) -> Option<(bool, String)> {
-    if (BLOKIRANI_KANALI.contains(&kanal) || kanal_modula(kanal)) && !smije_raditi(s) {
+    if pod_licencom(kanal) && !smije_raditi(s) {
         return Some((true, "Licenca je istekla — program radi samo za pregled. Unesite novi kod licence.".into()));
     }
     let trazi = katalog()["kanali"].get(kanal)?.as_array()?;
@@ -416,20 +399,18 @@ pub fn provjeri_kanal(b: &Backend, kanal: &str) -> R<()> {
     }
 }
 
-pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
-    // Ugovorni testovi rade s otključanom licencom (kao mock u tsBackend.ts).
-    if !b.provjera_licence {
-        return match kanal {
-            "licenca:stanje" | "licenca:aktiviraj" => Some(Ok(json!({ "stanje": "aktivna" }))),
-            _ => None,
-        };
-    }
-    Some(match kanal {
-        "licenca:stanje" => stanje_licence(b),
-        "licenca:aktiviraj" => aktiviraj_licencu(b, a[0].as_str().unwrap_or("")),
-        _ => return None,
-    })
+/// Ugovorni testovi rade s otključanom licencom (kao mock u tsBackend.ts).
+fn otkljucana() -> R<Value> {
+    Ok(json!({ "stanje": "aktivna" }))
 }
+
+pub const KANALI: &[Kanal] = &[
+    Kanal { ime: "licenca:stanje", h: |b, _| if b.provjera_licence { stanje_licence(b) } else { otkljucana() } },
+    Kanal {
+        ime: "licenca:aktiviraj",
+        h: |b, a| if b.provjera_licence { aktiviraj_licencu(b, a[0].as_str().unwrap_or("")) } else { otkljucana() },
+    },
+];
 
 #[cfg(test)]
 mod tests {
@@ -480,12 +461,12 @@ mod tests {
         assert_eq!(razlog_blokade(&s, "ponuda:create"), Some((false, "Modul Ponude nije uključen u licencu.".to_string())));
         assert_eq!(razlog_blokade(&s, "nalog:createIzPonude"), Some((false, "Modul Ponude nije uključen u licencu.".to_string())));
         assert_eq!(razlog_blokade(&s, "nalog:create"), None);
-        assert_eq!(razlog_blokade(&s, "order:create"), None);
+        assert_eq!(razlog_blokade(&s, "order:finalize"), None);
         let s_stari = izracunaj_stanje(Some(&stari), &v, "2026-09-01", "X");
         assert_eq!(razlog_blokade(&s_stari, "nalog:createIzPonude"), None);
         let zakljucana = izracunaj_stanje(Some(&samo_proizvodnja), &v, "2026-12-01", "X");
         assert!(razlog_blokade(&zakljucana, "ponuda:create").unwrap().0);
-        assert!(pod_licencom("normativ:save") && pod_licencom("order:create") && !pod_licencom("product:getAll"));
+        assert!(pod_licencom("normativ:save") && pod_licencom("order:finalize") && !pod_licencom("product:getAll"));
     }
 
     #[test]
@@ -538,10 +519,8 @@ mod tests {
         assert_eq!(efektivni_danas("2026-12-01", Some("2026-11-25"), Some("2026-11-20")), "2026-12-01");
         assert_eq!(efektivni_danas("2026-12-01", Some("zzzz"), Some("9999")), "2026-12-01");
 
-        let dir = std::env::temp_dir().join(format!("kasa-licenca-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let db = Db::aktivna(&dir.join("kasa.db"), std::sync::Arc::new(crate::petlja::Petlja::nova())).unwrap();
-        assert_eq!(najnoviji_datum_iz_baze(&db), None);
+        let db = crate::proba::baza("licenca-datum");
+        assert_eq!(procitaj_datum(&db).unwrap(), None);
         let racun = |manual: i64, kad: &str| {
             db.run(
                 "INSERT INTO orders (korisnikId, ukupno, pdvIznos, nacinPlacanja, status, isManual, createdAt) VALUES (1, 1, 0, 'Gotovina', 'completed', ?, ?)",
@@ -552,23 +531,19 @@ mod tests {
         racun(0, "2026-11-02 08:00:00");
         racun(0, "2026-11-20 23:59:59");
         racun(0, "2026-11-03 10:00:00");
-        assert_eq!(najnoviji_datum_iz_baze(&db).as_deref(), Some("2026-11-20"));
+        assert_eq!(procitaj_datum(&db).unwrap().as_deref(), Some("2026-11-20"));
         db.run("INSERT INTO cash_movements (tip, iznos, korisnikId, tringStatus, createdAt) VALUES ('polog', 1, 1, 'ok', '2026-11-21 07:00:00')", &[]).unwrap();
-        assert_eq!(najnoviji_datum_iz_baze(&db).as_deref(), Some("2026-11-21"));
+        assert_eq!(procitaj_datum(&db).unwrap().as_deref(), Some("2026-11-21"));
         // Ručni račun: datum je ukucao korisnik — ne broji se.
         racun(1, "2099-01-01 00:00:00");
-        assert_eq!(najnoviji_datum_iz_baze(&db).as_deref(), Some("2026-11-21"));
+        assert_eq!(procitaj_datum(&db).unwrap().as_deref(), Some("2026-11-21"));
         db.run("INSERT INTO cash_movements (tip, iznos, korisnikId, tringStatus, createdAt) VALUES ('polog', 1, 1, 'ok', 'smeće')", &[]).unwrap();
-        assert_eq!(najnoviji_datum_iz_baze(&db).as_deref(), Some("2026-11-21"));
-        drop(db);
-        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(procitaj_datum(&db).unwrap().as_deref(), Some("2026-11-21"));
     }
 
     #[test]
     fn datum_iz_baze_jednom_po_otvaranju() {
-        let dir = std::env::temp_dir().join(format!("kasa-licenca-jednom-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let db = Db::aktivna(&dir.join("kasa.db"), std::sync::Arc::new(crate::petlja::Petlja::nova())).unwrap();
+        let db = crate::proba::baza("licenca-jednom");
         let polog = |kad: &str| {
             db.run("INSERT INTO cash_movements (tip, iznos, korisnikId, tringStatus, createdAt) VALUES ('polog', 1, 1, 'ok', ?)", &[json!(kad)])
                 .unwrap();
@@ -590,8 +565,6 @@ mod tests {
         assert_eq!(d.procitaj(&db), None);
         db.exec("ALTER TABLE cm RENAME TO cash_movements").unwrap();
         assert_eq!(d.procitaj(&db).as_deref(), Some("2026-11-25"));
-        drop(db);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

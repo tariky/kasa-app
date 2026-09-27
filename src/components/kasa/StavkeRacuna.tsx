@@ -1,11 +1,9 @@
 import { useEffect, useRef } from 'react';
 import { Minus, Plus, X, ScanBarcode } from 'lucide-react';
 import { Key } from '@/components/ui/ledger';
-import { cn, formatKM } from '@/lib/utils';
+import { cn, formatKM, formatKolicina } from '@/lib/utils';
 import { iznosStavke } from '@/lib/racun';
 import type { CartItem } from '@/types';
-
-const fmtKol = (n: number) => String(Math.round(n * 1000) / 1000).replace('.', ',');
 
 /** Redni broj · artikal · količina · cijena · rabat · iznos · ukloni — isti raspored u zaglavlju i redovima. */
 const KOLONE = 'grid grid-cols-[2rem_minmax(0,1fr)_7.5rem_6rem_4.5rem_7rem_2rem] items-center gap-x-3 pl-5 pr-3';
@@ -83,7 +81,7 @@ export default function StavkeRacuna({ cart, zadnje, allowZeroStock, onKolicina,
                 <span className="mt-px block truncate font-mono text-[11px] text-slate-400">
                   {p.slobodan ? 'slobodna stavka' : p.sifra}
                   {p.tip !== 'usluga' && !p.slobodan && p.stanje != null && (
-                    <span className={cn('ml-2', puno ? 'text-amber-600' : 'text-slate-300')}>stanje {fmtKol(p.stanje)} {p.jm}</span>
+                    <span className={cn('ml-2', puno ? 'text-amber-600' : 'text-slate-300')}>stanje {formatKolicina(p.stanje)} {p.jm}</span>
                   )}
                 </span>
               </span>
@@ -102,7 +100,7 @@ export default function StavkeRacuna({ cart, zadnje, allowZeroStock, onKolicina,
                     title="Upiši količinu"
                     className="h-full min-w-[2.75rem] border-x border-slate-200 px-1.5 font-mono text-[13px] font-semibold tabular-nums text-slate-800 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
                   >
-                    {fmtKol(item.kolicina)}
+                    {formatKolicina(item.kolicina)}
                   </button>
                   <button
                     type="button" onClick={() => onKolicina(p.id, 1)} disabled={puno}
@@ -131,7 +129,7 @@ export default function StavkeRacuna({ cart, zadnje, allowZeroStock, onKolicina,
                       : 'text-slate-300 hover:bg-slate-100 hover:text-slate-600',
                   )}
                 >
-                  {item.rabat > 0 ? `−${fmtKol(item.rabat)}%` : '0%'}
+                  {item.rabat > 0 ? `−${formatKolicina(item.rabat)}%` : '0%'}
                 </button>
               </span>
 

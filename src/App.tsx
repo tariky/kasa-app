@@ -5,9 +5,19 @@ import AktivacijaScreen from '@/screens/AktivacijaScreen';
 import MainLayout from '@/components/MainLayout';
 import LicencaDialog from '@/components/licenca/LicencaDialog';
 import { OProgramuDialog } from '@/components/OProgramu';
+import { ModuliProvider } from '@/components/ModuliProvider';
 import { useLicenca } from '@/hooks/useLicenca';
 
+// Licenca i moduli važe i prije prijave (Aktivacija, Login), pa provider obuhvata sve ekrane.
 export default function App() {
+  return (
+    <ModuliProvider>
+      <Ekrani />
+    </ModuliProvider>
+  );
+}
+
+function Ekrani() {
   const [user, setUser] = useState<User | null>(null);
   const licenca = useLicenca();
   // Bez licence se i dalje može ući samo za pregled (podaci pripadaju klijentu).

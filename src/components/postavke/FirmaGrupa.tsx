@@ -169,7 +169,7 @@ export default function FirmaGrupa({ onSpremljeno, onIzmijenjeno }: {
               ))}
             </div>
             <div className="pt-2 space-y-2">
-              <span className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">Položaj na fakturi</span>
+              <span className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">Položaj na dokumentima</span>
               <ZiroRacuniPozicijaBirac value={forma.ziroRacuniPozicija} onChange={v => postavi('ziroRacuniPozicija', v)} />
             </div>
           </SekcijaTijelo>

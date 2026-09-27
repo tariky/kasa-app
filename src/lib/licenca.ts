@@ -5,6 +5,7 @@
 import { createCipheriv, createDecipheriv, createPrivateKey, createPublicKey, randomBytes, sign, verify, KeyObject } from 'node:crypto';
 import { BACKUP_KLJUC_HEX } from './backupKljuc';
 import { LICENCIRANI_MODULI, normalizujModule, type Modul } from './moduli';
+import { localDateStr } from './novac';
 
 const PREFIKS = 'PAZAR1';
 
@@ -89,11 +90,6 @@ function citajB(b: unknown): { c: string; x: string } | null {
 function kljuc(pem: string | KeyObject, tip: 'privatni' | 'javni'): KeyObject {
   if (typeof pem !== 'string') return pem;
   return tip === 'privatni' ? createPrivateKey(pem) : createPublicKey(pem);
-}
-
-export function lokalniDatum(d: Date): string {
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
 export function izdajLicencu(licenca: Licenca, privatniKljuc: string | KeyObject, r2?: R2Podaci): string {
@@ -182,7 +178,7 @@ export function provjeriLicencu(
   if (licenca.uredjaj && licenca.uredjaj !== opcije.uredjaj) {
     return { ok: false, razlog: 'uredjaj', licenca };
   }
-  if (lokalniDatum(opcije.sada ?? new Date()) > licenca.vrijediDo) {
+  if (localDateStr(opcije.sada ?? new Date()) > licenca.vrijediDo) {
     return { ok: false, razlog: 'istekla', licenca };
   }
   return { ok: true, licenca };

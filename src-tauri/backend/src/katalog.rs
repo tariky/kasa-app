@@ -1,13 +1,16 @@
-//! Kanali `product:*`, `materijal:search`, `dobavljac:*` i `kupac:*` (handlers.ts).
+//! Kanali `product:*`, `dobavljac:*` i `kupac:*` (handlers.ts).
 
 use serde_json::{json, Value};
 
 use crate::greska::R;
 use crate::js::{self, has};
 use crate::proizvodnja::je_artikal_u_proizvodnji;
+use crate::provjera_racuna::{NACINI_PLACANJA, PDV_STOPE};
 use crate::skladiste::{is_dobavljac_used, zapisi_promjene_cijena};
 use crate::sql::Db;
-use crate::{audit, baci, p, Args, Backend};
+use crate::zaliha::{self, Dokument, Smjer};
+use crate::kanali::Kanal;
+use crate::{audit, baci, p, Backend};
 
 // Napomena: `data.x !== undefined` je ovdje `has(data, "x")`. JSON gubi samo
 // `undefined` (polje nestane), a `null` ostaje `null` — i u originalu je
@@ -24,40 +27,31 @@ fn normalizuj_tip(t: &Value) -> &str {
     }
 }
 
-const PDV_STOPE: [&str; 2] = ["E", "K"];
 /// Tring: naziv zajedno s JM ima 32–36 znakova, zavisno od uređaja.
 const SLOBODAN_NAZIV_MAX: usize = 32;
 
-/// Stanje artikla iz kretanja zaliha (podupit u product:getAll/search).
-const SELECT_SA_STANJEM: &str = "
+/// Stanje artikla iz kretanja zaliha (`STANJE_SQL`), plus šifre dobavljača
+/// artikla u jednom stringu — za pretragu u šifarniku, primci i kasi.
+fn select_sa_siframa() -> String {
+    format!(
+        "
         SELECT p.*,
-          COALESCE(
-            (SELECT SUM(CASE WHEN sm.tip = 'ulaz' THEN sm.kolicina ELSE -sm.kolicina END)
-             FROM stock_movements sm WHERE sm.productId = p.id),
-            0
-          ) AS stanje
-        FROM products p";
-
-/// Kao `SELECT_SA_STANJEM`, plus šifre dobavljača artikla u jednom stringu —
-/// za pretragu u šifarniku, primci i kasi.
-const SELECT_SA_SIFRAMA: &str = "
-        SELECT p.*,
-          COALESCE(
-            (SELECT SUM(CASE WHEN sm.tip = 'ulaz' THEN sm.kolicina ELSE -sm.kolicina END)
-             FROM stock_movements sm WHERE sm.productId = p.id),
-            0
-          ) AS stanje,
+          {} AS stanje,
           (SELECT GROUP_CONCAT(ds.sifra, ' ') FROM artikal_dobavljac_sifre ds
             WHERE ds.productId = p.id AND ds.sifra IS NOT NULL) AS sifreDobavljaca
-        FROM products p";
+        FROM products p",
+        zaliha::stanje_sql()
+    )
+}
 
 fn product_get_all(db: &Db, tip: &Value) -> R<Value> {
+    let select = select_sa_siframa();
     if js::truthy(tip) {
         return db
-            .all(&format!("{SELECT_SA_SIFRAMA}\n        WHERE p.slobodan = 0 AND p.tip = ?\n        ORDER BY p.naziv\n      "), p![normalizuj_tip(tip)])
+            .all(&format!("{select}\n        WHERE p.slobodan = 0 AND p.tip = ?\n        ORDER BY p.naziv\n      "), p![normalizuj_tip(tip)])
             .map(Value::from);
     }
-    db.all(&format!("{SELECT_SA_SIFRAMA}\n        WHERE p.slobodan = 0\n        ORDER BY p.naziv\n      "), p![]).map(Value::from)
+    db.all(&format!("{select}\n        WHERE p.slobodan = 0\n        ORDER BY p.naziv\n      "), p![]).map(Value::from)
 }
 
 /// Trimovane šifra, naziv i barkod (prazan barkod = null) spremni za upis;
@@ -83,14 +77,6 @@ fn validiraj_plu(plu: &Value) -> R<Value> {
     match n {
         Some(n) if n.fract() == 0.0 && (0.0..=999_999.0).contains(&n) => Ok(json!(n as i64)),
         _ => baci!("PLU mora biti cijeli broj od 0 do 999999"),
-    }
-}
-
-/// JS `x !== y` za vrijednosti iz JSON-a i baze (brojevi po vrijednosti).
-pub(crate) fn razlicito(a: &Value, b: &Value) -> bool {
-    match (a.as_f64(), b.as_f64()) {
-        (Some(x), Some(y)) => x != y,
-        _ => a != b,
     }
 }
 
@@ -163,7 +149,7 @@ fn product_create(db: &Db, data: &Value) -> R<Value> {
 }
 
 fn product_update(b: &Backend, id: &Value, data: &Value) -> R<Value> {
-    let db = b.db()?;
+    let db = b.db();
     let upis = validiraj_artikal(db, data, id)?;
     let mut fields: Vec<&str> = Vec::new();
     let mut values: Vec<Value> = Vec::new();
@@ -191,7 +177,7 @@ fn product_update(b: &Backend, id: &Value, data: &Value) -> R<Value> {
         let result = db.run(&format!("UPDATE products SET {} WHERE id = ?", fields.join(", ")), &values)?;
         // Ručna izmjena cijene ulazi u historiju: poništavanje ranije primke je ne smije pregaziti.
         if let Some(prije) = prije {
-            if has(data, "cijena") && razlicito(&data["cijena"], &prije["cijena"]) {
+            if has(data, "cijena") && !js::jednako(&data["cijena"], &prije["cijena"]) {
                 zapisi_promjene_cijena(db, "rucno", &Value::Null, &[(id.clone(), prije["cijena"].clone(), data["cijena"].clone())])?;
                 audit::zabiljezi(
                     b,
@@ -238,50 +224,29 @@ fn product_delete(db: &Db, id: &Value) -> R<Value> {
 }
 
 fn product_adjust_stock(b: &Backend, product_id: &Value, new_stanje: &Value) -> R<Value> {
-    let db = b.db()?;
+    let db = b.db();
     if !db.ima("SELECT 1 FROM products WHERE id = ?", p![product_id])? {
         baci!("Artikal ne postoji");
     }
     let Some(novo) = new_stanje.as_f64().filter(|x| x.is_finite()) else {
         baci!("Stanje mora biti broj");
     };
-    // Calculate current stock
-    let stanje = db.val(
-        "
-      SELECT COALESCE(
-        SUM(CASE WHEN tip = 'ulaz' THEN kolicina ELSE -kolicina END), 0
-      ) AS stanje
-      FROM stock_movements WHERE productId = ?
-    ",
-        p![product_id],
-    )?;
-
+    let stanje = zaliha::stanje(db, product_id)?;
     let diff = novo - js::to_number(&stanje);
-    if diff == 0.0 {
+    // Ostatak zaokruživanja (0,1 + 0,2 − 0,3) nije korekcija.
+    if diff.abs() < zaliha::TOLERANCIJA_ZALIHE {
         return Ok(json!({ "changes": 0 }));
     }
 
-    let tip = if diff > 0.0 { "ulaz" } else { "izlaz" };
+    let smjer = if diff > 0.0 { Smjer::Ulaz } else { Smjer::Izlaz };
     let kolicina = js::f(diff.abs());
 
     db.tx(|| {
-        db.run(
-            "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId) VALUES (?, ?, ?, 'adjustment', 0)",
-            p![product_id, tip, kolicina],
-        )?;
+        zaliha::knjizi(db, Dokument { vrsta: "adjustment", id: &json!(0) }, smjer, [(product_id, &kolicina)], &Value::Null)?;
         audit::zabiljezi(b, "zaliha:korekcija", json!({ "productId": product_id, "staroStanje": stanje, "novoStanje": new_stanje }))
     })?;
 
     Ok(json!({ "changes": 1 }))
-}
-
-fn product_search(db: &Db, query: &Value) -> R<Value> {
-    let like = format!("%{}%", js::to_string(query));
-    db.all(
-        &format!("{SELECT_SA_SIFRAMA}\n        WHERE (p.naziv LIKE ? OR p.sifra LIKE ? OR p.barkod LIKE ?\n          OR EXISTS (SELECT 1 FROM artikal_dobavljac_sifre ds WHERE ds.productId = p.id AND ds.sifra LIKE ?))\n          AND p.tip != 'materijal' AND p.slobodan = 0\n        ORDER BY p.naziv\n      "),
-        p![like, like, like, like],
-    )
-    .map(Value::from)
 }
 
 // ─── Šifre dobavljača ───────────────────────────────────
@@ -352,16 +317,14 @@ fn product_find_by_dobavljac_sifra(db: &Db, dobavljac_id: &Value, sifra: &Value)
         return Ok(Value::Null);
     };
     db.get(
-        "
-      SELECT p.*,
-        COALESCE(
-          (SELECT SUM(CASE WHEN sm.tip = 'ulaz' THEN sm.kolicina ELSE -sm.kolicina END)
-           FROM stock_movements sm WHERE sm.productId = p.id),
-          0
-        ) AS stanje
+        &format!(
+            "
+      SELECT p.*, {} AS stanje
       FROM artikal_dobavljac_sifre ds JOIN products p ON p.id = ds.productId
       WHERE ds.dobavljacId = ? AND ds.sifra = ?
     ",
+            zaliha::stanje_sql()
+        ),
         p![dobavljac_id, s],
     )
     .map(|r| r.unwrap_or(Value::Null))
@@ -374,7 +337,7 @@ fn product_find_by_dobavljac_sifra(db: &Db, dobavljac_id: &Value, sifra: &Value)
 // isti naziv (bez obzira na velika slova), stopa i JM uvijek vraćaju na isti
 // artikal, kome se mijenja samo cijena.
 fn product_slobodan(b: &Backend, data: &Value) -> R<Value> {
-    let db = b.db()?;
+    let db = b.db();
     let naziv = js::trim(&data["naziv"]).unwrap_or("").to_string();
     if naziv.is_empty() {
         baci!("Naziv stavke je obavezan");
@@ -399,7 +362,7 @@ fn product_slobodan(b: &Backend, data: &Value) -> R<Value> {
         let id = match postojeci {
             Some(k) => {
                 db.run("UPDATE products SET cijena = ?, updatedAt = datetime('now','localtime') WHERE id = ?", p![data["cijena"], k["id"]])?;
-                if razlicito(&data["cijena"], &k["cijena"]) {
+                if !js::jednako(&data["cijena"], &k["cijena"]) {
                     audit::zabiljezi(
                         b,
                         "artikal:cijena",
@@ -427,15 +390,6 @@ fn product_slobodan(b: &Backend, data: &Value) -> R<Value> {
         };
         db.get("SELECT p.*, 0 AS stanje FROM products p WHERE p.id = ?", p![id]).map(|r| r.unwrap_or(Value::Null))
     })
-}
-
-fn materijal_search(db: &Db, query: &Value) -> R<Value> {
-    let like = format!("%{}%", js::to_string(query));
-    db.all(
-        &format!("{SELECT_SA_STANJEM}\n        WHERE p.tip = 'materijal' AND (p.naziv LIKE ? OR p.sifra LIKE ?)\n        ORDER BY p.naziv\n        LIMIT 30\n      "),
-        p![like, like],
-    )
-    .map(Value::from)
 }
 
 // ─── Dobavljači ─────────────────────────────────────────
@@ -506,12 +460,6 @@ fn dobavljac_delete(db: &Db, id: &Value) -> R<Value> {
 
 // ─── Kupci ──────────────────────────────────────────────
 
-fn kupac_search(db: &Db, query: &Value) -> R<Value> {
-    let like = format!("%{}%", js::to_string(query));
-    db.all("SELECT * FROM kupci WHERE naziv LIKE ? OR idBroj LIKE ? OR kontakt LIKE ? ORDER BY naziv", p![like, like, like])
-        .map(Value::from)
-}
-
 // Zajednička pravila za kupac:create (id = null) i kupac:update — na update-u se
 // provjerava samo ono što je poslano. Vraća trimovane naziv i JIB spremne za upis.
 fn validiraj_kupca(db: &Db, data: &Value, id: &Value) -> R<Vec<(&'static str, String)>> {
@@ -534,8 +482,6 @@ fn validiraj_kupca(db: &Db, data: &Value, id: &Value) -> R<Vec<(&'static str, St
     }
     Ok(upis)
 }
-
-const NACINI_PLACANJA: [&str; 4] = ["Gotovina", "Kartica", "Virman", "Ček"];
 
 // Zadane vrijednosti kupca za dokumente — samo poslana polja; prazno/null briše vrijednost.
 fn validiraj_zadano_kupca(data: &Value) -> R<Vec<(&'static str, Value)>> {
@@ -616,39 +562,37 @@ fn kupac_delete(db: &Db, id: &Value) -> R<Value> {
     Ok(json!({ "changes": result.changes }))
 }
 
-pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
-    let db = match b.db() {
-        Ok(db) => db,
-        Err(e) => return Some(Err(e)),
-    };
-    Some(match kanal {
-        "product:getAll" => product_get_all(db, &a[0]),
-        "product:get" => db.get("SELECT * FROM products WHERE id = ?", p![a[0]]).map(|r| r.unwrap_or(Value::Null)),
-        "product:create" => product_create(db, &a[0]),
-        "product:update" => product_update(b, &a[0], &a[1]),
-        "product:delete" => product_delete(db, &a[0]),
-        "product:adjustStock" => product_adjust_stock(b, &a[0], &a[1]),
-        "product:search" => product_search(db, &a[0]),
-        "product:slobodan" => product_slobodan(b, &a[0]),
-        "product:getDobavljacSifre" => product_get_dobavljac_sifre(db, &a[0]),
-        "product:setDobavljacSifre" => product_set_dobavljac_sifre(db, &a[0], &a[1]),
-        "product:findByDobavljacSifra" => product_find_by_dobavljac_sifra(db, &a[0], &a[1]),
-        "materijal:search" => materijal_search(db, &a[0]),
-        "dobavljac:getAll" => db.all("SELECT * FROM dobavljaci ORDER BY naziv", p![]).map(Value::from),
-        "dobavljac:create" => dobavljac_create(db, &a[0]),
-        "dobavljac:update" => dobavljac_update(db, &a[0], &a[1]),
-        "dobavljac:delete" => dobavljac_delete(db, &a[0]),
-        "dobavljac:getSifre" => db
-            .all(
-                "SELECT productId, sifra FROM artikal_dobavljac_sifre WHERE dobavljacId = ? AND sifra IS NOT NULL ORDER BY sifra",
-                p![a[0]],
-            )
-            .map(Value::from),
-        "kupac:getAll" => db.all("SELECT * FROM kupci ORDER BY naziv", p![]).map(Value::from),
-        "kupac:search" => kupac_search(db, &a[0]),
-        "kupac:create" => kupac_create(db, &a[0]),
-        "kupac:update" => kupac_update(db, &a[0], &a[1]),
-        "kupac:delete" => kupac_delete(db, &a[0]),
-        _ => return None,
-    })
-}
+pub const KANALI: &[Kanal] = &[
+    Kanal { ime: "product:getAll", h: |b, a| product_get_all(b.db(), &a[0]) },
+    Kanal {
+        ime: "product:get",
+        h: |b, a| b.db().get("SELECT * FROM products WHERE id = ?", p![a[0]]).map(|r| r.unwrap_or(Value::Null)),
+    },
+    Kanal { ime: "product:create", h: |b, a| product_create(b.db(), &a[0]) },
+    Kanal { ime: "product:update", h: |b, a| product_update(b, &a[0], &a[1]) },
+    Kanal { ime: "product:delete", h: |b, a| product_delete(b.db(), &a[0]) },
+    Kanal { ime: "product:adjustStock", h: |b, a| product_adjust_stock(b, &a[0], &a[1]) },
+    Kanal { ime: "product:getDobavljacSifre", h: |b, a| product_get_dobavljac_sifre(b.db(), &a[0]) },
+    Kanal { ime: "product:setDobavljacSifre", h: |b, a| product_set_dobavljac_sifre(b.db(), &a[0], &a[1]) },
+    Kanal { ime: "product:findByDobavljacSifra", h: |b, a| product_find_by_dobavljac_sifra(b.db(), &a[0], &a[1]) },
+    Kanal {
+        ime: "dobavljac:getSifre",
+        h: |b, a| {
+            b.db()
+                .all(
+                    "SELECT productId, sifra FROM artikal_dobavljac_sifre WHERE dobavljacId = ? AND sifra IS NOT NULL ORDER BY sifra",
+                    p![a[0]],
+                )
+                .map(Value::from)
+        },
+    },
+    Kanal { ime: "product:slobodan", h: |b, a| product_slobodan(b, &a[0]) },
+    Kanal { ime: "dobavljac:getAll", h: |b, _| b.db().all("SELECT * FROM dobavljaci ORDER BY naziv", p![]).map(Value::from) },
+    Kanal { ime: "dobavljac:create", h: |b, a| dobavljac_create(b.db(), &a[0]) },
+    Kanal { ime: "dobavljac:update", h: |b, a| dobavljac_update(b.db(), &a[0], &a[1]) },
+    Kanal { ime: "dobavljac:delete", h: |b, a| dobavljac_delete(b.db(), &a[0]) },
+    Kanal { ime: "kupac:getAll", h: |b, _| b.db().all("SELECT * FROM kupci ORDER BY naziv", p![]).map(Value::from) },
+    Kanal { ime: "kupac:create", h: |b, a| kupac_create(b.db(), &a[0]) },
+    Kanal { ime: "kupac:update", h: |b, a| kupac_update(b.db(), &a[0], &a[1]) },
+    Kanal { ime: "kupac:delete", h: |b, a| kupac_delete(b.db(), &a[0]) },
+];

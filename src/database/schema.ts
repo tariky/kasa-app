@@ -212,6 +212,12 @@ export const schema = `
   -- staraCijena je cijena prije ove promjene među izvorima koji još postoje:
   -- kad se prethodna promjena poništi, ovdje se prepiše njena staraCijena.
   -- Promjene prije uvođenja tabele nisu upisane (nema izmišljene historije).
+  -- Za izvoz ("Zalihe na dan") historija je samo-dodavanje: poništena promjena
+  -- se ne briše nego dobija ponistena = 1 (lanac je više ne vidi), a vraćena
+  -- cijena novi red s današnjim datumom (isto ponistena = 1). cijenaUProdaji:
+  -- cijena koja je stvarno bila u prodaji kad se novaCijena kasnije ispravi u
+  -- lancu (izmjena primke čiju je cijenu poslije mijenjalo nešto drugo); NULL
+  -- = novaCijena.
   CREATE TABLE IF NOT EXISTS cijena_historija (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     productId INTEGER NOT NULL,
@@ -219,6 +225,8 @@ export const schema = `
     izvorId INTEGER,
     staraCijena REAL NOT NULL,
     novaCijena REAL NOT NULL,
+    ponistena INTEGER NOT NULL DEFAULT 0,
+    cijenaUProdaji REAL,
     createdAt TEXT DEFAULT (datetime('now','localtime')),
     FOREIGN KEY (productId) REFERENCES products(id)
   );
@@ -318,6 +326,17 @@ export const schema = `
     FOREIGN KEY (materijalId) REFERENCES products(id)
   );
 
+  -- Stavke ponude koje nalog iz ponude izrađuje: pri završetku ulaze na stanje.
+  -- Ostali artikli ponude su roba sa zalihe — prodaja ih samo skida.
+  CREATE TABLE IF NOT EXISTS radni_nalog_proizvodi (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    radniNalogId INTEGER NOT NULL,
+    productId INTEGER NOT NULL,
+    kolicina REAL NOT NULL,
+    FOREIGN KEY (radniNalogId) REFERENCES radni_nalozi(id),
+    FOREIGN KEY (productId) REFERENCES products(id)
+  );
+
   -- Trag osjetljivih radnji (storno, korekcije, postavke, korisnici, uvoz baze).
   -- Samo upis: nema kanala za izmjenu ni brisanje. korisnikId je iz sesije i
   -- namjerno bez stranog ključa — brisanje korisnika ne smije brisati trag.
@@ -344,6 +363,7 @@ export const schema = `
   CREATE INDEX IF NOT EXISTS idx_nivelacija_stavke_nivelacijaId ON nivelacija_stavke(nivelacijaId);
   CREATE INDEX IF NOT EXISTS idx_prilog_stavke_orderId ON prilog_stavke(orderId);
   CREATE INDEX IF NOT EXISTS idx_radni_nalog_stavke_nalogId ON radni_nalog_stavke(radniNalogId);
+  CREATE INDEX IF NOT EXISTS idx_radni_nalog_proizvodi_nalogId ON radni_nalog_proizvodi(radniNalogId);
   CREATE INDEX IF NOT EXISTS idx_radni_nalozi_status ON radni_nalozi(status);
   CREATE INDEX IF NOT EXISTS idx_normativi_productId ON normativi(productId);
 `;

@@ -1,0 +1,51 @@
+{
+  "kanaliBezPrijave": [
+    "licenca:stanje", "licenca:aktiviraj",
+    "user:login", "user:logout",
+    "settings:getFirma",
+    "settings:get"
+  ],
+  "kanaliSaZadanimPinom": ["user:promijeniSvojPin", "user:logout"],
+  "adminKanali": [
+    "user:create", "user:update", "user:delete",
+    "settings:saveFirma", "settings:saveTring",
+    "proizvodnja:setEnabled",
+    "fiscal:setZadnjiBroj", "order:dismissFiscalGap", "pending:discard",
+    "db:backup", "db:restore",
+    "backup:sada",
+    "izvoz:knjigovodja",
+    "tring:init", "tring:getLogs", "tring:clearLogs"
+  ],
+  "blokiraniBezLicence": [
+    "order:createManual", "order:finalize", "order:finalizePrilog", "order:refundAndPrint",
+    "primka:create", "primka:update",
+    "product:adjustStock",
+    "ponuda:create", "ponuda:update", "ponuda:konvertuj",
+    "nalog:create", "nalog:createIzPonude", "nalog:update", "nalog:replaceStavke", "nalog:setProizvodi",
+    "nalog:setStatus", "nalog:izdajRacun"
+  ],
+  "postavke": {
+    "bezPrijave": ["ui.skala", "proizvodnja.enabled", "ui.showGenerator"],
+    "zaSve": ["kasa.scanMode"],
+    "zaAdmina": [
+      "kasa.pologPrompt", "kasa.allowZeroStock", "kasa.kusurKalkulacija", "kasa.requirePinRefund",
+      "kasa.showDailyTotal", "cijene.unosBezPdv",
+      "racun.napomena", "dev.logging",
+      "ui.skala",
+      "ui.showGenerator",
+      "dokumenti.faktura.rokDana", "dokumenti.faktura.nacinPlacanja", "dokumenti.faktura.napomena",
+      "dokumenti.ponuda.vaziDana", "dokumenti.ponuda.uslovi", "dokumenti.ponuda.nacinPlacanja", "dokumenti.ponuda.prefiks",
+      "dokumenti.ponuda.cifara", "dokumenti.ponuda.nastavakBroj", "dokumenti.ponuda.nastavakGodina",
+      "dokumenti.nalog.prefiks", "dokumenti.nalog.nastavakBroj", "dokumenti.nalog.nastavakGodina",
+      "dokumenti.podnozje", "dokumenti.pecat", "dokumenti.pecatVelicina",
+      "dokumenti.kolone.sifra", "dokumenti.kolone.jm",
+      "dokumenti.potpis.faktura.lijevo", "dokumenti.potpis.faktura.desno",
+      "dokumenti.potpis.ponuda.lijevo", "dokumenti.potpis.ponuda.desno",
+      "dokumenti.potpis.otpremnica.lijevo", "dokumenti.potpis.otpremnica.desno",
+      "dokumenti.potpis.racun.lijevo", "dokumenti.potpis.racun.desno",
+      "dokumenti.potpis.nalog.lijevo", "dokumenti.potpis.nalog.desno",
+      "dokumenti.pecat.faktura", "dokumenti.pecat.ponuda", "dokumenti.pecat.otpremnica", "dokumenti.pecat.racun"
+    ],
+    "tajne": ["tring.operatorPassword", "sigurnost.pinBlokada"]
+  }
+}

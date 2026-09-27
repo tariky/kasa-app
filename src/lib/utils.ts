@@ -1,5 +1,6 @@
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { ocistiPorukuIpc } from "../ipc/api";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -7,6 +8,11 @@ export function cn(...inputs: ClassValue[]) {
 
 export function formatKM(amount: number): string {
   return amount.toFixed(2).replace('.', ',') + ' KM';
+}
+
+/** Količina za prikaz i polje unosa: zarez, najviše 3 decimale, bez suvišnih nula. */
+export function formatKolicina(n: number): string {
+  return String(Math.round(n * 1000) / 1000).replace('.', ',');
 }
 
 /** Oblik riječi po broju: mnozina(1, ['red', 'reda', 'redova']) → 'red'; 3 → 'reda'; 5, 12 → 'redova'. */
@@ -31,18 +37,19 @@ function pad(n: number): string {
   return String(n).padStart(2, '0');
 }
 
-export function formatDate(date: string): string {
+/** 25.09.2026 — iz teksta iz baze ili iz `Date` (npr. današnji datum u podnožju PDF-a). */
+export function formatDate(date: string | Date): string {
   const d = new Date(date);
   return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`;
 }
 
-export function formatDateTime(date: string): string {
+/** 25.09.2026 u 10:30 u lokalnoj zoni; `veznik` po jeziku („at“), prazan daje „25.09.2026 10:30“. */
+export function formatDateTime(date: string | Date, veznik = 'u'): string {
   const d = new Date(date);
-  return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()} u ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return `${formatDate(d)} ${veznik ? `${veznik} ` : ''}${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-/** Electron IPC greške dolaze umotane u "Error invoking remote method '…': Error: …". */
+/** Poruka greške za prikaz; Electron IPC omot skida isto kao preload (`ocistiPorukuIpc`). */
 export function porukaGreske(err: any): string {
-  const raw = String(err?.message || err || 'Nepoznata greška');
-  return raw.replace(/^Error invoking remote method '[^']*':\s*(Error:\s*)?/, '');
+  return ocistiPorukuIpc(String(err?.message || err || 'Nepoznata greška'));
 }

@@ -5,6 +5,7 @@ import type { KeyObject } from 'node:crypto';
 import { provjeriLicencu } from './licenca';
 import { UPOZORENJE_DANA, PERIOD_MILOSTI_DANA, type StanjeLicence } from './licencaTipovi';
 import { KANALI_MODULA, NAZIV_MODULA, modulVanLicence } from './moduli';
+import pristup from '../ipc/pristup.json';
 
 export * from './licencaTipovi';
 
@@ -121,17 +122,8 @@ export function backupDozvoljen(s: StanjeLicence): boolean {
   return smijeRaditi(s) && 'licenca' in s && !!s.licenca.backup;
 }
 
-/** Kanali koji prave nove dokumente ili mijenjaju stanje zaliha. */
-const BLOKIRANI_KANALI = new Set([
-  'order:create', 'order:createManual', 'order:finalize', 'order:finalizePrilog',
-  'order:refund', 'order:refundAndPrint',
-  'tring:printReceipt', 'tring:printRefund',
-  'primka:create', 'primka:update',
-  'product:adjustStock',
-  'ponuda:create', 'ponuda:update', 'ponuda:konvertuj',
-  'nalog:create', 'nalog:createIzPonude', 'nalog:update', 'nalog:replaceStavke',
-  'nalog:setStatus', 'nalog:izdajRacun',
-]);
+/** Kanali koji prave nove dokumente ili mijenjaju stanje zaliha (src/ipc/pristup.json, isto i za Rust). */
+const BLOKIRANI_KANALI: ReadonlySet<string> = new Set(pristup.blokiraniBezLicence);
 
 /** Kanal pripada modulu (svi takvi kanali nešto mijenjaju — čitanja nisu u katalogu). */
 function kanalModula(kanal: string): boolean {

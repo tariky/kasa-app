@@ -9,12 +9,15 @@ import { Input } from '@/components/ui/input';
 import type { PretragaStavkiHandle } from '@/components/ui/pretraga-stavki';
 import { PretragaProizvoda } from '@/components/PretragaProizvoda';
 import { uvecajKolicinu } from '@/lib/pretraga';
+import { TOLERANCIJA_ZALIHE } from '@/lib/tolerancije';
 import { DecimalInput } from '@/components/ui/decimal-input';
 import { Eyebrow, Key, mod } from '@/components/ui/ledger';
 import { ElementiDialog } from './ElementiDialog';
 import { X, Ruler, Save, AlertTriangle, Lock } from 'lucide-react';
 
 export interface StavkaDraft {
+  /** Ključ reda — isti materijal može biti na više stavki, pa materijalId nije jedinstven. */
+  kljuc: number;
   materijalId: number; naziv: string; sifra: string; jm: string;
   kolicina: string; napomena: string; stanje: number;
   plocaSirina?: number | null; plocaVisina?: number | null;
@@ -26,9 +29,12 @@ export interface StavkeHandle {
   focusSearch: () => void;
 }
 
+/** Nove stavke dobijaju negativan ključ da se ne sudare sa id-jem spremljene stavke. */
+let sljedeciKljuc = -1;
+
 function izStavke(s: RadniNalogStavka): StavkaDraft {
   return {
-    materijalId: s.materijalId, naziv: s.materijalNaziv ?? `#${s.materijalId}`, sifra: s.materijalSifra ?? '',
+    kljuc: s.id, materijalId: s.materijalId, naziv: s.materijalNaziv ?? `#${s.materijalId}`, sifra: s.materijalSifra ?? '',
     jm: s.materijalJm ?? '', kolicina: String(s.kolicina), napomena: s.napomena ?? '', stanje: s.stanje ?? 0,
     plocaSirina: s.plocaSirina, plocaVisina: s.plocaVisina,
   };
@@ -77,28 +83,37 @@ export const StavkeUtroska = forwardRef<StavkeHandle, {
     el?.focus(); el?.select();
   }, [draft]);
 
+  // Kalkulacija ide po stavkama istim redom; n-ti red nekog materijala dobija n-tu stavku tog materijala.
   const cijene = useMemo(() => {
-    const m = new Map<number, KalkulacijaStavka>();
-    for (const s of kalkStavke ?? []) m.set(s.materijalId, s);
+    const m = new Map<number, KalkulacijaStavka[]>();
+    for (const s of kalkStavke ?? []) m.set(s.materijalId, [...(m.get(s.materijalId) ?? []), s]);
     return m;
   }, [kalkStavke]);
 
+  // Stanje pokriva zbir svih stavki istog materijala.
+  const utrosak = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const s of draft) m.set(s.materijalId, (m.get(s.materijalId) ?? 0) + (parseDecimal(s.kolicina) || 0));
+    return m;
+  }, [draft]);
+
   /** Uz "3*…" količina je već upisana pa fokus ostaje u pretrazi; inače ide na količinu. */
   const dodaj = (m: Product, kol: number | null) => {
-    const postoji = draft.some(x => x.materijalId === m.id);
+    const postoji = draft.find(x => x.materijalId === m.id);
     const k = kol != null ? String(kol).replace('.', ',') : '';
+    const kljuc = postoji?.kljuc ?? sljedeciKljuc--;
     if (!postoji) {
       setDraft(d => [...d, {
-        materijalId: m.id, naziv: m.naziv, sifra: m.sifra, jm: m.jm, kolicina: k, napomena: '',
+        kljuc, materijalId: m.id, naziv: m.naziv, sifra: m.sifra, jm: m.jm, kolicina: k, napomena: '',
         stanje: m.stanje ?? 0, plocaSirina: m.plocaSirina, plocaVisina: m.plocaVisina,
       }]);
     } else if (k) {
-      setDraft(d => d.map(x => (x.materijalId === m.id ? { ...x, kolicina: uvecajKolicinu(x.kolicina, kol!) } : x)));
+      setDraft(d => d.map(x => (x.kljuc === kljuc ? { ...x, kolicina: uvecajKolicinu(x.kolicina, kol!) } : x)));
     }
     if (!postoji || k) setDirty(true);
     if (k) return;
-    focusAfterAdd.current = m.id;
-    if (postoji) { const el = kolRefs.current.get(m.id); el?.focus(); el?.select(); }
+    focusAfterAdd.current = kljuc;
+    if (postoji) { const el = kolRefs.current.get(kljuc); el?.focus(); el?.select(); }
   };
   const set = (i: number, patch: Partial<StavkaDraft>) => { setDraft(d => d.map((s, j) => (j === i ? { ...s, ...patch } : s))); setDirty(true); };
   const ukloni = (i: number) => { setDraft(d => d.filter((_, j) => j !== i)); setDirty(true); };
@@ -172,11 +187,11 @@ export const StavkeUtroska = forwardRef<StavkeHandle, {
             </thead>
             <tbody>
               {draft.map((s, i) => {
-                const kol = parseDecimal(s.kolicina) || 0;
-                const prekoracenje = uredivo && kol > s.stanje;
-                const c = cijene.get(s.materijalId);
+                const prekoracenje = uredivo && (utrosak.get(s.materijalId) ?? 0) > s.stanje + TOLERANCIJA_ZALIHE;
+                const redMaterijala = draft.slice(0, i).filter(x => x.materijalId === s.materijalId).length;
+                const c = cijene.get(s.materijalId)?.[redMaterijala];
                 return (
-                  <tr key={s.materijalId} className="group">
+                  <tr key={s.kljuc} className="group">
                     <td className={cn(TD, 'text-right pr-2 pt-[11px] font-mono text-[10.5px] tabular-nums text-slate-300')}>{i + 1}</td>
                     <td className={cn(TD, 'px-2 min-w-[180px]')}>
                       <p className="text-[12.5px] font-medium text-slate-800 leading-snug pt-[3px]">{s.naziv}</p>
@@ -207,7 +222,7 @@ export const StavkeUtroska = forwardRef<StavkeHandle, {
                               className="h-8 w-7 flex items-center justify-center rounded text-slate-400 hover:text-blue-600 hover:bg-blue-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"><Ruler size={14} /></button>
                           )}
                           <DecimalInput maxDecimals={4} value={s.kolicina} onValueChange={t => set(i, { kolicina: t })} placeholder="0"
-                            ref={el => { if (el) kolRefs.current.set(s.materijalId, el); else kolRefs.current.delete(s.materijalId); }}
+                            ref={el => { if (el) kolRefs.current.set(s.kljuc, el); else kolRefs.current.delete(s.kljuc); }}
                             aria-label={`Količina ${s.naziv}`}
                             className={cn('h-8 w-[84px] font-mono text-[12.5px] text-right', prekoracenje && 'border-rose-300 text-rose-600 focus-visible:ring-rose-400/40')} />
                           <span className="text-[11px] text-slate-400 w-7 text-left truncate">{s.jm}</span>

@@ -1,6 +1,5 @@
 // src/components/racuni/RacunDetailDialog.tsx
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { pdf } from '@react-pdf/renderer';
 import type { Order } from '@/types';
 import { cn, formatKM, formatDateTime } from '@/lib/utils';
 import { iznosStavke } from '@/lib/racun';
@@ -8,36 +7,33 @@ import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { prilogKompletan, sumaPriloga } from '@/lib/prilog';
 import { formatDatumValute } from '@/lib/valuta';
 import { gotovinskiIznos } from '@/lib/drawer';
-import { opisPlacanja, raspodjelaPlacanja } from '@/lib/placanje';
+import { prikazPlacanja } from '@/lib/placanje';
 import { round2 } from '@/lib/novac';
-import { ucitajZaStampu } from '@/lib/stampa';
+import { otvoriPdf, spremiPdf, ucitajZaStampu } from '@/lib/stampa';
+import { otvoriNezavrseneRacune } from '@/lib/nezavrseniRacuni';
+import { izvrsiFiskalno } from '@/lib/fiskalniIshod';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { DatePicker } from '@/components/ui/date-picker';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Eyebrow, Key, mod } from '@/components/ui/ledger';
-import { FullDialog, FullDialogContent, FullDialogHeader, FullDialogFooter, FullDialogNotice, FullDialogTitle, FooterBtn, Fact, LegendKey } from '@/components/ui/full-dialog';
+import { Eyebrow, Key, jePoljeZaUnos, mod } from '@/components/ui/ledger';
+import { FullDialog, FullDialogContent, FullDialogHeader, FullDialogFooter, FullDialogNotice, FullDialogTitle, FooterBtn, Fact, LegendKey, SusjedniNav } from '@/components/ui/full-dialog';
 import { RacunPdf, type InvoiceLang } from '@/components/RacunPdf';
 import { OtpremnicaPdf } from '@/components/OtpremnicaPdf';
 import { PrilogPdf } from '@/components/PrilogPdf';
 import PrilogStavkeDialog from '@/components/PrilogStavkeDialog';
 import CashMovementDialog from '@/components/CashMovementDialog';
+import { useSusjedni } from '@/hooks/useSusjedni';
 import {
   Printer, Download, Truck, Paperclip, Undo2, AlertTriangle, KeyRound, CalendarClock,
-  ChevronUp, ChevronDown, User, Banknote, CreditCard,
+  User, Banknote, CreditCard,
 } from 'lucide-react';
 
 type Notice = { type: 'success' | 'error'; text: string };
 
 const TH = 'text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400 pb-2 border-b border-slate-200/80 whitespace-nowrap';
 const TD = 'py-2.5 border-b border-slate-100 align-top';
-
-/** Način plaćanja za zaglavlje: tekst ili razbijeno plaćanje (lib/placanje.ts), ikone po vrstama. */
-function placanje(nacin: string, ukupno: number): { label: string; kartica: boolean; gotovina: boolean } {
-  const { iznosi } = raspodjelaPlacanja(nacin, ukupno);
-  return { label: opisPlacanja(nacin, ukupno), kartica: iznosi.kartica > 0, gotovina: iznosi.gotovina > 0 };
-}
 
 /** Oznaka na tamnom zaglavlju — status i porijeklo računa. */
 function HeaderChip({ tone, children }: { tone: 'ok' | 'storno' | 'muted' | 'warn'; children: React.ReactNode }) {
@@ -113,9 +109,7 @@ export function RacunDetailDialog({ orderId, redoslijed, uloga, onClose, onNavig
     onChanged();
   };
 
-  const idx = orderId != null ? redoslijed.indexOf(orderId) : -1;
-  const prevId = idx > 0 ? redoslijed[idx - 1] : null;
-  const nextId = idx >= 0 && idx < redoslijed.length - 1 ? redoslijed[idx + 1] : null;
+  const susjedni = useSusjedni(redoslijed, orderId);
 
   const refunded = order?.status === 'refunded';
   const mozeReklamaciju = order?.status === 'completed' && !!order.brojFiskalnogRacuna;
@@ -125,35 +119,25 @@ export function RacunDetailDialog({ orderId, redoslijed, uloga, onClose, onNavig
   const mozeUreditiFakturu = imaFakturu && !fakturaZavrsena && !refunded;
 
   // ── dokumenti ─────────────────────────────────────────
-  const otvoriZaStampu = (blob: Blob) => {
-    const url = URL.createObjectURL(blob);
-    const win = window.open(url, '_blank');
-    if (win) win.onafterprint = () => URL.revokeObjectURL(url);
-  };
-  const spremi = async (blob: Blob, defaultName: string) => {
-    const savePath = await window.api.showSaveDialog({ defaultName, filters: [{ name: 'PDF', extensions: ['pdf'] }] });
-    if (!savePath) return;
-    await window.api.writeFile(savePath, Array.from(new Uint8Array(await blob.arrayBuffer())) as any);
-  };
-  const racunBlob = async (o: Order) => {
+  const racunPdf = async (o: Order) => {
     const { firma, postavke } = await ucitajZaStampu();
-    return pdf(<RacunPdf order={o} firma={firma} postavke={postavke} lang={lang} />).toBlob();
+    return <RacunPdf order={o} firma={firma} postavke={postavke} lang={lang} />;
   };
-  const otpremnicaBlob = async (o: Order) => {
+  const otpremnicaPdf = async (o: Order) => {
     const { firma, postavke } = await ucitajZaStampu();
-    return pdf(<OtpremnicaPdf order={o} firma={firma} postavke={postavke} />).toBlob();
+    return <OtpremnicaPdf order={o} firma={firma} postavke={postavke} />;
   };
 
-  const stampajRacun = async () => { if (order) try { otvoriZaStampu(await racunBlob(order)); } catch (e) { greska(e, 'Štampa računa'); } };
+  const stampajRacun = async () => { if (order) try { await otvoriPdf(await racunPdf(order)); } catch (e) { greska(e, 'Štampa računa'); } };
   const spremiRacun = async () => {
     if (!order) return;
-    try { await spremi(await racunBlob(order), `${lang === 'en' ? 'Invoice' : 'Racun'}-${order.brojFiskalnogRacuna || order.id}.pdf`); }
+    try { await spremiPdf(await racunPdf(order), `${lang === 'en' ? 'Invoice' : 'Racun'}-${order.brojFiskalnogRacuna || order.id}.pdf`); }
     catch (e) { greska(e, 'Spremanje računa'); }
   };
-  const stampajOtpremnicu = async () => { if (order) try { otvoriZaStampu(await otpremnicaBlob(order)); } catch (e) { greska(e, 'Štampa otpremnice'); } };
+  const stampajOtpremnicu = async () => { if (order) try { await otvoriPdf(await otpremnicaPdf(order)); } catch (e) { greska(e, 'Štampa otpremnice'); } };
   const spremiOtpremnicu = async () => {
     if (!order) return;
-    try { await spremi(await otpremnicaBlob(order), `Otpremnica-${order.brojFiskalnogRacuna || order.id}.pdf`); }
+    try { await spremiPdf(await otpremnicaPdf(order), `Otpremnica-${order.brojFiskalnogRacuna || order.id}.pdf`); }
     catch (e) { greska(e, 'Spremanje otpremnice'); }
   };
 
@@ -176,7 +160,7 @@ export function RacunDetailDialog({ orderId, redoslijed, uloga, onClose, onNavig
         return;
       }
       const { firma, postavke } = await ucitajZaStampu();
-      otvoriZaStampu(await pdf(<PrilogPdf order={order} firma={firma} stavke={stavke as any} postavke={postavke} />).toBlob());
+      await otvoriPdf(<PrilogPdf order={order} firma={firma} stavke={stavke as any} postavke={postavke} />);
     } catch (e) { greska(e, 'Štampa fakture'); }
   };
 
@@ -213,18 +197,29 @@ export function RacunDetailDialog({ orderId, redoslijed, uloga, onClose, onNavig
     try {
       // Štampa i upis storna idu kroz jedan poziv da ne ostane odštampana
       // reklamacija bez zapisa u bazi ako nešto pukne između.
-      const result = await window.api.refundAndPrintOrder({
+      const { ishod, res: result } = await izvrsiFiskalno(() => window.api.refundAndPrintOrder({
         id: order.id,
         brojReklamacije: reklamacijaBroj.trim() || undefined,
         dozvoliPolog,
         adminPin: trebaPin ? pinValue : undefined,
-      });
-      if (!result || !result.success) {
-        const details = result?.odgovori ? Object.entries(result.odgovori).map(([k, v]) => `${k}: ${v}`).join(', ') : '';
-        setReklamacijaGreska(`${result?.error || 'Nepoznata greška'}${details ? ` (${details})` : ''}`);
+      }));
+      // Storno je možda odštampan (ili već upisan iz dijaloga nezavršenih
+      // računa): bez ponovnog slanja i bez ponude pologa.
+      if (ishod.vrsta === 'nepoznat' || ishod.vrsta === 'vecEvidentiran') {
+        setReklamacijaOpen(false);
+        setReklamacijaBroj('');
+        setNotice({ type: 'error', text: ishod.poruka });
+        if (ishod.vrsta === 'nepoznat') otvoriNezavrseneRacune();
+        await reload();
+        return;
+      }
+      if (ishod.vrsta === 'greska' || !result) {
+        setReklamacijaGreska(ishod.poruka);
         // Prazna ladica nije razlog da se storno ne može napraviti — operateru
         // se ponudi override koji manjak evidentira kao polog i ponovi štampu.
         setOverrideManjak(result?.nedovoljnoSredstava ? (result.manjak ?? 0) : null);
+        // Odbijen poziv (npr. pogrešan PIN administratora) — PIN se upisuje ponovo.
+        if (!result) setPinValue('');
         return;
       }
       setReklamacijaOpen(false);
@@ -235,10 +230,6 @@ export function RacunDetailDialog({ orderId, redoslijed, uloga, onClose, onNavig
           + (result.pologIznos ? ` (evidentiran polog ${formatKM(result.pologIznos)})` : ''),
       });
       await reload();
-    } catch (err: any) {
-      console.error('Reklamacija error:', err);
-      setReklamacijaGreska(err?.message || 'Nepoznata greška');
-      setPinValue('');
     } finally {
       setReklamacijaLoading(false);
     }
@@ -279,11 +270,11 @@ export function RacunDetailDialog({ orderId, redoslijed, uloga, onClose, onNavig
       if (!contentRef.current?.contains(e.target as Node)) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+      if (jePoljeZaUnos(t)) return;
 
       switch (e.key) {
-        case 'ArrowUp': if (prevId != null) { e.preventDefault(); onNavigate(prevId); } return;
-        case 'ArrowDown': if (nextId != null) { e.preventDefault(); onNavigate(nextId); } return;
+        case 'ArrowUp': if (susjedni.prev != null) { e.preventDefault(); onNavigate(susjedni.prev); } return;
+        case 'ArrowDown': if (susjedni.next != null) { e.preventDefault(); onNavigate(susjedni.next); } return;
         default:
       }
       switch (e.key.toLowerCase()) {
@@ -306,7 +297,8 @@ export function RacunDetailDialog({ orderId, redoslijed, uloga, onClose, onNavig
   // Faktura sa dodijeljenim stavkama pokazuje njih; zbirna stavka je samo ono što je otišlo na uređaj.
   const stavkeFakture = imaFakturu && !!fakturaStavke?.length;
   const stavke: any[] = stavkeFakture ? fakturaStavke! : order?.stavke ?? [];
-  const nacin = order ? placanje(order.nacinPlacanja, order.ukupno) : null;
+  // Tekst ili razbijeno plaćanje, ikone po vrstama; nepoznat oblik bez ikone gotovine (lib/placanje.ts).
+  const nacin = order ? prikazPlacanja(order.nacinPlacanja, order.ukupno) : null;
   const imaRabat = stavke.some(s => (s.rabat || 0) > 0);
   const kupacAdresa = order ? [order.kupacAdresa, [order.kupacPostanskiBroj, order.kupacGrad].filter(Boolean).join(' ')].filter(Boolean).join(', ') : '';
 
@@ -356,9 +348,15 @@ export function RacunDetailDialog({ orderId, redoslijed, uloga, onClose, onNavig
                     <Fact label="Plaćanje" className="col-span-2">
                       <span className="flex items-center gap-2">
                         <span className="flex items-center gap-1 text-slate-400">
-                          {nacin.gotovina && <Banknote size={14} />}{nacin.kartica && <CreditCard size={14} />}
+                          {nacin.vrste.includes('gotovina') && <Banknote size={14} />}
+                          {nacin.vrste.includes('kartica') && <CreditCard size={14} />}
+                          {!nacin.poznat && (
+                            <span title="Nepoznat oblik načina plaćanja — ladica ga ne broji kao gotovinu">
+                              <AlertTriangle size={14} className="text-amber-500" />
+                            </span>
+                          )}
                         </span>
-                        {nacin.label}
+                        {nacin.opis}
                       </span>
                     </Fact>
                     <Fact label="Valuta">
@@ -481,15 +479,7 @@ export function RacunDetailDialog({ orderId, redoslijed, uloga, onClose, onNavig
 
             {/* ── Podnožje: dokumenti desno, tastatura lijevo ── */}
             <FullDialogFooter legend={<>
-                <span className="flex items-center gap-1">
-                  <button onClick={() => prevId != null && onNavigate(prevId)} disabled={prevId == null} aria-label="Prethodni račun"
-                    className="h-6 w-6 flex items-center justify-center rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 disabled:opacity-30 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"><ChevronUp size={14} /></button>
-                  <button onClick={() => nextId != null && onNavigate(nextId)} disabled={nextId == null} aria-label="Sljedeći račun"
-                    className="h-6 w-6 flex items-center justify-center rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 disabled:opacity-30 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"><ChevronDown size={14} /></button>
-                  <span className="font-mono tabular-nums ml-1">{idx >= 0 ? `${idx + 1} / ${redoslijed.length}` : ''}</span>
-                </span>
-                <span className="text-slate-300">·</span>
-                <LegendKey k="↑↓">račun</LegendKey>
+                <SusjedniNav susjedni={susjedni} naziv="račun" onIdi={onNavigate} />
                 <LegendKey k="esc">zatvori</LegendKey>
               </>}>
                 {mozeReklamaciju && <FooterBtn icon={Undo2} label="Reklamacija" hint="R" tone="danger" onClick={otvoriReklamaciju} />}

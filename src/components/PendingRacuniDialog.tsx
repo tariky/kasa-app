@@ -3,43 +3,77 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { naOtvaranjeNezavrsenih } from '@/lib/nezavrseniRacuni';
+import { localDateTimeInput } from '@/lib/novac';
 
 interface PendingRow {
   id: number;
   createdAt: string;
   snapshot: {
+    /** Bez vrste: račun sa kase ili faktura (lib/pendingRacun.ts). */
+    vrsta?: 'ponuda' | 'nalog' | 'storno';
     ukupno: number;
-    stavke: Array<{ naziv: string; kolicina: number; cijena: number }>;
+    stavke: Array<{ naziv?: string; kolicina: number; cijena: number; rabat?: number }>;
+    /** Račun po prilogu: na uređaj ide jedna zbirna stavka s ovim nazivom. */
+    prilogNaziv?: string | null;
+    ponudaBroj?: number; ponudaGodina?: number; nalogId?: number;
+    nalogBroj?: number; nalogGodina?: number;
+    /** Storno: fiskalni broj računa koji se stornira. */
+    brojRacuna?: string | null;
   };
 }
 
-function nowLocalInput(): string {
-  const d = new Date();
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+/** Šta je poslano na štampu — naslov i polje za broj s papira zavise od vrste. */
+function opisZapisa(snap: PendingRow['snapshot']): { naslov: string; dokument: string; brojLabel: string } {
+  switch (snap.vrsta) {
+    case 'ponuda':
+      return {
+        naslov: `Neispravno završen račun po ponudi br. ${snap.ponudaBroj}/${snap.ponudaGodina}`,
+        dokument: snap.nalogId != null ? 'Račun po ponudi (izdat iz radnog naloga)' : 'Račun po ponudi',
+        brojLabel: 'Fiskalni broj (sa papira)',
+      };
+    case 'nalog':
+      return {
+        naslov: `Neispravno završen račun za radni nalog br. ${snap.nalogBroj}/${snap.nalogGodina}`,
+        dokument: 'Račun za radni nalog', brojLabel: 'Fiskalni broj (sa papira)',
+      };
+    case 'storno':
+      return {
+        naslov: `Neispravno završen storno računa BF ${snap.brojRacuna ?? '?'}`,
+        dokument: 'Storno (reklamacija)', brojLabel: 'Broj reklamacije (sa papira)',
+      };
+    default:
+      return { naslov: 'Neispravno završen račun', dokument: 'Račun', brojLabel: 'Fiskalni broj (sa papira)' };
+  }
 }
 
 export default function PendingRacuniDialog({ uloga }: { uloga: 'admin' | 'kasir' }) {
   const [rows, setRows] = useState<PendingRow[]>([]);
   const [broj, setBroj] = useState('');
-  const [datum, setDatum] = useState(nowLocalInput());
+  const [datum, setDatum] = useState(localDateTimeInput);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
   const load = useCallback(async () => {
     const data = await window.api.listPending();
     setRows(data as PendingRow[]);
-    setBroj(''); setDatum(nowLocalInput()); setError('');
+    setBroj(''); setDatum(localDateTimeInput()); setError('');
   }, []);
 
   useEffect(() => { load(); }, [load]);
+  // Nepoznat ishod štampe: ekran traži da se dijalog otvori odmah.
+  useEffect(() => naOtvaranjeNezavrsenih(() => { load(); }), [load]);
 
   const current = rows[0];
   if (!current) return null;
+  const opis = opisZapisa(current.snapshot);
 
   const resolve = async () => {
     setError('');
-    if (!broj.trim()) { setError('Unesi fiskalni broj sa papirnog računa'); return; }
+    if (!broj.trim()) {
+      setError(current.snapshot.vrsta === 'storno' ? 'Unesi broj reklamacije sa papira' : 'Unesi fiskalni broj sa papirnog računa');
+      return;
+    }
     setLoading(true);
     try {
       await window.api.resolvePending({ id: current.id, brojFiskalnogRacuna: broj.trim(), createdAt: datum.replace('T', ' ') + ':00' });
@@ -67,20 +101,28 @@ export default function PendingRacuniDialog({ uloga }: { uloga: 'admin' | 'kasir
     <Dialog open={true}>
       <DialogContent className="max-w-lg" onEscapeKeyDown={(e) => e.preventDefault()} onPointerDownOutside={(e) => e.preventDefault()}>
         <DialogHeader>
-          <DialogTitle>Neispravno završen račun</DialogTitle>
+          <DialogTitle>{opis.naslov}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
           <p className="text-sm text-slate-600">
-            Ovaj račun je poslan na štampu, ali aplikacija nije potvrdila upis (moguć prekid/pad računara).
-            <strong> Provjerite papirni račun.</strong>
+            {opis.dokument} je poslan na štampu, ali aplikacija nije potvrdila upis (uređaj nije odgovorio ili je
+            došlo do prekida/pada računara).
+            <strong> Provjerite papirni isječak.</strong>
+            {current.snapshot.vrsta === 'storno' && ' Ako je odštampan, račun se stornira i roba vraća na stanje.'}
           </p>
           <div className="rounded border p-3 text-sm">
             <div className="font-medium mb-1">Stavke:</div>
             <ul className="space-y-0.5">
+              {current.snapshot.stavke.length === 0 && current.snapshot.prilogNaziv && (
+                <li className="flex justify-between">
+                  <span>{current.snapshot.prilogNaziv}</span>
+                  <span className="font-mono">{current.snapshot.ukupno.toFixed(2)}</span>
+                </li>
+              )}
               {current.snapshot.stavke.map((s, i) => (
                 <li key={i} className="flex justify-between">
-                  <span>{s.naziv} × {s.kolicina}</span>
-                  <span className="font-mono">{(s.cijena * s.kolicina).toFixed(2)}</span>
+                  <span>{s.naziv ?? ''} × {s.kolicina}</span>
+                  <span className="font-mono">{(s.cijena * s.kolicina * (1 - (s.rabat ?? 0) / 100)).toFixed(2)}</span>
                 </li>
               ))}
             </ul>
@@ -90,7 +132,7 @@ export default function PendingRacuniDialog({ uloga }: { uloga: 'admin' | 'kasir
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <Label>Fiskalni broj (sa papira)</Label>
+              <Label>{opis.brojLabel}</Label>
               <Input value={broj} onChange={e => setBroj(e.target.value)} placeholder="npr. 1234" />
             </div>
             <div>

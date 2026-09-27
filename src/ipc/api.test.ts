@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { napraviApi, type NaDogadjaj } from './api';
+import { napraviApi, ocistiGreske, ocistiPorukuIpc, type NaDogadjaj } from './api';
 import type { BackupDogadjaj } from '../lib/backupRaspored';
 
 // Lažni backend: bilježi pozive i pretplate, pa test može "poslati" događaj.
@@ -48,5 +48,71 @@ describe('napraviApi — događaji', () => {
     await api.getBackupInfo();
     await api.backupSada();
     expect(pozivi).toEqual([{ kanal: 'backup:info', args: [] }, { kanal: 'backup:sada', args: [] }]);
+  });
+});
+
+// Electron: handle() u main procesu baca `new Error(poruka)`, a ipcRenderer.invoke
+// je umota u "Error invoking remote method '<kanal>': " + err.toString().
+const electronOmot = (kanal: string, poruka: string) =>
+  `Error invoking remote method '${kanal}': ${String(new Error(poruka))}`;
+
+describe('ocistiPorukuIpc', () => {
+  test('skida Electron omot — ostaje poruka backenda, kao pod Tauri-jem', () => {
+    expect(ocistiPorukuIpc(electronOmot('order:finalize', 'Račun ne postoji'))).toBe('Račun ne postoji');
+    expect(ocistiPorukuIpc(electronOmot('user:login', 'Pogrešan PIN: pokušajte ponovo'))).toBe('Pogrešan PIN: pokušajte ponovo');
+  });
+
+  test('omot bez "Error:" (bačen tekst) se skida', () => {
+    expect(ocistiPorukuIpc("Error invoking remote method 'x:y': nešto nije u redu")).toBe('nešto nije u redu');
+  });
+
+  test('poruka bez omota ostaje ista', () => {
+    for (const p of ['Račun ne postoji', 'Error: ostaje jer nije omot', '', "Kanal 'a:b' ne postoji"]) {
+      expect(ocistiPorukuIpc(p)).toBe(p);
+    }
+  });
+});
+
+describe('ocistiGreske — omot oko pozovi (Electron preload)', () => {
+  test('odbijen poziv baca Error s porukom bez Electron omota', async () => {
+    const pozovi = ocistiGreske(async (kanal) => { throw new Error(electronOmot(kanal, 'Nema dovoljno na stanju')); });
+    const e = await pozovi('order:finalize', {}).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(Error);
+    expect((e as Error).message).toBe('Nema dovoljno na stanju');
+  });
+
+  test('izvorna greška ostaje kao cause', async () => {
+    const izvorna = new Error(electronOmot('order:finalize', 'Nema dovoljno na stanju'));
+    const pozovi = ocistiGreske(async () => { throw izvorna; });
+    const e = await pozovi('order:finalize').catch((x: unknown) => x);
+    expect((e as Error).cause).toBe(izvorna);
+  });
+
+  test('odbijanje koje nije Error: poruka je tekst odbijanja bez omota, a samo odbijanje je cause', async () => {
+    const tekst = "Error invoking remote method 'x:y': Error: Veza prekinuta";
+    const e = await ocistiGreske(async () => { throw tekst; })('x:y').catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(Error);
+    expect((e as Error).message).toBe('Veza prekinuta');
+    expect((e as Error).cause).toBe(tekst);
+
+    const objekat = { kod: 5 };
+    const e2 = await ocistiGreske(async () => { throw objekat; })('x:y').catch((x: unknown) => x);
+    expect((e2 as Error).message).toBe('[object Object]');
+    expect((e2 as Error).cause).toBe(objekat);
+  });
+
+  test('uspješan poziv prolazi nepromijenjen, s istim kanalom i argumentima', async () => {
+    const pozivi: unknown[][] = [];
+    const pozovi = ocistiGreske(async (kanal, ...args) => { pozivi.push([kanal, ...args]); return { ok: 1 }; });
+    expect(await pozovi('product:get', 5, 'a')).toEqual({ ok: 1 });
+    expect(pozivi).toEqual([['product:get', 5, 'a']]);
+  });
+
+  test('api nad očišćenim pozovi: UI dobije poruku bez omota', async () => {
+    const api = napraviApi(
+      ocistiGreske(async (kanal) => { throw new Error(electronOmot(kanal, 'Samo administrator')); }),
+      () => () => undefined,
+    );
+    await expect(api.deleteUser(3)).rejects.toThrow(/^Samo administrator$/);
   });
 });

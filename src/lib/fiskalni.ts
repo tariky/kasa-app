@@ -53,7 +53,7 @@ export const ZADNJI_FISKALNI_AT_KEY = 'fiscal.zadnjiBrojAt';
  * maksimum iz prošlog perioda. Reklamacije (`R-3`) i ručni upisi bez broja se
  * preskaču, pa se gleda prvi račun odozgo koji ima numerički BF.
  */
-export function zadnjiFiskalniRacun(db: SqlDb): { broj: number; createdAt: string } | null {
+function zadnjiFiskalniRacun(db: SqlDb): { broj: number; createdAt: string } | null {
   const rows = db
     .prepare(`
       SELECT brojFiskalnogRacuna, createdAt FROM orders

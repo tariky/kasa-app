@@ -1,10 +1,10 @@
 // src/lib/ulaz.ts
 // Čista logika forme ulaza robe: šta redu fali, totali, payload za bazu. Bez React-a.
-import type { Product } from '@/types';
+import type { PregledCijenaUlaza, Product } from '@/types';
 import { parseDecimal } from './utils';
 import { round2 } from './novac';
 import { prikazCijene, uBruto, uNetto } from './pdvUnos';
-import { jePloca, uBazuPrimke } from './ploca';
+import { izBazePrimke, jePloca, uBazuPrimke } from './ploca';
 import { kalkulacijaPrimke, rasporediZavisne, type KalkulacijaPrimke } from './kalkulacija';
 
 export interface UlazRed {
@@ -20,6 +20,13 @@ export interface UlazRed {
    * za režim — zato prebacivanje režima briše ovo polje i ne pomjera cijenu.
    */
   cijenaUnos?: string;
+  /**
+   * Stavka učitana iz spremljene primke: količina i nabavna kako su u bazi i
+   * tekst kojim ih forma prikazuje. Dok korisnik ne promijeni polje (ni artikal),
+   * spremanje vraća vrijednost iz baze — kod ploče je kom samo prikaz, a
+   * zaokružen preračun m² → kom → m² bi tiho mijenjao količinu (10 → 10,0271 m²).
+   */
+  izBaze?: { productId: number; kolicina: number; nabavnaCijena: number; prikazKolicine: string; prikazNabavne: string };
 }
 
 export type Nedostaje = 'artikal' | 'kolicina' | 'nabavna' | 'prodajna';
@@ -72,6 +79,19 @@ export const redNabavnaPoJed = (r: UlazRed) => broj(r.nabavnaCijena) * (1 - (bro
 
 export interface UlazStavkaPayload { productId: number; kolicina: number; nabavnaCijena: number; rabat: number; zavisniTroskovi: number; cijena: number; pdvStopa: string }
 
+/** Red forme iz spremljene stavke primke (ploča u komadima, nabavna po komadu). */
+export function redIzBaze(
+  p: Product | undefined,
+  s: { productId: number; kolicina: number; nabavnaCijena: number; rabat: number; cijena: number },
+): UlazRed {
+  const prikaz = izBazePrimke(p, s.kolicina, s.nabavnaCijena);
+  return {
+    productId: s.productId, kolicina: prikaz.kolicina, nabavnaCijena: prikaz.nabavnaCijena,
+    rabat: s.rabat ? String(s.rabat) : '', cijena: String(s.cijena),
+    izBaze: { productId: s.productId, kolicina: s.kolicina, nabavnaCijena: s.nabavnaCijena, prikazKolicine: prikaz.kolicina, prikazNabavne: prikaz.nabavnaCijena },
+  };
+}
+
 /**
  * Stavke za bazu: ploča se preračuna u m², materijalu se briše prodajna, a zavisni troškovi
  * dokumenta se rasporede po stavkama srazmjerno vrijednosti (fakturna − rabat).
@@ -82,10 +102,12 @@ export function uPayload(rows: UlazRed[], products: Product[], zavisniUkupno: st
   return potpuni.map((r, i) => {
     const p = products.find(x => x.id === r.productId);
     const baza = uBazuPrimke(p, broj(r.kolicina), broj(r.nabavnaCijena));
+    // Nedirnuto polje stavke iz baze ide nazad tačno kako je bilo.
+    const iz = r.izBaze?.productId === r.productId ? r.izBaze : undefined;
     return {
       productId: r.productId!,
-      kolicina: baza.kolicina,
-      nabavnaCijena: baza.nabavnaCijena,
+      kolicina: iz && r.kolicina === iz.prikazKolicine ? iz.kolicina : baza.kolicina,
+      nabavnaCijena: iz && r.nabavnaCijena === iz.prikazNabavne ? iz.nabavnaCijena : baza.nabavnaCijena,
       rabat: broj(r.rabat) || 0,
       zavisniTroskovi: zavisni[i],
       cijena: trebaProdajnu(p) ? broj(r.cijena) : 0,
@@ -125,4 +147,18 @@ export function redRucPosto(r: UlazRed, p: Product | undefined): number | null {
   const nab = redNabavnaPoJed(r);
   if (!(nab > 0)) return null;
   return round2(((uNetto(broj(r.cijena), p.pdvStopa) - nab) / nab) * 100);
+}
+
+const kolicinaTekst = (x: number) => (Number.isInteger(x) ? String(x) : x.toFixed(3).replace(/\.?0+$/, ''));
+
+/**
+ * Tekst potvrde za upozorenja pregleda izmjene ili brisanja ulaza (`potvrdi`):
+ * negativno stanje i roba već prodana po staroj cijeni ne blokiraju, ali se
+ * ne smiju proći bez potvrde.
+ */
+export function porukaUpozorenja(upozorenja: PregledCijenaUlaza['upozorenja'], radnja: 'izmjena' | 'brisanje'): string {
+  const redovi = upozorenja.map(u => u.vrsta === 'minus'
+    ? `• ${u.productNaziv}: stanje ${kolicinaTekst(u.stanjePrije)} → ${kolicinaTekst(u.stanjePoslije)} (u minusu)`
+    : `• ${u.productNaziv}: roba s ovog ulaza je već prodavana po staroj cijeni; cijena se mijenja bez nivelacije`);
+  return `${radnja === 'brisanje' ? 'Brisanje' : 'Izmjena'} ulaza — provjerite prije potvrde:\n\n${redovi.join('\n')}\n\nNastaviti?`;
 }

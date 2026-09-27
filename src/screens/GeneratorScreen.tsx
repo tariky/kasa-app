@@ -9,11 +9,18 @@ import {
 } from 'lucide-react';
 import { Product } from '@/types';
 import { formatKM, parseDecimal } from '@/lib/utils';
+import { round2 } from '@/lib/novac';
 import { generirajRacune, GeneratedRacun, GenerateResult } from '@/lib/batchRacuni';
+import { otvoriNezavrseneRacune } from '@/lib/nezavrseniRacuni';
+import { izvrsiFiskalno } from '@/lib/fiskalniIshod';
 
 const DELAY_SECONDS = 5;
 
-type RacunStatus = 'pending' | 'done' | 'failed';
+/**
+ * `nepoznat`: ishod štampe nije poznat (lib/fiskalniIshod.ts) — rješava se u
+ * nezavršenim računima, ne štampa ponovo.
+ */
+type RacunStatus = 'pending' | 'done' | 'failed' | 'nepoznat';
 
 export default function GeneratorScreen() {
   const [products, setProducts] = useState<Product[]>([]);
@@ -56,8 +63,8 @@ export default function GeneratorScreen() {
   const removeRacun = (id: string) => {
     if (!result || running) return;
     const racuni = result.racuni.filter(r => r.id !== id);
-    const ukupnoGenerisano = Math.round(racuni.reduce((s, r) => s + r.ukupno, 0) * 100) / 100;
-    setResult({ ...result, racuni, ukupnoGenerisano, manjak: Math.max(0, Math.round((result.target - ukupnoGenerisano) * 100) / 100) });
+    const ukupnoGenerisano = round2(racuni.reduce((s, r) => s + r.ukupno, 0));
+    setResult({ ...result, racuni, ukupnoGenerisano, manjak: Math.max(0, round2(result.target - ukupnoGenerisano)) });
     setStatuses(prev => { const next = { ...prev }; delete next[id]; return next; });
   };
 
@@ -72,18 +79,16 @@ export default function GeneratorScreen() {
       }, 1000);
     });
 
-  const finalizeOne = async (r: GeneratedRacun) => {
-    return window.api.finalizeOrder({
-      ukupno: r.ukupno,
-      pdvIznos: r.pdvIznos,
-      nacinPlacanja: 'Gotovina',
-      stavke: r.stavke,
-    });
-  };
+  const finalizeOne = (r: GeneratedRacun) => izvrsiFiskalno(() => window.api.finalizeOrder({
+    ukupno: r.ukupno,
+    pdvIznos: r.pdvIznos,
+    nacinPlacanja: 'Gotovina',
+    stavke: r.stavke,
+  }));
 
   const processAll = async () => {
     if (!result || running) return;
-    const queue = result.racuni.filter(r => statuses[r.id] !== 'done');
+    const queue = result.racuni.filter(r => statuses[r.id] !== 'done' && statuses[r.id] !== 'nepoznat');
     if (queue.length === 0) return;
 
     setRunning(true);
@@ -97,22 +102,46 @@ export default function GeneratorScreen() {
       setPhase('print');
 
       // Print, with a single retry after the recovery delay (retry-then-stop).
-      let res = await finalizeOne(r).catch((e: any) => ({ success: false, error: e?.message }));
-      if (!res || !res.success) {
+      // Ponavlja se samo siguran neuspjeh uređaja (vraćen odgovor). Nepoznat
+      // ishod, već evidentiran račun i odbijen poziv zaustavljaju seriju bez
+      // ponavljanja — inače prijeti dupli račun.
+      let { ishod, res } = await finalizeOne(r);
+      if (ishod.vrsta === 'greska' && res) {
         setPhase('wait');
         await sleepWithCountdown(DELAY_SECONDS);
         setPhase('print');
-        res = await finalizeOne(r).catch((e: any) => ({ success: false, error: e?.message }));
+        ({ ishod, res } = await finalizeOne(r));
       }
 
-      if (!res || !res.success) {
+      if (ishod.vrsta === 'vecEvidentiran') {
+        setStatuses(prev => ({ ...prev, [r.id]: 'done' }));
+        setRunning(false);
+        runningRef.current = false;
+        setActiveId(null);
+        setMessage({ type: 'error', text: `Zaustavljeno na računu ${printed + 1}/${queue.length}: ${ishod.poruka}` });
+        await loadProducts();
+        return;
+      }
+
+      if (ishod.vrsta === 'nepoznat') {
+        setStatuses(prev => ({ ...prev, [r.id]: 'nepoznat' }));
+        setRunning(false);
+        runningRef.current = false;
+        setActiveId(null);
+        setMessage({ type: 'error', text: `Zaustavljeno na računu ${printed + 1}/${queue.length}: ${ishod.poruka}` });
+        otvoriNezavrseneRacune();
+        await loadProducts();
+        return;
+      }
+
+      if (ishod.vrsta === 'greska') {
         setStatuses(prev => ({ ...prev, [r.id]: 'failed' }));
         setRunning(false);
         runningRef.current = false;
         setActiveId(null);
         setMessage({
           type: 'error',
-          text: `Zaustavljeno na računu ${printed + 1}/${queue.length}: ${res?.error || 'Greška pri štampanju'}. Odštampano ${printed}, preostalo ${queue.length - printed}.`,
+          text: `Zaustavljeno na računu ${printed + 1}/${queue.length}: ${ishod.poruka}. Odštampano ${printed}, preostalo ${queue.length - printed}.`,
         });
         await loadProducts();
         return;
@@ -256,7 +285,8 @@ export default function GeneratorScreen() {
                   className={`rounded-xl border bg-white p-3 transition-all ${
                     isActive ? 'ring-2 ring-blue-400 border-blue-300' :
                     st === 'done' ? 'border-emerald-200 bg-emerald-50/40' :
-                    st === 'failed' ? 'border-red-300 bg-red-50/50' : 'border-slate-200'
+                    st === 'failed' ? 'border-red-300 bg-red-50/50' :
+                    st === 'nepoznat' ? 'border-amber-300 bg-amber-50/50' : 'border-slate-200'
                   }`}
                 >
                   <div className="flex items-center justify-between mb-2">
@@ -264,6 +294,7 @@ export default function GeneratorScreen() {
                       <span className="text-[12px] font-mono text-slate-400">#{idx + 1}</span>
                       {st === 'done' && <CheckCircle2 className="h-4 w-4 text-emerald-500" />}
                       {st === 'failed' && <AlertTriangle className="h-4 w-4 text-red-500" />}
+                      {st === 'nepoznat' && <AlertTriangle className="h-4 w-4 text-amber-500" />}
                       {isActive && <Loader2 className="h-4 w-4 animate-spin text-blue-500" />}
                     </div>
                     <div className="flex items-center gap-2">

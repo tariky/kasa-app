@@ -1,79 +1,71 @@
 // Ko smije zvati koji kanal. Main proces drži prijavljenog korisnika (sesiju) i
-// sam odlučuje — renderer ne šalje ni korisnikId ni ulogu. Isti skupovi važe
-// za Rust backend (src-tauri), pa su ovdje kao podaci, ne razbacani po handlerima.
-import type { JavniKorisnik } from '../lib/korisnici';
-import { KLJUCEVI_DOKUMENATA } from '../lib/dokumentPostavke';
+// sam odlučuje — renderer ne šalje ni korisnikId ni ulogu. Liste su u
+// pristup.json da ih Rust backend (src-tauri) čita iste (`include_str!`).
+import {
+  nadjiPoPinu, pinKorisnika, pinZauzet, hesirajPin, validirajPin, ZADANI_PIN, type JavniKorisnik,
+} from '../lib/korisnici';
+import { zapisiAudit } from '../lib/audit';
+import { procitajPostavku, upisiPostavke } from '../lib/postavke';
+import type { SqlDb } from '../lib/sqldb';
+import pristup from './pristup.json';
 
 export const PORUKA_NISTE_PRIJAVLJENI = 'Niste prijavljeni';
 export const PORUKA_SAMO_ADMIN = 'Ovu radnju može izvršiti samo administrator';
 export const PORUKA_ZADANI_PIN = 'Prije rada promijenite zadani PIN 0000';
+/** Storno kasira uz kasa.requirePinRefund bez odobrenja za payload koji je stigao handleru. */
+export const PORUKA_BEZ_ODOBRENJA = 'Reklamacija traži PIN administratora — odobrenje ovog poziva nije pronađeno';
 
 /** Jedini kanali (uz KANALI_BEZ_PRIJAVE) dok prijavljeni korisnik još ima zadani PIN. */
-export const KANALI_SA_ZADANIM_PINOM: ReadonlySet<string> = new Set(['user:promijeniSvojPin', 'user:logout']);
+export const KANALI_SA_ZADANIM_PINOM: ReadonlySet<string> = new Set(pristup.kanaliSaZadanimPinom);
 
-/** Kanali koji rade i bez prijave (ekran za prijavu i aktivaciju licence). */
-export const KANALI_BEZ_PRIJAVE: ReadonlySet<string> = new Set([
-  'licenca:stanje', 'licenca:aktiviraj',
-  'user:login', 'user:logout',
-  // LoginScreen: naziv firme u lijevom panelu.
-  'settings:getFirma',
-  // settings:get samo za ključeve iz POSTAVKE_BEZ_PRIJAVE (vidi provjeriPristup).
-  'settings:get',
-]);
+/**
+ * Kanali koji rade i bez prijave: ekran za prijavu i aktivacija licence,
+ * settings:getFirma (naziv firme na LoginScreenu) i settings:get samo za
+ * ključeve iz POSTAVKE_BEZ_PRIJAVE (vidi provjeriPristup).
+ */
+export const KANALI_BEZ_PRIJAVE: ReadonlySet<string> = new Set(pristup.kanaliBezPrijave);
 
 /** Postavke koje renderer čita prije prijave (skala ekrana, moduli na LoginScreenu). */
-export const POSTAVKE_BEZ_PRIJAVE: ReadonlySet<string> = new Set([
-  'ui.skala', 'proizvodnja.enabled', 'ui.showGenerator',
-]);
+export const POSTAVKE_BEZ_PRIJAVE: ReadonlySet<string> = new Set(pristup.postavke.bezPrijave);
 
 /**
  * Kanali koji mijenjaju stanje, a UI ih nudi samo administratoru (Postavke,
- * Knjigovođa tab) ili su sami po sebi administratorski.
+ * Knjigovođa tab) ili su sami po sebi administratorski. Tu su i ručno
+ * pokretanje automatskog backup-a (backup:info smije svaki prijavljeni) i
+ * dijagnostika fiskalnog uređaja — log sadrži i lozinku operatera.
  */
-export const ADMIN_KANALI: ReadonlySet<string> = new Set([
-  'user:create', 'user:update', 'user:delete',
-  'settings:saveFirma', 'settings:saveTring',
-  'proizvodnja:setEnabled',
-  'fiscal:setZadnjiBroj', 'order:dismissFiscalGap', 'pending:discard',
-  'db:backup', 'db:restore',
-  // Automatski backup: ručno pokretanje (Postavke); backup:info smije svaki prijavljeni.
-  'backup:sada',
-  'izvoz:knjigovodja',
-  // Dijagnostika fiskalnog uređaja (Postavke → Fiskalni); log sadrži i lozinku operatera.
-  'tring:init', 'tring:getLogs', 'tring:clearLogs',
-]);
+export const ADMIN_KANALI: ReadonlySet<string> = new Set(pristup.adminKanali);
 
 /** settings:set — ključevi koje smije postaviti svaki prijavljeni korisnik (KasaScreen). */
-export const POSTAVKE_ZA_SVE: ReadonlySet<string> = new Set([
-  'kasa.scanMode',
-]);
+export const POSTAVKE_ZA_SVE: ReadonlySet<string> = new Set(pristup.postavke.zaSve);
 
-/** settings:set — ključevi iz Postavki (samo administrator). Sve ostalo se odbija. */
-export const POSTAVKE_ZA_ADMINA: ReadonlySet<string> = new Set([
-  // KasaGrupa
-  'kasa.pologPrompt', 'kasa.allowZeroStock', 'kasa.kusurKalkulacija', 'kasa.requirePinRefund',
-  'kasa.showDailyTotal', 'cijene.unosBezPdv',
-  // FiskalniGrupa
-  'racun.napomena', 'dev.logging',
-  // SistemGrupa
-  'ui.skala',
-  // LicencaGrupa
-  'ui.showGenerator',
-  // Postavke › Dokumenti (i nastavak numeracije iz starog programa)
-  ...KLJUCEVI_DOKUMENATA,
-]);
+/**
+ * settings:set — ključevi iz Postavki (samo administrator). Sve ostalo se odbija.
+ * Po grupama Postavki (redom kao u pristup.json):
+ * - Kasa (KasaGrupa): kasa.pologPrompt, kasa.allowZeroStock, kasa.kusurKalkulacija,
+ *   kasa.requirePinRefund, kasa.showDailyTotal, cijene.unosBezPdv
+ * - Fiskalni (FiskalniGrupa): racun.napomena, dev.logging
+ * - Sistem (SistemGrupa): ui.skala
+ * - Licenca (LicencaGrupa): ui.showGenerator
+ * - Dokumenti (Postavke › Dokumenti, i nastavak numeracije iz starog programa):
+ *   svi KLJUCEVI_DOKUMENATA (ugovor/kanali.ugovor.test.ts to provjerava)
+ */
+export const POSTAVKE_ZA_ADMINA: ReadonlySet<string> = new Set(pristup.postavke.zaAdmina);
 
 /**
  * Postavke koje settings:get nikad ne vraća (ide null). Stanje blokade PIN-a
  * je interno: ni čitanje ni upis (settings:set ga ionako odbija, nije na listi).
  */
-export const TAJNE_POSTAVKE: ReadonlySet<string> = new Set(['tring.operatorPassword', 'sigurnost.pinBlokada']);
+export const TAJNE_POSTAVKE: ReadonlySet<string> = new Set(pristup.postavke.tajne);
+
+const jeObjekat = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null;
 
 /**
  * Baca grešku ako `korisnik` (null = niko nije prijavljen) ne smije zvati
  * `kanal` s ovim argumentima. Poziva se prije handlera. `zadaniPin` = korisnik
  * se prijavio PIN-om 0000 i još ga nije promijenio: smije samo ono što smije
- * neprijavljen, plus promjenu svog PIN-a i odjavu.
+ * neprijavljen, plus promjenu svog PIN-a i odjavu. Vraćanje završenog naloga
+ * u izradu (nalog:setStatus 'vrati') smije samo admin; ostale statuse svako.
  */
 export function provjeriPristup(kanal: string, args: unknown[], korisnik: JavniKorisnik | null, zadaniPin = false): void {
   if (!korisnik || zadaniPin) {
@@ -85,6 +77,9 @@ export function provjeriPristup(kanal: string, args: unknown[], korisnik: JavniK
   }
   if (ADMIN_KANALI.has(kanal) && korisnik.uloga !== 'admin') throw new Error(PORUKA_SAMO_ADMIN);
   if (kanal === 'settings:set') provjeriUpisPostavke(args[0], korisnik);
+  if (kanal === 'nalog:setStatus' && jeObjekat(args[0]) && args[0].status === 'vrati' && korisnik.uloga !== 'admin') {
+    throw new Error('Vraćanje naloga u izradu može samo administrator');
+  }
 }
 
 function provjeriUpisPostavke(kljuc: unknown, korisnik: JavniKorisnik): void {
@@ -238,4 +233,161 @@ export class OgranicenjePromjenaPina {
   zabiljezi(korisnikId: number): void {
     this.svjeze(korisnikId).push(this.sada());
   }
+}
+
+// ─── Sesija ─────────────────────────────────────────────────
+// Prijavljeni korisnik živi samo u main procesu (jedan prozor = jedna sesija);
+// uloga se svaki put čita iz baze, pa izmjena ili brisanje korisnika važi odmah.
+// Rust: sesija.rs + korisnici.rs.
+
+/** Baza sesije: upiti i transakcija (better-sqlite3 u programu, bun:sqlite u testovima). */
+export type BazaSesije = SqlDb & { transaction<T>(fn: () => T): () => T };
+
+export interface Sesija {
+  /**
+   * user:login. Nova prijava uvijek poništi staru sesiju, i kad ne uspije
+   * (pogrešan PIN = null, blokada = greška). `zadaniPin`: prijava PIN-om 0000.
+   */
+  prijavi(pin: unknown): (JavniKorisnik & { zadaniPin: boolean }) | null;
+  /** user:logout — bez prijave je tih uspjeh. */
+  odjavi(): void;
+  /** user:promijeniSvojPin — prijavljeni korisnik mijenja svoj PIN (i gasi ograničenje zadanog PIN-a). */
+  promijeniSvojPin(stari: unknown, novi: unknown): void;
+  /** Prijavljeni korisnik iz baze; null kad niko nije prijavljen ili je korisnik obrisan. */
+  trenutni(): JavniKorisnik | null;
+  /** Prijavljeni korisnik; kanal je već prošao provjeriPristup, ali korisnik je mogao biti obrisan. */
+  korisnik(): JavniKorisnik;
+  /** Id prijavljenog za trag u audit_log (null = niko). */
+  prijavljeniId(): number | null;
+  /**
+   * Admin PIN za radnju kasira (storno). Neuspjeh ulazi u ograničenje pokušaja;
+   * baca 'Neispravan admin PIN'. Uspjeh ne briše ranije neuspjehe.
+   */
+  provjeriAdminPin(pin: unknown): JavniKorisnik;
+  /**
+   * Prije svakog handlera: pravila iz `provjeriPristup` za trenutnog korisnika,
+   * plus admin PIN za storno kad je uključen kasa.requirePinRefund.
+   */
+  provjeriPristup(kanal: string, args: unknown[]): void;
+  /**
+   * Admin koji je PIN-om odobrio storno ovog poziva: `unos` je payload
+   * order:refundAndPrint koji je prošao provjeriPristup. null = nije trebalo
+   * odobrenje (admin ili isključena postavka). Kad je trebalo, a za ovaj
+   * payload ga nema, baca `PORUKA_BEZ_ODOBRENJA` — storno kasira nikad bez
+   * odobrioca. Rust: `sesija::odobrio_admin`.
+   */
+  odobrioAdmin(unos: unknown): number | null;
+}
+
+export function napraviSesiju(db: BazaSesije, sat: () => number = () => Date.now()): Sesija {
+  let prijavljeniId: number | null = null;
+  // Prijava PIN-om 0000: dok ga ne promijeni, korisnik smije samo promijeniSvojPin i odjavu.
+  let saZadanimPinom = false;
+  // Stanje blokade je u bazi — restart programa ne briše ni blokadu ni eskalaciju.
+  const pokusaji = new OgranicenjePokusaja(sat, {
+    ucitaj: () => procitajPostavku(db, KLJUC_BLOKADE),
+    spremi: (json) => { upisiPostavke(db, [[KLJUC_BLOKADE, json]]); },
+  });
+  const promjenePina = new OgranicenjePromjenaPina(sat);
+  // Payload storna → admin koji ga je odobrio. Handler dobija isti objekat koji
+  // je prošao provjeriPristup (vidi handle() u handlers.ts).
+  const odobrenja = new WeakMap<object, number>();
+
+  const trenutni = (): JavniKorisnik | null => {
+    if (prijavljeniId === null) return null;
+    return (db.prepare('SELECT id, ime, uloga FROM users WHERE id = ?').get(prijavljeniId) as JavniKorisnik | undefined) ?? null;
+  };
+
+  const korisnik = (): JavniKorisnik => {
+    const k = trenutni();
+    if (!k) throw new Error(PORUKA_NISTE_PRIJAVLJENI);
+    return k;
+  };
+
+  const provjeriAdminPin = (pin: unknown): JavniKorisnik => {
+    pokusaji.provjeri();
+    const admin = nadjiPoPinu(db, pin, { samoAdmin: true });
+    if (!admin) {
+      pokusaji.neuspjeh();
+      throw new Error('Neispravan admin PIN');
+    }
+    return admin;
+  };
+
+  // Kasir uz uključen "PIN za reklamaciju" šalje admin PIN u istom pozivu;
+  // provjera je prije handlera, a time i prije štampe — odvojen korak provjere
+  // renderer bi mogao preskočiti.
+  const odobriStorno = (unos: unknown, k: JavniKorisnik): void => {
+    if (procitajPostavku(db, 'kasa.requirePinRefund') !== 'true' || k.uloga === 'admin') return;
+    if (!jeObjekat(unos) || !unos.adminPin) throw new Error('Reklamacija traži PIN administratora');
+    odobrenja.set(unos, provjeriAdminPin(unos.adminPin).id);
+  };
+
+  return {
+    prijavi(pin) {
+      prijavljeniId = null;
+      saZadanimPinom = false;
+      pokusaji.provjeri();
+      const u = nadjiPoPinu(db, pin);
+      if (!u) {
+        pokusaji.neuspjeh();
+        return null;
+      }
+      prijavljeniId = u.id;
+      saZadanimPinom = pin === ZADANI_PIN;
+      return { ...u, zadaniPin: saZadanimPinom };
+    },
+
+    odjavi() {
+      prijavljeniId = null;
+      saZadanimPinom = false;
+    },
+
+    // Kanal ne smije postati proročište za tuđe PIN-ove: uspjeh ne briše neuspjehe,
+    // zauzet PIN se broji kao neuspjeh, a i uspješne promjene su ograničene.
+    promijeniSvojPin(stari, novi) {
+      const k = korisnik();
+      const pin = validirajPin(novi);
+      if (pin === ZADANI_PIN) throw new Error(`Novi PIN ne smije biti ${ZADANI_PIN}`);
+      pokusaji.provjeri();
+      promjenePina.provjeri(k.id);
+      if (!pinKorisnika(db, k.id, stari)) {
+        pokusaji.neuspjeh();
+        throw new Error('Trenutni PIN nije tačan');
+      }
+      if (pinZauzet(db, pin, k.id)) {
+        pokusaji.neuspjeh();
+        throw new Error('Taj PIN je zauzet, odaberite drugi');
+      }
+      db.transaction(() => {
+        db.prepare('UPDATE users SET pin = ? WHERE id = ?').run(hesirajPin(pin), k.id);
+        zapisiAudit(db, prijavljeniId, 'korisnik:promjenaPina', { id: k.id });
+      })();
+      promjenePina.zabiljezi(k.id);
+      saZadanimPinom = false;
+    },
+
+    trenutni,
+    korisnik,
+    prijavljeniId: () => prijavljeniId,
+    provjeriAdminPin,
+
+    provjeriPristup(kanal, args) {
+      const k = trenutni();
+      // Modulska funkcija iznad (pravila iz pristup.json), ne ova metoda.
+      provjeriPristup(kanal, args, k, saZadanimPinom);
+      if (kanal === 'order:refundAndPrint' && k) odobriStorno(args[0], k);
+    },
+
+    odobrioAdmin(unos) {
+      const id = jeObjekat(unos) ? odobrenja.get(unos) : undefined;
+      if (id !== undefined) return id;
+      // Fail-closed: kasir uz uključen PIN je prošao odobriStorno, pa odobrenje
+      // mora postojati — nema ga samo ako payload nije onaj koji je provjeren.
+      if (trenutni()?.uloga !== 'admin' && procitajPostavku(db, 'kasa.requirePinRefund') === 'true') {
+        throw new Error(PORUKA_BEZ_ODOBRENJA);
+      }
+      return null;
+    },
+  };
 }

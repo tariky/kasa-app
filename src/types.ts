@@ -121,6 +121,24 @@ export interface OrderItem {
   productNaziv?: string;
   productJm?: string;
   productSifra?: string;
+  /** PLU artikla (`order:get`, JOIN na products). */
+  productPlu?: number | null;
+}
+
+/** Red iz `prilog:getStavke` (prilog_stavke + JOIN na products). */
+export interface PrilogStavka {
+  id: number;
+  orderId: number;
+  productId: number;
+  kolicina: number;
+  cijena: number;
+  /** Postotak; stari zapisi ga nemaju. */
+  rabat?: number | null;
+  pdvStopa: string;
+  productNaziv?: string;
+  productJm?: string;
+  productSifra?: string;
+  productTip?: string;
 }
 
 export interface Kupac {
@@ -189,6 +207,12 @@ export interface PregledCijenaUlaza {
   bezZalihe: Array<{ productId: number; productNaziv: string; staraCijena: number; novaCijena: number }>;
   /** Izmjena: cijena na ulazu promijenjena, ali u prodaji ostaje (kasnije ju je mijenjalo nešto drugo). */
   cijenaOstaje: Array<{ productId: number; productNaziv: string; cijena: number }>;
+  /**
+   * Izmjena/brisanje: ono što korisnik mora potvrditi (negativno stanje ne blokira).
+   * `minus` — zaliha poslije je negativna i manja nego prije; `prodano` — cijena se
+   * mijenja, a roba s ove primke je već (djelimično) prodana po staroj cijeni.
+   */
+  upozorenja: Array<{ vrsta: 'minus' | 'prodano'; productId: number; productNaziv: string; stanjePrije: number; stanjePoslije: number }>;
 }
 
 /**
@@ -237,6 +261,44 @@ export interface FirmaSettings {
 }
 
 export type ZiroRacuniPozicija = 'zaglavlje' | 'podnozje';
+
+/** Ponuda kako je vraćaju `ponuda:getAll` i `ponuda:get` (stavke i podaci kupca samo `ponuda:get`). */
+export interface Ponuda {
+  id: number;
+  broj: number;
+  godina: number;
+  kupacId: number;
+  datum: string;
+  vaziDo: string;
+  status: string;
+  napomena?: string | null;
+  ukupno: number;
+  pdvIznos: number;
+  racunId?: number | null;
+  racunBroj?: string | null;
+  kupacNaziv?: string;
+  korisnikIme?: string;
+  kupacIdBroj?: string | null;
+  kupacPdvBroj?: string | null;
+  kupacAdresa?: string | null;
+  kupacGrad?: string | null;
+  kupacPostanskiBroj?: string | null;
+  stavke?: StavkaPonude[];
+}
+
+/** Stavka ponude (ponuda_stavke + JOIN na products). */
+export interface StavkaPonude {
+  id: number;
+  ponudaId: number;
+  productId: number;
+  productNaziv?: string;
+  productJm?: string;
+  productSifra?: string;
+  kolicina: number;
+  cijena: number;
+  rabat: number;
+  pdvStopa: string;
+}
 
 export type NalogVrsta = 'narudzba' | 'zaliha';
 export type NalogStatus = 'otvoren' | 'u_izradi' | 'zavrsen' | 'fakturisan';
@@ -291,6 +353,32 @@ export interface RadniNalog {
   ponudaBroj?: number | null;
   ponudaGodina?: number | null;
   stavke?: RadniNalogStavka[];
+  /** Nalog iz ponude: stavke ponude koje nalog izrađuje (samo `nalog:get`). */
+  proizvodi?: RadniNalogProizvod[];
+}
+
+/** Proizvod koji nalog iz ponude izrađuje — pri završetku ulazi na stanje. */
+export interface RadniNalogProizvod {
+  id: number;
+  radniNalogId: number;
+  productId: number;
+  kolicina: number;
+  productNaziv?: string | null;
+  productSifra?: string | null;
+  productJm?: string | null;
+}
+
+/** Stavka ponude koju nalog može izrađivati (artikal — ne usluga ni materijal). */
+export interface ProizvodPonude {
+  ponudaStavkaId: number;
+  productId: number;
+  naziv: string;
+  sifra: string;
+  jm: string;
+  kolicina: number;
+  stanje: number;
+  /** Zadani izbor: artikla nema dovoljno na zalihi, pa se izrađuje. */
+  zadano: boolean;
 }
 
 export interface NormativStavka {

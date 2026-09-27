@@ -5,9 +5,9 @@
  */
 import type { SqlDb } from './sqldb';
 import { round2 } from './novac';
+import { NACINI_PLACANJA, type NacinPlacanja } from './placanje';
 
-export type NacinPlacanja = 'Gotovina' | 'Kartica' | 'Virman' | 'Ček';
-export const NACINI_PLACANJA: NacinPlacanja[] = ['Gotovina', 'Kartica', 'Virman', 'Ček'];
+export { NACINI_PLACANJA, type NacinPlacanja };
 
 export type DokumentSaPotpisom = 'faktura' | 'ponuda' | 'otpremnica' | 'racun' | 'nalog';
 export type DokumentSaPecatom = Exclude<DokumentSaPotpisom, 'nalog'>;

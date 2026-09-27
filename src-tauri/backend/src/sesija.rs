@@ -15,75 +15,15 @@ use serde_json::{json, Map, Value};
 
 use crate::greska::{Greska, R};
 use crate::js;
+use crate::pristup::pristup;
 use crate::sql::Db;
-use crate::{p, Backend};
+use crate::{korisnici, p, postavke, Backend};
 
 pub const PORUKA_NISTE_PRIJAVLJENI: &str = "Niste prijavljeni";
 pub const PORUKA_SAMO_ADMIN: &str = "Ovu radnju može izvršiti samo administrator";
 pub const PORUKA_ZADANI_PIN: &str = "Prije rada promijenite zadani PIN 0000";
-
-/// Jedini kanali (uz KANALI_BEZ_PRIJAVE) dok prijavljeni korisnik još ima zadani PIN.
-pub const KANALI_SA_ZADANIM_PINOM: &[&str] = &["user:promijeniSvojPin", "user:logout"];
-
-/// Kanali koji rade i bez prijave (ekran za prijavu i aktivaciju licence).
-pub const KANALI_BEZ_PRIJAVE: &[&str] = &[
-    "licenca:stanje", "licenca:aktiviraj",
-    "user:login", "user:logout",
-    // LoginScreen: naziv firme u lijevom panelu.
-    "settings:getFirma",
-    // settings:get samo za ključeve iz POSTAVKE_BEZ_PRIJAVE (vidi provjeri_pristup).
-    "settings:get",
-];
-
-/// Postavke koje renderer čita prije prijave (skala ekrana, moduli na LoginScreenu).
-pub const POSTAVKE_BEZ_PRIJAVE: &[&str] = &["ui.skala", "proizvodnja.enabled", "ui.showGenerator"];
-
-/// Kanali koji mijenjaju stanje, a UI ih nudi samo administratoru (Postavke,
-/// Knjigovođa tab) ili su sami po sebi administratorski.
-pub const ADMIN_KANALI: &[&str] = &[
-    "user:create", "user:update", "user:delete",
-    "settings:saveFirma", "settings:saveTring",
-    "proizvodnja:setEnabled",
-    "fiscal:setZadnjiBroj", "order:dismissFiscalGap", "pending:discard",
-    "db:backup", "db:restore",
-    "izvoz:knjigovodja",
-    // Dijagnostika fiskalnog uređaja (Postavke → Fiskalni); log sadrži i lozinku operatera.
-    "tring:init", "tring:getLogs", "tring:clearLogs",
-];
-
-/// settings:set — ključevi koje smije postaviti svaki prijavljeni korisnik (KasaScreen).
-pub const POSTAVKE_ZA_SVE: &[&str] = &["kasa.scanMode"];
-
-/// settings:set — ključevi iz Postavki (samo administrator). Sve ostalo se odbija.
-pub const POSTAVKE_ZA_ADMINA: &[&str] = &[
-    // KasaGrupa
-    "kasa.pologPrompt", "kasa.allowZeroStock", "kasa.kusurKalkulacija", "kasa.requirePinRefund",
-    "kasa.showDailyTotal", "cijene.unosBezPdv",
-    // FiskalniGrupa
-    "racun.napomena", "dev.logging",
-    // SistemGrupa
-    "ui.skala",
-    // LicencaGrupa
-    "ui.showGenerator",
-    // Postavke › Dokumenti (i nastavak numeracije iz starog programa) — isto što i
-    // KLJUCEVI_DOKUMENATA u src/lib/dokumentPostavke.ts; ugovorni test ih provjerava sve.
-    "dokumenti.faktura.rokDana", "dokumenti.faktura.nacinPlacanja", "dokumenti.faktura.napomena",
-    "dokumenti.ponuda.vaziDana", "dokumenti.ponuda.uslovi", "dokumenti.ponuda.nacinPlacanja", "dokumenti.ponuda.prefiks",
-    "dokumenti.ponuda.cifara", "dokumenti.ponuda.nastavakBroj", "dokumenti.ponuda.nastavakGodina",
-    "dokumenti.nalog.prefiks", "dokumenti.nalog.nastavakBroj", "dokumenti.nalog.nastavakGodina",
-    "dokumenti.podnozje", "dokumenti.pecat", "dokumenti.pecatVelicina",
-    "dokumenti.kolone.sifra", "dokumenti.kolone.jm",
-    "dokumenti.potpis.faktura.lijevo", "dokumenti.potpis.faktura.desno",
-    "dokumenti.potpis.ponuda.lijevo", "dokumenti.potpis.ponuda.desno",
-    "dokumenti.potpis.otpremnica.lijevo", "dokumenti.potpis.otpremnica.desno",
-    "dokumenti.potpis.racun.lijevo", "dokumenti.potpis.racun.desno",
-    "dokumenti.potpis.nalog.lijevo", "dokumenti.potpis.nalog.desno",
-    "dokumenti.pecat.faktura", "dokumenti.pecat.ponuda", "dokumenti.pecat.otpremnica", "dokumenti.pecat.racun",
-];
-
-/// Postavke koje settings:get nikad ne vraća (ide null). Stanje blokade PIN-a
-/// je interno: ni čitanje ni upis (settings:set ga ionako odbija, nije na listi).
-pub const TAJNE_POSTAVKE: &[&str] = &["tring.operatorPassword", "sigurnost.pinBlokada"];
+/// Storno kasira uz `kasa.requirePinRefund` bez odobrenja koje je stiglo handleru.
+pub const PORUKA_BEZ_ODOBRENJA: &str = "Reklamacija traži PIN administratora — odobrenje ovog poziva nije pronađeno";
 
 /// Korisnik kako ga vide kanali — nikad s PIN-om ni hešom.
 #[derive(Debug, Clone)]
@@ -164,7 +104,7 @@ fn korisnik_po_id(db: &Db, id: i64) -> R<Option<Korisnik>> {
 pub fn trenutni(b: &Backend) -> R<Option<Korisnik>> {
     match b.sesija.id() {
         None => Ok(None),
-        Some(id) => korisnik_po_id(b.db()?, id),
+        Some(id) => korisnik_po_id(b.db(), id),
     }
 }
 
@@ -176,45 +116,91 @@ pub fn korisnik(b: &Backend) -> R<Korisnik> {
 /// `{ ...unos, korisnikId }` — payload s korisnikom iz sesije (vrijednost iz
 /// payload-a nema efekta; ključ koji je već postojao ostaje na svom mjestu).
 pub fn sa_korisnikom(unos: &Value, korisnik_id: i64) -> Value {
-    let mut m = unos.as_object().cloned().unwrap_or_default();
-    m.insert("korisnikId".into(), json!(korisnik_id));
-    Value::Object(m)
+    js::spoji(unos, vec![("korisnikId", json!(korisnik_id))])
 }
 
 /// Baca grešku ako `korisnik` (None = niko nije prijavljen) ne smije zvati
 /// `kanal` s ovim argumentima. Poziva se prije handlera. `zadani_pin` =
 /// korisnik se prijavio PIN-om 0000 i još ga nije promijenio: smije samo ono
-/// što smije neprijavljen, plus promjenu svog PIN-a i odjavu.
+/// što smije neprijavljen, plus promjenu svog PIN-a i odjavu. Vraćanje
+/// završenog naloga u izradu (nalog:setStatus 'vrati') smije samo admin;
+/// ostale statuse svako.
 pub fn provjeri_pristup(kanal: &str, args: &[Value], korisnik: Option<&Korisnik>, zadani_pin: bool) -> R<()> {
+    let p = pristup();
     let Some(k) = korisnik.filter(|_| !zadani_pin) else {
-        if korisnik.is_some() && KANALI_SA_ZADANIM_PINOM.contains(&kanal) {
+        if korisnik.is_some() && p.kanali_sa_zadanim_pinom.contains(kanal) {
             return Ok(());
         }
         let poruka = if korisnik.is_some() { PORUKA_ZADANI_PIN } else { PORUKA_NISTE_PRIJAVLJENI };
-        if !KANALI_BEZ_PRIJAVE.contains(&kanal) {
+        if !p.kanali_bez_prijave.contains(kanal) {
             return Err(Greska(poruka.into()));
         }
         let kljuc = args.first().and_then(Value::as_str);
-        if kanal == "settings:get" && !kljuc.is_some_and(|k| POSTAVKE_BEZ_PRIJAVE.contains(&k)) {
+        if kanal == "settings:get" && !kljuc.is_some_and(|k| p.postavke_bez_prijave.contains(k)) {
             return Err(Greska(poruka.into()));
         }
         return Ok(());
     };
-    if ADMIN_KANALI.contains(&kanal) && !k.je_admin() {
+    if p.admin_kanali.contains(kanal) && !k.je_admin() {
         return Err(Greska(PORUKA_SAMO_ADMIN.into()));
     }
     if kanal == "settings:set" {
         provjeri_upis_postavke(args.first().unwrap_or(&js::NULL), k)?;
     }
+    if kanal == "nalog:setStatus" && args.first().is_some_and(|a| a["status"] == "vrati") && !k.je_admin() {
+        return Err(Greska("Vraćanje naloga u izradu može samo administrator".into()));
+    }
     Ok(())
+}
+
+/// Admin PIN za radnju kasira (storno). Neuspjeh ulazi u ograničenje
+/// pokušaja; baca 'Neispravan admin PIN'. Uspjeh ne briše ranije neuspjehe.
+pub fn provjeri_admin_pin(b: &Backend, pin: &Value) -> R<Korisnik> {
+    let db = b.db();
+    let pokusaji = Pokusaji::novi(db, b.sat.ms());
+    pokusaji.provjeri()?;
+    match korisnici::nadji_po_pinu(db, pin, true, None)? {
+        Some(admin) => Ok(admin),
+        None => {
+            pokusaji.neuspjeh()?;
+            Err(Greska("Neispravan admin PIN".into()))
+        }
+    }
+}
+
+/// Kasir uz uključen "PIN za reklamaciju" (`kasa.requirePinRefund`) šalje
+/// admin PIN u istom pozivu order:refundAndPrint (`unos`). Provjera je u
+/// sesiji, prije handlera, a time i prije štampe — odvojen korak provjere
+/// renderer bi mogao preskočiti. Vraća admina koji je odobrio storno; `None`
+/// = odobrenje nije trebalo (admin ili isključena postavka).
+pub fn odobri_storno(b: &Backend, unos: &Value, k: &Korisnik) -> R<Option<i64>> {
+    if postavke::procitaj(b.db(), "kasa.requirePinRefund")? != "true" || k.je_admin() {
+        return Ok(None);
+    }
+    if !js::truthy(&unos["adminPin"]) {
+        return Err(Greska("Reklamacija traži PIN administratora".into()));
+    }
+    Ok(Some(provjeri_admin_pin(b, &unos["adminPin"])?.id))
+}
+
+/// Admin koji je odobrio storno ovog poziva (`odobri_storno` → `Args`), u
+/// handleru. `None` = nije trebalo (admin ili isključena postavka); kad je
+/// trebalo, a odobrenja nema (handler pozvan mimo provjere sesije), greška —
+/// storno kasira nikad bez odobrioca. TS: `sesija.odobrioAdmin`.
+pub fn odobrio_admin(b: &Backend, k: &Korisnik, odobrio_admin_id: Option<i64>) -> R<Option<i64>> {
+    if odobrio_admin_id.is_none() && !k.je_admin() && postavke::procitaj(b.db(), "kasa.requirePinRefund")? == "true" {
+        return Err(Greska(PORUKA_BEZ_ODOBRENJA.into()));
+    }
+    Ok(odobrio_admin_id)
 }
 
 fn provjeri_upis_postavke(kljuc: &Value, korisnik: &Korisnik) -> R<()> {
     let k = kljuc.as_str().unwrap_or("");
-    if POSTAVKE_ZA_SVE.contains(&k) {
+    let p = pristup();
+    if p.postavke_za_sve.contains(k) {
         return Ok(());
     }
-    if !POSTAVKE_ZA_ADMINA.contains(&k) {
+    if !p.postavke_za_admina.contains(k) {
         return Err(Greska(format!("Postavka \"{k}\" se ne može mijenjati")));
     }
     if !korisnik.je_admin() {
@@ -240,8 +226,6 @@ pub const NAJDUZA_BLOKADA_MS: f64 = 15.0 * 60_000.0;
 pub const SMIRENJE_MS: f64 = 60.0 * 60_000.0;
 /// Postavka u kojoj živi stanje blokade (JSON, vidi StanjeBlokade).
 pub const KLJUC_BLOKADE: &str = "sigurnost.pinBlokada";
-
-const UPSERT: &str = "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value";
 
 pub fn poruka_blokade(preostalo_ms: f64) -> String {
     format!("Previše pogrešnih pokušaja. Pokušajte ponovo za {} s.", js::num_str((preostalo_ms / 1000.0).ceil()))
@@ -305,13 +289,12 @@ impl<'a> Pokusaji<'a> {
     }
 
     fn ucitaj(&self) -> R<Option<String>> {
-        let v = self.db.val("SELECT value FROM settings WHERE key = ?", p![KLJUC_BLOKADE])?;
+        let v = postavke::procitaj(self.db, KLJUC_BLOKADE)?;
         Ok(if v.is_null() { None } else { Some(js::to_string(&v)) })
     }
 
     fn spremi(&self, s: &StanjeBlokade) -> R<()> {
-        self.db.run(UPSERT, p![KLJUC_BLOKADE, s.json()])?;
-        Ok(())
+        postavke::upisi(self.db, KLJUC_BLOKADE, s.json())
     }
 
     /// Baca grešku dok traje blokada — tada se PIN ni ne provjerava.
@@ -426,6 +409,35 @@ mod tests {
             greska(provjeri_pristup("settings:set", &[json!(7)], Some(&admin), false)).as_deref(),
             Some("Postavka \"\" se ne može mijenjati")
         );
+        // Završen nalog u izradu vraća samo admin; ostale statuse svako.
+        let vrati = [json!({ "id": 1, "status": "vrati" })];
+        assert_eq!(
+            greska(provjeri_pristup("nalog:setStatus", &vrati, Some(&kasir), false)).as_deref(),
+            Some("Vraćanje naloga u izradu može samo administrator")
+        );
+        assert_eq!(greska(provjeri_pristup("nalog:setStatus", &vrati, Some(&admin), false)), None);
+        assert_eq!(greska(provjeri_pristup("nalog:setStatus", &[json!({ "id": 1, "status": "zavrsen" })], Some(&kasir), false)), None);
+        assert_eq!(greska(provjeri_pristup("nalog:setStatus", &[json!(["vrati"])], Some(&kasir), false)), None);
+    }
+
+    /// Admin PIN za storno kasira (`kasa.requirePinRefund`) se provjerava u
+    /// sesiji, prije handlera i štampe; rezultat je admin koji je odobrio.
+    #[test]
+    fn odobrenje_storna() {
+        let p = crate::proba::proba("odobrenje-storna");
+        let b = p.b();
+        let kasir = Korisnik { id: 2, ime: json!("Kasir"), uloga: "kasir".into() };
+        let admin = Korisnik { id: 1, ime: json!("Admin"), uloga: "admin".into() };
+        let odobri = |unos: Value, k: &Korisnik| odobri_storno(b, &unos, k).map_err(|g| g.0);
+        // Postavka isključena: bez odobrenja.
+        assert_eq!(odobri(json!({ "id": 1 }), &kasir), Ok(None));
+        postavke::upisi(b.db(), "kasa.requirePinRefund", "true").unwrap();
+        assert_eq!(odobri(json!({ "id": 1 }), &admin), Ok(None));
+        assert_eq!(odobri(json!({ "id": 1 }), &kasir), Err("Reklamacija traži PIN administratora".into()));
+        assert_eq!(odobri(json!([]), &kasir), Err("Reklamacija traži PIN administratora".into()));
+        assert_eq!(odobri(json!({ "id": 1, "adminPin": "9999" }), &kasir), Err("Neispravan admin PIN".into()));
+        // Seedovani admin (id 1) ima zadani PIN 0000.
+        assert_eq!(odobri(json!({ "id": 1, "adminPin": "0000" }), &kasir), Ok(Some(1)));
     }
 
     #[test]

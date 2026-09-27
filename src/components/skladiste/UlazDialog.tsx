@@ -1,11 +1,11 @@
 // src/components/skladiste/UlazDialog.tsx
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { pdf } from '@react-pdf/renderer';
 import type { Dobavljac, PregledCijenaUlaza, Primka, PrimkaStavka, Product, PromijenjenoOdPregleda } from '@/types';
-import { izBazePrimke, jePloca, m2UKom } from '@/lib/ploca';
-import { localDateStr } from '@/lib/novac';
-import { nedostajeOpis, praznaStavka, redStatus, ulazTotali, uPayload, type UlazRed } from '@/lib/ulaz';
+import { jePloca, m2UKom } from '@/lib/ploca';
+import { localDateStr, round2 } from '@/lib/novac';
+import { nedostajeOpis, porukaUpozorenja, praznaStavka, redIzBaze, redStatus, ulazTotali, uPayload, type UlazRed } from '@/lib/ulaz';
 import { kalkulacijaPrimke, nabavnaVrijednost, type KalkulacijaPrimke } from '@/lib/kalkulacija';
+import { formatRucPct } from '@/lib/izvjestaji';
 import { cn, formatKM, formatDate } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -14,17 +14,20 @@ import { Label } from '@/components/ui/label';
 import { DatePicker } from '@/components/ui/date-picker';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Eyebrow, Key, mod } from '@/components/ui/ledger';
-import { FullDialog, FullDialogContent, FullDialogHeader, FullDialogFooter, FullDialogNotice, FullDialogTitle, FooterBtn, Fact, HeaderBtn, LegendKey } from '@/components/ui/full-dialog';
+import { Eyebrow, Key, jePoljeZaUnos, mod } from '@/components/ui/ledger';
+import { FullDialog, FullDialogContent, FullDialogHeader, FullDialogFooter, FullDialogNotice, FullDialogTitle, FooterBtn, Fact, HeaderBtn, LegendKey, SusjedniNav } from '@/components/ui/full-dialog';
 import { UlazPdf } from '@/components/UlazPdf';
 import { UlazStavkeEditor, type UlazStavkeHandle } from './UlazStavkeEditor';
-import { PregledCijenaAside, PregledCijenaTabela, PregledPromijenjen, imaPromjena } from './PregledCijenaUlaza';
-import { Pencil, Trash2, Printer, Download, Save, ChevronUp, ChevronDown, Building2, AlertTriangle, X } from 'lucide-react';
+import { PregledCijenaAside, PregledCijenaTabela, PregledPromijenjen, imaSadrzaj } from './PregledCijenaUlaza';
+import { potvrdi } from '@/lib/dijalog';
+import { otvoriPdf, spremiPdf } from '@/lib/stampa';
+import { useSusjedni } from '@/hooks/useSusjedni';
+import { useCuvarIzmjena } from '@/hooks/useCuvarIzmjena';
+import { Pencil, Trash2, Printer, Download, Save, Building2, AlertTriangle, X } from 'lucide-react';
 
 export type UlazStanje = { kind: 'zatvoren' } | { kind: 'pregled'; id: number } | { kind: 'uredi'; id: number } | { kind: 'novi' };
 
 type Notice = { type: 'success' | 'error'; text: string };
-type Pending = { kind: 'close' } | { kind: 'nav'; id: number };
 
 interface Forma {
   brojPrimke: string; datum: string; dobavljacNaziv: string; dobavljacId: string; dobavljacAdresa: string;
@@ -35,16 +38,12 @@ interface Forma {
 const praznaForma = (): Forma => ({
   brojPrimke: '', datum: localDateStr(), dobavljacNaziv: '', dobavljacId: '', dobavljacAdresa: '', brojFakture: '', napomena: '', zavisniTroskovi: '', rows: [praznaStavka()],
 });
-const zavisniDokumenta = (stavke: PrimkaStavka[]) => Math.round(stavke.reduce((s, x) => s + (x.zavisniTroskovi || 0), 0) * 100) / 100;
+const zavisniDokumenta = (stavke: PrimkaStavka[]) => round2(stavke.reduce((s, x) => s + (x.zavisniTroskovi || 0), 0));
 const izPrimke = (p: Primka, products: Product[]): Forma => ({
   brojPrimke: p.brojPrimke, datum: p.datum, dobavljacNaziv: p.dobavljacNaziv ?? '', dobavljacId: p.dobavljacId ?? '', dobavljacAdresa: p.dobavljacAdresa ?? '',
   brojFakture: p.brojFakture ?? '', napomena: p.napomena ?? '',
   zavisniTroskovi: zavisniDokumenta(p.stavke ?? []) > 0 ? String(zavisniDokumenta(p.stavke ?? [])) : '',
-  rows: (p.stavke ?? []).map(s => {
-    const prod = products.find(x => x.id === s.productId);
-    const prikaz = izBazePrimke(prod, s.kolicina, s.nabavnaCijena);
-    return { productId: s.productId, kolicina: prikaz.kolicina, nabavnaCijena: prikaz.nabavnaCijena, rabat: s.rabat ? String(s.rabat) : '', cijena: String(s.cijena) };
-  }),
+  rows: (p.stavke ?? []).map(s => redIzBaze(products.find(x => x.id === s.productId), s)),
 });
 
 /** Payload za primka:create / primka:update (i njihov pregled) iz forme. */
@@ -96,7 +95,7 @@ function Kalkulacija({ k }: { k: KalkulacijaPrimke }) {
       {k.imaArtikala && (
         <div className="mt-2 pt-2 border-t border-dashed border-slate-200">
           <Red label="Prodajna bez PDV (artikli)" value={formatKM(k.prodajnaBezPdv)} />
-          <Red label={`RUC · ${k.rucPct.toFixed(1)} %`} value={formatKM(k.ruc)} tone="plus" strong />
+          <Red label={`RUC · ${formatRucPct(k.rucPct)} %`} value={formatKM(k.ruc)} tone="plus" strong />
           <Red label="PDV" value={formatKM(k.pdv)} />
           <Red label="MP vrijednost sa PDV" value={formatKM(k.prodajna)} />
         </div>
@@ -129,7 +128,6 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
   const [pregledCijena, setPregledCijena] = useState<PregledZa | null>(null);
   // Pregled uz dijalog brisanja (null = još se učitava).
   const [pregledBrisanja, setPregledBrisanja] = useState<PregledZa | null>(null);
-  const [pending, setPending] = useState<Pending | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<UlazStavkeHandle>(null);
   // Šifre izabranog dobavljača (productId → šifra) za pretragu stavki po njegovoj fakturi.
@@ -187,29 +185,18 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
     if (stanje.kind === 'novi' && edit) requestAnimationFrame(() => editorRef.current?.noviRed());
   }, [stanje.kind, edit]);
 
-  const idx = id != null ? redoslijed.indexOf(id) : -1;
-  const prevId = idx > 0 ? redoslijed[idx - 1] : null;
-  const nextId = idx >= 0 && idx < redoslijed.length - 1 ? redoslijed[idx + 1] : null;
+  const susjedni = useSusjedni(redoslijed, id);
 
-  const guarded = (p: Pending) => {
-    if (dirty) { setPending(p); return; }
-    if (p.kind === 'close') onClose(); else onNavigate(p.id);
-  };
-  const izvrsiPending = () => {
-    const p = pending; setPending(null);
-    if (!p) return;
-    if (p.kind === 'close') onClose(); else onNavigate(p.id);
-  };
+  const cuvar = useCuvarIzmjena(dirty, {
+    // Odbačene izmjene postojećeg ulaza vraćaju na pregled, ne zatvaraju.
+    onClose: () => { if (edit && primka && stanje.kind !== 'uredi') setEdit(false); else onClose(); },
+    onNavigate,
+    naslov: 'Nespremljene izmjene',
+    opis: 'Ulaz ima izmjene koje nisu spremljene.',
+  });
   const otkazi = () => {
-    if (stanje.kind === 'novi' || !primka) return guarded({ kind: 'close' });
-    if (dirty) { setPending({ kind: 'close' }); return; }
+    if (stanje.kind === 'novi' || !primka || dirty) return cuvar.zatrazi({ kind: 'close' });
     setEdit(false);
-  };
-  // Otkaži iz uređivanja postojećeg ulaza vraća na pregled, ne zatvara.
-  const odbaci = () => {
-    const p = pending; setPending(null);
-    if (p?.kind === 'close' && primka && stanje.kind !== 'uredi') { setEdit(false); return; }
-    izvrsiPending();
   };
 
   // ── akcije ────────────────────────────────────────────
@@ -223,7 +210,7 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
   const payloadRef = useRef<PayloadForme | null>(payload);
   payloadRef.current = payload;
   const dohvatiPregled = useCallback((p: PayloadForme) =>
-    ('id' in p ? window.api.pregledIzmjenePrimke(p) : window.api.pregledUnosaPrimke(p)), []);
+    (p.id !== undefined ? window.api.pregledIzmjenePrimke({ ...p, id: p.id }) : window.api.pregledUnosaPrimke(p)), []);
 
   useEffect(() => {
     const p = payloadRef.current;
@@ -257,9 +244,12 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
     }
     setSaving(true);
     try {
+      // Upozorenja (stanje u minusu, roba s ulaza već prodana po staroj cijeni)
+      // ne blokiraju, ali se uvijek potvrđuju — i kad nema nivelacije.
+      if (pregled.upozorenja.length > 0 && !(await potvrdi(porukaUpozorenja(pregled.upozorenja, 'izmjena')))) return;
       // Backend sprema samo ako operacija napravi tačno ovaj pregled; inače
       // ništa ne upiše i vrati novi — korisnik ga mora ponovo potvrditi.
-      const r = primka ? await window.api.updatePrimka(payload, pregled) : await window.api.createPrimka(payload, pregled);
+      const r = primka ? await window.api.updatePrimka({ ...payload, id: primka.id }, pregled) : await window.api.createPrimka(payload, pregled);
       if (odbijeno(r)) {
         setPregledCijena({ kljuc, pregled: r.pregled });
         setPotvrda({ kljuc, pregled: r.pregled, promijenjeno: true });
@@ -292,6 +282,8 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
     if (!primka || !potvrdaBrisanja || brisem) return;
     setBrisem(true);
     try {
+      const { upozorenja } = potvrdaBrisanja.pregled;
+      if (upozorenja.length > 0 && !(await potvrdi(porukaUpozorenja(upozorenja, 'brisanje')))) return;
       const r = await window.api.deletePrimka(primka.id, potvrdaBrisanja.pregled);
       if (odbijeno(r)) { setPregledBrisanja({ kljuc: String(primka.id), pregled: r.pregled, promijenjeno: true }); return; }
       setBrisiOpen(false); onDeleted(primka);
@@ -300,22 +292,17 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
     finally { setBrisem(false); }
   };
 
-  const buildPdf = async () => pdf(<UlazPdf primka={primka!} firma={await window.api.getFirmaSettings()} />).toBlob();
+  const primkaPdf = async () => <UlazPdf primka={primka!} firma={await window.api.getFirmaSettings()} />;
   const printPdf = async () => {
     if (!primka || edit) return;
-    const url = URL.createObjectURL(await buildPdf());
-    const win = window.open(url, '_blank');
-    if (win) win.onafterprint = () => URL.revokeObjectURL(url);
+    await otvoriPdf(await primkaPdf());
   };
   const exportPdf = async () => {
     if (!primka || edit) return;
-    const blob = await buildPdf();
-    const path = await window.api.showSaveDialog({ defaultName: `${primka.brojPrimke}.pdf`, filters: [{ name: 'PDF', extensions: ['pdf'] }] });
-    if (!path) return;
-    await window.api.writeFile(path, Array.from(new Uint8Array(await blob.arrayBuffer())) as any);
+    await spremiPdf(await primkaPdf(), `${primka.brojPrimke}.pdf`);
   };
 
-  const anySub = brisiOpen || potvrda != null || pending != null;
+  const anySub = brisiOpen || potvrda != null || cuvar.otvoren;
 
   // ── tastatura ─────────────────────────────────────────
   useEffect(() => {
@@ -329,15 +316,15 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
       }
       if (e.altKey) return;
       const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+      if (jePoljeZaUnos(t)) return;
       if (t && t.closest('[role="combobox"], [role="listbox"]')) return;
       if (edit) {
         if (e.key === '/') { e.preventDefault(); editorRef.current?.noviRed(); }
         return;
       }
       switch (e.key) {
-        case 'ArrowUp': if (prevId != null) { e.preventDefault(); guarded({ kind: 'nav', id: prevId }); } return;
-        case 'ArrowDown': if (nextId != null) { e.preventDefault(); guarded({ kind: 'nav', id: nextId }); } return;
+        case 'ArrowUp': if (susjedni.prev != null) { e.preventDefault(); cuvar.zatrazi({ kind: 'nav', id: susjedni.prev }); } return;
+        case 'ArrowDown': if (susjedni.next != null) { e.preventDefault(); cuvar.zatrazi({ kind: 'nav', id: susjedni.next }); } return;
         default:
       }
       switch (e.key.toLowerCase()) {
@@ -361,8 +348,8 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
   const datum = edit ? forma.datum : primka?.datum;
 
   return (
-    <FullDialog open={open} onRequestClose={() => (edit ? otkazi() : guarded({ kind: 'close' }))}>
-      <FullDialogContent ref={contentRef} onRequestClose={() => (edit ? otkazi() : guarded({ kind: 'close' }))}>
+    <FullDialog open={open} onRequestClose={() => (edit ? otkazi() : cuvar.zatrazi({ kind: 'close' }))}>
+      <FullDialogContent ref={contentRef} onRequestClose={() => (edit ? otkazi() : cuvar.zatrazi({ kind: 'close' }))}>
         {!primka && !edit && <FullDialogTitle className="sr-only">Ulaz robe</FullDialogTitle>}
         {(primka || edit) && (
           <>
@@ -500,7 +487,7 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
                     <Eyebrow className="block mb-1">Kalkulacija</Eyebrow>
                     <Kalkulacija k={edit ? totali : pregled} />
                   </section>
-                  {edit && prikazPregleda && imaPromjena(prikazPregleda) && (
+                  {edit && prikazPregleda && imaSadrzaj(prikazPregleda) && (
                     <PregledCijenaAside pregled={prikazPregleda} zastario={!pregledAktuelan} />
                   )}
                   {edit && pregledCijena && pregledCijena.kljuc === kljuc && 'greska' in pregledCijena && (
@@ -523,15 +510,7 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
               </FullDialogFooter>
             ) : (
               <FullDialogFooter legend={<>
-                <span className="flex items-center gap-1">
-                  <button onClick={() => prevId != null && guarded({ kind: 'nav', id: prevId })} disabled={prevId == null} aria-label="Prethodni ulaz"
-                    className="h-6 w-6 flex items-center justify-center rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 disabled:opacity-30 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"><ChevronUp size={14} /></button>
-                  <button onClick={() => nextId != null && guarded({ kind: 'nav', id: nextId })} disabled={nextId == null} aria-label="Sljedeći ulaz"
-                    className="h-6 w-6 flex items-center justify-center rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 disabled:opacity-30 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"><ChevronDown size={14} /></button>
-                  <span className="font-mono tabular-nums ml-1">{idx >= 0 ? `${idx + 1} / ${redoslijed.length}` : ''}</span>
-                </span>
-                <span className="text-slate-300">·</span>
-                <LegendKey k="↑↓">ulaz</LegendKey>
+                <SusjedniNav susjedni={susjedni} naziv="ulaz" onIdi={nId => cuvar.zatrazi({ kind: 'nav', id: nId })} />
                 <LegendKey k="esc">zatvori</LegendKey>
               </>}>
                 <FooterBtn icon={Trash2} label="Obriši" hint="D" tone="danger" onClick={() => setBrisiOpen(true)} />
@@ -546,22 +525,11 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
         )}
       </FullDialogContent>
 
-      <Dialog open={pending != null} onOpenChange={v => { if (!v) setPending(null); }}>
-        <DialogContent className="sm:max-w-[420px]">
-          <DialogHeader>
-            <DialogTitle>Nespremljene izmjene</DialogTitle>
-            <DialogDescription>Ulaz ima izmjene koje nisu spremljene.</DialogDescription>
-          </DialogHeader>
-          <div className="flex justify-between items-center gap-2 pt-2">
-            <Button variant="ghost" className="text-rose-600 hover:text-rose-700 hover:bg-rose-50" onClick={odbaci}>Odbaci izmjene</Button>
-            <Button variant="ghost" onClick={() => setPending(null)}>Ostani</Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {cuvar.dijalog}
 
       {primka && (
         <Dialog open={brisiOpen} onOpenChange={setBrisiOpen}>
-          <DialogContent className={cn(potvrdaBrisanja && (imaPromjena(potvrdaBrisanja.pregled) || potvrdaBrisanja.promijenjeno) ? 'sm:max-w-lg' : 'sm:max-w-[420px]')} onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); obrisi(); } }}>
+          <DialogContent className={cn(potvrdaBrisanja && (imaSadrzaj(potvrdaBrisanja.pregled) || potvrdaBrisanja.promijenjeno) ? 'sm:max-w-lg' : 'sm:max-w-[420px]')} onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); obrisi(); } }}>
             <DialogHeader>
               <DialogTitle>Obrisati ulaz {primka.brojPrimke}?</DialogTitle>
               <DialogDescription>Stanje robe sa ovog ulaza se skida sa skladišta, a prodajna cijena koju je ulaz postavio se vraća. Nivelacija uz ulaz ostaje. Brisanje se ne može poništiti.</DialogDescription>
@@ -571,7 +539,7 @@ export function UlazDialog({ stanje, products, dobavljaci, redoslijed, onClose, 
               <p className="text-[12px] text-slate-400">Provjeravam prodajne cijene…</p>
             ) : 'greska' in pregledBrisanja ? (
               <p className="flex items-center gap-1.5 text-[12px] text-rose-600"><AlertTriangle size={12} /> {pregledBrisanja.greska}</p>
-            ) : !imaPromjena(pregledBrisanja.pregled) ? (
+            ) : !imaSadrzaj(pregledBrisanja.pregled) ? (
               <p className="text-[12px] text-slate-500">Prodajne cijene se ne mijenjaju.</p>
             ) : (
               <>

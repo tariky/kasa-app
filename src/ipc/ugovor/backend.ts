@@ -6,7 +6,9 @@
 // Izbor implementacije: KASA_BACKEND=ts (podrazumijevano) ili KASA_BACKEND=rust
 // (src-tauri/backend, `bun run test:rust`).
 import type { Database } from 'bun:sqlite';
+import './zona';
 import type { LaziTring } from './laziTring';
+import type { Argumenti, Kanal, PozoviKanal } from '../kanali';
 import { hesirajPin } from '../../lib/korisnici';
 
 /**
@@ -30,12 +32,27 @@ export interface OtvoreniDijalog {
   opcije: Record<string, unknown>;
 }
 
+/** Argumenti kanala s istim brojem i redom, ali bez tipova. */
+type BezTipova<A> = A extends unknown[] ? { [I in keyof A]: unknown } : never;
+
 export interface Backend {
   /**
    * Poziv kanala kao iz renderera. Argumenti i rezultat idu kroz JSON, a
    * "nema vrijednosti" je uvijek `null` (JSON nema `undefined`).
+   *
+   * Kanal i broj argumenata su iz ugovora (src/ipc/kanali.ts); tipovi
+   * argumenata i rezultata namjerno nisu: testovi šalju i neispravne podatke
+   * (provjera validacije) i čitaju svaku varijantu odgovora bez sužavanja.
+   * Kanal mimo ugovora (uklonjen, iz liste teksta): `pozoviBezTipova`.
    */
-  call(kanal: string, ...args: unknown[]): Promise<any>;
+  call<K extends Kanal>(kanal: K, ...args: BezTipova<Argumenti<K>>): Promise<any>;
+  /**
+   * Isti poziv, s tipovima iz ugovora: argumenti `Argumenti<K>`, rezultat
+   * `Rezultat<K>` — za testove koji čitaju rezultat, pa ugovorni tip mora
+   * odgovarati onome što backend stvarno vrati. Namjerno neispravni podaci
+   * (provjera validacije) idu kroz `call`.
+   */
+  pozovi: PozoviKanal;
   /** Druga konekcija na istu bazu — za pripremu podataka i provjeru stanja. */
   db: Database;
   tring: LaziTring;
@@ -73,13 +90,18 @@ export interface OpcijeBackenda {
    * `null` = baza ostaje netaknuta (Admin/0000) i niko nije prijavljen.
    */
   prijava?: string | null;
+  /**
+   * Fajl baze (npr. backup iz starije verzije programa) koji backend otvori
+   * umjesto nove prazne baze — kopira se, original ostaje netaknut.
+   */
+  baza?: string;
 }
 
 export async function otvoriBackend(opcije: OpcijeBackenda = {}): Promise<Backend> {
   const vrsta = process.env.KASA_BACKEND ?? 'ts';
   let b: Backend;
-  if (vrsta === 'ts') b = await (await import('./tsBackend')).otvoriTsBackend();
-  else if (vrsta === 'rust') b = await (await import('./rustBackend')).otvoriRustBackend();
+  if (vrsta === 'ts') b = await (await import('./tsBackend')).otvoriTsBackend(opcije.baza);
+  else if (vrsta === 'rust') b = await (await import('./rustBackend')).otvoriRustBackend(opcije.baza);
   else throw new Error(`Nepoznat KASA_BACKEND: ${vrsta}`);
   if (opcije.prijava === undefined) {
     b.db.prepare('UPDATE users SET pin = ? WHERE id = 1').run(hesirajPin(ADMIN_PIN));
@@ -95,4 +117,14 @@ export async function prijavi(b: Backend, pin: string): Promise<{ id: number; im
   const u = await b.call('user:login', pin);
   if (!u) throw new Error(`Prijava PIN-om ${pin} nije uspjela`);
   return u;
+}
+
+/**
+ * Poziv kanala zadanog tekstom, s bilo kojim argumentima — za kanale koji ne
+ * postoje (uklonjeni), liste kanala i pogrešan broj argumenata.
+ */
+export function pozoviBezTipova(b: Backend, kanal: string, ...args: unknown[]): Promise<unknown> {
+  // Oba harnessa primaju bilo koji kanal i argumente; tip `call` ih samo sužava na ugovor.
+  const sirovo = b.call.bind(b) as unknown as (kanal: string, ...args: unknown[]) => Promise<unknown>;
+  return sirovo(kanal, ...args);
 }

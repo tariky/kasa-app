@@ -11,7 +11,8 @@ use crate::greska::R;
 use crate::js::{self, has};
 use crate::sesija::{self, Korisnik, Pokusaji};
 use crate::sql::Db;
-use crate::{audit, baci, p, Args, Backend};
+use crate::kanali::Kanal;
+use crate::{audit, baci, p, Backend};
 
 pub const ULOGE: [&str; 2] = ["admin", "kasir"];
 
@@ -172,11 +173,6 @@ pub fn osiguraj_zadanog_admina(db: &Db) -> R<()> {
     Ok(())
 }
 
-/// JS `r.id === osimId` (id iz baze je broj; id iz payload-a je šta god je poslano).
-fn isti_id(id: i64, osim: &Value) -> bool {
-    osim.as_f64() == Some(id as f64)
-}
-
 /// Korisnik čiji PIN odgovara (opcionalno samo među adminima, osim datog id-a).
 /// Provjerava se svaki red, bez ranog izlaza, da trajanje ne otkriva koji je
 /// korisnik pogođen.
@@ -192,7 +188,8 @@ pub fn nadji_po_pinu(db: &Db, pin: &Value, samo_admin: bool, osim_id: Option<&Va
         if samo_admin && uloga != "admin" {
             continue;
         }
-        if osim_id.is_some_and(|o| isti_id(id, o)) {
+        // `r.id === osimId` — id iz payload-a je šta god je poslano.
+        if osim_id.is_some_and(|o| js::jednako(&json!(id), o)) {
             continue;
         }
         nadjen = Some(Korisnik { id, ime: r["ime"].clone(), uloga });
@@ -210,21 +207,6 @@ pub fn pin_korisnika(db: &Db, id: i64, pin: &Value) -> R<bool> {
     Ok(db.get("SELECT pin FROM users WHERE id = ?", p![id])?.is_some_and(|r| provjeri_pin(pin, &js::to_string(&r["pin"]))))
 }
 
-/// Admin PIN za radnju kasira (storno). Neuspjeh ulazi u ograničenje
-/// pokušaja; baca 'Neispravan admin PIN'. Uspjeh ne briše ranije neuspjehe.
-pub fn provjeri_admin_pin(b: &Backend, pin: &Value) -> R<Korisnik> {
-    let db = b.db()?;
-    let pokusaji = Pokusaji::novi(db, b.sat.ms());
-    pokusaji.provjeri()?;
-    match nadji_po_pinu(db, pin, true, None)? {
-        Some(admin) => Ok(admin),
-        None => {
-            pokusaji.neuspjeh()?;
-            baci!("Neispravan admin PIN")
-        }
-    }
-}
-
 /// Admin koji je jedini admin u bazi — ne smije se obrisati ni degradirati.
 fn je_posljednji_admin(db: &Db, id: &Value) -> R<bool> {
     if db.val("SELECT uloga FROM users WHERE id = ?", p![id])? != "admin" {
@@ -238,7 +220,7 @@ fn je_posljednji_admin(db: &Db, id: &Value) -> R<bool> {
 fn login(b: &Backend, pin: &Value) -> R<Value> {
     // Nova prijava uvijek poništi staru sesiju, i kad ne uspije.
     b.sesija.postavi(None, false);
-    let db = b.db()?;
+    let db = b.db();
     let pokusaji = Pokusaji::novi(db, b.sat.ms());
     pokusaji.provjeri()?;
     let Some(u) = nadji_po_pinu(db, pin, false, None)? else {
@@ -261,7 +243,7 @@ fn promijeni_svoj_pin(b: &Backend, stari: &Value, novi: &Value) -> R<Value> {
     if novi_pin == ZADANI_PIN {
         baci!("Novi PIN ne smije biti {ZADANI_PIN}");
     }
-    let db = b.db()?;
+    let db = b.db();
     let sada = b.sat.ms();
     let pokusaji = Pokusaji::novi(db, sada);
     pokusaji.provjeri()?;
@@ -284,7 +266,7 @@ fn promijeni_svoj_pin(b: &Backend, stari: &Value, novi: &Value) -> R<Value> {
 }
 
 fn create(b: &Backend, data: &Value) -> R<Value> {
-    let db = b.db()?;
+    let db = b.db();
     if js::blank(&data["ime"]) {
         baci!("Ime korisnika je obavezno");
     }
@@ -302,7 +284,7 @@ fn create(b: &Backend, data: &Value) -> R<Value> {
 }
 
 fn update(b: &Backend, id: &Value, data: &Value) -> R<Value> {
-    let db = b.db()?;
+    let db = b.db();
     let mut fields: Vec<&str> = Vec::new();
     let mut values: Vec<Value> = Vec::new();
     // Audit: nova imena i uloga, a za PIN samo da je promijenjen.
@@ -351,7 +333,7 @@ fn update(b: &Backend, id: &Value, data: &Value) -> R<Value> {
 }
 
 fn delete(b: &Backend, id: &Value) -> R<Value> {
-    let db = b.db()?;
+    let db = b.db();
     for (tabela, poruka) in VEZE_KORISNIKA {
         if db.ima(&format!("SELECT 1 FROM {tabela} WHERE korisnikId = ? LIMIT 1"), p![id])? {
             baci!("{poruka}");
@@ -370,25 +352,21 @@ fn delete(b: &Backend, id: &Value) -> R<Value> {
     })
 }
 
-pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
-    let db = match b.db() {
-        Ok(db) => db,
-        Err(e) => return Some(Err(e)),
-    };
-    Some(match kanal {
-        "user:login" => login(b, &a[0]),
-        "user:logout" => {
+pub const KANALI: &[Kanal] = &[
+    Kanal { ime: "user:login", h: |b, a| login(b, &a[0]) },
+    Kanal {
+        ime: "user:logout",
+        h: |b, _| {
             b.sesija.postavi(None, false);
             Ok(json!({ "success": true }))
-        }
-        "user:promijeniSvojPin" => promijeni_svoj_pin(b, &a[0], &a[1]),
-        "user:getAll" => db.all("SELECT id, ime, uloga FROM users ORDER BY ime", p![]).map(Value::from),
-        "user:create" => create(b, &a[0]),
-        "user:update" => update(b, &a[0], &a[1]),
-        "user:delete" => delete(b, &a[0]),
-        _ => return None,
-    })
-}
+        },
+    },
+    Kanal { ime: "user:promijeniSvojPin", h: |b, a| promijeni_svoj_pin(b, &a[0], &a[1]) },
+    Kanal { ime: "user:getAll", h: |b, _| b.db().all("SELECT id, ime, uloga FROM users ORDER BY ime", p![]).map(Value::from) },
+    Kanal { ime: "user:create", h: |b, a| create(b, &a[0]) },
+    Kanal { ime: "user:update", h: |b, a| update(b, &a[0], &a[1]) },
+    Kanal { ime: "user:delete", h: |b, a| delete(b, &a[0]) },
+];
 
 #[cfg(test)]
 mod tests {

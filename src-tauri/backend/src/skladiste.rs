@@ -5,12 +5,13 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::{json, Value};
 
-use crate::greska::{self, Greska, R};
+use crate::greska::R;
 use crate::js;
 use crate::p;
 use crate::sql::Db;
-use crate::katalog::razlicito;
-use crate::{audit, baci, Args, Backend};
+use crate::zaliha::{self, Dokument, Smjer, TOLERANCIJA_ZALIHE};
+use crate::kanali::Kanal;
+use crate::{audit, baci, Backend};
 
 /// Tolerancija pri poređenju cijena (fening).
 const EPS: f64 = 0.001;
@@ -40,11 +41,6 @@ fn tekst(v: Option<&Value>) -> String {
     v.map(js::to_string).unwrap_or_else(|| "undefined".into())
 }
 
-/// Niz iz vrijednosti (`data.stavke`); nije niz → prazan.
-fn niz(v: &Value) -> &[Value] {
-    v.as_array().map(|a| a.as_slice()).unwrap_or(&[])
-}
-
 /// Promjena prodajne cijene artikla (`PriceChange`).
 #[derive(Clone)]
 struct PriceChange {
@@ -59,19 +55,6 @@ impl PriceChange {
     fn za_historiju(c: &[PriceChange]) -> Vec<(Value, Value, Value)> {
         c.iter().map(|c| (c.product_id.clone(), c.stara_cijena.clone(), c.nova_cijena.clone())).collect()
     }
-}
-
-/// Trenutno stanje artikla izračunato iz kretanja zaliha.
-fn get_product_stock(db: &Db, product_id: &Value) -> R<Value> {
-    db.val(
-        "
-    SELECT COALESCE(
-      SUM(CASE WHEN tip = 'ulaz' THEN kolicina ELSE -kolicina END), 0
-    ) AS stanje
-    FROM stock_movements WHERE productId = ?
-  ",
-        p![product_id],
-    )
 }
 
 /// Razvrsta izmjene prodajne cijene sa primke u dvije grupe (dedup po artiklu):
@@ -99,7 +82,7 @@ fn collect_price_changes<'a>(db: &Db, stavke: impl IntoIterator<Item = &'a Value
             continue;
         }
 
-        let existing_stock = get_product_stock(db, &pid)?;
+        let existing_stock = zaliha::stanje(db, &pid)?;
         let change = PriceChange {
             product_id: pid,
             kolicina: existing_stock.clone(),
@@ -107,7 +90,7 @@ fn collect_price_changes<'a>(db: &Db, stavke: impl IntoIterator<Item = &'a Value
             nova_cijena: ili_null(polje(stavka, "cijena")),
             pdv_stopa: ili_null(polje(stavka, "pdvStopa")),
         };
-        if js::to_number(&existing_stock) > 0.0 {
+        if js::to_number(&existing_stock) > TOLERANCIJA_ZALIHE {
             nivelacija.push(change);
         } else {
             bez_zaliha.push(change);
@@ -156,14 +139,21 @@ impl Vracanje {
 
 /// Vrati `staraCijena` artiklima koji još uvijek stoje na `novaCijena`. Ako je
 /// cijenu u međuvremenu promijenilo nešto drugo (kasnija primka, ručna izmjena),
-/// ta vrijednost se ne smije pregaziti. Vraća broj vraćenih artikala.
-fn vrati_cijene_ako_nepromijenjene(db: &Db, promjene: &[&Vracanje]) -> R<i64> {
+/// ta vrijednost se ne smije pregaziti. Vraćena cijena se upisuje u historiju s
+/// današnjim datumom (poništen red — samo trag za izvoz, nije dio lanca), pa
+/// izvoz za raniji dan i dalje vidi cijenu koja je tada važila. Vraća broj
+/// vraćenih artikala.
+fn vrati_cijene_ako_nepromijenjene(db: &Db, primka_id: &Value, promjene: &[&Vracanje]) -> R<i64> {
     let mut reverted = 0;
     for p in promjene {
         let current = db.get("SELECT cijena FROM products WHERE id = ?", p![p.product_id])?;
         if let Some(current) = current {
             if (js::to_number(&current["cijena"]) - js::to_number(&p.nova_cijena)).abs() <= EPS {
                 db.run("UPDATE products SET cijena = ?, updatedAt = datetime('now','localtime') WHERE id = ?", p![p.stara_cijena, p.product_id])?;
+                db.run(
+                    "INSERT INTO cijena_historija (productId, izvor, izvorId, staraCijena, novaCijena, ponistena) VALUES (?, 'primka', ?, ?, ?, 1)",
+                    p![p.product_id, primka_id, current["cijena"], p.stara_cijena],
+                )?;
                 reverted += 1;
             }
         }
@@ -212,7 +202,7 @@ fn revert_nivelacija_prices(db: &Db, primka_id: &Value, preskoci: &HashSet<Strin
             odabrane.push(p);
         }
     }
-    vrati_cijene_ako_nepromijenjene(db, &odabrane)
+    vrati_cijene_ako_nepromijenjene(db, primka_id, &odabrane)
 }
 
 /// Isto kao `revert_nivelacija_prices`, ali za cijene koje je primka promijenila
@@ -233,7 +223,7 @@ fn revert_prices_without_stock(db: &Db, primka_id: &Value, preskoci: &HashSet<St
         .collect();
     let odabrane: Vec<&Vracanje> =
         promjene.iter().filter(|p| !preskoci.contains(&kljuc(&p.product_id)) && u_skupu(samo, &p.product_id)).collect();
-    vrati_cijene_ako_nepromijenjene(db, &odabrane)
+    vrati_cijene_ako_nepromijenjene(db, primka_id, &odabrane)
 }
 
 // ── Historija promjena cijena (cijena_historija) ───────────────────────
@@ -259,12 +249,14 @@ pub fn zapisi_promjene_cijena(db: &Db, izvor: &str, izvor_id: &Value, promjene: 
 ///  - posljednja je: artikal se vraća na staru cijenu, ali samo ako još stoji
 ///    na cijeni ove primke (zaštita od izmjene mimo historije).
 ///
+/// Red se ne briše nego označi poništenim (`ponistena = 1`): lanac ga više ne
+/// vidi, a izvoz i dalje zna koja je cijena tada važila.
 /// Vraća artikle koje je historija pokrila (za njih se stari put ne koristi).
 /// `samo` ograniči poništavanje na te artikle (izmjena primke).
 fn ponisti_promjene_cijena_primke(db: &Db, primka_id: &Value, samo: Option<&HashSet<String>>) -> R<HashSet<String>> {
     let promjene: Vec<Value> = db
         .all(
-            "SELECT id, productId, staraCijena, novaCijena FROM cijena_historija WHERE izvor = 'primka' AND izvorId = ? ORDER BY id",
+            "SELECT id, productId, staraCijena, novaCijena FROM cijena_historija WHERE izvor = 'primka' AND izvorId = ? AND ponistena = 0 ORDER BY id",
             p![primka_id],
         )?
         .into_iter()
@@ -274,13 +266,12 @@ fn ponisti_promjene_cijena_primke(db: &Db, primka_id: &Value, samo: Option<&Hash
     let mut pokriveni = HashSet::new();
     for p in &promjene {
         pokriveni.insert(kljuc(&p["productId"]));
-        let s = db.get("SELECT id FROM cijena_historija WHERE productId = ? AND id > ? ORDER BY id LIMIT 1", p![p["productId"], p["id"]])?;
-        if let Some(s) = s {
+        if let Some(s) = sljedeca_promjena(db, &p["productId"], &p["id"])? {
             db.run("UPDATE cijena_historija SET staraCijena = ? WHERE id = ?", p![p["staraCijena"], s["id"]])?;
         } else {
-            vrati_cijene_ako_nepromijenjene(db, &[&Vracanje::iz(p)])?;
+            vrati_cijene_ako_nepromijenjene(db, primka_id, &[&Vracanje::iz(p)])?;
         }
-        db.run("DELETE FROM cijena_historija WHERE id = ?", p![p["id"]])?;
+        db.run("UPDATE cijena_historija SET ponistena = 1 WHERE id = ?", p![p["id"]])?;
     }
     Ok(pokriveni)
 }
@@ -312,7 +303,7 @@ fn artikli_primke(db: &Db, primka_id: &Value) -> R<Vec<Value>> {
             "
     SELECT productId FROM primka_stavke WHERE primkaId = ?
     UNION
-    SELECT productId FROM cijena_historija WHERE izvor = 'primka' AND izvorId = ?
+    SELECT productId FROM cijena_historija WHERE izvor = 'primka' AND izvorId = ? AND ponistena = 0
   ",
             p![primka_id, primka_id],
         )?
@@ -351,7 +342,7 @@ fn audit_cijena_primke(db: &Db, korisnik: Option<i64>, prije: &Cijene, izvor: &s
     let sada = cijene_artikala(db, &ids)?;
     for (product_id, stara_cijena) in &prije.red {
         let nova = sada.red.iter().find(|(id, _)| kljuc(id) == kljuc(product_id)).map(|(_, c)| c);
-        if let Some(nova_cijena) = nova.filter(|n| razlicito(n, stara_cijena)) {
+        if let Some(nova_cijena) = nova.filter(|n| !js::jednako(n, stara_cijena)) {
             audit::zapisi(
                 db,
                 korisnik,
@@ -378,8 +369,8 @@ fn promjene_u_prodaji(db: &Db, prije: &Cijene) -> R<Vec<PriceChange>> {
         if p["tip"] == "materijal" || (js::to_number(&p["cijena"]) - js::to_number(stara_cijena)).abs() <= EPS {
             continue;
         }
-        let kolicina = get_product_stock(db, product_id)?;
-        if js::to_number(&kolicina) > 0.0 {
+        let kolicina = zaliha::stanje(db, product_id)?;
+        if js::to_number(&kolicina) > TOLERANCIJA_ZALIHE {
             out.push(PriceChange {
                 product_id: product_id.clone(),
                 kolicina,
@@ -428,13 +419,14 @@ fn napomena_protunivelacije(razlog: &str, brojevi: &[String]) -> String {
 /// Promjena cijene artikla koju je primka upisala u historiju (najviše jedna po artiklu).
 fn promjena_cijene_primke(db: &Db, primka_id: &Value, product_id: &Value) -> R<Option<Value>> {
     db.get(
-        "SELECT id, staraCijena, novaCijena FROM cijena_historija WHERE izvor = 'primka' AND izvorId = ? AND productId = ? ORDER BY id DESC LIMIT 1",
+        "SELECT id, staraCijena, novaCijena FROM cijena_historija WHERE izvor = 'primka' AND izvorId = ? AND productId = ? AND ponistena = 0 ORDER BY id DESC LIMIT 1",
         p![primka_id, product_id],
     )
 }
 
+/// Sljedeća promjena u lancu (poništeni redovi nisu dio lanca).
 fn sljedeca_promjena(db: &Db, product_id: &Value, id: &Value) -> R<Option<Value>> {
-    db.get("SELECT id FROM cijena_historija WHERE productId = ? AND id > ? ORDER BY id LIMIT 1", p![product_id, id])
+    db.get("SELECT id FROM cijena_historija WHERE productId = ? AND id > ? AND ponistena = 0 ORDER BY id LIMIT 1", p![product_id, id])
 }
 
 /// Da li je prodajnu cijenu artikla poslije ove primke mijenjalo nešto drugo
@@ -452,7 +444,7 @@ fn cijena_kasnije_mijenjana(db: &Db, primka_id: &Value, product_id: &Value) -> R
     db.ima(
         "
     SELECT 1 FROM cijena_historija
-    WHERE productId = ? AND (
+    WHERE productId = ? AND ponistena = 0 AND (
       (izvor = 'primka' AND izvorId > ?) OR
       (izvor = 'rucno' AND createdAt >= (SELECT createdAt FROM primke WHERE id = ?))
     ) LIMIT 1
@@ -535,7 +527,12 @@ fn pripremi_izmjenu_primke(db: &Db, primka_id: &Value, nove_stavke: &[Value]) ->
         let Some(h) = promjena_cijene_primke(db, primka_id, product_id)? else { continue };
         if let Some(sljedeca) = sljedeca_promjena(db, product_id, &h["id"])? {
             let nova_cijena = ili_null(polje(nova, "cijena"));
-            db.run("UPDATE cijena_historija SET novaCijena = ? WHERE id = ?", p![nova_cijena, h["id"]])?;
+            // Nova cijena u lancu se ispravlja, a ona koja je stvarno bila u
+            // prodaji (za izvoz) ostaje zapamćena u cijenaUProdaji — prva, jednom.
+            db.run(
+                "UPDATE cijena_historija SET cijenaUProdaji = COALESCE(cijenaUProdaji, novaCijena), novaCijena = ? WHERE id = ?",
+                p![nova_cijena, h["id"]],
+            )?;
             db.run("UPDATE cijena_historija SET staraCijena = ? WHERE id = ?", p![nova_cijena, sljedeca["id"]])?;
         }
     }
@@ -573,13 +570,29 @@ fn stare_cijene_izmjene(stavke: &[Value], bez_zaliha: &[PriceChange], zadrzane: 
 struct PocetakPregleda {
     zadnja_nivelacija: Value,
     cijene: HashMap<String, Value>,
+    /// Izmjena/brisanje: (productId, zaliha prije operacije, zaliha bez robe iz te primke), redom artikala.
+    zalihe: Vec<(Value, f64, f64)>,
 }
 
-/// Stanje prije operacije: zadnja nivelacija i sve prodajne cijene.
-fn pocetak_pregleda(db: &Db) -> R<PocetakPregleda> {
+/// Stanje prije operacije: zadnja nivelacija i sve prodajne cijene; uz
+/// `primka_id` (izmjena, brisanje) i zaliha njenih artikala — za upozorenja.
+fn pocetak_pregleda(db: &Db, primka_id: Option<&Value>) -> R<PocetakPregleda> {
     let zadnja = db.val("SELECT COALESCE(MAX(id), 0) AS id FROM nivelacije", p![])?;
     let cijene = db.all("SELECT id, cijena FROM products", p![])?.into_iter().map(|p| (kljuc(&p["id"]), p["cijena"].clone())).collect();
-    Ok(PocetakPregleda { zadnja_nivelacija: zadnja, cijene })
+    let mut zalihe = Vec::new();
+    if let Some(primka_id) = primka_id {
+        let mut artikli = artikli_primke(db, primka_id)?;
+        artikli.sort_by(|a, b| js::to_number(a).partial_cmp(&js::to_number(b)).unwrap_or(std::cmp::Ordering::Equal));
+        for product_id in artikli {
+            let stanje = js::to_number(&zaliha::stanje(db, &product_id)?);
+            let ulaz = db.val(
+                "SELECT COALESCE(SUM(kolicina), 0) AS k FROM stock_movements WHERE referenceType = 'primka' AND referenceId = ? AND productId = ? AND tip = 'ulaz'",
+                p![primka_id, product_id],
+            )?;
+            zalihe.push((product_id, stanje, stanje - js::to_number(&ulaz)));
+        }
+    }
+    Ok(PocetakPregleda { zadnja_nivelacija: zadnja, cijene, zalihe })
 }
 
 /// Nivelacije nastale poslije `pocetak` i promjene cijena koje nisu u njima
@@ -621,14 +634,34 @@ fn rezultat_pregleda(db: &Db, pocetak: &PocetakPregleda, cijena_ostaje: Vec<Valu
         }
     }
 
+    // Upozorenja (izmjena, brisanje): negativno stanje ne blokira, ali korisnik
+    // mora znati — (a) zaliha poslije je u minusu i manja nego prije; (b) cijena
+    // se mijenja, a roba s ove primke je već (djelimično) prodana po staroj
+    // cijeni (zaliha bez primke je bila u minusu, pa nivelacije nema).
+    let mut upozorenja = Vec::new();
+    for (product_id, stanje, bez_primke) in &pocetak.zalihe {
+        let poslije = js::to_number(&zaliha::stanje(db, product_id)?);
+        let naziv = db.get("SELECT naziv FROM products WHERE id = ?", p![product_id])?.map(|r| r["naziv"].clone()).unwrap_or_else(|| json!(""));
+        let r = |vrsta: &str| {
+            json!({ "vrsta": vrsta, "productId": product_id, "productNaziv": naziv, "stanjePrije": js::f(*stanje), "stanjePoslije": js::f(poslije) })
+        };
+        if poslije < -TOLERANCIJA_ZALIHE && poslije < stanje - TOLERANCIJA_ZALIHE {
+            upozorenja.push(r("minus"));
+        }
+        if promijenjene.contains(&kljuc(product_id)) && *bez_primke < -TOLERANCIJA_ZALIHE {
+            upozorenja.push(r("prodano"));
+        }
+    }
+
     let cijena_ostaje: Vec<Value> = cijena_ostaje.into_iter().filter(|c| !promijenjene.contains(&kljuc(&c["productId"]))).collect();
-    Ok(json!({ "dokumenti": dokumenti, "bezZalihe": bez_zalihe, "cijenaOstaje": cijena_ostaje }))
+    Ok(json!({ "dokumenti": dokumenti, "bezZalihe": bez_zalihe, "cijenaOstaje": cijena_ostaje, "upozorenja": upozorenja }))
 }
 
 /// Kanonski otisak pregleda — ono što korisnik potvrđuje pri spremanju ili
 /// brisanju ulaza: svaki dokument (vrsta, broj, datum, napomena, stavke s
 /// artiklom, količinom, starom i novom cijenom i razlikama), promjene cijena
-/// bez dokumenta i cijene koje ostaju. Naziv artikla nije dio otiska: to je
+/// bez dokumenta, cijene koje ostaju i upozorenja (vrsta, artikal, stanje prije
+/// i poslije). Naziv artikla nije dio otiska: to je
 /// oznaka za prikaz, dokument artikal veže po id-u, pa preimenovanje ne mijenja
 /// ništa što se upisuje. Brojevi se zaokružuju na 6 decimala (šum pri
 /// sabiranju), redoslijed dokumenata ostaje (to je redoslijed brojeva).
@@ -689,10 +722,19 @@ fn otisak_pregleda(p: &Value) -> Option<String> {
         for s in niz(q.get("cijenaOstaje"))? {
             cijena_ostaje.push(stavka(s, &["cijena"])?);
         }
+        let mut upozorenja = Vec::new();
+        for s in niz(q.get("upozorenja"))? {
+            // `v: [String(s.vrsta), n(s.stanjePrije), n(s.stanjePoslije)]`
+            let pid = n(dio(Some(s), "productId")?)?;
+            let vrsta = tekst(dio(Some(s), "vrsta")?);
+            let v = vec![Value::from(vrsta), n(dio(Some(s), "stanjePrije")?)?, n(dio(Some(s), "stanjePoslije")?)?];
+            upozorenja.push((pid.as_f64().unwrap_or(0.0), json!({ "productId": pid, "v": v })));
+        }
         Ok(js::stringify(&json!({
             "dokumenti": dokumenti,
             "bezZalihe": po_artiklu(bez_zalihe),
             "cijenaOstaje": po_artiklu(cijena_ostaje),
+            "upozorenja": po_artiklu(upozorenja),
         })))
     }
     // `!q || typeof q !== 'object'`
@@ -737,9 +779,8 @@ fn cijene_koje_ostaju(db: &Db, primka_id: &Value, nove_stavke: &[Value]) -> R<Ve
 /// ponoć — deterministično (izmjena primke ne pomjera vrijeme) i unutar dana
 /// pri poređenju stringova (`BETWEEN 'D 00:00:00' AND 'D 23:59:59'`, `LIKE 'D%'`).
 fn datum_kretanja_primke(datum: &Value) -> Value {
-    thread_local!(static DATUM: regex::Regex = regex::Regex::new(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$").unwrap());
     let s = js::to_string(datum);
-    if DATUM.with(|r| r.is_match(&s)) { Value::String(format!("{s} 00:00:00")) } else { datum.clone() }
+    if js::iso_datum(&s) { Value::String(format!("{s} 00:00:00")) } else { datum.clone() }
 }
 
 /// Zajednička validacija za primka:create i primka:update. Baca grešku sa
@@ -759,9 +800,28 @@ fn validiraj_primku(db: &Db, data: &Value, primka_id: &Value) -> R<String> {
         baci!("Primka sa brojem \"{}\" već postoji", tekst(polje(data, "brojPrimke")));
     }
 
-    for s in niz(stavke) {
-        if !db.ima("SELECT 1 FROM products WHERE id = ?", p![ili_null(polje(s, "productId"))])? {
+    // Stavka: artikal koji ide na zalihu (ne usluga ni slobodna stavka s kase),
+    // količina konačan broj > 0, prodajna i nabavna konačne i ≥ 0.
+    let konacan = |k: &str, s: &Value| polje(s, k).and_then(Value::as_f64).filter(|x| x.is_finite());
+    for s in js::niz_ili_prazno(stavke) {
+        let Some(a) = db.get("SELECT naziv, tip, slobodan FROM products WHERE id = ?", p![ili_null(polje(s, "productId"))])? else {
             baci!("Artikal (ID {}) ne postoji", tekst(polje(s, "productId")));
+        };
+        let naziv = js::to_string(&a["naziv"]);
+        if a["tip"] == "usluga" {
+            baci!("\"{naziv}\" je usluga i ne ide na ulaz robe");
+        }
+        if js::to_number(&a["slobodan"]) == 1.0 {
+            baci!("\"{naziv}\" je slobodna stavka i ne ide na ulaz robe");
+        }
+        if !konacan("kolicina", s).is_some_and(|x| x > 0.0) {
+            baci!("Količina za \"{naziv}\" mora biti veća od nule");
+        }
+        if !konacan("cijena", s).is_some_and(|x| x >= 0.0) {
+            baci!("Prodajna cijena za \"{naziv}\" nije ispravna");
+        }
+        if !konacan("nabavnaCijena", s).is_some_and(|x| x >= 0.0) {
+            baci!("Nabavna cijena za \"{naziv}\" nije ispravna");
         }
     }
     Ok(broj_primke)
@@ -869,18 +929,15 @@ fn create_nivelacija(db: &Db, dan: &Dan, primka_id: &Value, price_diffs: &[Price
     Ok(Some(broj_nivelacije))
 }
 
-fn insert_stavka_i_ulaz(db: &Db, primka_id: &Value, stavka: &Value, stara_cijena: &Value, datum_ulaza: &Value) -> R<()> {
+fn insert_stavka(db: &Db, primka_id: &Value, stavka: &Value, stara_cijena: &Value) -> R<()> {
     let g = |k| ili_null(polje(stavka, k));
     db.run(
         "INSERT INTO primka_stavke (primkaId, productId, kolicina, cijena, nabavnaCijena, rabat, zavisniTroskovi, pdvStopa, staraCijena) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         p![primka_id, g("productId"), g("kolicina"), g("cijena"), g("nabavnaCijena"), g("rabat"), js::nn(&g("zavisniTroskovi"), &json!(0)), g("pdvStopa"), stara_cijena],
     )?;
-    db.run(
-        "INSERT INTO stock_movements (productId, tip, kolicina, referenceType, referenceId, createdAt) VALUES (?, 'ulaz', ?, 'primka', ?, ?)",
-        p![g("productId"), g("kolicina"), primka_id, datum_ulaza],
-    )?;
     Ok(())
 }
+
 
 /// dobavljacNaziv, dobavljacId, dobavljacAdresa, napomena, brojFakture (`?? null`).
 fn zaglavlje(data: &Value) -> [Value; 5] {
@@ -892,7 +949,7 @@ fn zaglavlje(data: &Value) -> [Value; 5] {
 // logika, pa najava na ekranu ne može odstupiti od onoga što spremanje uradi.
 fn unesi_primku(db: &Db, dan: &Dan, data: &Value) -> R<Value> {
     let broj_primke = validiraj_primku(db, data, &Value::Null)?;
-    let cijene_prije = cijene_artikala(db, &niz(&data["stavke"]).iter().map(|s| ili_null(polje(s, "productId"))).collect::<Vec<_>>())?;
+    let cijene_prije = cijene_artikala(db, &js::niz_ili_prazno(&data["stavke"]).iter().map(|s| ili_null(polje(s, "productId"))).collect::<Vec<_>>())?;
     let danas = Value::from(dan.danas.clone());
     let datum = js::or(&data["datum"], &danas).clone();
     let [dn, di, da, na, bf] = zaglavlje(data);
@@ -901,7 +958,7 @@ fn unesi_primku(db: &Db, dan: &Dan, data: &Value) -> R<Value> {
         p![broj_primke, datum, dn, di, da, na, bf],
     )?;
     let primka_id = Value::from(result.last_insert_rowid);
-    let stavke = niz(&data["stavke"]);
+    let stavke = js::niz_ili_prazno(&data["stavke"]);
 
     // Collect price diffs BEFORE inserting stock (so stock reflects pre-delivery state)
     let (nivelacija, bez_zaliha) = collect_price_changes(db, stavke)?;
@@ -909,11 +966,12 @@ fn unesi_primku(db: &Db, dan: &Dan, data: &Value) -> R<Value> {
     // Now insert stavke and stock movements. Artiklima bez zalihe stavka
     // pamti staru cijenu (nema nivelacije) da je update/delete može vratiti.
     let stare_cijene = stare_cijene_stavki(stavke, &bez_zaliha);
-    // Ulaz na zalihu nosi datum primke; nivelacija ostaje s današnjim datumom.
-    let datum_ulaza = datum_kretanja_primke(&datum);
     for (stavka, stara) in stavke.iter().zip(&stare_cijene) {
-        insert_stavka_i_ulaz(db, &primka_id, stavka, stara, &datum_ulaza)?;
+        insert_stavka(db, &primka_id, stavka, stara)?;
     }
+    // Ulaz na zalihu nosi datum primke; nivelacija ostaje s današnjim datumom.
+    let ulaz = stavke.iter().map(|s| (&s["productId"], &s["kolicina"]));
+    zaliha::knjizi(db, Dokument { vrsta: "primka", id: &primka_id }, Smjer::Ulaz, ulaz, &datum_kretanja_primke(&datum))?;
 
     let sve: Vec<PriceChange> = nivelacija.iter().chain(&bez_zaliha).cloned().collect();
     upisi_cijene(db, &sve)?;
@@ -929,7 +987,7 @@ fn izmijeni_primku(db: &Db, dan: &Dan, data: &Value) -> R<Value> {
     let broj_primke = validiraj_primku(db, data, &id)?;
     let danas = Value::from(dan.danas.clone());
     let datum = js::or(&data["datum"], &danas).clone();
-    let stavke = niz(&data["stavke"]);
+    let stavke = js::niz_ili_prazno(&data["stavke"]);
 
     let [dn, di, da, na, bf] = zaglavlje(data);
     db.run(
@@ -951,7 +1009,7 @@ fn izmijeni_primku(db: &Db, dan: &Dan, data: &Value) -> R<Value> {
 
     // Delete old stavke and stock movements
     db.run("DELETE FROM primka_stavke WHERE primkaId = ?", p![id])?;
-    db.run("DELETE FROM stock_movements WHERE referenceType = 'primka' AND referenceId = ?", p![id])?;
+    zaliha::ponisti(db, Dokument { vrsta: "primka", id: &id })?;
 
     // Collect price diffs BEFORE inserting stock — samo za dodane artikle i
     // promijenjene cijene koje ova primka i dalje određuje.
@@ -981,11 +1039,12 @@ fn izmijeni_primku(db: &Db, dan: &Dan, data: &Value) -> R<Value> {
     // pamti staru cijenu (nema nivelacije) da je update/delete može vratiti;
     // zadržane promjene zadržavaju svoju zapamćenu cijenu.
     let stare_cijene = stare_cijene_izmjene(stavke, &bez_zaliha, &izmjena.zadrzane_stare_cijene);
-    // Ulaz na zalihu nosi datum primke; nivelacija ostaje s današnjim datumom.
-    let datum_ulaza = datum_kretanja_primke(&datum);
     for (stavka, stara) in stavke.iter().zip(&stare_cijene) {
-        insert_stavka_i_ulaz(db, &id, stavka, stara, &datum_ulaza)?;
+        insert_stavka(db, &id, stavka, stara)?;
     }
+    // Ulaz na zalihu nosi datum primke; nivelacija ostaje s današnjim datumom.
+    let ulaz = stavke.iter().map(|s| (&s["productId"], &s["kolicina"]));
+    zaliha::knjizi(db, Dokument { vrsta: "primka", id: &id }, Smjer::Ulaz, ulaz, &datum_kretanja_primke(&datum))?;
 
     audit_cijena_primke(db, dan.korisnik, &prije, "primka:izmjena", &id)?;
 
@@ -1005,7 +1064,7 @@ fn obrisi_primku(db: &Db, dan: &Dan, id: &Value) -> R<Value> {
     revert_primka_prices(db, id, None)?;
 
     db.run("DELETE FROM primka_stavke WHERE primkaId = ?", p![id])?;
-    db.run("DELETE FROM stock_movements WHERE referenceType = 'primka' AND referenceId = ?", p![id])?;
+    zaliha::ponisti(db, Dokument { vrsta: "primka", id })?;
 
     // Nivelacije primke su dokumenti po kojima se prodavalo i ostaju. Vraćena
     // cijena u prodaji se dokumentuje protunivelacijom s današnjim datumom,
@@ -1046,29 +1105,22 @@ fn obrisi_primku(db: &Db, dan: &Dan, id: &Value) -> R<Value> {
 /// ne ostaje ništa — ni dokumenti, ni historija, ni zaliha, ni brojači
 /// (sqlite_sequence, broj nivelacije). Greška operacije (validacija) ide
 /// pozivaocu kao i bez pregleda. Vraća pregled i rezultat (None = poništeno).
+/// `primka_id` (izmjena, brisanje): pregled nosi i upozorenja za zalihu njenih artikala.
 fn s_pregledom(
     db: &Db,
     operacija: impl FnOnce() -> R<Value>,
     cijena_ostaje: impl FnOnce() -> R<Vec<Value>>,
     zadrzi: impl FnOnce(&Value) -> bool,
+    primka_id: Option<&Value>,
 ) -> R<(Value, Option<Value>)> {
-    let mut ishod = None;
-    let r = db.tx(|| {
-        let pocetak = pocetak_pregleda(db)?;
+    db.tx_s_odlukom(|| {
+        let pocetak = pocetak_pregleda(db, primka_id)?;
         let ostaje = cijena_ostaje()?;
         let rezultat = operacija()?;
         let pregled = rezultat_pregleda(db, &pocetak, ostaje)?;
-        if zadrzi(&pregled) {
-            ishod = Some((pregled, Some(rezultat)));
-            return Ok(());
-        }
-        ishod = Some((pregled, None));
-        Err(Greska(greska::PONISTI.into()))
-    });
-    match r {
-        Err(e) if e.0 != greska::PONISTI => Err(e),
-        _ => Ok(ishod.expect("pregled je postavljen prije potvrde ili poništenja")),
-    }
+        let potvrdi = zadrzi(&pregled);
+        Ok(((pregled, potvrdi.then_some(rezultat)), potvrdi))
+    })
 }
 
 /// Spremanje/brisanje ulaza. Ekran šalje pregled koji je korisnik potvrdio;
@@ -1082,11 +1134,12 @@ fn spremi_potvrdjeno(
     operacija: impl FnOnce() -> R<Value>,
     cijena_ostaje: impl FnOnce() -> R<Vec<Value>>,
     potvrda: &Value,
+    primka_id: Option<&Value>,
 ) -> R<Value> {
     if potvrda.is_null() {
         return db.tx(operacija);
     }
-    match s_pregledom(db, operacija, cijena_ostaje, |pregled| isti_pregled(potvrda, pregled))? {
+    match s_pregledom(db, operacija, cijena_ostaje, |pregled| isti_pregled(potvrda, pregled), primka_id)? {
         (_, Some(rezultat)) => Ok(rezultat),
         (pregled, None) => Ok(json!({ "promijenjeno": true, "pregled": pregled })),
     }
@@ -1098,13 +1151,18 @@ fn bez_cijena_koje_ostaju() -> R<Vec<Value>> {
 
 /// `cijeneKojeOstaju(db, data.id, data.stavke ?? [])`
 fn ostaju_pri_izmjeni(db: &Db, data: &Value) -> R<Vec<Value>> {
-    cijene_koje_ostaju(db, &ili_null(polje(data, "id")), niz(&data["stavke"]))
+    cijene_koje_ostaju(db, &ili_null(polje(data, "id")), js::niz_ili_prazno(&data["stavke"]))
 }
 
 /// Pregled promjena cijena prije spremanja/brisanja — ista operacija, uvijek
 /// poništena; ništa ne upisuje, pa nije u licencnoj blokadi.
-fn bez_upisa(db: &Db, operacija: impl FnOnce() -> R<Value>, cijena_ostaje: impl FnOnce() -> R<Vec<Value>>) -> R<Value> {
-    Ok(s_pregledom(db, operacija, cijena_ostaje, |_| false)?.0)
+fn bez_upisa(
+    db: &Db,
+    operacija: impl FnOnce() -> R<Value>,
+    cijena_ostaje: impl FnOnce() -> R<Vec<Value>>,
+    primka_id: Option<&Value>,
+) -> R<Value> {
+    Ok(s_pregledom(db, operacija, cijena_ostaje, |_| false, primka_id)?.0)
 }
 
 const NIVELACIJE_SELECT: &str = "
@@ -1186,30 +1244,52 @@ fn report_get_data(db: &Db, tip: &Value, from: &Value, to: &Value) -> R<Value> {
     baci!("Nepoznat tip izvještaja: {}", js::to_string(tip))
 }
 
-pub fn obradi(b: &Backend, kanal: &str, a: &Args) -> Option<R<Value>> {
-    let dan = Dan { danas: b.sat.danas(), godina: b.sat.godina(), korisnik: b.sesija.id() };
-    let db = match b.db() {
-        Ok(db) => db,
-        Err(e) => return Some(Err(e)),
-    };
-    let dan = &dan;
-    Some(match kanal {
-        "primka:getAll" => db.all("SELECT * FROM primke ORDER BY datum DESC", p![]).map(Value::from),
-        "primka:get" => get(db, &a[0]),
-        "primka:nextBroj" => next_broj(db, dan),
-        "primka:create" => spremi_potvrdjeno(db, || unesi_primku(db, dan, &a[0]), bez_cijena_koje_ostaju, &a[1]),
-        "primka:update" => spremi_potvrdjeno(db, || izmijeni_primku(db, dan, &a[0]), || ostaju_pri_izmjeni(db, &a[0]), &a[1]),
-        // Uspjeh bez povratne vrijednosti (kao i prije); samo odbijanje nosi pregled.
-        "primka:delete" => spremi_potvrdjeno(db, || obrisi_primku(db, dan, &a[0]), bez_cijena_koje_ostaju, &a[1]),
-        "primka:pregledUnosa" => bez_upisa(db, || unesi_primku(db, dan, &a[0]), bez_cijena_koje_ostaju),
-        "primka:pregledIzmjene" => bez_upisa(db, || izmijeni_primku(db, dan, &a[0]), || ostaju_pri_izmjeni(db, &a[0])),
-        "primka:pregledBrisanja" => bez_upisa(db, || obrisi_primku(db, dan, &a[0]), bez_cijena_koje_ostaju),
-        "nivelacija:getAll" => nivelacija_get_all(db, &a[0], &a[1]),
-        "nivelacija:get" => nivelacija_get(db, &a[0]),
-        "report:getData" => report_get_data(db, &a[0], &a[1], &a[2]),
-        _ => return None,
-    })
+/// "Danas" i prijavljeni korisnik ovog poziva.
+fn dan(b: &Backend) -> Dan {
+    Dan { danas: b.sat.danas(), godina: b.sat.godina(), korisnik: b.sesija.id() }
 }
+
+/// `data.id ?? null` primke koja se mijenja.
+fn id_primke(data: &Value) -> Value {
+    ili_null(polje(data, "id"))
+}
+
+pub const KANALI: &[Kanal] = &[
+    Kanal { ime: "primka:getAll", h: |b, _| b.db().all("SELECT * FROM primke ORDER BY datum DESC", p![]).map(Value::from) },
+    Kanal { ime: "primka:get", h: |b, a| get(b.db(), &a[0]) },
+    Kanal { ime: "primka:nextBroj", h: |b, _| next_broj(b.db(), &dan(b)) },
+    Kanal {
+        ime: "primka:create",
+        h: |b, a| spremi_potvrdjeno(b.db(), || unesi_primku(b.db(), &dan(b), &a[0]), bez_cijena_koje_ostaju, &a[1], None),
+    },
+    Kanal {
+        ime: "primka:update",
+        h: |b, a| {
+            let (db, id) = (b.db(), id_primke(&a[0]));
+            spremi_potvrdjeno(db, || izmijeni_primku(db, &dan(b), &a[0]), || ostaju_pri_izmjeni(db, &a[0]), &a[1], Some(&id))
+        },
+    },
+    // Uspjeh bez povratne vrijednosti (kao i prije); samo odbijanje nosi pregled.
+    Kanal {
+        ime: "primka:delete",
+        h: |b, a| spremi_potvrdjeno(b.db(), || obrisi_primku(b.db(), &dan(b), &a[0]), bez_cijena_koje_ostaju, &a[1], Some(&a[0])),
+    },
+    Kanal { ime: "primka:pregledUnosa", h: |b, a| bez_upisa(b.db(), || unesi_primku(b.db(), &dan(b), &a[0]), bez_cijena_koje_ostaju, None) },
+    Kanal {
+        ime: "primka:pregledIzmjene",
+        h: |b, a| {
+            let (db, id) = (b.db(), id_primke(&a[0]));
+            bez_upisa(db, || izmijeni_primku(db, &dan(b), &a[0]), || ostaju_pri_izmjeni(db, &a[0]), Some(&id))
+        },
+    },
+    Kanal {
+        ime: "primka:pregledBrisanja",
+        h: |b, a| bez_upisa(b.db(), || obrisi_primku(b.db(), &dan(b), &a[0]), bez_cijena_koje_ostaju, Some(&a[0])),
+    },
+    Kanal { ime: "nivelacija:getAll", h: |b, a| nivelacija_get_all(b.db(), &a[0], &a[1]) },
+    Kanal { ime: "nivelacija:get", h: |b, a| nivelacija_get(b.db(), &a[0]) },
+    Kanal { ime: "report:getData", h: |b, a| report_get_data(b.db(), &a[0], &a[1], &a[2]) },
+];
 
 #[cfg(test)]
 mod tests {
@@ -1223,11 +1303,13 @@ mod tests {
                            { "productId": 1, "productNaziv": "A", "kolicina": 1.5, "staraCijena": 1, "novaCijena": 2, "razlika": 1, "ukupnaRazlika": 1.5 }] }],
             "bezZalihe": [],
             "cijenaOstaje": [],
+            "upozorenja": [{ "vrsta": "minus", "productId": 2, "productNaziv": "B", "stanjePrije": 2, "stanjePoslije": -8.0000001 }],
         });
         assert_eq!(
             otisak_pregleda(&p).unwrap(),
-            r#"{"dokumenti":[["nivelacija","NIV-2026-001","2026-03-10",null,[{"productId":1,"v":[1.5,1,2,1,1.5]},{"productId":2,"v":[5,10,12,2,10]}]]],"bezZalihe":[],"cijenaOstaje":[]}"#
+            r#"{"dokumenti":[["nivelacija","NIV-2026-001","2026-03-10",null,[{"productId":1,"v":[1.5,1,2,1,1.5]},{"productId":2,"v":[5,10,12,2,10]}]]],"bezZalihe":[],"cijenaOstaje":[],"upozorenja":[{"productId":2,"v":["minus",2,-8]}]}"#
         );
+        assert_eq!(otisak_pregleda(&json!({ "dokumenti": [], "bezZalihe": [], "cijenaOstaje": [] })), None);
         assert_eq!(otisak_pregleda(&json!({ "dokumenti": [] })), None);
         assert_eq!(otisak_pregleda(&json!(null)), None);
         assert_eq!(datum_kretanja_primke(&json!("2026-03-10")), json!("2026-03-10 00:00:00"));

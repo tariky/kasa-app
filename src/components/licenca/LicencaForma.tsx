@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
-import { cn } from '@/lib/utils';
+import { cn, porukaGreske } from '@/lib/utils';
 import { LICENCA_KONTAKT, type LicencaInfo } from '@/lib/licencaTipovi';
-import { objaviLicencu } from '@/hooks/useLicenca';
+import { useModuliKontekst } from '@/components/ModuliProvider';
 import { Copy, Check, Phone, Mail, KeyRound, Loader2 } from 'lucide-react';
 
 interface Props {
@@ -14,6 +14,7 @@ interface Props {
 
 /** Polje za kod licence, ID uređaja i kontakt — zajedničko dialogu i ekranu aktivacije. */
 export default function LicencaForma({ uredjaj, onAktivirano, tamno }: Props) {
+  const { objaviLicencu } = useModuliKontekst();
   const [kod, setKod] = useState('');
   const [greska, setGreska] = useState('');
   const [radi, setRadi] = useState(false);
@@ -27,9 +28,8 @@ export default function LicencaForma({ uredjaj, onAktivirano, tamno }: Props) {
       objaviLicencu(info);
       setKod('');
       onAktivirano?.(info);
-    } catch (e: any) {
-      // Electron dodaje "Error invoking remote method '…': Error: " ispred poruke.
-      setGreska(String(e?.message ?? e).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''));
+    } catch (e) {
+      setGreska(porukaGreske(e));
     } finally {
       setRadi(false);
     }

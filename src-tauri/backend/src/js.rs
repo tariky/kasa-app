@@ -5,7 +5,9 @@
 //! `parseInt`, `JSON.stringify`... Ovdje su te operacije na jednom mjestu, da
 //! domenski kod čita kao original.
 
-use serde_json::{Map, Value};
+use serde_json::Value;
+
+use crate::greska::{Greska, R};
 
 pub static NULL: Value = Value::Null;
 
@@ -33,11 +35,6 @@ pub fn or<'a>(a: &'a Value, b: &'a Value) -> &'a Value {
 /// `a ?? b` — `undefined` i `null` su u JSON-u isto (`Null`).
 pub fn nn<'a>(a: &'a Value, b: &'a Value) -> &'a Value {
     if a.is_null() { b } else { a }
-}
-
-/// Broj iz vrijednosti bez konverzije tipa (`typeof v === 'number'`).
-pub fn num(v: &Value) -> Option<f64> {
-    v.as_f64()
 }
 
 /// JS `Number(v)` — NaN kad se ne da pretvoriti.
@@ -197,20 +194,6 @@ pub fn parse_int_value(v: &Value) -> Value {
     match parse_int(&to_string(v)) { Some(n) => Value::from(n), None => Value::Null }
 }
 
-/// `parseFloat(s)`; NaN kad nema broja na početku.
-pub fn parse_float(s: &str) -> f64 {
-    let t = s.trim_start();
-    let re = regex::Regex::new(r"^[+-]?(Infinity|[0-9]+\.?[0-9]*(?:[eE][+-]?[0-9]+)?|\.[0-9]+(?:[eE][+-]?[0-9]+)?)").unwrap();
-    match re.find(t) {
-        Some(m) => {
-            let x = m.as_str();
-            if x.ends_with("Infinity") { return if x.starts_with('-') { f64::NEG_INFINITY } else { f64::INFINITY }; }
-            x.parse().unwrap_or(f64::NAN)
-        }
-        None => f64::NAN,
-    }
-}
-
 /// `String(n).padStart(len, '0')`
 pub fn pad(n: i64, len: usize) -> String {
     format!("{:0>width$}", n, width = len)
@@ -256,11 +239,6 @@ pub fn parse(s: &str) -> Result<Value, String> {
     serde_json::from_str(s).map_err(|e| format!("JSON Parse error: {e}"))
 }
 
-/// Prazan objekat za `json!`-olike konstrukcije.
-pub fn obj() -> Map<String, Value> {
-    Map::new()
-}
-
 /// `s?.trim()` — `None` kad vrijednost nije string.
 pub fn trim(v: &Value) -> Option<&str> {
     v.as_str().map(|s| s.trim())
@@ -286,6 +264,66 @@ pub fn is_integer(v: &Value) -> bool {
     match v.as_f64() { Some(x) => x.is_finite() && x.fract() == 0.0, None => false }
 }
 
+/// JS `a === b` za vrijednosti iz JSON-a i baze: brojevi po vrijednosti (`5`
+/// i `5.0` su isti broj), ostalo po sadržaju.
+pub fn jednako(a: &Value, b: &Value) -> bool {
+    match (a.as_f64(), b.as_f64()) {
+        (Some(x), Some(y)) => x == y,
+        _ => a == b,
+    }
+}
+
+/// `{ ...base, k: v, ... }` — ključevi koji već postoje ostaju na svom mjestu,
+/// a `base` koji nije objekat daje samo nove ključeve.
+pub fn spoji(base: &Value, dodaci: Vec<(&str, Value)>) -> Value {
+    let mut m = base.as_object().cloned().unwrap_or_default();
+    for (k, v) in dodaci {
+        m.insert(k.to_string(), v);
+    }
+    Value::Object(m)
+}
+
+/// `for (const x of v)` — sve osim niza baca TypeError (`<ime> is not iterable`).
+pub fn iter_ili_baci<'a>(v: &'a Value, ime: &str) -> R<&'a [Value]> {
+    match v.as_array() {
+        Some(a) => Ok(a),
+        None => Err(Greska(format!("{ime} is not iterable"))),
+    }
+}
+
+/// `Array.isArray(v) ? v : []`
+pub fn niz_ili_prazno(v: &Value) -> &[Value] {
+    v.as_array().map(Vec::as_slice).unwrap_or(&[])
+}
+
+/// `s.slice(0, n)` — JS broji UTF-16 jedinice.
+pub fn slice_utf16(s: &str, n: usize) -> String {
+    let jedinice: Vec<u16> = s.encode_utf16().take(n).collect();
+    String::from_utf16_lossy(&jedinice)
+}
+
+/// `Number(datum.slice(0, 4))` kao JSON broj (NaN → null, kako ga SQLite veže).
+pub fn godina_iz_datuma(datum: &str) -> Value {
+    let s: String = datum.chars().take(4).collect();
+    f(to_number(&Value::String(s)))
+}
+
+/// `/^\d{4}-\d{2}-\d{2}$/.test(s)` — oblik ISO datuma, bez provjere kalendara.
+pub fn iso_datum(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 10 && b.iter().enumerate().all(|(i, c)| if i == 4 || i == 7 { *c == b'-' } else { c.is_ascii_digit() })
+}
+
+/// `Math.max(a, b)` — NaN se širi (Rustov `f64::max` ga preskače).
+pub fn max(a: f64, b: f64) -> f64 {
+    if a.is_nan() || b.is_nan() { f64::NAN } else { a.max(b) }
+}
+
+/// `Math.min(a, b)` — NaN se širi.
+pub fn min(a: f64, b: f64) -> f64 {
+    if a.is_nan() || b.is_nan() { f64::NAN } else { a.min(b) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,7 +343,6 @@ mod tests {
         assert_eq!(stringify(&json!({"a": 5.0, "b": [1.5, null, "x"]})), r#"{"a":5,"b":[1.5,null,"x"]}"#);
         assert_eq!(parse_int("8085abc"), Some(8085));
         assert_eq!(parse_int(""), None);
-        assert_eq!(parse_float(" 12.50kn"), 12.5);
         assert_eq!(to_number(&json!("")), 0.0);
         assert!(to_number(&json!("abc")).is_nan());
         assert_eq!(to_fixed(0.125, 2), "0.13");
@@ -316,5 +353,39 @@ mod tests {
         assert_eq!(to_fixed(-0.001, 2), "-0.00");
         assert_eq!(to_fixed(5.0, 2), "5.00");
         assert_eq!(to_fixed(0.73, 2), "0.73");
+    }
+
+    #[test]
+    fn operacije_kao_js() {
+        assert!(jednako(&json!(5), &json!(5.0)));
+        assert!(jednako(&json!("a"), &json!("a")));
+        assert!(jednako(&Value::Null, &Value::Null));
+        assert!(!jednako(&json!(5), &json!("5")));
+        assert!(!jednako(&json!(null), &json!(0)));
+        assert_eq!(spoji(&json!({ "a": 1, "b": 2 }), vec![("a", json!(3)), ("c", json!(4))]), json!({ "a": 3, "b": 2, "c": 4 }));
+        assert_eq!(js_kljucevi(&spoji(&json!({ "b": 1, "a": 2 }), vec![("b", json!(0))])), ["b", "a"]);
+        assert_eq!(spoji(&json!([1]), vec![("x", json!(1))]), json!({ "x": 1 }));
+        assert_eq!(iter_ili_baci(&json!([1, 2]), "stavke").unwrap(), &[json!(1), json!(2)]);
+        assert_eq!(iter_ili_baci(&json!({}), "stavke").unwrap_err().0, "stavke is not iterable");
+        assert_eq!(iter_ili_baci(&Value::Null, "data.stavke").unwrap_err().0, "data.stavke is not iterable");
+        assert_eq!(niz_ili_prazno(&json!([1])), &[json!(1)]);
+        assert!(niz_ili_prazno(&json!("x")).is_empty());
+        assert_eq!(slice_utf16("😀ab", 3), "😀a");
+        assert_eq!(slice_utf16("abc", 10), "abc");
+        assert_eq!(godina_iz_datuma("2026-03-01"), json!(2026));
+        assert_eq!(godina_iz_datuma("x"), Value::Null);
+        assert_eq!(godina_iz_datuma(""), json!(0));
+        assert!(iso_datum("2026-02-30"));
+        for los in ["2026-2-01", "2026-02-01 ", "2026/02/01", "", "２０２６-02-01"] {
+            assert!(!iso_datum(los), "{los}");
+        }
+        assert!(max(0.0, f64::NAN).is_nan());
+        assert!(min(f64::NAN, 1.0).is_nan());
+        assert_eq!(max(-1.0, 2.0), 2.0);
+        assert_eq!(min(-1.0, 2.0), -1.0);
+    }
+
+    fn js_kljucevi(v: &Value) -> Vec<&str> {
+        v.as_object().unwrap().keys().map(String::as_str).collect()
     }
 }

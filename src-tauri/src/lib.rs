@@ -1,10 +1,11 @@
 //! Tauri ljuska oko `pazar-backend`: prozor, komanda `api` (zamjena za
 //! `ipcRenderer.invoke`), sistemski dijalozi, restart i PDF prozori.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
+use pazar_backend::cuvanje;
 use pazar_backend::sat::Sat;
 use pazar_backend::{Backend, Platforma};
 use serde_json::Value;
@@ -19,8 +20,9 @@ struct TauriPlatforma {
     app: AppHandle,
 }
 
-fn filteri(opcije: &Value) -> Vec<(String, Vec<String>)> {
-    opcije["filters"]
+/// Filteri dijaloga (`[{ name, extensions }]`) kao parovi (ime, ekstenzije).
+fn filteri(filteri: &Value) -> Vec<(String, Vec<String>)> {
+    filteri
         .as_array()
         .into_iter()
         .flatten()
@@ -31,52 +33,24 @@ fn filteri(opcije: &Value) -> Vec<(String, Vec<String>)> {
         .collect()
 }
 
-/// Ekstenzije koje dijalog za čuvanje prihvata (PDF, izvoz, backup baze).
-const DOZVOLJENE_EKSTENZIJE: [&str; 5] = ["pdf", "xlsx", "csv", "db", "zip"];
-
-fn dozvoljena_ekstenzija(p: &Path) -> bool {
-    p.extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| DOZVOLJENE_EKSTENZIJE.iter().any(|d| d.eq_ignore_ascii_case(e)))
-}
-
-/// Predloženo ime fajla za dijalog: samo ime (renderer ne bira folder u kojem
-/// se dijalog otvara — `/` i `\` postaju `-`, kao i `:` jer je `C:ime` na
-/// Windowsu putanja relativna na disk C) i samo dozvoljena ekstenzija, inače `None`.
-fn ime_za_cuvanje(predlog: &str) -> Option<String> {
-    let ime = predlog.trim().replace(['/', '\\', ':'], "-");
-    if ime.is_empty() || ime.starts_with('.') || ime.contains('\0') || !dozvoljena_ekstenzija(Path::new(&ime)) {
-        return None;
-    }
-    Some(ime)
-}
-
-/// Filteri dijaloga bez ekstenzija koje se ne smiju snimati.
-fn dozvoljeni_filteri(opcije: &Value) -> Vec<(String, Vec<String>)> {
-    filteri(opcije)
-        .into_iter()
-        .map(|(ime, ext)| (ime, ext.into_iter().filter(|e| DOZVOLJENE_EKSTENZIJE.iter().any(|d| d.eq_ignore_ascii_case(e))).collect::<Vec<_>>()))
-        .filter(|(_, ext)| !ext.is_empty())
-        .collect()
-}
-
 impl Platforma for TauriPlatforma {
     fn dijalog_sacuvaj(&self, opcije: Value) -> Option<String> {
-        // Predlog ime fajla s nedozvoljenom ekstenzijom (ili bez nje) se odbija
+        // Ista pravila kao backend (`cuvanje`), još jednom uz sam dijalog:
+        // predlog imena s nedozvoljenom ekstenzijom (ili bez nje) se odbija
         // kao da je korisnik otkazao — dijalog se ni ne otvara.
-        let ime = ime_za_cuvanje(opcije["defaultPath"].as_str()?)?;
+        let ime = cuvanje::ime_za_cuvanje(&opcije["defaultPath"])?;
         let mut d = self.app.dialog().file().set_file_name(ime);
         if let Some(t) = opcije["title"].as_str() {
             d = d.set_title(t);
         }
-        for (ime, ext) in dozvoljeni_filteri(&opcije) {
+        for (ime, ext) in filteri(&cuvanje::dozvoljeni_filteri(&opcije["filters"])) {
             let ext: Vec<&str> = ext.iter().map(String::as_str).collect();
             d = d.add_filter(ime, &ext);
         }
         d.blocking_save_file()
             .and_then(|f| f.into_path().ok())
-            .filter(|p| dozvoljena_ekstenzija(p))
             .map(|p| p.to_string_lossy().into_owned())
+            .filter(|p| cuvanje::dozvoljena_ekstenzija(&Value::from(p.as_str())))
     }
 
     fn dijalog_otvori(&self, opcije: Value) -> Option<String> {
@@ -84,7 +58,7 @@ impl Platforma for TauriPlatforma {
         if let Some(t) = opcije["title"].as_str() {
             d = d.set_title(t);
         }
-        for (ime, ext) in filteri(&opcije) {
+        for (ime, ext) in filteri(&opcije["filters"]) {
             let ext: Vec<&str> = ext.iter().map(String::as_str).collect();
             d = d.add_filter(ime, &ext);
         }
@@ -355,42 +329,4 @@ pub fn run() {
                 }
             }
         });
-}
-
-#[cfg(test)]
-mod testovi {
-    use super::*;
-
-    #[test]
-    fn ime_za_cuvanje_separatori_postaju_crtice() {
-        assert_eq!(ime_za_cuvanje("Racun-1.pdf").as_deref(), Some("Racun-1.pdf"));
-        assert_eq!(ime_za_cuvanje("Faktura 12/2026.pdf").as_deref(), Some("Faktura 12-2026.pdf"));
-        assert_eq!(ime_za_cuvanje("/Users/x/Library/LaunchAgents/evil.pdf").as_deref(), Some("-Users-x-Library-LaunchAgents-evil.pdf"));
-        assert_eq!(ime_za_cuvanje("..\\..\\Startup\\izvoz.zip").as_deref(), None);
-        assert_eq!(ime_za_cuvanje("a/../../izvoz.zip").as_deref(), Some("a-..-..-izvoz.zip"));
-        assert_eq!(ime_za_cuvanje("C:\\Windows\\kasa-backup-2026-09-25.db").as_deref(), Some("C--Windows-kasa-backup-2026-09-25.db"));
-        assert_eq!(ime_za_cuvanje("C:izvoz.zip").as_deref(), Some("C-izvoz.zip"));
-        assert_eq!(ime_za_cuvanje("Izvjestaj.XLSX").as_deref(), Some("Izvjestaj.XLSX"));
-        assert_eq!(ime_za_cuvanje("promet.csv").as_deref(), Some("promet.csv"));
-    }
-
-    #[test]
-    fn ime_za_cuvanje_odbija_ostale_ekstenzije() {
-        for los in ["evil.exe", "skripta.sh", "x.pdf.bat", ".bashrc", ".skriveno.pdf", "bez-ekstenzije", "", "folder/", "..", "a\0.pdf", "plist.plist"] {
-            assert_eq!(ime_za_cuvanje(los), None, "{los}");
-        }
-    }
-
-    #[test]
-    fn filteri_bez_nedozvoljenih_ekstenzija() {
-        let opcije = serde_json::json!({ "filters": [
-            { "name": "PDF", "extensions": ["pdf"] },
-            { "name": "Sve", "extensions": ["exe", "zip"] },
-            { "name": "Skripte", "extensions": ["sh"] },
-        ]});
-        assert_eq!(
-            dozvoljeni_filteri(&opcije),
-            vec![("PDF".to_string(), vec!["pdf".to_string()]), ("Sve".to_string(), vec!["zip".to_string()])]
-        );
-    }
 }

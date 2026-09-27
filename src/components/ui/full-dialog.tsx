@@ -1,8 +1,10 @@
 // src/components/ui/full-dialog.tsx
 import * as React from 'react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
+import { ChevronDown, ChevronUp } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { Eyebrow, Key } from './ledger';
+import type { Susjedni } from '@/lib/ledgerLista';
+import { Eyebrow, Key, jePoljeZaUnos } from './ledger';
 
 /**
  * Dijalog preko cijelog ekrana za jedan dokument (radni nalog, ulaz robe): tamno zaglavlje
@@ -37,7 +39,7 @@ export const FullDialogContent = React.forwardRef<HTMLDivElement, {
         onEscapeKeyDown={e => {
           e.preventDefault();
           const t = e.target as HTMLElement | null;
-          if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) {
+          if (t && jePoljeZaUnos(t)) {
             // Pretraga s upitom sama briše upit; ostala polja samo ispuštaju fokus.
             if (t.getAttribute('role') === 'combobox' && (t as HTMLInputElement).value) return;
             t.blur(); inner.current?.focus(); return;
@@ -159,4 +161,26 @@ export function Fact({ label, children, className }: { label: string; children: 
 /** Legenda prečice: keycap + šta radi. */
 export function LegendKey({ k, children }: { k: string; children: React.ReactNode }) {
   return <span className="flex items-center gap-1"><Key className="ml-0">{k}</Key> {children}</span>;
+}
+
+const SUSJEDNI_BTN = 'h-6 w-6 flex items-center justify-center rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 disabled:opacity-30 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50';
+
+/**
+ * Legenda podnožja za susjedne dokumente: strelice na prethodni i sljedeći,
+ * pozicija u listi („2 / 14“) i ↑↓. `naziv` je vrsta dokumenta („ulaz“, „nalog“…).
+ */
+export function SusjedniNav({ susjedni: s, naziv, onIdi }: { susjedni: Susjedni; naziv: string; onIdi: (id: number) => void }) {
+  return (
+    <>
+      <span className="flex items-center gap-1">
+        <button onClick={() => s.prev != null && onIdi(s.prev)} disabled={s.prev == null} aria-label={`Prethodni ${naziv}`}
+          className={SUSJEDNI_BTN}><ChevronUp size={14} /></button>
+        <button onClick={() => s.next != null && onIdi(s.next)} disabled={s.next == null} aria-label={`Sljedeći ${naziv}`}
+          className={SUSJEDNI_BTN}><ChevronDown size={14} /></button>
+        <span className="font-mono tabular-nums ml-1">{s.pozicija}</span>
+      </span>
+      <span className="text-slate-300">·</span>
+      <LegendKey k="↑↓">{naziv}</LegendKey>
+    </>
+  );
 }

@@ -1,5 +1,5 @@
-import type { TringResponse } from '@/services/tring';
 import type { SqlDb } from './sqldb';
+import type { FiskalniUredjaj, IshodUredjaja } from './fiskalniUredjaj';
 import { ocekivanoStanje, type DrawerState } from './drawer';
 import { round2 } from './novac';
 
@@ -8,8 +8,19 @@ export type TringStatus = 'ok' | 'error' | 'skipped';
 
 export interface CashDeps {
   db: SqlDb;
-  /** Pošalje UnosNovca/PovratNovca; `null` znači da fiskalna integracija nije uključena. */
-  send: (tip: CashTip, iznos: number) => Promise<TringResponse | null>;
+  /** Šalje UnosNovca/PovratNovca; `null` znači da fiskalna integracija nije uključena. */
+  uredjaj: Pick<FiskalniUredjaj, 'unosNovca' | 'povratNovca'> | null;
+}
+
+/** Polog → UnosNovca, povrat → PovratNovca; bez uređaja ništa se ne šalje. */
+function posalji(deps: CashDeps, tip: CashTip, iznos: number): Promise<IshodUredjaja | null> {
+  if (!deps.uredjaj) return Promise.resolve(null);
+  return tip === 'polog' ? deps.uredjaj.unosNovca(iznos) : deps.uredjaj.povratNovca(iznos);
+}
+
+function statusSlanja(ishod: IshodUredjaja | null): { tringStatus: TringStatus; error?: string } {
+  if (ishod === null) return { tringStatus: 'skipped' };
+  return ishod.ok ? { tringStatus: 'ok' } : { tringStatus: 'error', error: ishod.greska };
 }
 
 export interface CashMovementRow {
@@ -49,18 +60,13 @@ export async function addCashMovement(
     throw new Error('Korisnik ne postoji');
   }
 
-  const result = await deps.send(data.tip, iznos);
-  const tringStatus: TringStatus = result === null ? 'skipped' : result.success ? 'ok' : 'error';
+  const { tringStatus, error } = statusSlanja(await posalji(deps, data.tip, iznos));
 
   const r = deps.db.prepare(
     'INSERT INTO cash_movements (tip, iznos, korisnikId, tringStatus, napomena) VALUES (?, ?, ?, ?, ?)'
   ).run(data.tip, iznos, data.korisnikId, tringStatus, data.napomena ?? null);
 
-  return {
-    id: Number(r.lastInsertRowid),
-    tringStatus,
-    error: result && !result.success ? (result.error || result.vrstaOdgovora) : undefined,
-  };
+  return { id: Number(r.lastInsertRowid), tringStatus, error };
 }
 
 export async function retryCashMovement(deps: CashDeps, id: number): Promise<AddCashResult> {
@@ -68,15 +74,10 @@ export async function retryCashMovement(deps: CashDeps, id: number): Promise<Add
   if (!row) throw new Error('Zapis ne postoji');
   if (row.tringStatus !== 'error') throw new Error('Samo neuspjela slanja se mogu ponoviti');
 
-  const result = await deps.send(row.tip, row.iznos);
-  const tringStatus: TringStatus = result === null ? 'skipped' : result.success ? 'ok' : 'error';
+  const { tringStatus, error } = statusSlanja(await posalji(deps, row.tip, row.iznos));
   deps.db.prepare('UPDATE cash_movements SET tringStatus = ? WHERE id = ?').run(tringStatus, id);
 
-  return {
-    id,
-    tringStatus,
-    error: result && !result.success ? (result.error || result.vrstaOdgovora) : undefined,
-  };
+  return { id, tringStatus, error };
 }
 
 export function getTodayMovements(db: SqlDb): CashMovementRow[] {

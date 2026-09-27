@@ -1,7 +1,5 @@
 import { test, expect, beforeEach } from 'bun:test';
-import { Database } from 'bun:sqlite';
-import { schema } from '@/database/schema';
-import type { SqlDb } from './sqldb';
+import { testnaBaza, type TestnaBaza } from './testnaBaza';
 import {
   parseFiskalniBroj, izracunajPraznine, MAX_PRAZNINA,
   zadnjiFiskalniBroj, zadnjiUpisaniFiskalniBroj,
@@ -54,12 +52,10 @@ test('izracunajPraznine preskače odbačene brojeve bez trošenja limita', () =>
 
 // ── Predviđanje sljedećeg fiskalnog broja ──
 
-let db: SqlDb & Database;
+let db: TestnaBaza;
 
 beforeEach(() => {
-  db = new Database(':memory:') as SqlDb & Database;
-  db.exec(schema);
-  db.prepare("INSERT INTO users (id, ime, pin, uloga) VALUES (1, 'Kasir', '1234', 'kasir')").run();
+  db = testnaBaza({ kasir: true });
 });
 
 function dodajRacun(broj: string | null, createdAt?: string): void {

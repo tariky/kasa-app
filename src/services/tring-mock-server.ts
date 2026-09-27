@@ -2,6 +2,7 @@
 // Run standalone: bun run src/services/tring-mock-server.ts
 
 import * as http from "node:http";
+import type { AddressInfo } from "node:net";
 
 const DEFAULT_PORT = 8085;
 const PRINT_DELAY_MS = 2500; // Simulate real printer delay
@@ -223,7 +224,11 @@ function handleRequest(
   }
 }
 
-export function startMockTringServer(port: number = DEFAULT_PORT): http.Server {
+/**
+ * `kasnjenjeMs` zamijeni simulirano kašnjenje štampača za sve komande
+ * (testovi daju 0); bez njega 2,5 s za račun i reklamaciju, 300 ms ostalo.
+ */
+export function startMockTringServer(port: number = DEFAULT_PORT, opts: { kasnjenjeMs?: number } = {}): http.Server {
   const server = http.createServer((req, res) => {
     if (req.method !== "POST") {
       res.writeHead(405, { "Content-Type": "application/xml" });
@@ -239,7 +244,7 @@ export function startMockTringServer(port: number = DEFAULT_PORT): http.Server {
 
       // Simulate printer delay for receipt/refund endpoints
       const path = (req.url ?? "/").split("?")[0];
-      const delay = ["/sfr", "/srr"].includes(path) ? PRINT_DELAY_MS : 300;
+      const delay = opts.kasnjenjeMs ?? (["/sfr", "/srr"].includes(path) ? PRINT_DELAY_MS : 300);
 
       setTimeout(() => {
         res.writeHead(status, {
@@ -253,11 +258,27 @@ export function startMockTringServer(port: number = DEFAULT_PORT): http.Server {
 
   server.listen(port, () => {
     console.log(
-      `[mock-tring] Tring.Fiscal.Server mock running on http://localhost:${port}`
+      `[mock-tring] Tring.Fiscal.Server mock running on http://localhost:${(server.address() as AddressInfo).port}`
     );
   });
 
   return server;
+}
+
+/**
+ * Mock za testove na slobodnom portu (0): vrati se tek kad server sluša, a
+ * greška pri pokretanju odbije obećanje. Fiksni portovi su se sudarali kad
+ * se dva runa testova puste u isto vrijeme.
+ */
+export function pokreniMockTring(opts: { kasnjenjeMs?: number } = {}): Promise<{ server: http.Server; port: number }> {
+  const server = startMockTringServer(0, opts);
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.once("listening", () => {
+      server.off("error", reject);
+      resolve({ server, port: (server.address() as AddressInfo).port });
+    });
+  });
 }
 
 // Run standalone

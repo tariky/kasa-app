@@ -2,6 +2,7 @@ import type * as Tring from '@/services/tring';
 import type { SqlDb } from './sqldb';
 import { izracunajTotale, TOLERANCIJA_IZNOSA } from './racun';
 import { pripremiPlacanje } from './placanje';
+import type { KupacRacuna as PoljaKupca } from './kupacRacuna';
 
 // Provjera računa i ponuda u main procesu, prije ikakve štampe ili upisa:
 // renderer šalje stavke, a iznosi se ovdje računaju iz njih (izracunajTotale).
@@ -83,9 +84,8 @@ export function provjeriTotale(
   provjeri(zadano.pdvIznos, izracunato.pdvIznos, 'Iznos PDV-a');
 }
 
-export interface KupacRacuna {
-  naziv?: string; idBroj?: string; adresa?: string; grad?: string; postanskiBroj?: string;
-}
+/** Kupac na računu kako ga backend prima: polja kupca s ekrana (kupacRacuna.ts), svako može izostati. */
+export type KupacRacuna = Partial<PoljaKupca>;
 
 const POLJA_KUPCA = ['naziv', 'idBroj', 'adresa', 'grad', 'postanskiBroj'] as const;
 
@@ -116,6 +116,21 @@ export interface PripremljenRacun {
   vrstePlacanja: Tring.VrstaPlacanja[];
   kupac?: KupacRacuna;
   napomena?: string;
+}
+
+/**
+ * Račun kako ga šalje ekran (order:finalize, order:createManual) — backend mu
+ * ne vjeruje: pripremiRacun sve provjeri, a iznose računa iz stavki.
+ */
+export interface UnosRacuna {
+  stavke: Array<{ productId: number; kolicina: number; cijena: number; rabat?: number; pdvStopa: string }>;
+  /** Iznosi koje je izračunao ekran; izostavljeni se ne provjeravaju (provjeriTotale). */
+  ukupno?: number;
+  pdvIznos?: number;
+  nacinPlacanja: string;
+  vrstePlacanja?: Tring.VrstaPlacanja[];
+  kupac?: KupacRacuna | null;
+  napomena?: string | null;
 }
 
 /**

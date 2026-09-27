@@ -3,7 +3,7 @@
 // Electron ABI), a licenca je otključana — ona ima svoje testove.
 import { mock } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Backend, OdgovoriDijaloga, OtvoreniDijalog } from './backend';
@@ -61,7 +61,18 @@ mock.module(path.join(__dirname, '../licenca.ts'), () => ({
   backupPristup: () => backupR2,
 }));
 
-export async function otvoriTsBackend(): Promise<Backend> {
+/**
+ * Poziv handlera kao iz Electron IPC-a, bez JSON-a: `undefined` ostaje
+ * `undefined` (Backend.call ga kroz JSON vraća kao null). Za otvoren TS backend.
+ */
+export async function pozoviHandlerBezJsona(kanal: string, ...args: unknown[]): Promise<unknown> {
+  const fn = handleri.get(kanal);
+  if (!fn) throw new Error(`Kanal ne postoji: ${kanal}`);
+  return fn({}, ...args);
+}
+
+/** `baza`: postojeći fajl baze koji se kopira kao kasa.db prije otvaranja (vidi OpcijeBackenda). */
+export async function otvoriTsBackend(baza?: string): Promise<Backend> {
   // Dinamički, da bi mockovi iznad bili postavljeni prije učitavanja handlera.
   const { registerIpcHandlers } = await import('../handlers');
   const { closeDb } = await import('../../database/db');
@@ -75,13 +86,14 @@ export async function otvoriTsBackend(): Promise<Backend> {
   userData = mkdtempSync(path.join(tmpdir(), 'kasa-ugovor-'));
   const radniFolder = path.join(userData, 'radni');
   mkdirSync(radniFolder);
+  if (baza) copyFileSync(baza, path.join(userData, 'kasa.db'));
   registerIpcHandlers();
 
   const db = new Database(path.join(userData, 'kasa.db'), { strict: true });
   const tring = pokreniLaziTring();
   db.prepare("UPDATE settings SET value = ? WHERE key = 'tring.port'").run(String(tring.port));
 
-  return {
+  const backend: Backend = {
     db,
     tring,
     dijalog,
@@ -98,6 +110,8 @@ export async function otvoriTsBackend(): Promise<Backend> {
       handleri.clear();
       registerIpcHandlers();
     },
+    // Isti poziv; tipove argumenata i rezultata daje Backend.pozovi.
+    pozovi: (kanal, ...args) => (backend.call as unknown as (kanal: string, ...args: unknown[]) => Promise<never>)(kanal, ...args),
     async call(kanal, ...args) {
       const fn = handleri.get(kanal);
       if (!fn) throw new Error(`Kanal ne postoji: ${kanal}`);
@@ -119,4 +133,5 @@ export async function otvoriTsBackend(): Promise<Backend> {
       rmSync(userData, { recursive: true, force: true });
     },
   };
+  return backend;
 }
