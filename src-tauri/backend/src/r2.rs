@@ -192,6 +192,10 @@ pub fn posalji(p: &Pristup, kljuc: &str, tijelo: &[u8], napredak: &mut dyn FnMut
         // Kao node:https u Electronu (i Tring): bez HTTP(S)_PROXY iz okruženja —
         // lažni S3 na localhostu nikad ne smije ići kroz proxy.
         .proxy(None)
+        // Kao node:https: bez praćenja preusmjerenja. ureq bi 301/302/303 ponovio
+        // kao GET bez tijela i 2xx na njega prijavio kao uspješan backup, a
+        // 307/308 kao grešku veze; ovako je svaki 3xx `R2 greška (3xx)`.
+        .max_redirects(0)
         .build()
         .into();
     // `host` postavlja ureq iz URL-a (isti kao potpisani).
@@ -360,6 +364,16 @@ mod tests {
         nit.join().unwrap();
         assert_eq!((g.status, g.kod.as_deref()), (Some(403), Some("AccessDenied")));
         assert_eq!(g.za_korisnika(), "R2 pristup više ne važi — zatražite novu licencu");
+    }
+
+    #[test]
+    fn put_preusmjeren_je_greska() {
+        // node:https ne prati preusmjerenja; ureq bi PUT ponovio kao GET bez
+        // tijela i 2xx na njega prijavio kao uspješan backup.
+        let (adresa, nit) = server("HTTP/1.1 302 Found\r\nlocation: /drugo\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".into(), Duration::ZERO);
+        let g = posalji(&pristup(&adresa), "U/x.db.age", b"abc", &mut |_, _| {}, CEKANJE).unwrap_err();
+        nit.join().unwrap();
+        assert_eq!(g, R2Greska { poruka: "R2 greška (302): Found".into(), status: Some(302), kod: None });
     }
 
     #[test]
