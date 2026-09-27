@@ -133,10 +133,19 @@ fn greska_odgovora(status: u16, status_tekst: &str, xml: &str) -> R2Greska {
 
 /// Koliko se čeka veza i odgovor R2 (`cekanjeMs` u r2Posalji).
 pub const CEKANJE: Duration = Duration::from_secs(120);
-/// Gornja granica cijelog slanja: zaglavljen upload ne smije zauvijek držati
-/// backup "u toku" (raspored tada ne bi pokušao ponovo).
-const NAJDUZE_SLANJE: Duration = Duration::from_secs(30 * 60);
+/// Najmanja gornja granica cijelog slanja.
+const NAJKRACE_SLANJE: Duration = Duration::from_secs(30 * 60);
+/// Najsporija veza (bajta/s) na kojoj backup još mora proći.
+const NAJSPORIJE_BPS: u64 = 16 * 1024;
 const KOMAD: usize = 64 * 1024;
+
+/// Gornja granica cijelog slanja: zaglavljen upload ne smije zauvijek držati
+/// backup "u toku" (raspored tada ne bi pokušao ponovo). Raste s veličinom —
+/// fiksna granica bi velikoj bazi na sporom uplinku rušila svaki backup,
+/// zauvijek. Zastoj i dalje završi na TCP timeoutu sistema ili na ovoj granici.
+fn najduze_slanje(duzina: usize) -> Duration {
+    NAJKRACE_SLANJE.max(Duration::from_secs(duzina as u64 / NAJSPORIJE_BPS))
+}
 
 /// Tijelo PUT-a u komadima od 64 KB; `napredak` se javi kad komad ode ureq-u.
 struct SaNapretkom<'a, 'n> {
@@ -179,7 +188,10 @@ pub fn posalji(p: &Pristup, kljuc: &str, tijelo: &[u8], napredak: &mut dyn FnMut
         .http_status_as_error(false)
         .timeout_connect(Some(cekanje))
         .timeout_recv_response(Some(cekanje))
-        .timeout_global(Some(NAJDUZE_SLANJE))
+        .timeout_global(Some(najduze_slanje(tijelo.len())))
+        // Kao node:https u Electronu (i Tring): bez HTTP(S)_PROXY iz okruženja —
+        // lažni S3 na localhostu nikad ne smije ići kroz proxy.
+        .proxy(None)
         .build()
         .into();
     // `host` postavlja ureq iz URL-a (isti kao potpisani).
@@ -254,6 +266,14 @@ mod tests {
         assert_eq!(g.za_korisnika(), g.poruka);
         let g = greska_odgovora(404, "Not Found", "<Error><Code>NoSuchBucket</Code><Message>The specified bucket does not exist.</Message></Error>");
         assert_eq!(g.poruka, "R2 greška (404 NoSuchBucket): The specified bucket does not exist.");
+    }
+
+    #[test]
+    fn granica_slanja_raste_s_velicinom() {
+        assert_eq!(najduze_slanje(0), Duration::from_secs(30 * 60));
+        assert_eq!(najduze_slanje(1_000_000), Duration::from_secs(30 * 60));
+        // 100 MiB po 16 KiB/s = 6400 s (> 30 min).
+        assert_eq!(najduze_slanje(100 * 1024 * 1024), Duration::from_secs(6400));
     }
 
     /// Šta je lažni server primio: zaglavlja (imena malim slovima) i tijelo.
