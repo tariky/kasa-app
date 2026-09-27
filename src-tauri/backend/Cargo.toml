@@ -27,3 +27,8 @@ pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 getrandom = "0.2"
 subtle = "2"
 hostname = "0.4"
+# Automatski backup (backup.rs, r2.rs): R2 podaci iz licence (AES-256-GCM, kao
+# node:crypto u lib/licenca.ts) i backup fajl age(gzip(baza)) kao lib/backupFajl.ts.
+aes-gcm = "0.10"
+age = "0.12"
+flate2 = "1"

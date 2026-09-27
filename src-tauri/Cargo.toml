@@ -41,3 +41,11 @@ strip = true
 opt-level = 3
 [profile.dev.package.sha2]
 opt-level = 3
+# gzip i age šifrovanje backup-a: bez optimizacije desetine MB baze traju
+# sekundama i u `tauri dev`.
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+[profile.dev.package.chacha20]
+opt-level = 3
+[profile.dev.package.poly1305]
+opt-level = 3

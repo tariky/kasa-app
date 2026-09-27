@@ -29,6 +29,8 @@ pub mod audit;
 pub mod provjera_racuna;
 pub mod cuvanje;
 pub mod zaliha;
+pub mod r2;
+pub mod backup;
 #[cfg(test)]
 mod proba;
 
