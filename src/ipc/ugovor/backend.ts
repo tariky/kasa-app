@@ -77,6 +77,11 @@ export interface Backend {
    * backup-a). Token → R2 podaci imaju svoje testove (licenca.test.ts, licenca.rs).
    */
   postaviBackupLicencu(r2: import('../../lib/licenca').R2Podaci | null): void;
+  /**
+   * R2 podaci iz tokena licence kako ih backend čita (TS `backupPodaci`, Rust
+   * `backup_podaci`) — bez provjere potpisa; `null` = token bez (ispravnog) backup-a.
+   */
+  r2IzTokena(token: string): Promise<import('../../lib/licenca').R2Podaci | null>;
   /** Događaji koje je backend poslao prozoru (`backup:stanje`, `licenca:blokirano`…), redom. */
   dogadjaji: { ime: string; podaci: unknown }[];
   close(): Promise<void>;

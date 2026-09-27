@@ -115,6 +115,9 @@ export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
     postaviBackupLicencu() {
       throw new Error('Rust backend još nema automatski backup (faza 4, vidi spec)');
     },
+    async r2IzTokena(token) {
+      return ((await zahtjev({ meta: 'r2IzTokena', token })).ok ?? null) as import('../../lib/licenca').R2Podaci | null;
+    },
     radniFolder,
     restartovan: () => restart,
     async kanali() {

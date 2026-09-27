@@ -4,11 +4,12 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { generateIdentity, identityToRecipient } from 'age-encryption';
+import { generateKeyPairSync } from 'node:crypto';
 import { readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { desifrujBackup } from '../../lib/backupFajl';
-import type { R2Podaci } from '../../lib/licenca';
+import { izdajLicencu, type R2Podaci } from '../../lib/licenca';
 import { PORUKA_SAMO_ADMIN } from '../sesija';
 import { otvoriBackend, prijavi, type Backend } from './backend';
 import { pokreniLaziS3, S3_KLJUC, S3_TAJNA, type LaziS3 } from './laziS3';
@@ -136,5 +137,37 @@ describe.skipIf(process.env.KASA_BACKEND === 'rust')('backup:*', () => {
     expect((await b.pozovi('backup:info')).aktivan).toBe(true);
     await expect(b.call('backup:sada')).rejects.toThrow(PORUKA_SAMO_ADMIN);
     expect(s3.zahtjevi).toHaveLength(0);
+  });
+});
+
+// Harness zaobilazi token (postaviBackupLicencu), pa ovdje posebno: token koji
+// izdaje generator (TS) backend mora pročitati u iste R2 podatke. Za Rust je to
+// jedini dokaz da AES-GCM dešifrovanje iz licence radi kao u Electronu.
+describe('R2 podaci iz licence (TS izdaje, backend čita)', () => {
+  let b: Backend;
+  beforeEach(async () => { b = await otvoriBackend({ prijava: null }); });
+  afterEach(async () => { await b.close(); });
+
+  const licenca = { klijent: 'Ugovor d.o.o.', vrijediDo: '2099-12-31', izdana: '2026-09-27', backup: { bucket: 'pazar-ugovor' } };
+  const potpis = () => generateKeyPairSync('ed25519').privateKey;
+
+  test('token s backup-om daje iste R2 podatke', async () => {
+    const r2: R2Podaci = {
+      accountId: '0123456789abcdef0123456789abcdef', accessKeyId: 'KLJUČ-ugovor', secret: 'tajna/+=ugovor',
+      bucket: 'pazar-ugovor', primalac: await identityToRecipient(await generateIdentity()),
+    };
+    expect(await b.r2IzTokena(izdajLicencu(licenca, potpis(), r2))).toEqual(r2);
+  });
+
+  test('token bez backup-a ili s pokvarenim b.x: null', async () => {
+    const { backup: _, ...bezBackupa } = licenca;
+    expect(await b.r2IzTokena(izdajLicencu(bezBackupa, potpis()))).toBeNull();
+
+    const r2: R2Podaci = { accountId: 'a', accessKeyId: 'k', secret: 's', bucket: 'pazar-ugovor', primalac: 'age1xyz' };
+    const [prefiks, payload, sig] = izdajLicencu(licenca, potpis(), r2).split('.');
+    const p = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    const x: string = p.b.x;
+    p.b.x = x.slice(0, 20) + (x[20] === 'A' ? 'B' : 'A') + x.slice(21);
+    expect(await b.r2IzTokena(`${prefiks}.${Buffer.from(JSON.stringify(p)).toString('base64url')}.${sig}`)).toBeNull();
   });
 });

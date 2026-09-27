@@ -12,6 +12,8 @@
 //!
 //! Meta zahtjev `{"id":2,"meta":"kanali"}` vraća `{"id":2,"ok":[…]}` — sve
 //! kanale backenda (`Backend.kanali()` u harnessu).
+//! `{"id":3,"meta":"r2IzTokena","token":"PAZAR1…"}` vraća R2 podatke iz
+//! tokena (`Backend.r2IzTokena`) ili `null`.
 //!
 //! Svaki zahtjev radi u svojoj niti, s mjestom u redu uzetim pri čitanju:
 //! kao u Electronu, drugi poziv može raditi dok prvi čeka uređaj.
@@ -101,6 +103,11 @@ fn main() {
         };
         if z["meta"] == "kanali" {
             posalji(&json!({ "id": z["id"], "ok": *pazar_backend::kanali::SVI_KANALI }));
+            continue;
+        }
+        if z["meta"] == "r2IzTokena" {
+            let r2 = pazar_backend::licenca::backup_podaci(z["token"].as_str().unwrap_or(""));
+            posalji(&json!({ "id": z["id"], "ok": r2.map(|r| r.u_json()) }));
             continue;
         }
         {

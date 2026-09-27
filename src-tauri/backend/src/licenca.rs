@@ -10,6 +10,8 @@
 
 use std::sync::{Mutex, OnceLock};
 
+use aes_gcm::aead::{Aead, KeyInit};
+use aes_gcm::{Aes256Gcm, Nonce};
 use base64::engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig};
 use base64::engine::DecodePaddingMode;
 use base64::{alphabet, Engine};
@@ -85,6 +87,81 @@ fn backup_bucket(b: &Value) -> Option<&str> {
     thread_local!(static K: Regex = Regex::new(r"^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$").unwrap());
     let c = b["c"].as_str().filter(|c| K.with(|r| r.is_match(c)))?;
     b["x"].is_string().then_some(c)
+}
+
+/// AES-256-GCM ključ za R2 podatke u licenci (`b.x`) iz `src/lib/backupKljuc.ts`
+/// — jedan izvor za oba backenda. Fajl nije u gitu (repo je javan); CI ga
+/// piše iz tajne. Skriva kredencijale od onoga ko vidi token, ne i od onoga
+/// ko rastavi program — pravu zaštitu nose pravila bucketa.
+fn backup_kljuc() -> &'static [u8; 32] {
+    static K: OnceLock<[u8; 32]> = OnceLock::new();
+    K.get_or_init(|| {
+        const TS: &str = include_str!("../../../src/lib/backupKljuc.ts");
+        let hex = Regex::new(r"'([0-9a-f]{64})'").unwrap().captures(TS).expect("backupKljuc.ts mora imati ključ od 64 hex znaka")[1].to_string();
+        let mut k = [0u8; 32];
+        for (i, b) in k.iter_mut().enumerate() {
+            *b = u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).unwrap();
+        }
+        k
+    })
+}
+
+/// R2 pristup (token samo za bucket klijenta) i javni age ključ kojim se
+/// backup šifruje (`R2Podaci`). Nikad ne ide rendereru.
+#[derive(Clone, Debug, PartialEq)]
+pub struct R2Podaci {
+    pub account_id: String,
+    pub access_key_id: String,
+    pub secret: String,
+    pub bucket: String,
+    /// `age1…` — privatni par je samo kod izdavača.
+    pub primalac: String,
+}
+
+impl R2Podaci {
+    /// Iz JSON oblika `R2Podaci` (TS, camelCase); `None` kad polje fali ili je prazno.
+    pub fn iz_json(v: &Value) -> Option<R2Podaci> {
+        let s = |k: &str| v.get(k)?.as_str().filter(|x| !x.is_empty()).map(str::to_string);
+        Some(R2Podaci {
+            account_id: s("accountId")?,
+            access_key_id: s("accessKeyId")?,
+            secret: s("secret")?,
+            bucket: s("bucket")?,
+            primalac: s("primalac")?,
+        })
+    }
+
+    pub fn u_json(&self) -> Value {
+        json!({
+            "accountId": self.account_id,
+            "accessKeyId": self.access_key_id,
+            "secret": self.secret,
+            "bucket": self.bucket,
+            "primalac": self.primalac,
+        })
+    }
+}
+
+/// `desifrujR2`: nonce(12) | AES-256-GCM(JSON {a, k, s, r}) | tag(16).
+fn desifruj_r2(bucket: &str, x: &str) -> Option<R2Podaci> {
+    let buf = base64url(x)?;
+    if buf.len() < 12 + 16 {
+        return None;
+    }
+    let json = Aes256Gcm::new_from_slice(backup_kljuc()).ok()?.decrypt(Nonce::from_slice(&buf[..12]), &buf[12..]).ok()?;
+    let p: Value = serde_json::from_slice(&json).ok()?;
+    let s = |k: &str| p.get(k)?.as_str().filter(|x| !x.is_empty()).map(str::to_string);
+    Some(R2Podaci { account_id: s("a")?, access_key_id: s("k")?, secret: s("s")?, bucket: bucket.to_string(), primalac: s("r")? })
+}
+
+/// R2 podaci iz tokena (`backupPodaci`). Ne provjerava potpis — pozivalac
+/// koristi token koji je već prošao provjeru licence.
+pub fn backup_podaci(token: &str) -> Option<R2Podaci> {
+    procitaj_licencu(token)?;
+    let payload = token.trim().split('.').nth(1)?;
+    let p: Value = serde_json::from_slice(&base64url(payload)?).ok()?;
+    let bucket = backup_bucket(&p["b"])?;
+    desifruj_r2(bucket, p["b"]["x"].as_str()?)
 }
 
 /// Čita token bez provjere potpisa; `None` kad format nije ispravan.
@@ -336,6 +413,16 @@ pub fn stanje_licence(b: &Backend) -> R<Value> {
         zapisi(b, &z)?;
     }
     Ok(sa_uredjajem(izracunaj_stanje(token.as_deref(), javni_kljuc(), &danas, uredjaj_id())))
+}
+
+/// R2 podaci za automatski backup (`backupPristup`); `None` kad licenca ne
+/// dozvoljava rad ili nema backup. Samo backend, nikad renderer.
+pub fn backup_pristup(b: &Backend) -> Option<R2Podaci> {
+    let s = stanje_licence(b).ok()?;
+    if !smije_raditi(&s) || !s["licenca"]["backup"].is_object() {
+        return None;
+    }
+    backup_podaci(procitaj(b)["token"].as_str()?)
 }
 
 pub fn aktiviraj_licencu(b: &Backend, token: &str) -> R<Value> {
@@ -612,5 +699,50 @@ mod tests {
             let l = procitaj_licencu(&t).expect(los);
             assert!(l.get("backup").is_none(), "{los}");
         }
+    }
+
+    /// `b.x` kao `sifrujR2` u lib/licenca.ts: nonce(12) | AES-256-GCM(JSON) | tag(16), base64url.
+    fn x_za(json: &str) -> String {
+        use aes_gcm::aead::{Aead, KeyInit};
+        let c = aes_gcm::Aes256Gcm::new_from_slice(backup_kljuc()).unwrap();
+        let nonce = [9u8; 12];
+        let mut buf = nonce.to_vec();
+        buf.extend(c.encrypt(aes_gcm::Nonce::from_slice(&nonce), json.as_bytes()).unwrap());
+        URL_SAFE_NO_PAD.encode(buf)
+    }
+
+    fn token_s_b(k: &SigningKey, b: &str) -> String {
+        izdaj(k, &format!(r#"{{"k":"F","d":"2026-10-10","i":"2026-01-01","b":{b}}}"#))
+    }
+
+    #[test]
+    fn r2_podaci_iz_licence() {
+        let k = SigningKey::from_bytes(&[7u8; 32]);
+        let x = x_za(r#"{"a":"acc","k":"kid","s":"tajna/+=","r":"age1primalac"}"#);
+        let t = token_s_b(&k, &format!(r#"{{"c":"pazar-pekara","x":"{x}"}}"#));
+        let ocekivano = R2Podaci {
+            account_id: "acc".into(), access_key_id: "kid".into(), secret: "tajna/+=".into(),
+            bucket: "pazar-pekara".into(), primalac: "age1primalac".into(),
+        };
+        assert_eq!(backup_podaci(&t), Some(ocekivano.clone()));
+        assert_eq!(R2Podaci::iz_json(&ocekivano.u_json()), Some(ocekivano));
+
+        // Pokvaren ili nepotpun `b` = bez backup-a, ne panika.
+        let mut pokvaren = x.clone().into_bytes();
+        pokvaren[20] = if pokvaren[20] == b'A' { b'B' } else { b'A' };
+        let pokvaren = String::from_utf8(pokvaren).unwrap();
+        for b in [
+            format!(r#"{{"c":"pazar-pekara","x":"{pokvaren}"}}"#),
+            r#"{"c":"pazar-pekara","x":"AAAA"}"#.to_string(),
+            format!(r#"{{"c":"Los_Bucket","x":"{x}"}}"#),
+            format!(r#"{{"c":"pazar-pekara","x":"{}"}}"#, x_za(r#"{"a":"acc","k":"kid","s":"","r":"age1p"}"#)),
+            format!(r#"{{"c":"pazar-pekara","x":"{}"}}"#, x_za("nije json")),
+        ] {
+            assert_eq!(backup_podaci(&token_s_b(&k, &b)), None, "{b}");
+        }
+        assert_eq!(backup_podaci(&izdaj(&k, r#"{"k":"F","d":"2026-10-10","i":"2026-01-01"}"#)), None);
+        assert_eq!(backup_podaci("PAZAR1.x.y"), None);
+        assert_eq!(R2Podaci::iz_json(&json!({"accountId": "a"})), None);
+        assert_eq!(R2Podaci::iz_json(&Value::Null), None);
     }
 }

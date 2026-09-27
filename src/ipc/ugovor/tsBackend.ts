@@ -100,6 +100,9 @@ export async function otvoriTsBackend(baza?: string): Promise<Backend> {
     otvoreniDijalozi,
     dogadjaji,
     postaviBackupLicencu: (r2) => { backupR2 = r2; },
+    async r2IzTokena(token) {
+      return (await import('../../lib/licenca')).backupPodaci(token);
+    },
     radniFolder,
     restartovan: () => restart,
     async kanali() {
