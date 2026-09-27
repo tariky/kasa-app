@@ -37,6 +37,19 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # Ključ za R2 podatke u licenci (src/lib/backupKljuc.ts) nije u javnom
+      # repou; Electron ga uvozi, Rust ga ugrađuje (include_str!). Bez tajne
+      # build pada — ne smije izaći verzija u kojoj backup tiho ne radi.
+      - name: Backup key
+        shell: bash
+        env:
+          PAZAR_BACKUP_KLJUC_HEX: ${{ secrets.PAZAR_BACKUP_KLJUC_HEX }}
+        run: |
+          if [[ ! "$PAZAR_BACKUP_KLJUC_HEX" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "Nedostaje tajna PAZAR_BACKUP_KLJUC_HEX (64 hex znaka)"; exit 1
+          fi
+          printf "export const BACKUP_KLJUC_HEX = '%s';\n" "$PAZAR_BACKUP_KLJUC_HEX" > src/lib/backupKljuc.ts
+
       # Isti ugovorni testovi kao nad TS backendom — na Windowsu hvataju razlike
       # u putanjama i fajlovima (backup/uvoz baze).
       - name: Contract tests over Rust backend

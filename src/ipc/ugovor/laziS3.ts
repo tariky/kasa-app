@@ -1,6 +1,7 @@
 // Lažni S3 za ugovor backup-a: prima PUT, provjerava SigV4 potpis (ponovo ga
-// računa s poznatim tajnim ključem) i SHA-256 tijela. Rust backend (faza 4)
-// mora proći iste provjere — to je jedini dokaz da ga R2 neće odbiti.
+// računa s poznatim tajnim ključem) i SHA-256 tijela. Rust backend
+// (src-tauri/backend/src/r2.rs) prolazi iste provjere — to je jedini dokaz da
+// ga R2 neće odbiti.
 import { createHash } from 'node:crypto';
 import { potpisiS3 } from '../../lib/r2';
 

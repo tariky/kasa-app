@@ -29,6 +29,19 @@ licencom. `PAZAR_USER_DATA=<folder>` pokrene program nad drugim folderom.
 - Poređenje s TS backendom nad kopijom stvarne baze (original se ne dira):
   `KASA_STVARNA_BAZA=<putanja do kasa.db> bun test src/ipc/ugovor/stvarnaBaza.poredjenje.test.ts`
 
+## Automatski backup (R2)
+
+Isti kao u Electron verziji (spec `docs/superpowers/specs/2026-09-25-r2-backup-design.md`):
+`backup.rs` (raspored, stanje u `userData/backup-stanje.json`, gzip + age, kanali
+`backup:info`/`backup:sada`, događaj `backup:stanje`) i `r2.rs` (SigV4, PUT).
+Ljuska provjerava raspored svake minute. Kopija baze (`VACUUM INTO`) ide pod
+petljom, šifrovanje i slanje bez nje — kasa radi dok backup šalje.
+
+- R2 podaci su u licenci, šifrovani ključem iz `src/lib/backupKljuc.ts`, koji
+  NIJE u gitu: lokalno ga kopirati u svaki worktree, a CI ga piše iz tajne
+  `PAZAR_BACKUP_KLJUC_HEX`. Bez fajla backend se ne kompajlira.
+- `PAZAR_BACKUP_ENDPOINT=<url>` šalje backup na drugi S3 endpoint (testovi, lažni S3).
+
 ## Razlike u odnosu na Electron
 
 - `window.api` se pravi iz iste definicije (`src/ipc/api.ts`) nad komandom `api`.

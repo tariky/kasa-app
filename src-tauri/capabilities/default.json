@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Samo glavni prozor: komanda api (i smoke_kraj u debug smoke testu), događaj licenca:blokirano, dijalozi potvrde/obavijesti i zoom (veličina prikaza). PDF prozori (pdf-N) nemaju nikakav IPC.",
+  "description": "Samo glavni prozor: komanda api (i smoke_kraj u debug smoke testu), događaji licenca:blokirano i backup:stanje, dijalozi potvrde/obavijesti i zoom (veličina prikaza). PDF prozori (pdf-N) nemaju nikakav IPC.",
   "windows": [
     "main"
   ],

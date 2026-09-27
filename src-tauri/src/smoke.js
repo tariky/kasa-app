@@ -78,6 +78,8 @@
 
     const licenca = await window.api.getLicenca();
     ok('licenca:stanje', licenca?.stanje === 'nema' && /^[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}$/.test(licenca?.uredjaj), JSON.stringify(licenca));
+    const backup = await window.api.getBackupInfo();
+    ok('backup:info bez licence', backup?.aktivan === false && backup?.uToku === false, JSON.stringify(backup));
 
     // Licenca blokira kanale koji prave dokumente i javlja događaj rendereru.
     let blokirano = false;

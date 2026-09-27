@@ -1,6 +1,6 @@
 // Automatski backup: stanje, raspored i napredak. Čist modul bez Node-a —
 // koriste ga main proces (src/lib/backupTok.ts) i renderer (traka, Postavke).
-// Rust backend (faza 4) mora dati iste odgovore. Spec:
+// Rust backend (src-tauri/backend/src/backup.rs) daje iste odgovore. Spec:
 // docs/superpowers/specs/2026-09-25-r2-backup-design.md
 
 export const INTERVAL_MS = 3 * 60 * 60 * 1000;

@@ -28,6 +28,11 @@ na statičkom pregledu; klik "Backup sada" u pravom Electronu prema stvarnom R2 
 - `src/components/postavke/AutomatskiBackup.tsx` + `src/hooks/useBackup.ts` — kartica u Postavke → Sistem.
 - Ugovor: `src/ipc/ugovor/backup.ugovor.test.ts` protiv lažnog S3 (`src/ipc/ugovor/laziS3.ts`, `PAZAR_BACKUP_ENDPOINT`).
 
+**Urađeno u Tauri verziji (2026-09-27)** — plan `docs/superpowers/plans/2026-09-27-r2-backup-tauri.md`:
+`src-tauri/backend/src/r2.rs`, `backup.rs`, `licenca.rs` (`backup_podaci`, `backup_pristup`); ugovor
+`backup.ugovor.test.ts` prolazi nad oba backenda (i interop TS token → Rust, Rust age → JS). Kopija baze
+ide pod petljom na aktivnoj konekciji (kao sinhroni better-sqlite3), ne na posebnoj konekciji.
+
 **Odluke donesene u planu** (`docs/superpowers/plans/2026-09-25-r2-backup-aplikacija.md`):
 1. `sljedeciBackup(stanje, sada, start)` ima treći argument (start), pa pao pokušaj ima prednost (+15 min) i ništa ne ide prije `start + 1 min` — bez petlje kad backup-a nikad nije bilo.
 2. Tajmer je provjera svake minute (`setInterval` + `sljedeciBackup`) umjesto jednog dugog `setTimeout`-a — preživi spavanje laptopa i sam primijeti novu licencu (±1 min).
@@ -41,9 +46,7 @@ na statičkom pregledu; klik "Backup sada" u pravom Electronu prema stvarnom R2 
 10. Prolazna traka i pilula gore desno (klik prolazi kroz njih); trajno upozorenje (nema backup-a >24 h) je stavka u lijevom meniju iznad korisnika — klik vodi u Postavke › Sistem samo za admina (pilula na ekranu je prekrivala dugme Faktura na Kasi).
 
 **Ostaje:**
-1. Tauri/Rust: isto (crates `age`, `hmac`, `aes-gcm`; `ureq`, `sha2` već postoje), ugovorni testovi protiv lažnog S3 (`PAZAR_BACKUP_ENDPOINT`), interop Rust age → JS `desifrujBackup`.
-   Ugovor `backup.ugovor.test.ts` već postoji i čeka Rust (`describe.skipIf`); `ugovor_server.rs` treba
-   `postaviBackupLicencu` i događaje `{"dogadjaj":"backup:stanje","podaci":…}`.
+1. Ručno: „Backup sada“ u pravoj Tauri aplikaciji prema stvarnom R2 (vlasnik), pa `bun run backup lista <bucket>`.
 
 
 ## Problem

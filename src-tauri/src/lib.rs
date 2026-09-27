@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
-use pazar_backend::cuvanje;
+use pazar_backend::{backup, cuvanje};
 use pazar_backend::sat::Sat;
 use pazar_backend::{Backend, Platforma};
 use serde_json::Value;
@@ -144,6 +144,17 @@ fn user_data(app: &AppHandle) -> PathBuf {
     }
     let baza = app.path().config_dir().unwrap_or_else(|_| std::env::temp_dir());
     baza.join("Pazar")
+}
+
+/// Automatski backup (`pokreniRaspored` u Electronu): provjera svake minute —
+/// preživi spavanje računara i sama primijeti novu licencu (±1 min).
+fn pokreni_raspored_backupa(app: AppHandle) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_secs(60));
+        let Some(b) = app.try_state::<Backend>() else { continue };
+        // Bug u jednom pokušaju ne smije ugasiti raspored.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| backup::tick(b.inner())));
+    });
 }
 
 /// Smoke test (`PAZAR_SMOKE`) postoji samo u debug buildu: u release buildu
@@ -314,6 +325,7 @@ pub fn run() {
             match Backend::novi(&folder, platforma, Sat::sistemski(), true) {
                 Ok(b) => {
                     app.manage(b);
+                    pokreni_raspored_backupa(handle.clone());
                 }
                 Err(e) => {
                     handle
