@@ -47,6 +47,11 @@ impl Sat {
 
     /// `new Date().toISOString()`
     pub fn iso(&self) -> String {
-        self.sada().with_timezone(&Utc).format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
+        iso_iz_ms(self.ms())
     }
+}
+
+/// `new Date(ms).toISOString()`
+pub fn iso_iz_ms(ms: i64) -> String {
+    Utc.timestamp_millis_opt(ms).single().unwrap_or_default().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
 }
