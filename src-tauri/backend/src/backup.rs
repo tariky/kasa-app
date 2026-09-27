@@ -249,6 +249,8 @@ fn izvrsi(b: &Backend, r2: &R2Podaci) {
         let _odmor = b.odmor();
         javi(b, json!({ "faza": "sifrovanje", "procenat": 0 }));
         let fajl = sifruj(&baza, &r2.primalac)?;
+        // Kopija baze ne treba dok traje slanje (i sat vremena na sporoj vezi).
+        drop(baza);
         javi(b, json!({ "faza": "slanje", "procenat": 0 }));
         let pristup = r2::Pristup {
             account_id: &r2.account_id,
@@ -298,12 +300,15 @@ pub fn sada(b: &Backend) -> R<Value> {
     *zakljucaj(&b.backup.tekuci) = Some(t.clone());
 
     /// Kraj backup-a i kad `izvrsi` pukne (bug): tekući se oslobodi, a svi koji
-    /// čekaju dobiju info — niko ne visi, raspored ide dalje.
+    /// čekaju dobiju info — niko ne visi, raspored ide dalje. Panika u `info`
+    /// usred odmotavanja panike iz `izvrsi` bi abortirala proces (cijelu kasu),
+    /// pa se hvata ovdje; čekači tada dobiju `null`.
     struct Kraj<'a>(&'a Backend, Arc<Tekuci>);
     impl Drop for Kraj<'_> {
         fn drop(&mut self) {
             *zakljucaj(&self.0.backup.tekuci) = None;
-            self.1.zavrsi(info(self.0));
+            let i = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| info(self.0))).unwrap_or(Value::Null);
+            self.1.zavrsi(i);
         }
     }
     let kraj = Kraj(b, t.clone());

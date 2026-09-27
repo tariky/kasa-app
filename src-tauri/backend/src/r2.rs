@@ -188,6 +188,9 @@ pub fn posalji(p: &Pristup, kljuc: &str, tijelo: &[u8], napredak: &mut dyn FnMut
         .http_status_as_error(false)
         .timeout_connect(Some(cekanje))
         .timeout_recv_response(Some(cekanje))
+        // Tijelo greške (non-2xx) — kao 120 s idle timeout soketa u Electronu,
+        // samo ukupno. Uspjeh (2xx) se vraća bez čitanja tijela.
+        .timeout_recv_body(Some(cekanje))
         .timeout_global(Some(najduze_slanje(tijelo.len())))
         // Kao node:https u Electronu (i Tring): bez HTTP(S)_PROXY iz okruženja —
         // lažni S3 na localhostu nikad ne smije ići kroz proxy.
@@ -286,6 +289,11 @@ mod tests {
     /// Jedan zahtjev na 127.0.0.1: pročita ga, sačeka `odgoda`, odgovori `odgovor`.
     /// Vraća adresu i nit koja daje ono što je primljeno.
     fn server(odgovor: String, odgoda: Duration) -> (String, std::thread::JoinHandle<Primljeno>) {
+        server_drzi(odgovor, odgoda, Duration::ZERO)
+    }
+
+    /// Kao `server`, ali vezu drži otvorenom još `drzi` nakon odgovora.
+    fn server_drzi(odgovor: String, odgoda: Duration, drzi: Duration) -> (String, std::thread::JoinHandle<Primljeno>) {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let adresa = format!("http://{}", l.local_addr().unwrap());
         let nit = std::thread::spawn(move || {
@@ -315,6 +323,7 @@ mod tests {
             }
             std::thread::sleep(odgoda);
             let _ = s.write_all(odgovor.as_bytes());
+            std::thread::sleep(drzi);
             (zaglavlja, buf[kraj..].to_vec())
         });
         (adresa, nit)
@@ -381,6 +390,18 @@ mod tests {
         let (adresa, nit) = server(odgovor("200 OK", ""), Duration::from_secs(2));
         let g = posalji(&pristup(&adresa), "U/x.db.age", b"abc", &mut |_, _| {}, Duration::from_millis(300)).unwrap_err();
         assert_eq!(g, R2Greska { poruka: "Nema veze s R2 (isteklo vrijeme)".into(), status: None, kod: None });
+        nit.join().unwrap();
+    }
+
+    #[test]
+    fn tijelo_greske_ne_stize() {
+        // Zaglavlja 500 stignu, tijelo nikad: ne čeka se do granice cijelog slanja.
+        let zaglavlja = "HTTP/1.1 500 Internal Server Error\r\ncontent-length: 100\r\n\r\n".to_string();
+        let (adresa, nit) = server_drzi(zaglavlja, Duration::ZERO, Duration::from_secs(3));
+        let t = std::time::Instant::now();
+        let g = posalji(&pristup(&adresa), "U/x.db.age", b"abc", &mut |_, _| {}, Duration::from_millis(300)).unwrap_err();
+        assert!(t.elapsed() < Duration::from_secs(2), "{:?}", t.elapsed());
+        assert_eq!(g, R2Greska { poruka: "R2 greška (500): Internal Server Error".into(), status: Some(500), kod: None });
         nit.join().unwrap();
     }
 

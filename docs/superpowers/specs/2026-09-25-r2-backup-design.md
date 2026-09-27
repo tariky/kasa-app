@@ -3,7 +3,7 @@
 **Datum:** 2026-09-25
 **Status:** Approved (brainstorming) — djelimično urađeno, vidi "Stanje implementacije"
 
-## Stanje implementacije (2026-09-26)
+## Stanje implementacije (2026-09-27)
 
 **Urađeno i provjereno na stvarnom bucketu** (`pazar-lunatik-doo`, dev licenca "Lunatik doo"):
 - `src/lib/licenca.ts` — polje `b` u tokenu, `licenca.backup = { bucket }`, `backupPodaci(token)` (samo main proces).
@@ -11,7 +11,7 @@
 - `src/lib/r2.ts` — SigV4 (4 službena AWS vektora prolaze), `r2Posalji`, `r2Preuzmi`, `r2Lista`, `imeBackupa`.
 - `src/lib/backupFajl.ts` — `sifrujBackup` (gzip + age) / `desifrujBackup`.
 - `src/lib/uredjaj.ts` — `uredjajId()` izvučen iz `src/ipc/licenca.ts` (bez Electrona).
-- `src-tauri/backend/src/licenca.rs` — parsira `backup.bucket` (bez dešifrovanja `x`).
+- `src-tauri/backend/src/licenca.rs` — parsira `backup.bucket`; od Tauri verzije (2026-09-27) i dešifruje `x` (`backup_podaci`).
 - Generator licenci (`tools/licenca-gui`, `tools/licenca.ts`, `tools/licenca-zajednicko.ts`) — Account ID, age ključ, bucket + ključevi po klijentu.
 - `tools/backup/backup.ts` — `kljuc`, `posalji`, `lista`, `preuzmi`, `sifruj`, `desifruj`
   (`posalji` bez argumenata radi tačno ono što treba aplikacija: licenca + baza dev aplikacije → R2).
@@ -39,7 +39,7 @@ ide pod petljom na aktivnoj konekciji (kao sinhroni better-sqlite3), ne na poseb
 3. `procenat` u događaju je unutar faze (0–100), a traka ga preslikava na ukupni (`ukupniProcenat`); Rust šalje isto.
 4. `backup:sada` čeka kraj i vraća `BackupInfo` (greška backup-a je u `info.greska`); baca samo kad backup nije u licenci.
 5. Napredak po bajtovima ide kroz `node:http(s)` PUT s `content-length` u komadima od 64 KB, jer `fetch` sa streamom šalje chunked što R2 odbija; GET i lista ostaju na `fetch`.
-6. Ugovorni harness dobija `postaviBackupLicencu(r2)` i `dogadjaji`, a backup testovi su `describe.skipIf(KASA_BACKEND === 'rust')` dok Rust ne stigne.
+6. Ugovorni harness dobija `postaviBackupLicencu(r2)` i `dogadjaji`, a backup testovi su `describe.skipIf(KASA_BACKEND === 'rust')` dok Rust ne stigne; Tauri: skipIf je skinut, testovi idu nad oba backenda.
 7. Klik na trajno upozorenje otvara Postavke → Sistem samo za admina; kod kasira je to samo oznaka.
 8. Stanje pri pokretanju daje `useBackupPrikaz` (pita `backup:info` na mount): traka se odmah prikaže ako backup teče, inače čeka događaje; trajnu grešku prikazuje lijevi meni (odluka 10), ne traka.
 9. `backup:sada` smije samo admin, `backup:info` svaki prijavljeni korisnik.
@@ -150,7 +150,7 @@ JSON: { "a": accountId, "k": accessKeyId, "s": secret, "r": "age1…" }
 - Ime bucketa: `^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$`.
 
 **Urađeno (2026-09-25):** token, generator, CLI, Rust parsiranje `backup.bucket`
-(dešifrovanje u Rustu dolazi sa slanjem). Bucket po klijentu, ne zajednički.
+(dešifrovanje u Rustu dolazi sa slanjem — stiglo 2026-09-27, `backup_podaci`). Bucket po klijentu, ne zajednički.
 
 ## Pohrana na računaru klijenta
 
@@ -174,7 +174,8 @@ backup istovremeno ("Backup sada" dok teče vraća postojeći).
 
 1. **kopija** — `VACUUM INTO` u temp fajl (dosljedna kopija i s WAL-om).
    Electron: better-sqlite3 u main procesu (sinhrono; ~desetine ms za tipične
-   baze). Tauri: posebna konekcija na zasebnoj niti.
+   baze). Tauri: isto, na aktivnoj konekciji dok drži petlju (ne posebna
+   konekcija na zasebnoj niti) — vidi "Urađeno u Tauri verziji".
 2. **šifrovanje** — gzip → age (Electron: `age-encryption`; Rust: `age` crate).
 3. **slanje** — `PUT https://<a>.r2.cloudflarestorage.com/<b>/<ime>`,
    AWS SigV4 (`region=auto`, `service=s3`; potpisuje se
