@@ -2,11 +2,11 @@
 // razgovara s njim JSON linijama — vidi src-tauri/backend/src/bin/ugovor_server.rs.
 // Binarij se gradi prije testova (`bun run test:rust`); ovdje se samo provjeri
 // da postoji.
-import { Database } from 'bun:sqlite';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Backend, OdgovoriDijaloga, OtvoreniDijalog } from './backend';
+import { BazaTesta } from './bazaTesta';
 import { pokreniLaziTring } from './laziTring';
 import { ZONA_TESTA } from './zona';
 
@@ -89,7 +89,7 @@ export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
 
   let proc = await pokreni();
 
-  const db = new Database(path.join(userData, 'kasa.db'), { strict: true });
+  const db = new BazaTesta(path.join(userData, 'kasa.db'), { strict: true });
   const tring = pokreniLaziTring();
   db.prepare("UPDATE settings SET value = ? WHERE key = 'tring.port'").run(String(tring.port));
 

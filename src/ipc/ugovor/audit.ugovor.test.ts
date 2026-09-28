@@ -6,6 +6,7 @@ import { Database } from 'bun:sqlite';
 import path from 'node:path';
 import { otvoriBackend, prijavi, ADMIN_PIN, type Backend } from './backend';
 import { scenarij, ADMIN, spremljena, postoji } from './scenarij';
+import { BazaTesta } from './bazaTesta';
 
 let b: Backend;
 const baza = scenarij(() => b);
@@ -217,7 +218,7 @@ describe('audit_log', () => {
     b.dijalog.otvori = backup;
     b.dijalog.potvrda = 1;
     const r = postoji(await b.pozovi('db:restore'));
-    const aktivna = new Database(path.join(path.dirname(b.radniFolder), 'kasa.db'), { readonly: true });
+    const aktivna = new BazaTesta(path.join(path.dirname(b.radniFolder), 'kasa.db'), { readonly: true });
     try {
       expect(audit(aktivna)).toEqual([{ korisnikId: ADMIN, akcija: 'baza:restore', detalji: { izvor: backup, sigurnosnaKopija: r.safetyPath } }]);
     } finally {

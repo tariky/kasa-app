@@ -2,14 +2,14 @@
 // `better-sqlite3` su zamijenjeni tankim shimovima (native build je vezan za
 // Electron ABI), a licenca je otključana — ona ima svoje testove.
 import { mock } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Backend, OdgovoriDijaloga, OtvoreniDijalog } from './backend';
+import { BazaTesta } from './bazaTesta';
 import { pokreniLaziTring } from './laziTring';
 
-class BetterSqliteShim extends Database {
+class BetterSqliteShim extends BazaTesta {
   constructor(file: string, opts: { readonly?: boolean; fileMustExist?: boolean } = {}) {
     super(file, opts.readonly ? { readonly: true, strict: true } : { create: !opts.fileMustExist, readwrite: true, strict: true });
   }
@@ -89,7 +89,7 @@ export async function otvoriTsBackend(baza?: string): Promise<Backend> {
   if (baza) copyFileSync(baza, path.join(userData, 'kasa.db'));
   registerIpcHandlers();
 
-  const db = new Database(path.join(userData, 'kasa.db'), { strict: true });
+  const db = new BazaTesta(path.join(userData, 'kasa.db'), { strict: true });
   const tring = pokreniLaziTring();
   db.prepare("UPDATE settings SET value = ? WHERE key = 'tring.port'").run(String(tring.port));
 

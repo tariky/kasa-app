@@ -8,6 +8,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { otvoriBackend, prijavi, type Backend } from './backend';
+import { BazaTesta } from './bazaTesta';
 import { LEGACY_SCHEMA, LEGACY_SCHEMA_S_TABELAMA } from './staraBaza';
 import { schema } from '../../database/schema';
 import { provjeriPin } from '../../lib/korisnici';
@@ -18,7 +19,7 @@ let b: Backend;
 /** Stara baza s ponešto podataka, kao fajl (backend dobije kopiju). */
 function staraBaza(): string {
   const putanja = path.join(folder, 'stara.db');
-  const db = new Database(putanja);
+  const db = new BazaTesta(putanja);
   db.exec(LEGACY_SCHEMA);
   db.exec(`
     INSERT INTO users (ime, pin, uloga) VALUES ('Vlasnik', '9876', 'admin'), ('Stari Kasir', '1234', 'kasir');
@@ -129,7 +130,7 @@ test('ponovno otvaranje iste baze (drugi i treći prolaz migracija) ne mijenja n
 /** Kasnija stara baza (LEGACY_SCHEMA_S_TABELAMA) s kupcem, fakturom po prilogu i promjenom cijene. */
 function staraBazaSTabelama(): string {
   const putanja = path.join(folder, 'stara-s-tabelama.db');
-  const db = new Database(putanja);
+  const db = new BazaTesta(putanja);
   db.exec(LEGACY_SCHEMA_S_TABELAMA);
   db.exec(`
     INSERT INTO users (ime, pin, uloga) VALUES ('Vlasnik', '9876', 'admin');
