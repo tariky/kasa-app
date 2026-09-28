@@ -39,17 +39,16 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # DIJAGNOSTIKA (privremeno): spor poziv redom, bez pauze / setTimeout 0 /
-      # mikrotask između — da li zaglavi čitanje stdout-a ugovor-servera.
+      # DIJAGNOSTIKA (privremeno): bisekcija storno testa koji zaglavi.
       - name: Diag redom
         continue-on-error: true
-        timeout-minutes: 8
+        timeout-minutes: 10
         run: |
           cargo build --manifest-path src-tauri/Cargo.toml -p pazar-backend --bin ugovor-server
-          foreach ($t in 'bezpauze', 'timeout0', 'mikro') {
+          foreach ($t in 'original', 'trycatch', 'bezkrivog', 'korisnicikanal', 'rejectsposporom', 'resolvesposporom') {
             Write-Host "=== $t"
-            $p = Start-Process -FilePath bun -ArgumentList 'test','diag/harness-redom.test.ts','-t',$t -NoNewWindow -PassThru
-            if (-not $p.WaitForExit(40000)) { Write-Host "=== $t ZAGLAVIO" }
+            $p = Start-Process -FilePath bun -ArgumentList 'test','diag/storno-bisekcija.test.ts','-t',$t -NoNewWindow -PassThru
+            if (-not $p.WaitForExit(25000)) { Write-Host "=== $t ZAGLAVIO" }
             Get-Process ugovor-server, bun -ErrorAction SilentlyContinue | Stop-Process -Force
           }
         env:
