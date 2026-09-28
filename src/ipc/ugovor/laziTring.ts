@@ -135,7 +135,6 @@ export function pokreniLaziTring(): LaziTring {
     port: 0,
     async fetch(req) {
       const putanja = new URL(req.url).pathname;
-      if (process.env.KASA_UGOVOR_TRAG) console.error(`[trag ${performance.now().toFixed(0)}] tring ${putanja}`); // DIJAGNOSTIKA (privremeno)
       zahtjevi.push({ putanja, tijelo: await req.text() });
 
       const zadrzan = zadrzani.get(putanja);

@@ -39,31 +39,9 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # DIJAGNOSTIKA (privremeno): način čitanja odgovora ugovor-servera
-      # (pipe / getReader / fajl + tajmer) u expect().rejects nakon sporog odgovora.
-      - name: Diag citanje
-        continue-on-error: true
-        timeout-minutes: 10
-        run: |
-          cargo build --manifest-path src-tauri/Cargo.toml -p pazar-backend --bin ugovor-server
-          foreach ($c in 'pipe', 'reader', 'fajl') {
-            foreach ($t in 'original', 'rejectsposporom') {
-              Write-Host "=== $c $t"
-              $env:KASA_UGOVOR_CITANJE = $c
-              $p = Start-Process -FilePath bun -ArgumentList 'test','diag/storno-bisekcija.test.ts','-t',$t -NoNewWindow -PassThru
-              if (-not $p.WaitForExit(25000)) { Write-Host "=== $c $t ZAGLAVIO" }
-              Get-Process ugovor-server, bun -ErrorAction SilentlyContinue | Stop-Process -Force
-            }
-          }
-        env:
-          KASA_BACKEND: rust
-          TEMP: ${{ runner.temp }}
-          TMP: ${{ runner.temp }}
-
       # Isti ugovorni testovi kao nad TS backendom — na Windowsu hvataju razlike
       # u putanjama i fajlovima (backup/uvoz baze). Privremeni folderi (baza po
-      # testu) idu na D: — na C: runnera su SQLite upisi toliko spori da test
-      # sa PIN-ovima pređe bun-ovih 5 s.
+      # testu) idu na D: — na C: runnera su SQLite upisi i do 20× sporiji.
       - name: Contract tests over Rust backend
         run: bun run test:rust
         timeout-minutes: 20

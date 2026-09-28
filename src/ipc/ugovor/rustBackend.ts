@@ -1,5 +1,6 @@
 // Pokreće Rust backend (src-tauri/backend) kao proces `ugovor-server` i
 // razgovara s njim JSON linijama — vidi src-tauri/backend/src/bin/ugovor_server.rs.
+// Zahtjevi idu na stdin, a odgovori (stdout procesa) u fajl koji se čita tajmerom.
 // Binarij se gradi prije testova (`bun run test:rust`); ovdje se samo provjeri
 // da postoji.
 import { closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readSync, rmSync } from 'node:fs';
@@ -31,9 +32,6 @@ export async function otvoriRustBackend(baza?: string): Promise<Backend> {
 }
 
 /** Rust backend nad postojećim folderom (npr. kopija stvarne baze); `close` ga briše. */
-// DIJAGNOSTIKA (privremeno): puls — da li event loop radi dok test čeka.
-if (process.env.KASA_UGOVOR_TRAG) setInterval(() => console.error(`[trag ${performance.now().toFixed(0)}] puls`), 500).unref();
-
 export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
   if (!existsSync(BINARIJ)) {
     throw new Error(`Nema ${BINARIJ} — prvo: cargo build --manifest-path src-tauri/Cargo.toml -p pazar-backend --bin ugovor-server`);
@@ -44,19 +42,21 @@ export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
   let restart = false;
   const dogadjaji: { ime: string; podaci: unknown }[] = [];
   let cekaju = new Map<number, (o: Odgovor) => void>();
-
   let brojProcesa = 0;
 
   /** Pokrene ugovor-server nad `userData` i sačeka da javi da je spreman. */
   async function pokreni() {
-    // DIJAGNOSTIKA (privremeno): način čitanja odgovora — pipe/reader/fajl.
-    const citanje = process.env.KASA_UGOVOR_CITANJE ?? 'pipe';
+    // Odgovori idu u fajl, ne kroz pipe: bun na Windowsu (1.3.14–1.4.2) ne
+    // dostavi stdout podprocesa dok `expect(poziv).rejects` čeka odgovor koji
+    // stiže poslije sporog prethodnog (npr. provjera PIN-a) — test visi, iako
+    // je ugovor-server odgovor upisao. Tajmeri za to vrijeme rade, pa se fajl
+    // čita tajmerom.
     const izlaz = path.join(userData, `ugovor-stdout-${++brojProcesa}.jsonl`);
     const proc = Bun.spawn([BINARIJ, userData], {
       // Backend računa "danas" i SQLite `localtime` u istoj zoni kao test (zona.ts).
       env: { ...process.env, TZ: ZONA_TESTA },
       stdin: 'pipe',
-      stdout: citanje === 'fajl' ? Bun.file(izlaz) : 'pipe',
+      stdout: Bun.file(izlaz),
       stderr: process.env.KASA_UGOVOR_LOG ? 'inherit' : 'ignore',
     });
     // Svaki proces ima svoje zahtjeve na čekanju (stari se gasi prije novog).
@@ -82,40 +82,26 @@ export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
       }
     }
 
-    if (citanje === 'fajl') {
-      let fd: number | null = null;
-      let pozicija = 0;
-      const komad = new Uint8Array(64 * 1024);
-      const procitaj = () => {
-        if (fd === null) {
-          try { fd = openSync(izlaz, 'r'); } catch { return; }
-        }
-        let n: number;
-        while ((n = readSync(fd, komad, 0, komad.length, pozicija)) > 0) {
-          pozicija += n;
-          obradi(komad.slice(0, n));
-        }
-      };
-      const tajmer = setInterval(procitaj, 5);
-      void proc.exited.then(() => {
-        clearInterval(tajmer);
-        procitaj();
-        if (fd !== null) closeSync(fd);
-      });
-    } else if (citanje === 'reader') {
-      void (async () => {
-        const r = proc.stdout.getReader();
-        for (;;) {
-          const { value, done } = await r.read();
-          if (done) break;
-          obradi(value);
-        }
-      })();
-    } else {
-      void (async () => {
-        for await (const dio of proc.stdout) obradi(dio);
-      })();
+    let fd: number | null = null;
+    let pozicija = 0;
+    const komad = new Uint8Array(64 * 1024);
+    function procitaj() {
+      if (fd === null) {
+        try { fd = openSync(izlaz, 'r'); } catch { return; }
+      }
+      let n: number;
+      while ((n = readSync(fd, komad, 0, komad.length, pozicija)) > 0) {
+        pozicija += n;
+        obradi(komad.subarray(0, n));
+      }
     }
+    const tajmer = setInterval(procitaj, 2);
+    // Fajl se zatvori prije nego close() obriše userData (Windows ne da obrisati otvoren fajl).
+    void proc.exited.then(() => {
+      clearInterval(tajmer);
+      procitaj();
+      if (fd !== null) closeSync(fd);
+    });
 
     const start = await pokrenut;
     if (!start.spreman) throw new Error(`ugovor-server nije pokrenut: ${start.greska}`);
@@ -143,16 +129,9 @@ export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
   async function zahtjev(tijelo: Record<string, unknown>): Promise<Odgovor> {
     const id = ++sljedeci;
     const odgovor = new Promise<Odgovor>(r => cekaju.set(id, r));
-    // DIJAGNOSTIKA (privremeno): trag zahtjeva za storno timeout na Windowsu.
-    const t0 = performance.now();
-    if (process.env.KASA_UGOVOR_TRAG) console.error(`[trag ${t0.toFixed(0)}] -> ${id} ${String(tijelo.kanal ?? tijelo.meta)}`);
     proc.stdin.write(JSON.stringify({ id, ...tijelo }) + '\n');
     proc.stdin.flush();
-    if (!process.env.KASA_UGOVOR_TRAG) return odgovor;
-    return odgovor.then(o => {
-      console.error(`[trag ${performance.now().toFixed(0)}] <- ${id} ${(performance.now() - t0).toFixed(0)} ms ${o.greska ?? ''}`);
-      return o;
-    });
+    return odgovor;
   }
 
   const backend: Backend = {
