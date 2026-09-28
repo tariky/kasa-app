@@ -1,0 +1,3 @@
+# Zlatni fajl se poredi bajt po bajt (Rust include_str! i TS test) — bez CRLF
+# pri checkoutu na Windowsu.
+src/services/tring.zlatni.txt text eol=lf
