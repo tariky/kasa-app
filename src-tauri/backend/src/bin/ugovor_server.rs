@@ -115,7 +115,12 @@ fn main() {
         let (b, stanje) = (b.clone(), stanje.clone());
         niti.push(std::thread::spawn(move || {
             let args = z["args"].as_array().cloned().unwrap_or_default();
+            // DIJAGNOSTIKA (privremeno): gdje zapne odgovor na Windowsu.
+            let trag = std::env::var_os("KASA_UGOVOR_TRAG").is_some();
+            let id = z["id"].clone();
+            if trag { eprintln!("[srv] {id} poziv"); }
             let r = b.call_u_redu(tiket, z["kanal"].as_str().unwrap_or(""), args);
+            if trag { eprintln!("[srv] {id} vraceno"); }
             let ja = std::thread::current().id();
             let dijalozi: Vec<Value> = {
                 let mut s = stanje.lock().unwrap();
@@ -128,7 +133,9 @@ fn main() {
                 Err(g) => json!({ "id": z["id"], "greska": g }),
             };
             odgovor["dijalozi"] = Value::Array(dijalozi);
+            if trag { eprintln!("[srv] {id} dijalozi"); }
             posalji(&odgovor);
+            if trag { eprintln!("[srv] {id} poslano"); }
         }));
         niti.retain(|n| !n.is_finished());
     }

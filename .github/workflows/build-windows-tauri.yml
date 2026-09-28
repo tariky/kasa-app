@@ -43,7 +43,16 @@ jobs:
         continue-on-error: true
         run: |
           cargo build --manifest-path src-tauri/Cargo.toml -p pazar-backend --bin ugovor-server
-          bun test src/ipc/ugovor/audit.ugovor.test.ts -t "adminom koji je odobrio" --timeout 30000
+          $test = Start-Process -FilePath bun -ArgumentList 'test','src/ipc/ugovor/audit.ugovor.test.ts','-t','"adminom koji je odobrio"','--timeout','30000' -NoNewWindow -PassThru
+          Start-Sleep -Seconds 15
+          $cdb = "${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\x64\cdb.exe"
+          Write-Host "cdb postoji: $(Test-Path $cdb)"
+          Get-Process ugovor-server -ErrorAction SilentlyContinue | ForEach-Object {
+            Write-Host "=== stekovi ugovor-server pid $($_.Id)"
+            & $cdb -p $_.Id -y "src-tauri\target\debug" -c ".lines -e; ~*kn 30; qd"
+          }
+          $test | Wait-Process -Timeout 90 -ErrorAction SilentlyContinue
+          Get-Process ugovor-server, bun -ErrorAction SilentlyContinue | Stop-Process -Force
         env:
           KASA_BACKEND: rust
           KASA_UGOVOR_LOG: '1'
