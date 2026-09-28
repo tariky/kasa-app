@@ -37,6 +37,20 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # DIJAGNOSTIKA (privremeno): storno test sam, s tragom zahtjeva i stderr-om
+      # ugovor-servera, uz 30 s umjesto 5 s — da li je spor ili visi, i gdje.
+      - name: Diag storno timeout
+        continue-on-error: true
+        run: |
+          cargo build --manifest-path src-tauri/Cargo.toml -p pazar-backend --bin ugovor-server
+          bun test src/ipc/ugovor/audit.ugovor.test.ts -t "adminom koji je odobrio" --timeout 30000
+        env:
+          KASA_BACKEND: rust
+          KASA_UGOVOR_LOG: '1'
+          KASA_UGOVOR_TRAG: '1'
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+
       # Isti ugovorni testovi kao nad TS backendom — na Windowsu hvataju razlike
       # u putanjama i fajlovima (backup/uvoz baze). Privremeni folderi (baza po
       # testu) idu na D: — na C: runnera su SQLite upisi toliko spori da test

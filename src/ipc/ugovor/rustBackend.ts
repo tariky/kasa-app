@@ -102,9 +102,16 @@ export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
   async function zahtjev(tijelo: Record<string, unknown>): Promise<Odgovor> {
     const id = ++sljedeci;
     const odgovor = new Promise<Odgovor>(r => cekaju.set(id, r));
+    // DIJAGNOSTIKA (privremeno): trag zahtjeva za storno timeout na Windowsu.
+    const t0 = performance.now();
+    if (process.env.KASA_UGOVOR_TRAG) console.error(`[trag ${t0.toFixed(0)}] -> ${id} ${String(tijelo.kanal ?? tijelo.meta)}`);
     proc.stdin.write(JSON.stringify({ id, ...tijelo }) + '\n');
     proc.stdin.flush();
-    return odgovor;
+    if (!process.env.KASA_UGOVOR_TRAG) return odgovor;
+    return odgovor.then(o => {
+      console.error(`[trag ${performance.now().toFixed(0)}] <- ${id} ${(performance.now() - t0).toFixed(0)} ms ${o.greska ?? ''}`);
+      return o;
+    });
   }
 
   const backend: Backend = {
