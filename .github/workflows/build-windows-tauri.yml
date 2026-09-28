@@ -39,23 +39,21 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # DIJAGNOSTIKA (privremeno): storno test s pulsom event loopa, sirovim
-      # stdout komadima i cdb stekovima bun.exe dok visi.
-      - name: Diag storno bun
+      # DIJAGNOSTIKA (privremeno): spor poziv redom, bez pauze / setTimeout 0 /
+      # mikrotask između — da li zaglavi čitanje stdout-a ugovor-servera.
+      - name: Diag redom
         continue-on-error: true
         timeout-minutes: 8
         run: |
           cargo build --manifest-path src-tauri/Cargo.toml -p pazar-backend --bin ugovor-server
-          $test = Start-Process -FilePath bun -ArgumentList 'test','src/ipc/ugovor/audit.ugovor.test.ts','-t','"adminom koji je odobrio"','--timeout','30000' -NoNewWindow -PassThru
-          Start-Sleep -Seconds 8
-          $cdb = "${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\x64\cdb.exe"
-          Write-Host "=== stekovi bun pid $($test.Id)"
-          & $cdb -p $test.Id -c "~*kn 25; qd"
-          if (-not $test.WaitForExit(40000)) { Write-Host "=== bun ZAGLAVIO" }
-          Get-Process ugovor-server, bun -ErrorAction SilentlyContinue | Stop-Process -Force
+          foreach ($t in 'bezpauze', 'timeout0', 'mikro') {
+            Write-Host "=== $t"
+            $p = Start-Process -FilePath bun -ArgumentList 'test','diag/harness-redom.test.ts','-t',$t -NoNewWindow -PassThru
+            if (-not $p.WaitForExit(40000)) { Write-Host "=== $t ZAGLAVIO" }
+            Get-Process ugovor-server, bun -ErrorAction SilentlyContinue | Stop-Process -Force
+          }
         env:
           KASA_BACKEND: rust
-          KASA_UGOVOR_TRAG: '1'
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
 
