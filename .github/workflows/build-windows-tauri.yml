@@ -11,6 +11,8 @@ permissions:
 jobs:
   build-windows-tauri:
     runs-on: windows-2022
+    # Zaglavljen test inače drži runner do GitHub-ovog limita od 6 sati.
+    timeout-minutes: 60
 
     steps:
       # Akcije su pinovane na commit SHA (tag u komentaru) — pomjeren tag ne mijenja build.
@@ -37,28 +39,18 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # DIJAGNOSTIKA (privremeno): storno test sam, s tragom zahtjeva i stderr-om
-      # ugovor-servera, uz 30 s umjesto 5 s — da li je spor ili visi, i gdje.
-      - name: Diag storno timeout
+      # DIJAGNOSTIKA (privremeno): minimalni repro bez backenda — da li
+      # expect().rejects/resolves zaglavi kad obećanje čeka stdout podprocesa.
+      - name: Diag bun rejects
         continue-on-error: true
+        timeout-minutes: 5
         run: |
-          cargo build --manifest-path src-tauri/Cargo.toml -p pazar-backend --bin ugovor-server
-          $test = Start-Process -FilePath bun -ArgumentList 'test','src/ipc/ugovor/audit.ugovor.test.ts','-t','"adminom koji je odobrio"','--timeout','30000' -NoNewWindow -PassThru
-          Start-Sleep -Seconds 15
-          $cdb = "${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\x64\cdb.exe"
-          Write-Host "cdb postoji: $(Test-Path $cdb)"
-          Get-Process ugovor-server -ErrorAction SilentlyContinue | ForEach-Object {
-            Write-Host "=== stekovi ugovor-server pid $($_.Id)"
-            & $cdb -p $_.Id -y "src-tauri\target\debug" -c ".lines -e; ~*kn 30; qd"
+          foreach ($t in 'try-catch', 'rejects', 'resolves') {
+            Write-Host "=== $t"
+            $p = Start-Process -FilePath bun -ArgumentList 'test','diag/bun-rejects.test.ts','-t',$t -NoNewWindow -PassThru
+            if (-not $p.WaitForExit(40000)) { Write-Host "=== $t ZAGLAVIO" }
+            Get-Process bun -ErrorAction SilentlyContinue | Stop-Process -Force
           }
-          $test | Wait-Process -Timeout 90 -ErrorAction SilentlyContinue
-          Get-Process ugovor-server, bun -ErrorAction SilentlyContinue | Stop-Process -Force
-        env:
-          KASA_BACKEND: rust
-          KASA_UGOVOR_LOG: '1'
-          KASA_UGOVOR_TRAG: '1'
-          TEMP: ${{ runner.temp }}
-          TMP: ${{ runner.temp }}
 
       # Isti ugovorni testovi kao nad TS backendom — na Windowsu hvataju razlike
       # u putanjama i fajlovima (backup/uvoz baze). Privremeni folderi (baza po
@@ -66,6 +58,7 @@ jobs:
       # sa PIN-ovima pređe bun-ovih 5 s.
       - name: Contract tests over Rust backend
         run: bun run test:rust
+        timeout-minutes: 20
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
