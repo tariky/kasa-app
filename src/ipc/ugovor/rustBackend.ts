@@ -2,7 +2,7 @@
 // razgovara s njim JSON linijama — vidi src-tauri/backend/src/bin/ugovor_server.rs.
 // Binarij se gradi prije testova (`bun run test:rust`); ovdje se samo provjeri
 // da postoji.
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Backend, OdgovoriDijaloga, OtvoreniDijalog } from './backend';
@@ -45,13 +45,18 @@ export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
   const dogadjaji: { ime: string; podaci: unknown }[] = [];
   let cekaju = new Map<number, (o: Odgovor) => void>();
 
+  let brojProcesa = 0;
+
   /** Pokrene ugovor-server nad `userData` i sačeka da javi da je spreman. */
   async function pokreni() {
+    // DIJAGNOSTIKA (privremeno): način čitanja odgovora — pipe/reader/fajl.
+    const citanje = process.env.KASA_UGOVOR_CITANJE ?? 'pipe';
+    const izlaz = path.join(userData, `ugovor-stdout-${++brojProcesa}.jsonl`);
     const proc = Bun.spawn([BINARIJ, userData], {
       // Backend računa "danas" i SQLite `localtime` u istoj zoni kao test (zona.ts).
       env: { ...process.env, TZ: ZONA_TESTA },
       stdin: 'pipe',
-      stdout: 'pipe',
+      stdout: citanje === 'fajl' ? Bun.file(izlaz) : 'pipe',
       stderr: process.env.KASA_UGOVOR_LOG ? 'inherit' : 'ignore',
     });
     // Svaki proces ima svoje zahtjeve na čekanju (stari se gasi prije novog).
@@ -60,27 +65,57 @@ export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
     let spreman!: (o: Odgovor) => void;
     const pokrenut = new Promise<Odgovor>(r => { spreman = r; });
 
-    (async () => {
-      const dekoder = new TextDecoder();
-      let buf = '';
-      for await (const dio of proc.stdout) {
-        // DIJAGNOSTIKA (privremeno): svaki sirovi komad stdout-a.
-        if (process.env.KASA_UGOVOR_TRAG) console.error(`[trag ${performance.now().toFixed(0)}] stdout ${dio.length} B: ${new TextDecoder().decode(dio).slice(0, 60).trim()}`);
-        buf += dekoder.decode(dio, { stream: true });
-        let nl: number;
-        while ((nl = buf.indexOf('\n')) >= 0) {
-          const linija = buf.slice(0, nl);
-          buf = buf.slice(nl + 1);
-          if (!linija.trim()) continue;
-          const o = JSON.parse(linija) as Odgovor;
-          if (o.spreman !== undefined) spreman(o);
-          else if (o.dogadjaj === 'restart') restart = true;
-          else if (o.dogadjaj) dogadjaji.push({ ime: o.dogadjaj, podaci: (o as { podaci?: unknown }).podaci ?? null });
-          else if (o.id !== undefined) { mojiZahtjevi.get(o.id)?.(o); mojiZahtjevi.delete(o.id); }
-        }
+    const dekoder = new TextDecoder();
+    let buf = '';
+    function obradi(dio: Uint8Array) {
+      buf += dekoder.decode(dio, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const linija = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        if (!linija.trim()) continue;
+        const o = JSON.parse(linija) as Odgovor;
+        if (o.spreman !== undefined) spreman(o);
+        else if (o.dogadjaj === 'restart') restart = true;
+        else if (o.dogadjaj) dogadjaji.push({ ime: o.dogadjaj, podaci: (o as { podaci?: unknown }).podaci ?? null });
+        else if (o.id !== undefined) { mojiZahtjevi.get(o.id)?.(o); mojiZahtjevi.delete(o.id); }
       }
-      if (process.env.KASA_UGOVOR_TRAG) console.error(`[trag ${performance.now().toFixed(0)}] stdout EOF`);
-    })();
+    }
+
+    if (citanje === 'fajl') {
+      let fd: number | null = null;
+      let pozicija = 0;
+      const komad = new Uint8Array(64 * 1024);
+      const procitaj = () => {
+        if (fd === null) {
+          try { fd = openSync(izlaz, 'r'); } catch { return; }
+        }
+        let n: number;
+        while ((n = readSync(fd, komad, 0, komad.length, pozicija)) > 0) {
+          pozicija += n;
+          obradi(komad.slice(0, n));
+        }
+      };
+      const tajmer = setInterval(procitaj, 5);
+      void proc.exited.then(() => {
+        clearInterval(tajmer);
+        procitaj();
+        if (fd !== null) closeSync(fd);
+      });
+    } else if (citanje === 'reader') {
+      void (async () => {
+        const r = proc.stdout.getReader();
+        for (;;) {
+          const { value, done } = await r.read();
+          if (done) break;
+          obradi(value);
+        }
+      })();
+    } else {
+      void (async () => {
+        for await (const dio of proc.stdout) obradi(dio);
+      })();
+    }
 
     const start = await pokrenut;
     if (!start.spreman) throw new Error(`ugovor-server nije pokrenut: ${start.greska}`);
