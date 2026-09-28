@@ -31,6 +31,9 @@ export async function otvoriRustBackend(baza?: string): Promise<Backend> {
 }
 
 /** Rust backend nad postojećim folderom (npr. kopija stvarne baze); `close` ga briše. */
+// DIJAGNOSTIKA (privremeno): puls — da li event loop radi dok test čeka.
+if (process.env.KASA_UGOVOR_TRAG) setInterval(() => console.error(`[trag ${performance.now().toFixed(0)}] puls`), 500).unref();
+
 export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
   if (!existsSync(BINARIJ)) {
     throw new Error(`Nema ${BINARIJ} — prvo: cargo build --manifest-path src-tauri/Cargo.toml -p pazar-backend --bin ugovor-server`);
@@ -61,6 +64,8 @@ export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
       const dekoder = new TextDecoder();
       let buf = '';
       for await (const dio of proc.stdout) {
+        // DIJAGNOSTIKA (privremeno): svaki sirovi komad stdout-a.
+        if (process.env.KASA_UGOVOR_TRAG) console.error(`[trag ${performance.now().toFixed(0)}] stdout ${dio.length} B: ${new TextDecoder().decode(dio).slice(0, 60).trim()}`);
         buf += dekoder.decode(dio, { stream: true });
         let nl: number;
         while ((nl = buf.indexOf('\n')) >= 0) {
@@ -74,6 +79,7 @@ export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
           else if (o.id !== undefined) { mojiZahtjevi.get(o.id)?.(o); mojiZahtjevi.delete(o.id); }
         }
       }
+      if (process.env.KASA_UGOVOR_TRAG) console.error(`[trag ${performance.now().toFixed(0)}] stdout EOF`);
     })();
 
     const start = await pokrenut;
