@@ -89,7 +89,8 @@ export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
 
   let proc = await pokreni();
 
-  const db = new BazaTesta(path.join(userData, 'kasa.db'), { strict: true });
+  const putanjaBaze = path.join(userData, 'kasa.db');
+  let db = new BazaTesta(putanjaBaze, { strict: true });
   const tring = pokreniLaziTring();
   db.prepare("UPDATE settings SET value = ? WHERE key = 'tring.port'").run(String(tring.port));
 
@@ -107,7 +108,7 @@ export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
   }
 
   const backend: Backend = {
-    db,
+    get db() { return db; },
     tring,
     dijalog,
     otvoreniDijalozi,
@@ -130,8 +131,18 @@ export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
     // Isti poziv; tipove argumenata i rezultata daje Backend.pozovi.
     pozovi: (kanal, ...args) => (backend.call as unknown as (kanal: string, ...args: unknown[]) => Promise<never>)(kanal, ...args),
     async call(kanal, ...args) {
-      // Date.now() prati setSystemTime iz testa — backend računa "danas" po njemu.
-      const o = await zahtjev({ kanal, args, dijalog, sada: Date.now() });
+      // db:restore briše i zamjenjuje kasa.db; Windows ne da obrisati fajl koji
+      // drži druga konekcija (ova, iz procesa testa), pa se ona pusti za vrijeme
+      // uvoza. Nova konekcija gleda bazu kakva je poslije uvoza.
+      const uvoz = kanal === 'db:restore';
+      if (uvoz) db.close();
+      let o: Odgovor;
+      try {
+        // Date.now() prati setSystemTime iz testa — backend računa "danas" po njemu.
+        o = await zahtjev({ kanal, args, dijalog, sada: Date.now() });
+      } finally {
+        if (uvoz) db = new BazaTesta(putanjaBaze, { strict: true });
+      }
       otvoreniDijalozi.push(...(o.dijalozi ?? []));
       if (o.greska !== undefined) throw new Error(o.greska);
       return o.ok ?? null;

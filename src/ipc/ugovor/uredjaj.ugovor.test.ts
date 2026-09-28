@@ -1,10 +1,10 @@
 // Ugovor za kanale tring:*, cash:*, dialog:saveFile, fs:writeFile, db:backup i
 // db:restore — vidi backend.ts.
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import { copyFileSync, existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { ADMIN_PIN, otvoriBackend, prijavi, type Backend } from './backend';
+import { BazaTesta } from './bazaTesta';
 import { tag } from './laziTring';
 import { scenarij, ADMIN, sada, postoji, neuspjehStampe } from './scenarij';
 
@@ -20,9 +20,9 @@ function zadnji() {
   return z;
 }
 
-/** Otvara aktivnu bazu posebnom konekcijom — nakon uvoza `b.db` gleda stari fajl. */
-function aktivnaBaza(): Database {
-  return new Database(path.join(path.dirname(b.radniFolder), 'kasa.db'), { readonly: true });
+/** Otvara aktivnu bazu posebnom read-only konekcijom. */
+function aktivnaBaza(): BazaTesta {
+  return new BazaTesta(path.join(path.dirname(b.radniFolder), 'kasa.db'), { readonly: true });
 }
 
 const OK = { success: true, vrstaOdgovora: 'OK', odgovori: {}, statusCode: 200 };
@@ -570,7 +570,7 @@ describe('db:backup', () => {
     b.dijalog.sacuvaj = cilj;
 
     expect(await b.pozovi('db:backup')).toBe(cilj);
-    const kopija = new Database(cilj, { readonly: true });
+    const kopija = new BazaTesta(cilj, { readonly: true });
     try {
       expect(kopija.prepare("SELECT naziv FROM products WHERE sifra = 'B1'").get()).toEqual({ naziv: 'Backup artikal' });
       expect(kopija.prepare('SELECT ime FROM users WHERE id = 1').get()).toEqual({ ime: 'Admin' });
@@ -589,7 +589,7 @@ describe('db:backup', () => {
 
     expect([...readFileSync(cilj).subarray(18, 20)]).toEqual([1, 1]); // 2, 2 = WAL
     expect(readdirSync(b.radniFolder)).toEqual(['kopija.db']);
-    const kopija = new Database(cilj, { readonly: true });
+    const kopija = new BazaTesta(cilj, { readonly: true });
     try {
       expect(kopija.prepare('PRAGMA journal_mode').get()).toEqual({ journal_mode: 'delete' });
       expect(kopija.prepare('PRAGMA integrity_check').get()).toEqual({ integrity_check: 'ok' });
@@ -706,7 +706,7 @@ describe('db:restore', () => {
 
   test('odbija SQLite bazu koja nije Kasa baza i navodi tabele koje fale', async () => {
     const tudja = path.join(b.radniFolder, 'tudja.db');
-    const t = new Database(tudja);
+    const t = new BazaTesta(tudja);
     t.exec('CREATE TABLE users (id INTEGER)');
     t.close();
     b.dijalog.otvori = tudja;
@@ -723,7 +723,7 @@ describe('db:restore', () => {
       ['CREATE TABLE tajna (x);', 'Fajl sadrži tabele kojih nema u Kasa bazi: tajna.'],
     ]) {
       const backup = await napraviBackup();
-      const t = new Database(backup);
+      const t = new BazaTesta(backup);
       t.exec(dodatak);
       t.close();
       b.dijalog.otvori = backup;
@@ -778,7 +778,7 @@ describe('db:restore', () => {
     // Sigurnosna kopija ima stanje prije uvoza, aktivna baza stanje iz backup-a.
     // Sigurnosna kopija je samostalan fajl kao i backup — otvara se read-only.
     expect([...readFileSync(r.safetyPath).subarray(18, 20)]).toEqual([1, 1]);
-    const kopija = new Database(r.safetyPath, { readonly: true });
+    const kopija = new BazaTesta(r.safetyPath, { readonly: true });
     const aktivna = aktivnaBaza();
     try {
       expect(kopija.prepare("SELECT COUNT(*) AS n FROM products WHERE sifra = 'N1'").get()).toEqual({ n: 1 });
