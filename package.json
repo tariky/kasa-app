@@ -18,6 +18,7 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
+    "tauri:build:win": "PATH=\"/opt/homebrew/opt/llvm/bin:/opt/homebrew/opt/lld/bin:$PATH\" tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc --bundles nsis",
     "tauri:vite": "vite --config vite.tauri.config.ts",
     "tauri:vite:build": "vite build --config vite.tauri.config.ts"
   },

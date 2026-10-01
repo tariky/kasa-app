@@ -13,6 +13,10 @@ Rust (`backend/`). Paket za macOS ima ~6 MB (Electron: ~290 MB).
 
 Potrebno: Rust (stable), Bun, na Windowsu WebView2 (dolazi s Windowsom 10/11).
 Windows paket se gradi na Windowsu (`bun run tauri:build` → MSI/NSIS).
+Probni NSIS instaler može i s macOS-a: `bun run tauri:build:win` (kros-kompajliranje
+preko cargo-xwin; prije toga `brew install nsis llvm lld`,
+`rustup target add x86_64-pc-windows-msvc`, `cargo install --locked cargo-xwin`).
+Bez MSI-ja i bez Windows ugovornih testova — izdanja idu kroz CI.
 
 Podaci su u istom folderu kao kod Electron verzije (`appData/Pazar`:
 `kasa.db`, `licenca.json`), pa Tauri verzija nastavlja nad postojećom bazom i
