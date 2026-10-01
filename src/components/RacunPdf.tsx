@@ -55,7 +55,7 @@ export function RacunPdf({ order, firma, lang = 'bs', postavke }: RacunPdfProps)
     >
       <DvaBloka>
         <Izdavac firma={firma} naslov={t.seller} />
-        <Kupac kupac={order} naslov={t.buyer} />
+        <Kupac kupac={order} naslov={t.buyer} pdv />
       </DvaBloka>
 
       <MetaRed polja={[
