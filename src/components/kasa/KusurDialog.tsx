@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { DecimalInput } from '@/components/ui/decimal-input';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogBody, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { cn, formatKM, formatKolicina, parseDecimal } from '@/lib/utils';
 import { prijedloziApoena, round2 } from '@/lib/novac';
 
@@ -20,7 +20,7 @@ export default function KusurDialog({ iznos, onZatvori }: { iznos: number | null
 
   return (
     <Dialog open={iznos !== null} onOpenChange={(open) => { if (!open) zatvori(); }}>
-      <DialogContent className="sm:max-w-[400px] p-0 gap-0 overflow-hidden rounded-2xl">
+      <DialogContent className="sm:max-w-[400px] p-0 gap-0 rounded-2xl">
         {iznos !== null && (() => {
           const apoeni = prijedloziApoena(iznos);
           const datoBroj = dato ? parseDecimal(dato) : null;
@@ -35,14 +35,14 @@ export default function KusurDialog({ iznos, onZatvori }: { iznos: number | null
           };
           return (
             <>
-              <div className="px-6 pt-6 pb-5">
-                <DialogHeader>
-                  <DialogTitle className="text-[15px]">Kalkulacija kusura</DialogTitle>
-                  <DialogDescription className="text-[12px] text-slate-500 mt-0.5">
-                    Upišite koliko je mušterija dala — kusur se računa automatski
-                  </DialogDescription>
-                </DialogHeader>
+              <DialogHeader className="px-6 pt-6">
+                <DialogTitle className="text-[15px]">Kalkulacija kusura</DialogTitle>
+                <DialogDescription className="text-[12px] text-slate-500 mt-0.5">
+                  Upišite koliko je mušterija dala — kusur se računa automatski
+                </DialogDescription>
+              </DialogHeader>
 
+              <DialogBody className="px-6 pb-5">
                 {/* Ukupno */}
                 <div className="mt-4 flex items-baseline justify-between">
                   <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Ukupno</span>
@@ -103,9 +103,9 @@ export default function KusurDialog({ iznos, onZatvori }: { iznos: number | null
                     </p>
                   </div>
                 )}
-              </div>
+              </DialogBody>
 
-              <div className="border-t border-slate-100 px-6 py-3 bg-slate-50/50 flex items-center justify-between">
+              <div className="shrink-0 border-t border-slate-100 px-6 py-3 bg-slate-50/50 flex items-center justify-between">
                 <span className="text-[11px] text-slate-400">
                   Esc za zatvaranje
                 </span>
