@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
-  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
+  Dialog, DialogBody, DialogContent, DialogDescription, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
 import { Separator } from '@/components/ui/separator';
 import { ActionRow, Eyebrow, FilterSelect, Key, LedgerHead, SegmentedFilter } from '@/components/ui/ledger';
@@ -797,10 +797,10 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
       {/* ── Obriši ponudu ── */}
       <Dialog open={nalogIzbor != null} onOpenChange={v => { if (!v) setNalogIzbor(null); }}>
         <DialogContent
-          className="sm:max-w-[560px] p-0 gap-0 overflow-hidden"
+          className="sm:max-w-[560px] p-0 gap-0"
           onKeyDown={submitOnMeta(() => { if (nalogIzbor) otvoriNalogIzPonude(proizvodiIzIzbora(nalogIzbor.linije, nalogIzbor.oznacene)); })}
         >
-          <div className="px-6 pt-6 pb-4">
+          <div className="px-6 pt-6 pb-4 flex-shrink-0">
             <DialogHeader>
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center">
@@ -818,7 +818,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
             </DialogHeader>
           </div>
           <Separator />
-          <div className="px-6 py-5">
+          <DialogBody className="px-6 py-5">
             {nalogIzbor && (
               <ProizvodiNaloga
                 linije={nalogIzbor.linije}
@@ -831,8 +831,8 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
                 })}
               />
             )}
-          </div>
-          <div className="border-t bg-slate-50/50 px-6 py-4 flex items-center justify-between gap-3">
+          </DialogBody>
+          <div className="border-t bg-slate-50/50 px-6 py-4 flex items-center justify-between gap-3 flex-shrink-0">
             <span className="flex items-center gap-1.5 text-[10.5px] text-slate-400">
               <Key className="ml-0">⌘↵</Key> otvori nalog
             </span>
@@ -849,7 +849,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
 
       <Dialog open={brisiOpen} onOpenChange={setBrisiOpen}>
         <DialogContent
-          className="sm:max-w-[420px] p-0 gap-0 overflow-hidden"
+          className="sm:max-w-[420px] p-0 gap-0"
           onKeyDown={submitOnMeta(deletePonuda)}
         >
           <div className="px-6 pt-6 pb-4">
