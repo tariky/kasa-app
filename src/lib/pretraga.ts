@@ -44,9 +44,13 @@ export function normalizuj(s: string): string {
   return o;
 }
 
-/** "3*kant" / "2,5 × iverica" → količina ispred zvjezdice; "7×50" ostaje upit. */
+/**
+ * "3*kant" / "3x kant" / "2,5 × iverica" → količina ispred zvjezdice ili x-a.
+ * Na BiH/HR tastaturi * traži Shift, pa je x ravnopravan — ali samo s razmakom
+ * ili krajem iza, da "7×50", "3x50 vijak" i "3xl" ostanu upit.
+ */
 export function parsirajUpit(raw: string): { upit: string; kolicina: number | null } {
-  const m = raw.match(/^\s*(\d+(?:[.,]\d+)?)\s*\*\s*(.*)$/);
+  const m = raw.match(/^\s*(\d+(?:[.,]\d+)?)\s*(?:\*|[x×](?=\s|$))\s*(.*)$/i);
   if (!m) return { upit: raw.trim(), kolicina: null };
   return { upit: m[2].trim(), kolicina: parseFloat(m[1].replace(',', '.')) };
 }

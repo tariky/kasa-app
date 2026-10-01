@@ -6,7 +6,7 @@ import {
   Dialog, DialogBody, DialogContent, DialogDescription, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
 import { Separator } from '@/components/ui/separator';
-import { ActionRow, Eyebrow, FilterSelect, Key, LedgerHead, SegmentedFilter } from '@/components/ui/ledger';
+import { ActionRow, Eyebrow, FilterSelect, Key, LedgerHead, SegmentedFilter, mod } from '@/components/ui/ledger';
 import {
   RefreshCw, FileText, AlertTriangle, Printer, Download, Plus, Trash2, Pencil,
   Receipt, X, Hammer,
@@ -526,7 +526,7 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
                     <span className="flex items-center gap-1"><Key className="ml-0">↑↓</Key> odaberi</span>
                     <span className="flex items-center gap-1"><Key className="ml-0">↵</Key> štampa</span>
                     <span className="flex items-center gap-1"><Key className="ml-0">←→</Key> filter</span>
-                    <span className="hidden lg:flex items-center gap-1"><Key className="ml-0">/</Key> pretraga</span>
+                    <span className="hidden lg:flex items-center gap-1"><Key className="ml-0">/</Key><Key className="ml-0">{mod('F')}</Key> pretraga</span>
                   </span>
                 </div>
               </>

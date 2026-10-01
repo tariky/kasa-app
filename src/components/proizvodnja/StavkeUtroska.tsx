@@ -169,7 +169,7 @@ export const StavkeUtroska = forwardRef<StavkeHandle, {
       {draft.length === 0 ? (
         <div className="rounded-xl border border-dashed border-slate-200 px-5 py-8 text-center">
           <p className="text-[12.5px] text-slate-500">{uredivo ? 'Nalog još nema stavki.' : 'Nalog nema stavki utroška.'}</p>
-          {uredivo && <p className="text-[11.5px] text-slate-400 mt-0.5">Potražite materijal iznad — tipka <Key className="ml-0 mx-0.5">/</Key> otvara pretragu.</p>}
+          {uredivo && <p className="text-[11.5px] text-slate-400 mt-0.5">Potražite materijal iznad — tipka <Key className="ml-0 mx-0.5">/</Key> ili <Key className="ml-0 mx-0.5">{mod('F')}</Key> otvara pretragu.</p>}
         </div>
       ) : (
         <div className="overflow-x-auto -mx-1 px-1">

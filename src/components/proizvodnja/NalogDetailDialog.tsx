@@ -151,6 +151,7 @@ export function NalogDetailDialog({ nalogId, redoslijed, uloga, onClose, onNavig
       const modKey = e.metaKey || e.ctrlKey;
       if (modKey && !e.altKey && !e.shiftKey) {
         if (e.key.toLowerCase() === 's') { e.preventDefault(); stavkeRef.current?.save(); return; }
+        if (e.key.toLowerCase() === 'f') { if (uredivo) { e.preventDefault(); stavkeRef.current?.focusSearch(); } return; }
         if (e.key === 'Enter') { if (primarna && !stavkeDirty) { e.preventDefault(); primarna(); } return; }
         return;
       }

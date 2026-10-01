@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { akcijaListe, indeksZaTipku, sljedeciFilter, susjedni, type MjestoTipke, type MogucnostiListe } from './ledgerLista';
+import { akcijaListe, indeksZaTipku, jeCtrlF, sljedeciFilter, susjedni, type MjestoTipke, type MogucnostiListe } from './ledgerLista';
 
 describe('indeksZaTipku', () => {
   test('↓ i ↑ pomjeraju za jedan, a bez izbora ↓ ide na prvi i ↑ ostaje na prvom', () => {
@@ -67,6 +67,23 @@ describe('akcijaListe', () => {
       expect(akcijaListe(tipka('Enter', mod), van, racuni)).toBeNull();
       expect(akcijaListe(tipka('p', mod), van, ponude)).toBeNull();
     }
+  });
+
+  test('Ctrl+F / ⌘F fokusira pretragu odakle god (i iz polja), „/“ na BiH/HR traži Shift', () => {
+    for (const mod of [{ ctrlKey: true }, { metaKey: true }]) {
+      for (const mjesto of [van, uPolju, uPretrazi, naRedu, uIzborniku]) {
+        expect(akcijaListe(tipka('f', mod), mjesto, racuni)).toEqual({ vrsta: 'pretraga' });
+      }
+      expect(akcijaListe(tipka('F', mod), van, ponude)).toEqual({ vrsta: 'pretraga' });
+      expect(akcijaListe(tipka('f', mod), van, nalozi)).toBeNull();
+    }
+  });
+
+  test('AltGr (na Windowsu Ctrl+Alt) + F nije pretraga', () => {
+    expect(akcijaListe(tipka('f', { ctrlKey: true, altKey: true }), van, racuni)).toBeNull();
+    expect(jeCtrlF(tipka('f', { ctrlKey: true, altKey: true }))).toBe(false);
+    expect(jeCtrlF(tipka('f'))).toBe(false);
+    expect(jeCtrlF(tipka('g', { ctrlKey: true }))).toBe(false);
   });
 
   test('u pretrazi: esc briše upit, ↓ vodi u listu (prvi ili izabrani red), ostalo ide u polje', () => {

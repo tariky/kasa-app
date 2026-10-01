@@ -6,7 +6,7 @@ import { RefreshCw, Receipt, AlertTriangle, Plus, Paperclip, Search, X } from 'l
 import { Order } from '@/types';
 import { cn, formatKM, formatDateTime } from '@/lib/utils';
 import { filtriraj, type PoljaPretrage } from '@/lib/pretraga';
-import { Key, LedgerHead, SegmentedFilter } from '@/components/ui/ledger';
+import { Key, LedgerHead, SegmentedFilter, mod } from '@/components/ui/ledger';
 import DodajRacunDialog from '@/components/DodajRacunDialog';
 import { RacunDetailDialog } from '@/components/racuni/RacunDetailDialog';
 import { useIpcPodaci } from '@/hooks/useIpcPodaci';
@@ -277,7 +277,7 @@ export default function NarudzbeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) 
               <span className="flex items-center gap-1"><Key className="ml-0">↑↓</Key> odaberi</span>
               <span className="flex items-center gap-1"><Key className="ml-0">↵</Key> otvori</span>
               <span className="flex items-center gap-1"><Key className="ml-0">←→</Key> filter</span>
-              <span className="flex items-center gap-1"><Key className="ml-0">/</Key> pretraga</span>
+              <span className="flex items-center gap-1"><Key className="ml-0">/</Key><Key className="ml-0">{mod('F')}</Key> pretraga</span>
             </span>
           </div>
         </>

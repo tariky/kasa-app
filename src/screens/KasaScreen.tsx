@@ -519,7 +519,7 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
           />
           <div className="flex h-11 flex-shrink-0 items-center gap-4 border-t border-slate-100 bg-slate-50/70 pl-5 pr-2 text-[11px] text-slate-400 select-none">
             <span className="flex items-center gap-1.5"><Key className="ml-0">↵</Key> {scanMode ? 'dodaj 1 kom' : 'dodaj'}</span>
-            <span className="flex items-center gap-1.5"><Key className="ml-0">3*</Key> količina</span>
+            <span className="flex items-center gap-1.5"><Key className="ml-0">3x</Key> količina</span>
             <span className="hidden items-center gap-1.5 xl:flex"><Key className="ml-0">F2</Key> brzi sken</span>
             <span className="hidden items-center gap-1.5 xl:flex"><Key className="ml-0">F3</Key> slobodna stavka</span>
             <span className="flex items-center gap-1.5"><Key className="ml-0">F5</Key> naplati</span>

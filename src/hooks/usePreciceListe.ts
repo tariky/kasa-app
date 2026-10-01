@@ -19,7 +19,7 @@ export interface OpcijePreciceListe<F extends string> extends Pick<MogucnostiLis
 }
 
 /**
- * Prečice ledger ekrana na cijelom prozoru: „/“ pretraga, esc briše upit, ↓ iz
+ * Prečice ledger ekrana na cijelom prozoru: „/“ ili Ctrl+F pretraga, esc briše upit, ↓ iz
  * pretrage u listu, N novi, R osvježi, ←→ i [ ] filter, ↑↓ i ↵ van liste.
  * Pravila su u `lib/ledgerLista.ts`; ovdje se samo izvršavaju.
  */
