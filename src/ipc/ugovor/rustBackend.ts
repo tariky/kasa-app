@@ -1,12 +1,13 @@
 // Pokreće Rust backend (src-tauri/backend) kao proces `ugovor-server` i
 // razgovara s njim JSON linijama — vidi src-tauri/backend/src/bin/ugovor_server.rs.
+// Zahtjevi idu na stdin, a odgovori (stdout procesa) u fajl koji se čita tajmerom.
 // Binarij se gradi prije testova (`bun run test:rust`); ovdje se samo provjeri
 // da postoji.
-import { Database } from 'bun:sqlite';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Backend, OdgovoriDijaloga, OtvoreniDijalog } from './backend';
+import { BazaTesta } from './bazaTesta';
 import { pokreniLaziTring } from './laziTring';
 import { ZONA_TESTA } from './zona';
 
@@ -41,14 +42,21 @@ export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
   let restart = false;
   const dogadjaji: { ime: string; podaci: unknown }[] = [];
   let cekaju = new Map<number, (o: Odgovor) => void>();
+  let brojProcesa = 0;
 
   /** Pokrene ugovor-server nad `userData` i sačeka da javi da je spreman. */
   async function pokreni() {
+    // Odgovori idu u fajl, ne kroz pipe: bun na Windowsu (1.3.14–1.4.2) ne
+    // dostavi stdout podprocesa dok `expect(poziv).rejects` čeka odgovor koji
+    // stiže poslije sporog prethodnog (npr. provjera PIN-a) — test visi, iako
+    // je ugovor-server odgovor upisao. Tajmeri za to vrijeme rade, pa se fajl
+    // čita tajmerom.
+    const izlaz = path.join(userData, `ugovor-stdout-${++brojProcesa}.jsonl`);
     const proc = Bun.spawn([BINARIJ, userData], {
       // Backend računa "danas" i SQLite `localtime` u istoj zoni kao test (zona.ts).
       env: { ...process.env, TZ: ZONA_TESTA },
       stdin: 'pipe',
-      stdout: 'pipe',
+      stdout: Bun.file(izlaz),
       stderr: process.env.KASA_UGOVOR_LOG ? 'inherit' : 'ignore',
     });
     // Svaki proces ima svoje zahtjeve na čekanju (stari se gasi prije novog).
@@ -57,24 +65,43 @@ export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
     let spreman!: (o: Odgovor) => void;
     const pokrenut = new Promise<Odgovor>(r => { spreman = r; });
 
-    (async () => {
-      const dekoder = new TextDecoder();
-      let buf = '';
-      for await (const dio of proc.stdout) {
-        buf += dekoder.decode(dio, { stream: true });
-        let nl: number;
-        while ((nl = buf.indexOf('\n')) >= 0) {
-          const linija = buf.slice(0, nl);
-          buf = buf.slice(nl + 1);
-          if (!linija.trim()) continue;
-          const o = JSON.parse(linija) as Odgovor;
-          if (o.spreman !== undefined) spreman(o);
-          else if (o.dogadjaj === 'restart') restart = true;
-          else if (o.dogadjaj) dogadjaji.push({ ime: o.dogadjaj, podaci: (o as { podaci?: unknown }).podaci ?? null });
-          else if (o.id !== undefined) { mojiZahtjevi.get(o.id)?.(o); mojiZahtjevi.delete(o.id); }
-        }
+    const dekoder = new TextDecoder();
+    let buf = '';
+    function obradi(dio: Uint8Array) {
+      buf += dekoder.decode(dio, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const linija = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        if (!linija.trim()) continue;
+        const o = JSON.parse(linija) as Odgovor;
+        if (o.spreman !== undefined) spreman(o);
+        else if (o.dogadjaj === 'restart') restart = true;
+        else if (o.dogadjaj) dogadjaji.push({ ime: o.dogadjaj, podaci: (o as { podaci?: unknown }).podaci ?? null });
+        else if (o.id !== undefined) { mojiZahtjevi.get(o.id)?.(o); mojiZahtjevi.delete(o.id); }
       }
-    })();
+    }
+
+    let fd: number | null = null;
+    let pozicija = 0;
+    const komad = new Uint8Array(64 * 1024);
+    function procitaj() {
+      if (fd === null) {
+        try { fd = openSync(izlaz, 'r'); } catch { return; }
+      }
+      let n: number;
+      while ((n = readSync(fd, komad, 0, komad.length, pozicija)) > 0) {
+        pozicija += n;
+        obradi(komad.subarray(0, n));
+      }
+    }
+    const tajmer = setInterval(procitaj, 2);
+    // Fajl se zatvori prije nego close() obriše userData (Windows ne da obrisati otvoren fajl).
+    void proc.exited.then(() => {
+      clearInterval(tajmer);
+      procitaj();
+      if (fd !== null) closeSync(fd);
+    });
 
     const start = await pokrenut;
     if (!start.spreman) throw new Error(`ugovor-server nije pokrenut: ${start.greska}`);
@@ -89,7 +116,8 @@ export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
 
   let proc = await pokreni();
 
-  const db = new Database(path.join(userData, 'kasa.db'), { strict: true });
+  const putanjaBaze = path.join(userData, 'kasa.db');
+  let db = new BazaTesta(putanjaBaze, { strict: true });
   const tring = pokreniLaziTring();
   db.prepare("UPDATE settings SET value = ? WHERE key = 'tring.port'").run(String(tring.port));
 
@@ -114,7 +142,7 @@ export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
   }
 
   const backend: Backend = {
-    db,
+    get db() { return db; },
     tring,
     dijalog,
     otvoreniDijalozi,
@@ -142,8 +170,18 @@ export async function otvoriRustBackendNad(userData: string): Promise<Backend> {
     // Isti poziv; tipove argumenata i rezultata daje Backend.pozovi.
     pozovi: (kanal, ...args) => (backend.call as unknown as (kanal: string, ...args: unknown[]) => Promise<never>)(kanal, ...args),
     async call(kanal, ...args) {
-      // Date.now() prati setSystemTime iz testa — backend računa "danas" po njemu.
-      const o = await zahtjev({ kanal, args, dijalog, sada: Date.now() });
+      // db:restore briše i zamjenjuje kasa.db; Windows ne da obrisati fajl koji
+      // drži druga konekcija (ova, iz procesa testa), pa se ona pusti za vrijeme
+      // uvoza. Nova konekcija gleda bazu kakva je poslije uvoza.
+      const uvoz = kanal === 'db:restore';
+      if (uvoz) db.close();
+      let o: Odgovor;
+      try {
+        // Date.now() prati setSystemTime iz testa — backend računa "danas" po njemu.
+        o = await zahtjev({ kanal, args, dijalog, sada: Date.now() });
+      } finally {
+        if (uvoz) db = new BazaTesta(putanjaBaze, { strict: true });
+      }
       otvoreniDijalozi.push(...(o.dijalozi ?? []));
       if (o.greska !== undefined) throw new Error(o.greska);
       return o.ok ?? null;

@@ -2,14 +2,14 @@
 // `better-sqlite3` su zamijenjeni tankim shimovima (native build je vezan za
 // Electron ABI), a licenca je otključana — ona ima svoje testove.
 import { mock } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Backend, OdgovoriDijaloga, OtvoreniDijalog } from './backend';
+import { BazaTesta } from './bazaTesta';
 import { pokreniLaziTring } from './laziTring';
 
-class BetterSqliteShim extends Database {
+class BetterSqliteShim extends BazaTesta {
   constructor(file: string, opts: { readonly?: boolean; fileMustExist?: boolean } = {}) {
     super(file, opts.readonly ? { readonly: true, strict: true } : { create: !opts.fileMustExist, readwrite: true, strict: true });
   }
@@ -89,12 +89,13 @@ export async function otvoriTsBackend(baza?: string): Promise<Backend> {
   if (baza) copyFileSync(baza, path.join(userData, 'kasa.db'));
   registerIpcHandlers();
 
-  const db = new Database(path.join(userData, 'kasa.db'), { strict: true });
+  const putanjaBaze = path.join(userData, 'kasa.db');
+  let db = new BazaTesta(putanjaBaze, { strict: true });
   const tring = pokreniLaziTring();
   db.prepare("UPDATE settings SET value = ? WHERE key = 'tring.port'").run(String(tring.port));
 
   const backend: Backend = {
-    db,
+    get db() { return db; },
     tring,
     dijalog,
     otvoreniDijalozi,
@@ -121,11 +122,17 @@ export async function otvoriTsBackend(baza?: string): Promise<Backend> {
       // Handler loguje svaku grešku; u testovima su greške očekivane, pa bez šuma.
       const logGreske = console.error;
       console.error = () => undefined;
+      // db:restore briše i zamjenjuje kasa.db; Windows ne da obrisati fajl koji
+      // drži druga konekcija (ova, iz procesa testa), pa se ona pusti za vrijeme
+      // uvoza. Nova konekcija gleda bazu kakva je poslije uvoza.
+      const uvoz = kanal === 'db:restore';
+      if (uvoz) db.close();
       let rezultat: unknown;
       try {
         rezultat = await fn({}, ...JSON.parse(JSON.stringify(args)));
       } finally {
         console.error = logGreske;
+        if (uvoz) db = new BazaTesta(putanjaBaze, { strict: true });
       }
       return rezultat === undefined ? null : JSON.parse(JSON.stringify(rezultat));
     },

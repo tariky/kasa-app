@@ -2,7 +2,6 @@
 // backup:stanje, protiv lažnog S3 (PAZAR_BACKUP_ENDPOINT), nad oba backenda.
 // Tijelo se dešifruje JS age-om i otvara kao baza — za Rust je to i interop.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import { generateIdentity, identityToRecipient } from 'age-encryption';
 import { generateKeyPairSync } from 'node:crypto';
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -12,6 +11,7 @@ import { desifrujBackup } from '../../lib/backupFajl';
 import { izdajLicencu, type R2Podaci } from '../../lib/licenca';
 import { PORUKA_SAMO_ADMIN } from '../sesija';
 import { otvoriBackend, prijavi, type Backend } from './backend';
+import { BazaTesta } from './bazaTesta';
 import { pokreniLaziS3, S3_KLJUC, S3_TAJNA, type LaziS3 } from './laziS3';
 import { scenarij } from './scenarij';
 
@@ -67,7 +67,7 @@ describe('backup:*', () => {
 
     const fajl = path.join(b.radniFolder, 'vraceno.db');
     writeFileSync(fajl, await desifrujBackup(z.tijelo, identitet));
-    const vraceno = new Database(fajl, { readonly: true });
+    const vraceno = new BazaTesta(fajl, { readonly: true });
     expect(vraceno.prepare("SELECT naziv FROM kupci WHERE idBroj = '4200000000000'").get()).toEqual({ naziv: 'Kupac iz backup-a' });
     expect(vraceno.prepare('PRAGMA integrity_check').get()).toEqual({ integrity_check: 'ok' });
     vraceno.close();

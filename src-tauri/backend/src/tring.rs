@@ -838,7 +838,11 @@ mod tests {
     #[test]
     fn ishod_veza_odbijena_sigurno_nije_stampano() {
         let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-        let r = tring_na(port).stampati_fiskalni_racun(&racun());
+        let t = tring_na(port);
+        // Windows ponavlja SYN na odbijenu vezu ~2 s prije ECONNREFUSED; sa 100 ms
+        // iz tring_na bi to bio ETIMEDOUT.
+        t.postavi_timeout(CONNECT_TIMEOUT, CONNECT_TIMEOUT);
+        let r = t.stampati_fiskalni_racun(&racun());
         assert!(!uspjeh(&r));
         assert!(to_string(&r["error"]).contains("ECONNREFUSED"), "{r}");
         assert!(r.get("ishodNepoznat").is_none(), "{r}");

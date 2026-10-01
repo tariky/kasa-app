@@ -11,6 +11,8 @@ permissions:
 jobs:
   build-windows-tauri:
     runs-on: windows-2022
+    # Zaglavljen test inače drži runner do GitHub-ovog limita od 6 sati.
+    timeout-minutes: 60
 
     steps:
       # Akcije su pinovane na commit SHA (tag u komentaru) — pomjeren tag ne mijenja build.
@@ -51,12 +53,20 @@ jobs:
           printf "export const BACKUP_KLJUC_HEX = '%s';\n" "$PAZAR_BACKUP_KLJUC_HEX" > src/lib/backupKljuc.ts
 
       # Isti ugovorni testovi kao nad TS backendom — na Windowsu hvataju razlike
-      # u putanjama i fajlovima (backup/uvoz baze).
+      # u putanjama i fajlovima (backup/uvoz baze). Privremeni folderi (baza po
+      # testu) idu na D: — na C: runnera su SQLite upisi i do 20× sporiji.
       - name: Contract tests over Rust backend
         run: bun run test:rust
+        timeout-minutes: 20
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
 
       - name: Rust unit tests
         run: cargo test --manifest-path src-tauri/Cargo.toml -p pazar-backend
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
 
       - name: Build Tauri installer
         run: bun run tauri:build
