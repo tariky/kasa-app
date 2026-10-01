@@ -4,7 +4,7 @@ import { Input } from '@/components/ui/input';
 import { LedgerHead } from '@/components/ui/ledger';
 import { Separator } from '@/components/ui/separator';
 import {
-  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
+  Dialog, DialogBody, DialogContent, DialogDescription, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
 import { cn, mnozina, porukaGreske } from '@/lib/utils';
 import type { User } from '@/types';
@@ -136,8 +136,8 @@ export default function KorisniciGrupa({ onPromjena }: { onPromjena: () => void 
       </Sekcija>
 
       <Dialog open={dialog} onOpenChange={setDialog}>
-        <DialogContent className="sm:max-w-[420px] p-0 gap-0 overflow-hidden">
-          <div className="px-6 pt-6 pb-4">
+        <DialogContent className="sm:max-w-[420px] p-0 gap-0">
+          <div className="shrink-0 px-6 pt-6 pb-4">
             <DialogHeader>
               <DialogTitle className="text-lg">{uredjuje ? 'Uredi korisnika' : 'Novi korisnik'}</DialogTitle>
               <DialogDescription className="text-[12px]">
@@ -148,44 +148,46 @@ export default function KorisniciGrupa({ onPromjena }: { onPromjena: () => void 
 
           <Separator />
 
-          <form className="px-6 py-5 space-y-4" onSubmit={e => { e.preventDefault(); spremi(); }}>
-            <Polje label="Ime" htmlFor="user-ime">
-              <Input id="user-ime" value={ime} onChange={e => setIme(e.target.value)} placeholder="Ime korisnika"
-                className="h-10 text-[14px] bg-slate-50 border-slate-200" autoFocus />
-            </Polje>
-            <Polje label={uredjuje ? 'Novi PIN' : 'PIN'} htmlFor="user-pin"
-              napomena={uredjuje ? 'Od 4 do 6 cifara. Prazno — PIN ostaje isti.' : 'Od 4 do 6 cifara.'}>
-              <Input id="user-pin" type="password" value={pin} onChange={e => setPin(e.target.value.replace(/\D/g, ''))}
-                maxLength={6} inputMode="numeric" pattern="[0-9]*" placeholder="••••" autoComplete="off"
-                className="font-mono h-10 text-[14px] bg-slate-50 border-slate-200" />
-            </Polje>
-            <Polje label="Uloga">
-              <div role="radiogroup" aria-label="Uloga" className="grid grid-cols-2 gap-2">
-                {(['kasir', 'admin'] as const).map(u => (
-                  <button
-                    key={u}
-                    type="button"
-                    role="radio"
-                    aria-checked={uloga === u}
-                    onClick={() => setUloga(u)}
-                    className={cn(
-                      'h-10 rounded-lg border text-[13px] font-medium transition-colors flex items-center justify-center gap-1.5',
-                      'focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50',
-                      uloga === u
-                        ? u === 'admin' ? 'border-amber-400 bg-amber-50/60 text-amber-800' : 'border-blue-500 bg-blue-50/80 text-blue-700'
-                        : 'border-slate-200 text-slate-500 hover:border-slate-300',
-                    )}
-                  >
-                    {u === 'admin' && <Shield size={14} />}
-                    {u === 'admin' ? 'Administrator' : 'Kasir'}
-                  </button>
-                ))}
-              </div>
-            </Polje>
-            <button type="submit" hidden />
-          </form>
+          <DialogBody>
+            <form className="px-6 py-5 space-y-4" onSubmit={e => { e.preventDefault(); spremi(); }}>
+              <Polje label="Ime" htmlFor="user-ime">
+                <Input id="user-ime" value={ime} onChange={e => setIme(e.target.value)} placeholder="Ime korisnika"
+                  className="h-10 text-[14px] bg-slate-50 border-slate-200" autoFocus />
+              </Polje>
+              <Polje label={uredjuje ? 'Novi PIN' : 'PIN'} htmlFor="user-pin"
+                napomena={uredjuje ? 'Od 4 do 6 cifara. Prazno — PIN ostaje isti.' : 'Od 4 do 6 cifara.'}>
+                <Input id="user-pin" type="password" value={pin} onChange={e => setPin(e.target.value.replace(/\D/g, ''))}
+                  maxLength={6} inputMode="numeric" pattern="[0-9]*" placeholder="••••" autoComplete="off"
+                  className="font-mono h-10 text-[14px] bg-slate-50 border-slate-200" />
+              </Polje>
+              <Polje label="Uloga">
+                <div role="radiogroup" aria-label="Uloga" className="grid grid-cols-2 gap-2">
+                  {(['kasir', 'admin'] as const).map(u => (
+                    <button
+                      key={u}
+                      type="button"
+                      role="radio"
+                      aria-checked={uloga === u}
+                      onClick={() => setUloga(u)}
+                      className={cn(
+                        'h-10 rounded-lg border text-[13px] font-medium transition-colors flex items-center justify-center gap-1.5',
+                        'focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50',
+                        uloga === u
+                          ? u === 'admin' ? 'border-amber-400 bg-amber-50/60 text-amber-800' : 'border-blue-500 bg-blue-50/80 text-blue-700'
+                          : 'border-slate-200 text-slate-500 hover:border-slate-300',
+                      )}
+                    >
+                      {u === 'admin' && <Shield size={14} />}
+                      {u === 'admin' ? 'Administrator' : 'Kasir'}
+                    </button>
+                  ))}
+                </div>
+              </Polje>
+              <button type="submit" hidden />
+            </form>
+          </DialogBody>
 
-          <div className="border-t bg-slate-50/50 px-6 py-4 flex items-center justify-end gap-3">
+          <div className="shrink-0 border-t bg-slate-50/50 px-6 py-4 flex items-center justify-end gap-3">
             {greska && <span className="mr-auto text-[12px] font-medium text-rose-600">{greska}</span>}
             <Button variant="ghost" onClick={() => setDialog(false)}>Otkaži</Button>
             <Button onClick={spremi} disabled={!ime.trim() || !pinIspravan}

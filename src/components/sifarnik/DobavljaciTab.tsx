@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
+  Dialog, DialogContent, DialogHeader, DialogBody, DialogTitle, DialogDescription,
 } from '@/components/ui/dialog';
 import { LedgerHead } from '@/components/ui/ledger';
 import { Separator } from '@/components/ui/separator';
@@ -98,8 +98,8 @@ function DobavljacDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[520px] p-0 gap-0 overflow-hidden">
-        <div className="px-6 pt-6 pb-4">
+      <DialogContent className="sm:max-w-[520px] p-0 gap-0">
+        <div className="shrink-0 px-6 pt-6 pb-4">
           <DialogHeader>
             <div className="flex items-center gap-3">
               <div className={cn(
@@ -120,7 +120,7 @@ function DobavljacDialog({
 
         <Separator />
 
-        <div className="px-6 py-5 space-y-5">
+        <DialogBody className="px-6 py-5 space-y-5">
           <div className="space-y-1.5">
             <Label htmlFor="dob-naziv" className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
               Naziv firme
@@ -186,9 +186,9 @@ function DobavljacDialog({
               placeholder="Telefon, email..."
             />
           </div>
-        </div>
+        </DialogBody>
 
-        <div className="border-t bg-slate-50/50">
+        <div className="shrink-0 border-t bg-slate-50/50">
           {error && (
             <div className="mx-6 mt-4 text-sm px-3 py-2.5 rounded-lg bg-red-50 text-red-600 border border-red-100 flex items-center gap-2">
               <X className="h-4 w-4 flex-shrink-0" />
