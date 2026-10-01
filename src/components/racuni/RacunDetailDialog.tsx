@@ -16,7 +16,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { DatePicker } from '@/components/ui/date-picker';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogBody, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Eyebrow, Key, jePoljeZaUnos, mod } from '@/components/ui/ledger';
 import { FullDialog, FullDialogContent, FullDialogHeader, FullDialogFooter, FullDialogNotice, FullDialogTitle, FooterBtn, Fact, LegendKey, SusjedniNav } from '@/components/ui/full-dialog';
 import { RacunPdf, type InvoiceLang } from '@/components/RacunPdf';
@@ -517,66 +517,69 @@ export function RacunDetailDialog({ orderId, redoslijed, uloga, onClose, onNavig
                 </DialogDescription>
               </DialogHeader>
 
-              {drawerWarning && (
-                <div className="rounded-lg bg-amber-50/70 border border-amber-100 px-3 py-2.5">
-                  <p className="text-[12px] font-semibold text-amber-800">U kasi nema dovoljno evidentirane gotovine za povrat</p>
-                  <p className="text-[11.5px] text-amber-700/80 mt-0.5">
-                    Očekivano stanje je {formatKM(drawerWarning.stanje)}, a povrat traži {formatKM(drawerWarning.potrebno)}.
-                    Tring povrat po reklamaciji ide gotovinom, pa printer bez pokrića odbija
-                    štampu. Možeš unijeti polog ručno ili pregaziti stanje: manjak se tada
-                    evidentira kao polog i storno prolazi.
+              {/* Na niskom ekranu skrola tijelo, dugmad ostaju vidljiva; -m-1 p-1 čuva prsten fokusa polja. */}
+              <DialogBody className="-m-1 p-1 space-y-4">
+                {drawerWarning && (
+                  <div className="rounded-lg bg-amber-50/70 border border-amber-100 px-3 py-2.5">
+                    <p className="text-[12px] font-semibold text-amber-800">U kasi nema dovoljno evidentirane gotovine za povrat</p>
+                    <p className="text-[11.5px] text-amber-700/80 mt-0.5">
+                      Očekivano stanje je {formatKM(drawerWarning.stanje)}, a povrat traži {formatKM(drawerWarning.potrebno)}.
+                      Tring povrat po reklamaciji ide gotovinom, pa printer bez pokrića odbija
+                      štampu. Možeš unijeti polog ručno ili pregaziti stanje: manjak se tada
+                      evidentira kao polog i storno prolazi.
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2 mt-2">
+                      <Button variant="outline" size="sm" className="h-7 text-[11px] border-amber-200 text-amber-700 hover:bg-amber-50 hover:text-amber-800" onClick={() => setPologOpen(true)}>
+                        Unesi polog
+                      </Button>
+                      <Button variant="outline" size="sm" className="h-7 text-[11px] border-amber-300 text-amber-700 hover:bg-amber-50 hover:text-amber-800" disabled={reklamacijaLoading} onClick={() => reklamiraj(true)}>
+                        Reklamiraj uz polog {formatKM(round2(drawerWarning.potrebno - drawerWarning.stanje))}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {trebaPin && (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="reklamacija-pin" className="flex items-center gap-1.5 text-[12px] text-slate-600">
+                      <KeyRound size={13} className="text-amber-500" /> PIN administratora
+                    </Label>
+                    <Input id="reklamacija-pin" type="password" value={pinValue} autoFocus maxLength={8} inputMode="numeric" placeholder="PIN"
+                      onChange={e => { setPinValue(e.target.value.replace(/\D/g, '')); setReklamacijaGreska(null); }}
+                      onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); reklamiraj(); } }}
+                      className="font-mono text-center text-lg h-10 tracking-[0.3em]" />
+                  </div>
+                )}
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="reklamacija-broj" className="text-[12px] text-slate-600">Broj fiskalnog za reklamaciju (opcionalno)</Label>
+                  <Input id="reklamacija-broj" value={reklamacijaBroj} onChange={e => setReklamacijaBroj(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); reklamiraj(); } }}
+                    placeholder="Unesite broj fiskalnog računa" className="font-mono text-[13px] h-9" />
+                </div>
+
+                {reklamacijaGreska && (
+                  <p className="flex items-start gap-2 rounded-lg bg-rose-50 border border-rose-100 px-3 py-2 text-[11.5px] font-medium text-rose-700">
+                    <AlertTriangle size={13} className="mt-[1px] flex-shrink-0" /> {reklamacijaGreska}
                   </p>
-                  <div className="flex flex-wrap items-center gap-2 mt-2">
-                    <Button variant="outline" size="sm" className="h-7 text-[11px] border-amber-200 text-amber-700 hover:bg-amber-50 hover:text-amber-800" onClick={() => setPologOpen(true)}>
-                      Unesi polog
-                    </Button>
-                    <Button variant="outline" size="sm" className="h-7 text-[11px] border-amber-300 text-amber-700 hover:bg-amber-50 hover:text-amber-800" disabled={reklamacijaLoading} onClick={() => reklamiraj(true)}>
-                      Reklamiraj uz polog {formatKM(round2(drawerWarning.potrebno - drawerWarning.stanje))}
+                )}
+
+                {overrideManjak !== null && (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2.5">
+                    <p className="text-[12px] font-semibold text-amber-800">Printer je odbio storno zbog stanja kase</p>
+                    <p className="text-[11.5px] text-amber-700/80 mt-0.5">
+                      Za povrat fali {formatKM(overrideManjak)}. Možeš pregaziti stanje kase — taj iznos
+                      će biti evidentiran kao polog (i na printeru i u evidenciji ladice), pa se
+                      reklamacija odmah ponovo štampa.
+                    </p>
+                    <Button variant="outline" size="sm" className="h-7 mt-2 text-[11px] border-amber-300 text-amber-700 hover:bg-amber-50 hover:text-amber-800" disabled={reklamacijaLoading} onClick={() => reklamiraj(true)}>
+                      Ipak reklamiraj (polog {formatKM(overrideManjak)})
                     </Button>
                   </div>
-                </div>
-              )}
+                )}
+              </DialogBody>
 
-              {trebaPin && (
-                <div className="space-y-1.5">
-                  <Label htmlFor="reklamacija-pin" className="flex items-center gap-1.5 text-[12px] text-slate-600">
-                    <KeyRound size={13} className="text-amber-500" /> PIN administratora
-                  </Label>
-                  <Input id="reklamacija-pin" type="password" value={pinValue} autoFocus maxLength={8} inputMode="numeric" placeholder="PIN"
-                    onChange={e => { setPinValue(e.target.value.replace(/\D/g, '')); setReklamacijaGreska(null); }}
-                    onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); reklamiraj(); } }}
-                    className="font-mono text-center text-lg h-10 tracking-[0.3em]" />
-                </div>
-              )}
-
-              <div className="space-y-1.5">
-                <Label htmlFor="reklamacija-broj" className="text-[12px] text-slate-600">Broj fiskalnog za reklamaciju (opcionalno)</Label>
-                <Input id="reklamacija-broj" value={reklamacijaBroj} onChange={e => setReklamacijaBroj(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); reklamiraj(); } }}
-                  placeholder="Unesite broj fiskalnog računa" className="font-mono text-[13px] h-9" />
-              </div>
-
-              {reklamacijaGreska && (
-                <p className="flex items-start gap-2 rounded-lg bg-rose-50 border border-rose-100 px-3 py-2 text-[11.5px] font-medium text-rose-700">
-                  <AlertTriangle size={13} className="mt-[1px] flex-shrink-0" /> {reklamacijaGreska}
-                </p>
-              )}
-
-              {overrideManjak !== null && (
-                <div className="rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2.5">
-                  <p className="text-[12px] font-semibold text-amber-800">Printer je odbio storno zbog stanja kase</p>
-                  <p className="text-[11.5px] text-amber-700/80 mt-0.5">
-                    Za povrat fali {formatKM(overrideManjak)}. Možeš pregaziti stanje kase — taj iznos
-                    će biti evidentiran kao polog (i na printeru i u evidenciji ladice), pa se
-                    reklamacija odmah ponovo štampa.
-                  </p>
-                  <Button variant="outline" size="sm" className="h-7 mt-2 text-[11px] border-amber-300 text-amber-700 hover:bg-amber-50 hover:text-amber-800" disabled={reklamacijaLoading} onClick={() => reklamiraj(true)}>
-                    Ipak reklamiraj (polog {formatKM(overrideManjak)})
-                  </Button>
-                </div>
-              )}
-
-              <div className="flex justify-end gap-2 pt-2">
+              <div className="flex flex-shrink-0 justify-end gap-2 pt-2">
                 <Button variant="ghost" onClick={() => setReklamacijaOpen(false)}>Otkaži</Button>
                 <Button variant="destructive" onClick={() => reklamiraj()} disabled={reklamacijaLoading} className="min-w-[160px]">
                   {reklamacijaLoading ? 'Štampam povrat…' : <>Potvrdi reklamaciju <Key tone="danger">{mod('↵')}</Key></>}
