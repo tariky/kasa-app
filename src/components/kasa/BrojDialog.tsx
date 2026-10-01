@@ -1,6 +1,6 @@
 import { Button } from '@/components/ui/button';
 import { DecimalInput } from '@/components/ui/decimal-input';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogBody, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { cn, formatKolicina, parseDecimal } from '@/lib/utils';
 
 /**
@@ -46,14 +46,14 @@ export default function BrojDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onZatvori(); }}>
-      <DialogContent className="sm:max-w-[340px] p-0 gap-0 overflow-hidden rounded-2xl">
-        <div className="px-6 pt-6 pb-5">
-          <DialogHeader>
-            <DialogTitle className="text-[15px]">{naslov}</DialogTitle>
-            <DialogDescription className="text-sm text-slate-500 truncate mt-0.5">
-              {opis}
-            </DialogDescription>
-          </DialogHeader>
+      <DialogContent className="sm:max-w-[340px] p-0 gap-0 rounded-2xl">
+        <DialogHeader className="px-6 pt-6">
+          <DialogTitle className="text-[15px]">{naslov}</DialogTitle>
+          <DialogDescription className="text-sm text-slate-500 truncate mt-0.5">
+            {opis}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogBody className="px-6 pb-5">
           {korak ? (
             <div className="mt-5 flex items-center gap-3">
               <button
@@ -77,8 +77,8 @@ export default function BrojDialog({
             </div>
           )}
           {children}
-        </div>
-        <div className="border-t border-slate-100 px-6 py-4 bg-slate-50/50 flex justify-end gap-2">
+        </DialogBody>
+        <div className="shrink-0 border-t border-slate-100 px-6 py-4 bg-slate-50/50 flex justify-end gap-2">
           <Button variant="ghost" size="sm" className="rounded-lg" onClick={onOtkazi}>
             Otkaži
           </Button>

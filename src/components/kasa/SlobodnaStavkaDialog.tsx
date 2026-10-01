@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { DecimalInput } from '@/components/ui/decimal-input';
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
+  Dialog, DialogContent, DialogHeader, DialogBody, DialogTitle, DialogDescription,
 } from '@/components/ui/dialog';
 import { cn, parseDecimal } from '@/lib/utils';
 import { PDV_STOPA_E_PCT } from '@/lib/pdv';
@@ -77,15 +77,15 @@ export default function SlobodnaStavkaDialog({ open, onClose, onDodaj, stope }: 
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="sm:max-w-[420px] p-0 gap-0 overflow-hidden rounded-2xl">
-        <div className="px-6 pt-6 pb-5">
-          <DialogHeader>
-            <DialogTitle className="text-[15px]">Slobodna stavka</DialogTitle>
-            <DialogDescription className="text-sm text-slate-500 mt-0.5">
-              Stavka bez šifre. Ne ulazi u šifarnik i nema zalihu.
-            </DialogDescription>
-          </DialogHeader>
+      <DialogContent className="sm:max-w-[420px] p-0 gap-0 rounded-2xl">
+        <DialogHeader className="px-6 pt-6">
+          <DialogTitle className="text-[15px]">Slobodna stavka</DialogTitle>
+          <DialogDescription className="text-sm text-slate-500 mt-0.5">
+            Stavka bez šifre. Ne ulazi u šifarnik i nema zalihu.
+          </DialogDescription>
+        </DialogHeader>
 
+        <DialogBody className="px-6 pb-5">
           <div className="mt-5 space-y-4">
             <label className="block">
               <span className="flex justify-between text-[12px] font-medium text-slate-600 mb-1.5">
@@ -176,8 +176,8 @@ export default function SlobodnaStavkaDialog({ open, onClose, onDodaj, stope }: 
               </p>
             )}
           </div>
-        </div>
-        <div className="border-t border-slate-100 px-6 py-4 bg-slate-50/50 flex justify-end gap-2">
+        </DialogBody>
+        <div className="shrink-0 border-t border-slate-100 px-6 py-4 bg-slate-50/50 flex justify-end gap-2">
           <Button variant="ghost" size="sm" className="rounded-lg" onClick={onClose}>
             Otkaži
           </Button>

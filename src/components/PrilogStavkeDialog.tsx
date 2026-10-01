@@ -70,7 +70,7 @@ export default function PrilogStavkeDialog({ open, onOpenChange, order, onSaved 
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!busy) onOpenChange(v); }}>
-      <DialogContent className="max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
+      <DialogContent className="max-w-3xl max-h-[90vh]">
         <DialogHeader>
           <DialogTitle className="text-[15px]">
             Faktura br. {order.prilogBroj} — račun #{order.brojFiskalnogRacuna || order.id}

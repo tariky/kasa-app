@@ -101,7 +101,7 @@ export default function DodajRacunDialog({ open, onOpenChange, onSaved, prefillB
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) reset(); onOpenChange(v); }}>
       <DialogContent
-        className="max-w-3xl max-h-[92vh] p-0 gap-0 overflow-hidden flex flex-col"
+        className="max-w-3xl max-h-[92vh] p-0 gap-0"
         onKeyDown={(e) => {
           if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !loading) {
             e.preventDefault();

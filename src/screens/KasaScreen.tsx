@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { User as UserIcon, Printer, Percent, Paperclip, PencilLine, ScanBarcode, Eraser, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
+  Dialog, DialogContent, DialogHeader, DialogBody, DialogTitle, DialogDescription,
 } from '@/components/ui/dialog';
 import { Key, jePoljeZaUnos } from '@/components/ui/ledger';
 import { PretragaProizvoda } from '@/components/PretragaProizvoda';
@@ -801,33 +801,34 @@ export default function KasaScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
 
       {/* Kupac dialog */}
       <Dialog open={kupacOpen} onOpenChange={(open) => { if (!open) { setKupacOpen(false); fokusPretraga(); } }}>
-        <DialogContent className="sm:max-w-[520px] p-0 gap-0 overflow-hidden rounded-2xl">
-          <div className="px-6 pt-6 pb-4">
-            <DialogHeader>
-              <DialogTitle className="text-[15px]">Kupac</DialogTitle>
-              <DialogDescription className="text-sm text-slate-500 mt-0.5">
-                Odaberite sačuvanog kupca ili upišite podatke novog.
-              </DialogDescription>
-            </DialogHeader>
-          </div>
+        <DialogContent className="sm:max-w-[520px] p-0 gap-0 rounded-2xl">
+          <DialogHeader className="px-6 pt-6">
+            <DialogTitle className="text-[15px]">Kupac</DialogTitle>
+            <DialogDescription className="text-sm text-slate-500 mt-0.5">
+              Odaberite sačuvanog kupca ili upišite podatke novog.
+            </DialogDescription>
+          </DialogHeader>
 
-          <div className="px-6 pb-5">
-            <PretragaKupaca
-              onIzaberi={selectKupac}
-              nedavnoKljuc="kupci-kasa"
-              izabraniIdBroj={kupac.idBroj.trim()}
-              placeholder="Traži kupca po nazivu, JIB-u ili gradu…"
-              autoFocus
-            />
-          </div>
+          {/* Razmak ispod naslova je u tijelu da prsten fokusa pretrage ne bude odsječen. */}
+          <DialogBody className="pt-4">
+            <div className="px-6 pb-5">
+              <PretragaKupaca
+                onIzaberi={selectKupac}
+                nedavnoKljuc="kupci-kasa"
+                izabraniIdBroj={kupac.idBroj.trim()}
+                placeholder="Traži kupca po nazivu, JIB-u ili gradu…"
+                autoFocus
+              />
+            </div>
 
-          {/* Novi / uređivanje kupca */}
-          <div className="border-t border-slate-100 px-6 pb-5 pt-4 space-y-2">
-            <p className="text-[12px] font-medium text-slate-500">Podaci kupca na računu</p>
-            <KupacRacunaPolja value={kupac} onChange={setKupac} />
-          </div>
+            {/* Novi / uređivanje kupca */}
+            <div className="border-t border-slate-100 px-6 pb-5 pt-4 space-y-2">
+              <p className="text-[12px] font-medium text-slate-500">Podaci kupca na računu</p>
+              <KupacRacunaPolja value={kupac} onChange={setKupac} />
+            </div>
+          </DialogBody>
 
-          <div className="border-t border-slate-100 px-6 py-4 bg-slate-50/50 flex items-center justify-between">
+          <div className="shrink-0 border-t border-slate-100 px-6 py-4 bg-slate-50/50 flex items-center justify-between">
             <div>
               {kupac.idBroj.trim() && (
                 <button

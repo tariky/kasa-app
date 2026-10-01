@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { AlertTriangle, Receipt } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogBody, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Eyebrow, Key, mod } from '@/components/ui/ledger';
 import { NacinPlacanjaBirac } from '@/components/NacinPlacanjaBirac';
 import { formatKM } from '@/lib/utils';
@@ -77,14 +77,14 @@ export default function FiskalnaNaplataDialog<R extends FiskalniOdgovor>({
   return (
     <Dialog open={open} onOpenChange={zatvori}>
       <DialogContent
-        className="sm:max-w-[440px] p-0 gap-0 overflow-hidden"
+        className="sm:max-w-[440px] p-0 gap-0"
         onKeyDown={e => {
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); izdaj(); return; }
           const i = Number(e.key);
           if (i >= 1 && i <= NACINI_PLACANJA.length) { e.preventDefault(); setNacin(NACINI_PLACANJA[i - 1]); }
         }}
       >
-        <div className="px-6 pt-6 pb-4">
+        <div className="shrink-0 px-6 pt-6 pb-4">
           <DialogHeader>
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-violet-50 flex items-center justify-center">
@@ -99,7 +99,7 @@ export default function FiskalnaNaplataDialog<R extends FiskalniOdgovor>({
         </div>
         <Separator />
 
-        <div className="px-6 py-5 space-y-4">
+        <DialogBody className="px-6 py-5 space-y-4">
           <div className="flex items-start gap-3 bg-amber-50/60 border border-amber-100 rounded-xl px-4 py-3">
             <AlertTriangle size={16} className="text-amber-500 mt-0.5 flex-shrink-0" />
             <div>
@@ -125,9 +125,9 @@ export default function FiskalnaNaplataDialog<R extends FiskalniOdgovor>({
               {greska}
             </div>
           )}
-        </div>
+        </DialogBody>
 
-        <div className="border-t bg-slate-50/50 px-6 py-4 flex items-center justify-between gap-3">
+        <div className="shrink-0 border-t bg-slate-50/50 px-6 py-4 flex items-center justify-between gap-3">
           <span className="flex items-center gap-1.5 text-[10.5px] text-slate-400">
             <Key className="ml-0">{mod('↵')}</Key> izdaj
           </span>

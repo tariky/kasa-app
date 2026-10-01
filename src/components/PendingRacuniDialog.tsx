@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -103,7 +103,8 @@ export default function PendingRacuniDialog({ uloga }: { uloga: 'admin' | 'kasir
         <DialogHeader>
           <DialogTitle>{opis.naslov}</DialogTitle>
         </DialogHeader>
-        <div className="space-y-4">
+        {/* Tijelo do rubova dijaloga: traka za skrol uz rub, prsten fokusa polja nije odsječen. */}
+        <DialogBody className="-mx-6 px-6 -mb-1 pb-1 space-y-4">
           <p className="text-sm text-slate-600">
             {opis.dokument} je poslan na štampu, ali aplikacija nije potvrdila upis (uređaj nije odgovorio ili je
             došlo do prekida/pada računara).
@@ -142,8 +143,8 @@ export default function PendingRacuniDialog({ uloga }: { uloga: 'admin' | 'kasir
           </div>
           {error && <p className="text-sm text-red-600">{error}</p>}
           {rows.length > 1 && <p className="text-xs text-slate-500">Preostalo nerazriješenih: {rows.length}</p>}
-        </div>
-        <div className="flex justify-between gap-2 mt-2">
+        </DialogBody>
+        <div className="shrink-0 flex justify-between gap-2 mt-2">
           {/* Odbacivanje briše jedini trag računa — samo administrator (provjera je i u main procesu). */}
           {uloga === 'admin'
             ? <Button variant="outline" onClick={discard} disabled={loading}>Nije odštampan — odbaci</Button>
