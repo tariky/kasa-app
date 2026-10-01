@@ -742,7 +742,7 @@ function PrimkeTab({ products, dobavljaci, onReloadProducts }: { products: Produ
             <span className="hidden sm:flex items-center gap-3">
               <span className="flex items-center gap-1"><Key className="ml-0">↑↓</Key> odaberi</span>
               <span className="flex items-center gap-1"><Key className="ml-0">↵</Key> otvori</span>
-              <span className="flex items-center gap-1"><Key className="ml-0">/</Key> pretraga</span>
+              <span className="flex items-center gap-1"><Key className="ml-0">/</Key><Key className="ml-0">{mod('F')}</Key> pretraga</span>
               <span className="flex items-center gap-1"><Key className="ml-0">N</Key> novi</span>
               <span className="flex items-center gap-1"><Key className="ml-0">R</Key> osvježi</span>
             </span>

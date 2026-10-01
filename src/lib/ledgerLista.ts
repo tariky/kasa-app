@@ -37,6 +37,13 @@ export function sljedeciFilter<F extends string>(filteri: readonly { id: F }[], 
 
 export interface TipkaListe { key: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean }
 
+/**
+ * Ctrl+F (⌘F) — pretraga na svakom rasporedu tastature, jer „/“ na BiH/HR traži
+ * Shift+7. AltGr na Windowsu stiže kao Ctrl+Alt, pa AltGr+F nije pretraga.
+ * Nove prečice: slova, cifre, F-tipke i strelice; simbol samo uz ovakvu zamjenu.
+ */
+export const jeCtrlF = (t: TipkaListe) => (t.ctrlKey || t.metaKey) && !t.altKey && t.key.toLowerCase() === 'f';
+
 /** Gdje je tipka pritisnuta. */
 export interface MjestoTipke {
   /** Input, textarea, select ili contentEditable (`jePoljeZaUnos`). */
@@ -51,7 +58,7 @@ export interface MjestoTipke {
 
 /** Šta ekran nudi s tastature. */
 export interface MogucnostiListe {
-  /** „/“ fokusira pretragu, esc u pretrazi briše upit. */
+  /** „/“ i Ctrl+F fokusiraju pretragu, esc u pretrazi briše upit. */
   pretraga?: boolean;
   novi?: boolean;
   osvjezi?: boolean;
@@ -85,6 +92,7 @@ export type AkcijaListe =
  * može obraditi ekran (Ponude: P, S, U, K…). Slova se gledaju bez obzira na Shift.
  */
 export function akcijaListe(t: TipkaListe, mjesto: MjestoTipke, m: MogucnostiListe): AkcijaListe | 'dalje' | null {
+  if (jeCtrlF(t)) return m.pretraga ? { vrsta: 'pretraga' } : null;
   if (t.metaKey || t.ctrlKey || t.altKey) return null;
   if (mjesto.uPolju) {
     if (mjesto.uPretrazi) {

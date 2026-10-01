@@ -5,6 +5,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Key, jePoljeZaUnos } from '@/components/ui/ledger';
 import { GreskaUcitavanja } from '@/components/GreskaUcitavanja';
 import { potvrdi, obavijesti } from '@/lib/dijalog';
+import { jeCtrlF } from '@/lib/ledgerLista';
 import { porukaGreske } from '@/lib/utils';
 import { Plus, Search, X, type LucideIcon } from 'lucide-react';
 
@@ -28,7 +29,7 @@ interface Props {
   alati?: React.ReactNode;
   /** false: bez „Ukupno N“ (kad filter u `alati` već nosi brojače). */
   brojac?: boolean;
-  /** false dok je otvoren dijalog forme — tada „/“ i „N“ ne rade. */
+  /** false dok je otvoren dijalog forme — tada „/“, Ctrl+F i „N“ ne rade. */
   precice?: boolean;
   /** Stanje iz `useIpcPodaci`: dok lista nije učitana nema poruke „prazno“, a greška se vidi. */
   ucitavanje?: { podaci: unknown; greska: string | null; osvjezi: () => Promise<void> };
@@ -36,7 +37,7 @@ interface Props {
 
 /**
  * Ljuska liste u Šifarniku: pretraga, brojač, dugme za novi unos, prečice
- * („/“ pretraga, „N“ novi, esc briše upit) i prazno stanje. Forme i kolone su
+ * („/“ ili Ctrl+F pretraga, „N“ novi, esc briše upit) i prazno stanje. Forme i kolone su
  * u tabovima.
  */
 export function SifarnikLista({
@@ -45,10 +46,11 @@ export function SifarnikLista({
 }: Props) {
   const searchRef = useRef<HTMLInputElement>(null);
 
-  // "/" pretraga, "N" novi unos — isto kao na listi artikala.
+  // "/" ili Ctrl+F pretraga, "N" novi unos — isto kao na listi artikala.
   useEffect(() => {
     if (!precice) return;
     const onKey = (e: KeyboardEvent) => {
+      if (jeCtrlF(e)) { e.preventDefault(); searchRef.current?.focus(); return; }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const t = e.target as HTMLElement | null;
       if (t && jePoljeZaUnos(t)) {
