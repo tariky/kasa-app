@@ -11,6 +11,9 @@ import { Eyebrow, Key, jePoljeZaUnos } from './ledger';
  * s brojem dokumenta, tijelo koje skrola, podnožje sa sljedećim korakom. Esc iz polja prvo
  * napušta polje; tek esc s tijela dijaloga zatvara — zatvaranje uvijek ide kroz onRequestClose
  * da vlasnik može pitati za nespremljene izmjene.
+ *
+ * Na niskom ekranu (14" 1366×768, prozor ~640 px) rub, zaglavlje i podnožje su zbijeniji
+ * (`max-height: 720px`) da tijelu ostane više mjesta; na većim ekranima izgled je isti.
  */
 export function FullDialog({ open, onRequestClose, children }: {
   open: boolean; onRequestClose: () => void; children: React.ReactNode;
@@ -48,7 +51,7 @@ export const FullDialogContent = React.forwardRef<HTMLDivElement, {
         }}
         onPointerDownOutside={e => { e.preventDefault(); onRequestClose(); }}
         className={cn(
-          'fixed z-50 inset-3 md:inset-5 flex flex-col rounded-2xl bg-white border-2 border-white shadow-2xl shadow-slate-900/40 overflow-hidden outline-none',
+          'fixed z-50 inset-3 md:inset-5 [@media(max-height:720px)]:inset-3 flex flex-col rounded-2xl bg-white border-2 border-white shadow-2xl shadow-slate-900/40 overflow-hidden outline-none',
           'data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:fade-in-0 data-[state=closed]:fade-out-0',
           'data-[state=open]:zoom-in-[0.985] data-[state=closed]:zoom-out-[0.985] duration-200 motion-reduce:animate-none',
           className,
@@ -68,7 +71,7 @@ export function FullDialogHeader({ eyebrow, title, description, actions, childre
   eyebrow: string; title: React.ReactNode; description?: React.ReactNode; actions?: React.ReactNode; children?: React.ReactNode;
 }) {
   return (
-    <header className="flex-shrink-0 bg-[#0f1629] text-white px-6 pt-5 pb-4">
+    <header className="flex-shrink-0 bg-[#0f1629] text-white px-6 pt-5 pb-4 [@media(max-height:720px)]:pt-3.5 [@media(max-height:720px)]:pb-3">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 flex items-baseline gap-4 flex-wrap">
           <div>
@@ -118,7 +121,7 @@ export function FullDialogNotice({ type, text, onClose }: { type: 'success' | 'e
 /** Podnožje: legenda prečica lijevo, akcije desno. */
 export function FullDialogFooter({ legend, children }: { legend?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <footer className="flex-shrink-0 border-t border-slate-200/80 bg-slate-50/60 px-6 py-3 flex items-center justify-between gap-4">
+    <footer className="flex-shrink-0 border-t border-slate-200/80 bg-slate-50/60 px-6 py-3 [@media(max-height:720px)]:py-2 flex items-center justify-between gap-4">
       <div className="hidden md:flex items-center gap-3 text-[10.5px] text-slate-400 whitespace-nowrap">{legend}</div>
       <div className="flex items-center gap-2 ml-auto">{children}</div>
     </footer>
