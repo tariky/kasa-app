@@ -30,6 +30,20 @@ describe('parsirajUpit', () => {
     expect(parsirajUpit(' 2,5 * iverica')).toEqual({ upit: 'iverica', kolicina: 2.5 });
     expect(parsirajUpit('7×50')).toEqual({ upit: '7×50', kolicina: null });
   });
+  test('„x“ umjesto zvjezdice (na BiH/HR tastaturi * traži Shift): količina samo kad iza x ide razmak ili kraj', () => {
+    expect(parsirajUpit('3x kant bijela')).toEqual({ upit: 'kant bijela', kolicina: 3 });
+    expect(parsirajUpit('3X kant')).toEqual({ upit: 'kant', kolicina: 3 });
+    expect(parsirajUpit(' 2,5 x iverica')).toEqual({ upit: 'iverica', kolicina: 2.5 });
+    expect(parsirajUpit('2,5 × iverica')).toEqual({ upit: 'iverica', kolicina: 2.5 });
+    expect(parsirajUpit('3x')).toEqual({ upit: '', kolicina: 3 });
+    expect(parsirajUpit('3*')).toEqual({ upit: '', kolicina: 3 });
+  });
+  test('dimenzije i veličine ostaju upit', () => {
+    expect(parsirajUpit('3x50')).toEqual({ upit: '3x50', kolicina: null });
+    expect(parsirajUpit('3x50 vijak')).toEqual({ upit: '3x50 vijak', kolicina: null });
+    expect(parsirajUpit('3xl majica')).toEqual({ upit: '3xl majica', kolicina: null });
+    expect(parsirajUpit('x kant')).toEqual({ upit: 'x kant', kolicina: null });
+  });
   test('bez prefiksa', () => {
     expect(parsirajUpit('  hrast ')).toEqual({ upit: 'hrast', kolicina: null });
   });

@@ -397,7 +397,7 @@ export function PretragaStavki<T extends object>(props: PretragaStavkiProps<T>) 
           <div className="flex flex-wrap items-center gap-x-3.5 gap-y-1 border-t border-slate-100 bg-slate-50/80 px-3 py-2 text-[11px] text-slate-500">
             <span className="inline-flex items-center gap-1"><Key className="ml-0">↑</Key><Key className="ml-0">↓</Key> biranje</span>
             <span className="inline-flex items-center gap-1"><Key className="ml-0">↵</Key> {akcija}</span>
-            {kolicine && <span className="inline-flex items-center gap-1"><Key className="ml-0">3*</Key> količina</span>}
+            {kolicine && <span className="inline-flex items-center gap-1"><Key className="ml-0">3x</Key> količina</span>}
             <span className="inline-flex items-center gap-1"><Key className="ml-0">esc</Key> zatvori</span>
             <span className="ml-auto font-mono tabular-nums text-slate-400">
               {q ? `${ukupno} od ${stavke?.length ?? 0}` : ukupno > izbor.length ? `${izbor.length} od ${ukupno}, kucajte za više` : `${ukupno}`}

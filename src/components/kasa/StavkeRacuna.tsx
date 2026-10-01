@@ -41,7 +41,7 @@ export default function StavkeRacuna({ cart, zadnje, allowZeroStock, onKolicina,
           Skenirajte barkod ili počnite kucati naziv, bilo gdje na ekranu.
         </p>
         <p className="mt-0.5 flex items-center gap-1.5 text-[12.5px] text-slate-400">
-          Više komada odjednom: <Key className="ml-0">3*</Key> ispred naziva
+          Više komada odjednom: <Key className="ml-0">3x</Key> ispred naziva
         </p>
       </div>
     );
