@@ -195,7 +195,7 @@ export function NalogDetailDialog({ nalogId, redoslijed, uloga, onClose, onNavig
                 </>}
                 actions={(uredivo || nalog.status === 'zavrsen') && <HeaderBtn icon={Pencil} label="Uredi" hint="U" onClick={() => setEditOpen(true)} />}
               >
-                <div className="mt-4 max-w-[720px]">
+                <div className="mt-4 [@media(max-height:720px)]:mt-3 max-w-[720px]">
                   <StatusRail nalog={nalog} />
                 </div>
               </FullDialogHeader>

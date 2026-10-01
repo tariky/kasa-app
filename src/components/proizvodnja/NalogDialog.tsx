@@ -188,13 +188,13 @@ export function NalogDialog({ open, onOpenChange, nalog, onSaved, stavkeNespreml
           description={opisZaglavlja}
         >
           {!isEdit && (
-            <div role="radiogroup" aria-label="Vrsta naloga" className="mt-4 grid grid-cols-2 gap-2 max-w-[520px]">
+            <div role="radiogroup" aria-label="Vrsta naloga" className="mt-4 [@media(max-height:720px)]:mt-3 grid grid-cols-2 gap-2 max-w-[520px]">
               {VRSTE.map(({ v, label, opis, Icon }) => {
                 const on = forma.vrsta === v;
                 return (
                   <button key={v} type="button" role="radio" aria-checked={on} onClick={() => promijeniVrstu(v)}
                     className={cn(
-                      'flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-left transition-colors duration-150',
+                      'flex items-center gap-3 rounded-xl px-3.5 py-2.5 [@media(max-height:720px)]:py-2 text-left transition-colors duration-150',
                       'focus:outline-none focus-visible:ring-2 focus-visible:ring-white/60',
                       on ? 'bg-white text-[#0f1629]' : 'bg-white/[0.06] text-white/70 hover:bg-white/10 hover:text-white',
                     )}>
