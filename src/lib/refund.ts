@@ -1,10 +1,9 @@
-import { provjeriReklamaciju } from '../services/tring';
+import { normalizeOznaka, provjeriReklamaciju, type OznakaPlacanja } from '../services/tring';
 import type { SqlDb } from './sqldb';
 import type { FiskalniUredjaj, IshodUredjaja } from './fiskalniUredjaj';
 import { parseFiskalniBroj } from './fiskalni';
-import { buildTringReklamacija } from './tringRacun';
+import { buildTringReklamacija, povratReklamacije } from './tringRacun';
 import { PRILOG_SIFRA, prilogNaziv } from './prilog';
-import { gotovinskiIznos } from './drawer';
 import { round2 } from './novac';
 import { baciAkoCekaNezavrsen, vecEvidentiranStorno, type SnapshotStorna } from './pendingRacun';
 import { fiskalizuj, uToku } from './fiskalizacija';
@@ -60,12 +59,13 @@ export interface RefundDeps {
   /** Evidentira polog (Tring UnosNovca + zapis u cash_movements). */
   depositCash?: (iznos: number, napomena: string) => Promise<void>;
   /**
-   * Samo Tring UnosNovca, bez zapisa u cash_movements. Pokriva nenovčani dio
-   * računa (virman, kartica): uređaj ga traži jer storno isplaćuje gotovinom,
-   * ali iz ladice ništa ne izlazi i storno ga odmah potroši — zapis u
-   * evidenciji bi lažno napuhao očekivano stanje. Ide automatski, bez pitanja.
+   * Samo Tring UnosNovca na vrstu plaćanja, bez zapisa u cash_movements.
+   * Pokriva bezgotovinski dio razbijenog računa koji se vraća gotovinom i
+   * stanje vrste povrata koje uređaj ne vidi (npr. virman poslije Z
+   * izvještaja). Storno ga odmah potroši, a iz ladice ništa ne izlazi — zapis
+   * u evidenciji bi lažno napuhao očekivano stanje. Ide automatski, bez pitanja.
    */
-  deviceCashIn?: (iznos: number) => Promise<void>;
+  deviceCashIn?: (iznos: number, vrsta: OznakaPlacanja) => Promise<void>;
 }
 
 export interface RefundResult {
@@ -149,8 +149,10 @@ export async function refundAndPrint(
           WHERE oi.orderId = ?
         `).all(id);
 
+    const povrat = povratReklamacije(order.nacinPlacanja, order.ukupno);
     const racun = buildTringReklamacija({
       stavke,
+      placanje: povrat.placanje,
       brojRacuna,
       kupac: order.kupacIdBroj ? {
         idBroj: order.kupacIdBroj,
@@ -166,20 +168,17 @@ export async function refundAndPrint(
     const nevaljana = provjeriReklamaciju(racun);
     if (nevaljana) throw new Error(nevaljana);
 
-    // Tring povrat po reklamiranom računu ide isključivo gotovinom, bez obzira
-    // kako je original plaćen — uređaj traži pokriće u punom iznosu računa i
-    // inače vrati ERROR_FISCAL_INSUFFICIENT_MONEY. Iz ladice, međutim, fizički
-    // izlazi samo gotovinski dio originala.
+    // Uređaj vraća cijeli iznos računa vrstom povrata (povratReklamacije) i
+    // traži da njeno stanje u kasi bude barem toliko — inače TFS 535
+    // (Nedovoljno novca u kasi). Iz ladice fizički izlazi samo gotovinski dio.
+    const vrsta = normalizeOznaka(povrat.placanje.oznaka);
+    const gotovinski = vrsta === 'Gotovina';
     const potrebnoUredjaj = round2(order.ukupno);
-    const potrebnoLadica = gotovinskiIznos(order.nacinPlacanja, order.ukupno);
-    let stanjeLadice = 0;
-    let manjakUredjaj = 0;
+    const potrebnoLadica = gotovinski ? round2(potrebnoUredjaj - povrat.pokrice) : 0;
     let manjakLadica = 0;
-    if (deps.drawerState) {
+    if (deps.drawerState && potrebnoLadica > 0) {
       try {
-        stanjeLadice = deps.drawerState().ocekivanoStanje;
-        manjakUredjaj = Math.max(0, round2(potrebnoUredjaj - stanjeLadice));
-        manjakLadica = Math.max(0, round2(Math.min(potrebnoLadica, potrebnoUredjaj) - stanjeLadice));
+        manjakLadica = Math.max(0, round2(potrebnoLadica - deps.drawerState().ocekivanoStanje));
       } catch { /* stanje ladice je informativno — ne smije oboriti storno */ }
     }
 
@@ -204,13 +203,11 @@ export async function refundAndPrint(
 
     // Unos novca ili štampa koji bace izuzetak — storno nije odštampan (fiskalizuj briše red).
     const stampaj = async (): Promise<IshodUredjaja> => {
-      // Nenovčani dio pokrića ide automatski — nema odluke za operatera jer
-      // nikakav stvaran novac ne mijenja vlasnika (virmanski račun se ovdje
-      // pokriva u cijelosti, pa storno prolazi bez ijednog dodatnog klika).
-      const samoUredjaj = Math.max(0, round2(manjakUredjaj - manjakLadica));
-      if (samoUredjaj > 0 && deps.deviceCashIn) {
-        await deps.deviceCashIn(samoUredjaj);
-        uneseno = samoUredjaj;
+      // Bezgotovinski dio razbijenog računa ide u gotovinu uređaja automatski —
+      // nema odluke za operatera jer nikakav stvaran novac ne mijenja vlasnika.
+      if (povrat.pokrice > 0 && deps.deviceCashIn) {
+        await deps.deviceCashIn(povrat.pokrice, 'Gotovina');
+        uneseno = povrat.pokrice;
       }
 
       if (planiraniPolog > 0 && deps.depositCash) {
@@ -222,15 +219,16 @@ export async function refundAndPrint(
       let ishod = await uredjaj.stampajReklamaciju(racun);
 
       // Stanje ladice je samo procjena brojača u uređaju (pologi se mogu voditi
-      // i mimo aplikacije), pa ako uređaj i dalje javlja manjak — dopuni do
-      // punog iznosa računa i pokušaj još jednom. Storno taj iznos odmah
+      // i mimo aplikacije), a stanje virmana/kartice uređaj može nulirati Z
+      // izvještajem — pa ako uređaj i dalje javlja manjak, dopuni vrstu povrata
+      // do punog iznosa računa i pokušaj još jednom. Storno taj iznos odmah
       // potroši, tako da brojač uređaja ne ostane napuhan. Bez pitanja kad
       // gotovinski manjak ne postoji; inače tek uz override. Nikad nakon
       // nepoznatog ishoda — storno je možda već odštampan.
       if ((manjakLadica === 0 || data.dozvoliPolog) && !ishod.ok && !ishod.nepoznat && jeNedovoljnoSredstava(ishod)) {
         const dopuna = round2(potrebnoUredjaj - uneseno);
         if (dopuna > 0 && deps.deviceCashIn) {
-          await deps.deviceCashIn(dopuna);
+          await deps.deviceCashIn(dopuna, vrsta);
           uneseno = round2(uneseno + dopuna);
           ishod = await uredjaj.stampajReklamaciju(racun);
         }
@@ -255,10 +253,11 @@ export async function refundAndPrint(
       const neuspjeh = zadnjiIshod as IshodUredjaja | null;
       return {
         ...r,
-        // Override se nudi samo ako može pomoći: kad fali stvarna gotovina, ili
-        // kad uređaj i dalje traži novac a nismo ga dopunili do punog iznosa.
+        // Override (polog gotovine) se nudi samo ako može pomoći: kad fali
+        // stvarna gotovina, ili kad uređaj i dalje traži gotovinu a nismo je
+        // dopunili do punog iznosa. Bezgotovinskom povratu polog ne pomaže.
         nedovoljnoSredstava:
-          !data.dozvoliPolog &&
+          !data.dozvoliPolog && gotovinski &&
           (manjakLadica > 0 || (!!neuspjeh && jeNedovoljnoSredstava(neuspjeh) && uneseno < potrebnoUredjaj)),
         manjak: manjakLadica > 0 ? manjakLadica : round2(potrebnoUredjaj - uneseno),
       };
