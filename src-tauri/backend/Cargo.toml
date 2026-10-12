@@ -1,6 +1,6 @@
 [package]
 name = "pazar-backend"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 description = "Pazar backend: IPC kanali (bivši Electron main proces) nad SQLite bazom"
 

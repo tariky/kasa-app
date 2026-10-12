@@ -2884,7 +2884,7 @@ dependencies = [
 
 [[package]]
 name = "pazar"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "pazar-backend",
  "serde_json",
@@ -2897,7 +2897,7 @@ dependencies = [
 
 [[package]]
 name = "pazar-backend"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "aes-gcm",
  "age",

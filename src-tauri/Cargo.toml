@@ -1,6 +1,6 @@
 [package]
 name = "pazar"
-version = "1.0.0"
+version = "1.0.1"
 description = "Pazar POS application for Bosnian market"
 authors = ["Tarik Caplja <tarik@lunatik.ba>"]
 edition = "2021"
