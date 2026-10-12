@@ -73,10 +73,10 @@ impl<'a> Uredjaj<'a> {
         result
     }
 
-    /// UnosNovca — polog ili pokriće za storno.
-    pub fn unos_novca(&self, oznaka: &str, iznos: f64) -> Odgovor {
+    /// UnosNovca na vrstu plaćanja — polog (`Gotovina`) ili pokriće za storno.
+    pub fn unos_novca(&self, oznaka: &str, iznos: f64, vrsta: &str) -> Odgovor {
         self.van_transakcije();
-        let result = self.b.tring.unos_novca(iznos);
+        let result = self.b.tring.unos_novca(iznos, vrsta);
         self.dnevnik(oznaka, &result);
         result
     }

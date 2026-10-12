@@ -128,7 +128,9 @@ pub fn refund_and_print(b: &Backend, data: &Value, korisnik_id: i64, odobrio_adm
     } else {
         Value::Null
     };
-    let racun = tring_racun::build_tring_reklamacija(&json!({ "stavke": stavke, "kupac": kupac }), broj_racuna);
+    let ukupno = to_number(&order["ukupno"]);
+    let povrat = tring_racun::povrat_reklamacije(&order["nacinPlacanja"], ukupno);
+    let racun = tring_racun::build_tring_reklamacija(&json!({ "stavke": stavke, "kupac": kupac }), broj_racuna, &povrat.placanje);
     // Reklamacija koju uređaj ne bi primio (npr. PLU artikla van opsega) se
     // odbija prije ikakvog unosa novca — inače bi pokriće ostalo u brojaču
     // uređaja i u pologu bez storna.
@@ -136,20 +138,19 @@ pub fn refund_and_print(b: &Backend, data: &Value, korisnik_id: i64, odobrio_adm
         baci!("{poruka}");
     }
 
-    // Tring povrat po reklamiranom računu ide isključivo gotovinom, bez obzira
-    // kako je original plaćen — uređaj traži pokriće u punom iznosu računa i
-    // inače vrati ERROR_FISCAL_INSUFFICIENT_MONEY. Iz ladice, međutim, fizički
-    // izlazi samo gotovinski dio originala.
-    let ukupno = to_number(&order["ukupno"]);
+    // Uređaj vraća cijeli iznos računa vrstom povrata (povrat_reklamacije) i
+    // traži da njeno stanje u kasi bude barem toliko — inače TFS 535
+    // (Nedovoljno novca u kasi). Iz ladice fizički izlazi samo gotovinski dio.
+    let vrsta = povrat.oznaka;
+    let gotovinski = vrsta == "Gotovina";
     let potrebno_uredjaj = round2(ukupno);
-    let potrebno_ladica = cash::gotovinski_iznos(&order["nacinPlacanja"], ukupno);
-    let mut manjak_uredjaj = 0.0;
+    let potrebno_ladica = if gotovinski { round2(potrebno_uredjaj - povrat.pokrice) } else { 0.0 };
     let mut manjak_ladica = 0.0;
     // Stanje ladice je informativno — ne smije oboriti storno.
-    if let Ok(stanje) = cash::drawer_state(db) {
-        let stanje_ladice = to_number(&stanje["ocekivanoStanje"]);
-        manjak_uredjaj = js::max(0.0, round2(potrebno_uredjaj - stanje_ladice));
-        manjak_ladica = js::max(0.0, round2(js::min(potrebno_ladica, potrebno_uredjaj) - stanje_ladice));
+    if potrebno_ladica > 0.0 {
+        if let Ok(stanje) = cash::drawer_state(db) {
+            manjak_ladica = js::max(0.0, round2(potrebno_ladica - to_number(&stanje["ocekivanoStanje"])));
+        }
     }
 
     let dozvoli_polog = truthy(&data["dozvoliPolog"]);
@@ -179,13 +180,11 @@ pub fn refund_and_print(b: &Backend, data: &Value, korisnik_id: i64, odobrio_adm
 
     // Unos novca ili štampa koji ne uspiju — storno nije odštampan (fiskalizuj briše red).
     let stampaj = || -> R<Odgovor> {
-        // Nenovčani dio pokrića ide automatski — nema odluke za operatera jer
-        // nikakav stvaran novac ne mijenja vlasnika (virmanski račun se ovdje
-        // pokriva u cijelosti, pa storno prolazi bez ijednog dodatnog klika).
-        let samo_uredjaj = js::max(0.0, round2(manjak_uredjaj - manjak_ladica));
-        if samo_uredjaj > 0.0 {
-            cash::device_cash_in(b, samo_uredjaj)?;
-            uneseno = samo_uredjaj;
+        // Bezgotovinski dio razbijenog računa ide u gotovinu uređaja automatski —
+        // nema odluke za operatera jer nikakav stvaran novac ne mijenja vlasnika.
+        if povrat.pokrice > 0.0 {
+            cash::device_cash_in(b, povrat.pokrice, "Gotovina")?;
+            uneseno = povrat.pokrice;
         }
 
         if planirani_polog > 0.0 {
@@ -198,8 +197,9 @@ pub fn refund_and_print(b: &Backend, data: &Value, korisnik_id: i64, odobrio_adm
         let mut result = uredjaj.reklamacija("refundAndPrint", &racun);
 
         // Stanje ladice je samo procjena brojača u uređaju (pologi se mogu voditi
-        // i mimo aplikacije), pa ako uređaj i dalje javlja manjak — dopuni do
-        // punog iznosa računa i pokušaj još jednom. Storno taj iznos odmah
+        // i mimo aplikacije), a stanje virmana/kartice uređaj može nulirati Z
+        // izvještajem — pa ako uređaj i dalje javlja manjak, dopuni vrstu povrata
+        // do punog iznosa računa i pokušaj još jednom. Storno taj iznos odmah
         // potroši, tako da brojač uređaja ne ostane napuhan. Bez pitanja kad
         // gotovinski manjak ne postoji; inače tek uz override. Nikad nakon
         // nepoznatog ishoda — storno je možda već odštampan.
@@ -210,7 +210,7 @@ pub fn refund_and_print(b: &Backend, data: &Value, korisnik_id: i64, odobrio_adm
         {
             let dopuna = round2(potrebno_uredjaj - uneseno);
             if dopuna > 0.0 {
-                cash::device_cash_in(b, dopuna)?;
+                cash::device_cash_in(b, dopuna, vrsta)?;
                 uneseno = round2(uneseno + dopuna);
                 result = uredjaj.reklamacija("refundAndPrint", &racun);
             }
@@ -236,9 +236,11 @@ pub fn refund_and_print(b: &Backend, data: &Value, korisnik_id: i64, odobrio_adm
         // ponude pologa — storno se ne smije slati ponovo dok se ne riješi).
         Err(odgovor) if truthy(&odgovor["vecEvidentiran"]) || truthy(&odgovor["ishodNepoznat"]) => return Ok(odgovor),
         Err(mut neuspjeh) => {
-            // Override se nudi samo ako može pomoći: kad fali stvarna gotovina, ili
-            // kad uređaj i dalje traži novac a nismo ga dopunili do punog iznosa.
+            // Override (polog gotovine) se nudi samo ako može pomoći: kad fali
+            // stvarna gotovina, ili kad uređaj i dalje traži gotovinu a nismo je
+            // dopunili do punog iznosa. Bezgotovinskom povratu polog ne pomaže.
             let nedovoljno = !dozvoli_polog
+                && gotovinski
                 && (manjak_ladica > 0.0 || (zadnji.as_ref().is_some_and(je_nedovoljno_sredstava) && uneseno < potrebno_uredjaj));
             let manjak = if manjak_ladica > 0.0 { manjak_ladica } else { round2(potrebno_uredjaj - uneseno) };
             neuspjeh["nedovoljnoSredstava"] = json!(nedovoljno);

@@ -548,9 +548,11 @@ export function stampatiFiskalniRacun(racun: Racun): Promise<TringResponse> {
 function reklamacijaObjekat(racun: ReklamiraniRacun): string {
   // Reklamacija mora nositi tačno jednu vrstu plaćanja — gotovinski povrat se
   // šalje kao Gotovina/0 (tako radi i Tringov vlastiti POS na FP1, a isporučeni
-  // primjer srr.reklamirani.xml je identičan). Prazan <VrstePlacanja/> iz teksta
-  // uputstva je zastario i TFS ga odbija greškom 573. Pozitivan iznos NIJE
-  // povrat nego doplata kupca, pa se nikad ne šalje.
+  // primjer srr.reklamirani.xml je identičan), a povrat na virman, karticu ili
+  // ček negativnim iznosom računa (lib/tringRacun.ts, povratReklamacije).
+  // Prazan <VrstePlacanja/> iz teksta uputstva je zastario i TFS ga odbija
+  // greškom 573. Pozitivan iznos NIJE povrat nego doplata kupca, pa se nikad
+  // ne šalje.
   const placanja = racun.vrstePlacanja.length > 0
     ? racun.vrstePlacanja
     : [{ oznaka: 'Gotovina', iznos: 0 }];

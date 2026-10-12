@@ -62,7 +62,7 @@ pub fn ocekivano_stanje(movements: &[Value], prodaje: &[Value], reklamirani: &[V
 /// Pošalje UnosNovca/PovratNovca (`cashDeps().send`). U aplikaciji integracija
 /// uvijek odgovara, pa status 'skipped' (odgovor `null`) ovdje ne nastaje.
 fn send(uredjaj: &Uredjaj, tip: &str, iznos: f64) -> Odgovor {
-    if tip == "polog" { uredjaj.unos_novca(tip, iznos) } else { uredjaj.povrat_novca(tip, iznos) }
+    if tip == "polog" { uredjaj.unos_novca(tip, iznos, "Gotovina") } else { uredjaj.povrat_novca(tip, iznos) }
 }
 
 fn tring_status(result: &Odgovor) -> &'static str {
@@ -200,8 +200,8 @@ pub fn deposit_cash(b: &Backend, iznos: f64, napomena: &str, korisnik_id: &Value
 }
 
 /// Pokriće koje fizički ne ulazi u ladicu — samo brojač uređaja.
-pub fn device_cash_in(b: &Backend, iznos: f64) -> R<()> {
-    let res = Uredjaj::iz_postavki(b)?.unos_novca("deviceCashIn", iznos);
+pub fn device_cash_in(b: &Backend, iznos: f64, vrsta: &str) -> R<()> {
+    let res = Uredjaj::iz_postavki(b)?.unos_novca("deviceCashIn", iznos, vrsta);
     if !tring::uspjeh(&res) {
         baci!(
             "Unos novca od {} KM nije prihvaćen na printeru: {}",

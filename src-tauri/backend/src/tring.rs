@@ -312,22 +312,22 @@ impl Tring {
         self.post_xml("/sdi", &body)
     }
 
-    /// Službeni unos gotovine u kasu (polog), uvijek Gotovina.
-    pub fn unos_novca(&self, iznos: f64) -> Odgovor {
-        self.novac(&UNOS_NOVCA_PATHS, 7, iznos)
+    /// Službeni unos novca u kasu na vrstu plaćanja (`Gotovina` za polog).
+    pub fn unos_novca(&self, iznos: f64, oznaka: &str) -> Odgovor {
+        self.novac(&UNOS_NOVCA_PATHS, 7, iznos, oznaka)
     }
 
     /// Službeni iznos gotovine iz kase.
     pub fn povrat_novca(&self, iznos: f64) -> Odgovor {
-        self.novac(&POVRAT_NOVCA_PATHS, 8, iznos)
+        self.novac(&POVRAT_NOVCA_PATHS, 8, iznos, "Gotovina")
     }
 
-    fn novac(&self, paths: &[&str], vrsta_zahtjeva: i64, iznos: f64) -> Odgovor {
+    fn novac(&self, paths: &[&str], vrsta_zahtjeva: i64, iznos: f64, oznaka: &str) -> Odgovor {
         // Provjera prije brojača zahtjeva, kao `broj(iznos)` u services/tring.ts.
         if let Err(e) = broj(&js::f(iznos), "Iznos") {
             return odbijeno(&e);
         }
-        match novac_xml(self.next_request_number(), vrsta_zahtjeva, iznos, "Gotovina") {
+        match novac_xml(self.next_request_number(), vrsta_zahtjeva, iznos, oznaka) {
             Ok(body) => self.post_xml_fallback(paths, &body),
             Err(e) => odbijeno(&e),
         }

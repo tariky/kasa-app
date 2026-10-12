@@ -389,17 +389,32 @@ describe('order:refundAndPrint', () => {
     expect(baza.stanje(p)).toBe(10);
   });
 
-  test('bezgotovinski račun: pokriće se prvo unese u uređaj', async () => {
+  test('bezgotovinski račun se vraća na istu vrstu plaćanja, negativnim iznosom i bez unosa novca', async () => {
     const p = baza.artikal({ sifra: 'S3', cijena: 30 });
-    const { id } = await izdaj([stavka(p, 1, 30)], { brojFiskalnogRacuna: '56', nacinPlacanja: 'Kartica' });
+    for (const [nacin, oznaka] of [['Kartica', 'Kartica'], ['Virman', 'Virman'], ['Ček', 'Cek']]) {
+      b.tring.zahtjevi.length = 0;
+      const { id } = await izdaj([stavka(p, 1, 30)], { nacinPlacanja: nacin });
 
-    const r = await b.pozovi('order:refundAndPrint', { id });
+      expect(await b.pozovi('order:refundAndPrint', { id })).toMatchObject({ success: true, pologIznos: 0 });
+      expect(b.tring.zahtjevi.map(z => z.putanja)).toEqual(['/srr']);
+      const placanje = postoji(tag(b.tring.zahtjevi[0].tijelo, 'VrstePlacanja'));
+      expect([tag(placanje, 'Oznaka'), tag(placanje, 'Iznos')]).toEqual([oznaka, '-30']);
+    }
+    expect(baza.broj('SELECT COUNT(*) FROM cash_movements')).toBe(0);
+  });
 
-    expect(r.success).toBe(true);
-    const putanje = b.tring.zahtjevi.map(z => z.putanja);
-    expect(putanje.at(-1)).toBe('/srr');
-    expect(putanje[0]).toMatch(/^\/(unosnovca|un)$/);
-    expect(b.tring.zahtjevi[0].tijelo).toContain('30');
+  test('razbijeno plaćanje: povrat gotovinom, bezgotovinski dio se prvo unese u gotovinu uređaja', async () => {
+    const p = baza.artikal({ sifra: 'S9', cijena: 30 });
+    const { id } = await izdaj([stavka(p, 1, 30)]);
+    b.db.prepare('UPDATE orders SET nacinPlacanja = ? WHERE id = ?').run('{"gotovina":10,"kartica":20}', id);
+
+    expect(await b.pozovi('order:refundAndPrint', { id })).toMatchObject({ success: true, pologIznos: 0 });
+    expect(b.tring.zahtjevi.map(z => z.putanja)).toEqual(['/unosnovca', '/srr']);
+    const [unos, srr] = b.tring.zahtjevi.map(z => z.tijelo);
+    expect([tag(unos, 'Oznaka'), tag(unos, 'Iznos')]).toEqual(['Gotovina', '20']);
+    const placanje = postoji(tag(srr, 'VrstePlacanja'));
+    expect([tag(placanje, 'Oznaka'), tag(placanje, 'Iznos')]).toEqual(['Gotovina', '0']);
+    expect(baza.broj('SELECT COUNT(*) FROM cash_movements')).toBe(0);
   });
 
   test('greška printera: račun ostaje nestorniran', async () => {
@@ -491,9 +506,10 @@ describe('order:refundAndPrint', () => {
   });
 
   test('reklamacija koju uređaj ne bi primio se odbija prije unosa novca i štampe', async () => {
-    // Bezgotovinski račun: bez provjere bi pokriće prvo otišlo na uređaj.
+    // Razbijeno plaćanje: bez provjere bi pokriće prvo otišlo na uređaj.
     const p = baza.artikal({ sifra: 'S6', cijena: 30 });
-    const { id } = await izdaj([stavka(p, 1, 30)], { brojFiskalnogRacuna: '58', nacinPlacanja: 'Virman' });
+    const { id } = await izdaj([stavka(p, 1, 30)], { brojFiskalnogRacuna: '58' });
+    b.db.prepare('UPDATE orders SET nacinPlacanja = ? WHERE id = ?').run('{"gotovina":10,"virman":20}', id);
     b.db.prepare('UPDATE products SET plu = 1000000 WHERE id = ?').run(p); // stari podatak, van Tringovog opsega
 
     await expect(b.call('order:refundAndPrint', { id, dozvoliPolog: true }))
@@ -509,20 +525,22 @@ describe('order:refundAndPrint', () => {
 });
 
 // ─── Storno: pokriće u uređaju i manjak ─────────────────────
-// Uređaj isplaćuje storno gotovinom i traži pokriće u punom iznosu računa
-// (lib/refund.ts). Unos novca koji uređaj odbije znači da storno nije
-// odštampan; ishod nakon štampe se čita iz zadnjeg odgovora uređaja.
+// Uređaj vraća storno vrstom plaćanja originala i traži da njeno stanje
+// pokrije puni iznos računa (lib/refund.ts). Unos novca koji uređaj odbije
+// znači da storno nije odštampan; ishod nakon štampe se čita iz zadnjeg
+// odgovora uređaja.
 
 describe('order:refundAndPrint — pokriće i manjak', () => {
   const NEMA_NOVCA = 535; // TFS: Nedovoljno novca u kasi
 
   test('uređaj odbije unos pokrića: greška ide dalje, red nezavršenih obrisan, reklamacija nije poslana', async () => {
     const p = baza.artikal({ sifra: 'M1', cijena: 30, stanje: 5 });
-    const { id } = await izdaj([stavka(p, 1, 30)], { brojFiskalnogRacuna: '60', nacinPlacanja: 'Kartica' });
+    const { id } = await izdaj([stavka(p, 1, 30)], { brojFiskalnogRacuna: '60' });
+    b.db.prepare('UPDATE orders SET nacinPlacanja = ? WHERE id = ?').run('{"gotovina":5,"kartica":25}', id);
     b.tring.greskaNa('/unosnovca', 'Nema papira', 901);
 
     await expect(b.call('order:refundAndPrint', { id }))
-      .rejects.toThrow('Unos novca od 30 KM nije prihvaćen na printeru: Nema papira [901]');
+      .rejects.toThrow('Unos novca od 25 KM nije prihvaćen na printeru: Nema papira [901]');
 
     expect(b.tring.zahtjevi.map(z => z.putanja)).toEqual(['/unosnovca']);
     expect(baza.broj('SELECT COUNT(*) FROM pending_receipts')).toBe(0);
@@ -559,6 +577,31 @@ describe('order:refundAndPrint — pokriće i manjak', () => {
     expect(r.error).toBe('Nedovoljno novca u kasi (Nema novca ni poslije unosa) [535]');
     expect(b.tring.zahtjevi.map(z => z.putanja)).toEqual(['/srr', '/unosnovca', '/srr']);
     expect(baza.broj('SELECT COUNT(*) FROM pending_receipts')).toBe(0);
+    expect(baza.red('SELECT status FROM orders WHERE id = ?', id).status).toBe('completed');
+  });
+
+  test('uređaj nema stanja virmana (npr. poslije Z): unos na virman i ponovljena štampa, bez pologa', async () => {
+    const p = baza.artikal({ sifra: 'M5', cijena: 30 });
+    const { id } = await izdaj([stavka(p, 1, 30)], { nacinPlacanja: 'Virman' });
+    b.tring.greskaNa('/srr', 'Nema novca', NEMA_NOVCA);
+
+    expect(await b.pozovi('order:refundAndPrint', { id })).toMatchObject({ success: true, pologIznos: 0 });
+    expect(b.tring.zahtjevi.map(z => z.putanja)).toEqual(['/srr', '/unosnovca', '/srr']);
+    const unos = b.tring.zahtjevi[1].tijelo;
+    expect([tag(unos, 'Oznaka'), tag(unos, 'Iznos')]).toEqual(['Virman', '30']);
+    expect(baza.broj('SELECT COUNT(*) FROM cash_movements')).toBe(0);
+  });
+
+  test('virman koji uređaj ni poslije unosa ne primi: bez ponude gotovinskog pologa', async () => {
+    const p = baza.artikal({ sifra: 'M6', cijena: 30 });
+    const { id } = await izdaj([stavka(p, 1, 30)], { nacinPlacanja: 'Virman' });
+    b.tring.greskaNa('/srr', 'Nema novca', NEMA_NOVCA);
+    b.tring.greskaNa('/srr', 'Nema novca ni poslije unosa', NEMA_NOVCA);
+
+    const r = await b.pozovi('order:refundAndPrint', { id });
+
+    expect(r).toMatchObject({ success: false, nedovoljnoSredstava: false, manjak: 0 });
+    expect(b.tring.zahtjevi.map(z => z.putanja)).toEqual(['/srr', '/unosnovca', '/srr']);
     expect(baza.red('SELECT status FROM orders WHERE id = ?', id).status).toBe('completed');
   });
 

@@ -676,8 +676,8 @@ export function registerIpcHandlers(): void {
         }
       },
       // Pokriće koje fizički ne ulazi u ladicu — samo brojač uređaja.
-      deviceCashIn: async (iznos) => {
-        const res = await u.unosNovca(iznos);
+      deviceCashIn: async (iznos, vrsta) => {
+        const res = await u.unosNovca(iznos, vrsta);
         if (!res.ok) throw new Error(`Unos novca od ${iznos} KM nije prihvaćen na printeru: ${res.greska}`);
       },
     }, { ...data, korisnikId: k.id, odobrioAdminId });

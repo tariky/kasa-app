@@ -25,8 +25,8 @@ export type NeuspjehUredjaja = Extract<IshodUredjaja, { ok: false }>;
 export interface FiskalniUredjaj {
   stampajRacun(r: Tring.Racun): Promise<IshodUredjaja>;
   stampajReklamaciju(r: Tring.ReklamiraniRacun): Promise<IshodUredjaja>;
-  /** Službeni unos gotovine (polog). */
-  unosNovca(iznos: number): Promise<IshodUredjaja>;
+  /** Službeni unos novca (polog); bez `vrsta` gotovina. */
+  unosNovca(iznos: number, vrsta?: Tring.OznakaPlacanja): Promise<IshodUredjaja>;
   /** Službeni iznos gotovine (povrat). */
   povratNovca(iznos: number): Promise<IshodUredjaja>;
   /** Prijava operatera iz postavki. */
@@ -56,7 +56,7 @@ type Odgovor = Promise<Tring.TringResponse | null>;
 export interface TringFunkcije {
   stampatiFiskalniRacun(r: Tring.Racun): Odgovor;
   stampatiReklamiraniRacun(r: Tring.ReklamiraniRacun): Odgovor;
-  unosNovca(iznos: number): Odgovor;
+  unosNovca(iznos: number, vrsta?: Tring.OznakaPlacanja): Odgovor;
   povratNovca(iznos: number): Odgovor;
   inicijalizacija(): Promise<Tring.TringResponse>;
   stampatiPresjekStanja(): Promise<Tring.TringResponse>;
@@ -74,7 +74,7 @@ export function uredjajIzFunkcija(f: Partial<TringFunkcije>): FiskalniUredjaj {
   return {
     stampajRacun: async r => ishodIzOdgovora(await fn('stampatiFiskalniRacun')(r)),
     stampajReklamaciju: async r => ishodIzOdgovora(await fn('stampatiReklamiraniRacun')(r)),
-    unosNovca: async iznos => ishodIzOdgovora(await fn('unosNovca')(iznos)),
+    unosNovca: async (iznos, vrsta) => ishodIzOdgovora(await fn('unosNovca')(iznos, vrsta)),
     povratNovca: async iznos => ishodIzOdgovora(await fn('povratNovca')(iznos)),
     inicijalizacija: async () => fn('inicijalizacija')(),
     presjekStanja: async () => fn('stampatiPresjekStanja')(),
@@ -125,7 +125,7 @@ export function uredjajIzPostavki(db: SqlDb): FiskalniUredjaj {
   return uredjajIzFunkcija({
     stampatiFiskalniRacun: r => { podesi(); return Tring.stampatiFiskalniRacun(r); },
     stampatiReklamiraniRacun: r => { podesi(); return Tring.stampatiReklamiraniRacun(r); },
-    unosNovca: iznos => { podesi(); return Tring.unosNovca(iznos); },
+    unosNovca: (iznos, vrsta) => { podesi(); return Tring.unosNovca(iznos, vrsta); },
     povratNovca: iznos => { podesi(); return Tring.povratNovca(iznos); },
     inicijalizacija: () => { podesi(); return Tring.inicijalizacija(p.operatorId, p.operatorPassword ?? '0'); },
     stampatiPresjekStanja: () => { podesi(); return Tring.stampatiPresjekStanja(); },

@@ -3,6 +3,7 @@
 use serde_json::{json, Map, Value};
 
 use crate::js::{self, or, round2, to_number, truthy};
+use crate::provjera_racuna;
 
 fn map_kupac(kupac: &Value) -> Value {
     if !truthy(kupac) {
@@ -66,12 +67,49 @@ pub fn build_tring_racun(data: &Value) -> Value {
     bez_null(m)
 }
 
-/// `brojRacuna` je već parsiran broj originalnog računa.
-pub fn build_tring_reklamacija(data: &Value, broj_racuna: i64) -> Value {
+/// Kako reklamacija vraća novac (`povratReklamacije` u lib/tringRacun.ts).
+/// Tring traži tačno jednu vrstu plaćanja na reklamaciji (TFS 573), a uređaj
+/// smanjuje stanje upravo te vrste: račun plaćen jednom bezgotovinskom vrstom
+/// vraća se na nju negativnim iznosom računa; gotovinski, razbijeni ili
+/// nepoznat oblik gotovinom (`Gotovina`/0), uz `pokrice` — bezgotovinski dio
+/// koji se prije storna unese u gotovinu uređaja.
+pub struct PovratReklamacije {
+    /// Vrsta plaćanja na reklamaciji (`{oznaka, iznos}`).
+    pub placanje: Value,
+    /// Oznaka vrste povrata kako je uređaj prima.
+    pub oznaka: &'static str,
+    pub pokrice: f64,
+}
+
+pub fn povrat_reklamacije(nacin_placanja: &Value, ukupno: f64) -> PovratReklamacije {
+    let iznos = round2(ukupno);
+    let raspodjela = provjera_racuna::raspodjela_placanja(&js::to_string(nacin_placanja), iznos);
+    if let Some(p) = &raspodjela {
+        let bezgotovinske: Vec<&'static str> = [(p.kartica, "Kartica"), (p.virman, "Virman"), (p.cek, "Cek")]
+            .into_iter()
+            .filter(|&(x, _)| x != 0.0)
+            .map(|(_, oznaka)| oznaka)
+            .collect();
+        if p.gotovina == 0.0 && bezgotovinske.len() == 1 {
+            let oznaka = bezgotovinske[0];
+            return PovratReklamacije { placanje: json!({ "oznaka": oznaka, "iznos": js::f(-iznos) }), oznaka, pokrice: 0.0 };
+        }
+    }
+    let gotovina = raspodjela.map_or(0.0, |p| p.gotovina);
+    PovratReklamacije {
+        placanje: json!({ "oznaka": "Gotovina", "iznos": 0 }),
+        oznaka: "Gotovina",
+        pokrice: js::max(0.0, round2(iznos - gotovina)),
+    }
+}
+
+/// `brojRacuna` je već parsiran broj originalnog računa; `placanje` je vrsta
+/// povrata iz [`povrat_reklamacije`].
+pub fn build_tring_reklamacija(data: &Value, broj_racuna: i64, placanje: &Value) -> Value {
     let mut m = Map::new();
     m.insert("stavke".into(), stavke(data));
     // Gotovinski povrat se uređaju javlja kao Gotovina/0 (TFS greška 573 inače).
-    m.insert("vrstePlacanja".into(), json!([{ "oznaka": "Gotovina", "iznos": 0 }]));
+    m.insert("vrstePlacanja".into(), json!([placanje]));
     m.insert("kupac".into(), map_kupac(&data["kupac"]));
     m.insert("brojRacuna".into(), Value::from(broj_racuna));
     bez_null(m)
