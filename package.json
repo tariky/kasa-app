@@ -1,7 +1,7 @@
 {
   "name": "Pazar",
   "productName": "Pazar",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Pazar POS application for Bosnian market",
   "main": ".vite/build/main.js",
   "private": true,
@@ -15,6 +15,7 @@
     "test:rust": "cargo build --manifest-path src-tauri/Cargo.toml -p pazar-backend --bin ugovor-server && KASA_BACKEND=rust bun test src/ipc/ugovor",
     "licence": "bun tools/licenca-gui/server.ts",
     "backup": "bun tools/backup/backup.ts",
+    "verzija": "bun tools/verzija.ts",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
