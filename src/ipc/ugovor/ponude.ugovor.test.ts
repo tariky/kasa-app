@@ -303,6 +303,40 @@ describe('ponuda:create / ponuda:update — provjera stavki', () => {
   });
 });
 
+// ─── avans ponude ───────────────────────────────────────────
+
+describe('ponuda — avans', () => {
+  test('create/update upisuju avans (zaokružen na pfening); bez avansa 0; izostavljen u update ostaje; get ga vraća', async () => {
+    const bez = await napraviPonudu();
+    expect(baza.red('SELECT avans FROM ponude WHERE id = ?', bez.id).avans).toBe(0);
+
+    const { id, p } = await napraviPonudu({ avans: 5.555 });
+    expect(baza.red('SELECT avans FROM ponude WHERE id = ?', id).avans).toBe(5.56);
+    expect((await b.pozovi('ponuda:get', id)).avans).toBe(5.56);
+
+    await b.call('ponuda:update', id, { stavke: [stavka(p, 2, 10)] });
+    expect(baza.red('SELECT avans FROM ponude WHERE id = ?', id).avans).toBe(5.56);
+    await b.call('ponuda:update', id, { avans: 20, stavke: [stavka(p, 2, 10)] });
+    expect(baza.red('SELECT avans FROM ponude WHERE id = ?', id).avans).toBe(20);
+    await b.call('ponuda:update', id, { avans: null, stavke: [stavka(p, 2, 10)] });
+    expect(baza.red('SELECT avans FROM ponude WHERE id = ?', id).avans).toBe(0);
+  });
+
+  test('odbija negativan, nebrojčan i avans veći od ukupnog iznosa ponude', async () => {
+    const kupacId = dodajKupca();
+    const p = baza.artikal({ sifra: 'AV1', cijena: 10 });
+    const s = [stavka(p, 2, 10)];
+    await expect(b.call('ponuda:create', { kupacId, avans: -1, stavke: s })).rejects.toThrow('Avans ne može biti negativan');
+    await expect(b.call('ponuda:create', { kupacId, avans: 'x', stavke: s })).rejects.toThrow('Avans nije ispravan broj');
+    await expect(b.call('ponuda:create', { kupacId, avans: 20.01, stavke: s })).rejects.toThrow('Avans ne može biti veći od iznosa ponude');
+    expect(baza.red('SELECT COUNT(*) AS n FROM ponude').n).toBe(0);
+
+    const { id } = await napraviPonudu({ avans: 10 });
+    await expect(b.call('ponuda:update', id, { stavke: [stavka(p, 1, 5)] })).rejects.toThrow('Avans ne može biti veći od iznosa ponude');
+    expect(baza.red('SELECT avans, ukupno FROM ponude WHERE id = ?', id)).toEqual({ avans: 10, ukupno: 20 });
+  });
+});
+
 // ─── ponuda:setStatus ───────────────────────────────────────
 
 describe('ponuda:setStatus', () => {

@@ -244,6 +244,7 @@ export const schema = `
     napomena TEXT,
     ukupno REAL NOT NULL,
     pdvIznos REAL NOT NULL,
+    avans REAL NOT NULL DEFAULT 0,
     racunId INTEGER,
     createdAt TEXT DEFAULT (datetime('now','localtime')),
     UNIQUE(broj, godina),
@@ -299,6 +300,7 @@ export const schema = `
     productId INTEGER,
     kolicina REAL NOT NULL DEFAULT 1,
     dogovorenaCijena REAL,
+    avans REAL NOT NULL DEFAULT 0,
     trosakRada REAL NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'otvoren'
       CHECK(status IN ('otvoren', 'u_izradi', 'zavrsen', 'fakturisan')),

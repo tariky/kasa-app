@@ -6,6 +6,7 @@ import { localDateStr } from '@/lib/novac';
 import { formatBrojNaloga, stavkeIzNormativa } from '@/lib/proizvodnja';
 import { useDokumentPostavke } from '@/components/DokumentPostavkeProvider';
 import { rokOznaka } from '@/lib/nalogPrikaz';
+import { ostatakPoslijeAvansa } from '@/lib/avans';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { DecimalInput } from '@/components/ui/decimal-input';
@@ -36,12 +37,13 @@ interface Forma {
   datum: string;
   rok: string;
   cijena: string;
+  avans: string;
   napomena: string;
 }
 
 const prazna = (): Forma => ({
   vrsta: 'narudzba', kupacId: null, proizvod: null, kolicina: '1', opis: '',
-  datum: localDateStr(), rok: '', cijena: '', napomena: '',
+  datum: localDateStr(), rok: '', cijena: '', avans: '', napomena: '',
 });
 
 const izNaloga = (n: RadniNalog): Forma => ({
@@ -53,6 +55,7 @@ const izNaloga = (n: RadniNalog): Forma => ({
   datum: n.datum,
   rok: n.rok ?? '',
   cijena: n.dogovorenaCijena != null ? String(n.dogovorenaCijena).replace('.', ',') : '',
+  avans: n.avans ? String(n.avans).replace('.', ',') : '',
   napomena: n.napomena ?? '',
 });
 
@@ -117,13 +120,16 @@ export function NalogDialog({ open, onOpenChange, nalog, onSaved, stavkeNespreml
 
   const kolicinaBroj = parseDecimal(forma.kolicina);
   const cijenaBroj = forma.cijena ? parseDecimal(forma.cijena) : null;
+  const avansBroj = forma.avans.trim() ? parseDecimal(forma.avans) : 0;
   // Backend ne preračunava stavke pri promjeni količine — korisnik to bira ovdje.
   const kolicinaPromijenjena = isEdit && !zavrsen && forma.vrsta === 'zaliha' && kolicinaBroj > 0 && kolicinaBroj !== nalog!.kolicina;
   const ponudiPreracun = kolicinaPromijenjena && normativ.length > 0;
 
-  const fali = forma.vrsta === 'narudzba'
-    ? (!forma.kupacId ? 'Izaberite kupca' : !forma.opis.trim() ? 'Upišite opis narudžbe' : null)
-    : (!forma.proizvod ? 'Izaberite proizvod' : !(kolicinaBroj > 0) ? 'Upišite količinu' : null);
+  const fali = (forma.vrsta === 'narudzba'
+    ? (!forma.kupacId ? 'Izaberite kupca' : !forma.opis.trim() ? 'Upišite opis narudžbe'
+      : isNaN(avansBroj) ? 'Avans nije ispravan'
+      : cijenaBroj != null && cijenaBroj > 0 && avansBroj > cijenaBroj ? 'Avans je veći od dogovorene cijene' : null)
+    : (!forma.proizvod ? 'Izaberite proizvod' : !(kolicinaBroj > 0) ? 'Upišite količinu' : null));
 
   const zatvori = () => onOpenChange(false);
   const zatraziZatvaranje = () => cuvar.zatrazi();
@@ -142,10 +148,10 @@ export function NalogDialog({ open, onOpenChange, nalog, onSaved, stavkeNespreml
       const napomena = forma.napomena.trim() || null;
       let payload: any;
       if (zavrsen) {
-        payload = { dogovorenaCijena: cijenaBroj, rok, napomena };
+        payload = { dogovorenaCijena: cijenaBroj, avans: avansBroj, rok, napomena };
       } else {
         payload = { opis: forma.opis.trim(), datum: forma.datum, rok, napomena, dogovorenaCijena: cijenaBroj };
-        if (forma.vrsta === 'narudzba') payload.kupacId = forma.kupacId;
+        if (forma.vrsta === 'narudzba') { payload.kupacId = forma.kupacId; payload.avans = avansBroj; }
         else { payload.productId = forma.proizvod!.id; payload.kolicina = kolicinaBroj; }
       }
       let id: number;
@@ -215,7 +221,7 @@ export function NalogDialog({ open, onOpenChange, nalog, onSaved, stavkeNespreml
         {error && <FullDialogNotice type="error" text={error} onClose={() => setError('')} />}
         {zavrsen && (
           <div role="status" className="flex-shrink-0 flex items-center gap-2 px-6 py-2 text-[12px] font-medium border-b bg-amber-50 border-amber-100 text-amber-700">
-            <Lock size={12} /> Nalog je završen, pa se mijenjaju samo cijena, rok i napomena.
+            <Lock size={12} /> Nalog je završen, pa se mijenjaju samo cijena, avans, rok i napomena.
           </div>
         )}
         {ponudiPreracun && (
@@ -345,6 +351,15 @@ export function NalogDialog({ open, onOpenChange, nalog, onSaved, stavkeNespreml
                     </div>
                   </Polje>
                 )}
+                {!zaliha && (
+                  <Polje label="Avans" pomoc={<span className="text-[11px] text-slate-400">uplaćeno, ide na štampu</span>}>
+                    <div className="relative">
+                      <DecimalInput value={forma.avans} onValueChange={t => set('avans', t)} placeholder="0,00" aria-label="Avans"
+                        className="h-10 pr-10 text-right font-mono text-[13px] tabular-nums" />
+                      <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[11.5px] text-slate-400">KM</span>
+                    </div>
+                  </Polje>
+                )}
               </section>
 
               <Polje label="Napomena" htmlFor="nalog-napomena" pomoc={<span className="text-[11px] text-slate-400">opciono, ide na štampu</span>}>
@@ -377,6 +392,20 @@ export function NalogDialog({ open, onOpenChange, nalog, onSaved, stavkeNespreml
                       {cijenaBroj != null
                         ? <span className="font-mono text-[18px] font-semibold tabular-nums text-slate-900">{formatKM(cijenaBroj || 0)}</span>
                         : <span className="text-[12px] text-amber-600">nije upisano</span>}
+                    </div>
+                  )}
+                  {!zaliha && avansBroj > 0 && (
+                    <div className="space-y-1 text-[12px]">
+                      <div className="flex items-baseline justify-between">
+                        <span className="text-slate-500">Avans</span>
+                        <span className="font-mono tabular-nums text-slate-700">{formatKM(avansBroj)}</span>
+                      </div>
+                      {cijenaBroj != null && cijenaBroj > 0 && (
+                        <div className="flex items-baseline justify-between">
+                          <span className="text-slate-500">Ostatak</span>
+                          <span className="font-mono tabular-nums font-semibold text-slate-900">{formatKM(ostatakPoslijeAvansa(cijenaBroj, avansBroj))}</span>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

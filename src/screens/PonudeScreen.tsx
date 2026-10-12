@@ -22,6 +22,7 @@ import { izReda } from '@/lib/stavkeDokumenta';
 import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { localDateStr } from '@/lib/novac';
 import { cn, formatKM, formatDate } from '@/lib/utils';
+import { ostatakPoslijeAvansa } from '@/lib/avans';
 import { useModuli } from '@/hooks/useModuli';
 import { formatBrojNaloga } from '@/lib/proizvodnja';
 import { zadaniIzbor, proizvodiIzIzbora } from '@/lib/nalogPrikaz';
@@ -637,6 +638,18 @@ export default function PonudeScreen({ uloga }: { uloga: 'admin' | 'kasir' }) {
                     {formatKM(selected.ukupno)}
                   </span>
                 </div>
+                {selected.avans > 0 && (
+                  <>
+                    <div className="flex items-center justify-between text-[11.5px] mt-1.5">
+                      <span className="text-slate-400">Uplaćeni avans</span>
+                      <span className="font-mono tabular-nums text-slate-600">{formatKM(selected.avans)}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-[11.5px] mt-1">
+                      <span className="font-medium text-slate-600">Preostalo za uplatu</span>
+                      <span className="font-mono tabular-nums font-semibold text-slate-800">{formatKM(ostatakPoslijeAvansa(selected.ukupno, selected.avans))}</span>
+                    </div>
+                  </>
+                )}
               </div>
 
               {/* Akcije */}

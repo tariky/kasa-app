@@ -493,6 +493,51 @@ describe('proizvodi naloga iz ponude', () => {
   });
 });
 
+// ─── avans naloga ───────────────────────────────────────────
+
+describe('nalog — avans', () => {
+  test('create upisuje avans (bez avansa 0), update ga mijenja i na završenom nalogu; get ga vraća', async () => {
+    const kupacId = dodajKupca();
+    const bez = await narudzba(kupacId);
+    expect(baza.red('SELECT avans FROM radni_nalozi WHERE id = ?', bez).avans).toBe(0);
+
+    const id = await narudzba(kupacId, { dogovorenaCijena: 1000, avans: 300.004 });
+    expect(baza.red('SELECT avans FROM radni_nalozi WHERE id = ?', id).avans).toBe(300);
+    expect((await b.pozovi('nalog:get', id)).avans).toBe(300);
+
+    const { id: zavrsen } = await zavrsenaNarudzba(500, { avans: 100 });
+    await b.call('nalog:update', zavrsen, { avans: 250, napomena: 'doplata' });
+    expect(baza.red('SELECT avans FROM radni_nalozi WHERE id = ?', zavrsen).avans).toBe(250);
+    await b.call('nalog:update', zavrsen, { avans: null });
+    expect(baza.red('SELECT avans FROM radni_nalozi WHERE id = ?', zavrsen).avans).toBe(0);
+  });
+
+  test('nalog iz ponude preuzima avans ponude', async () => {
+    const kupacId = dodajKupca();
+    const a = dodajProizvod('ORM', 'artikal');
+    const ponudaId = dodajPonudu(kupacId, 'prihvacena', [{ productId: a, kolicina: 1, cijena: 900 }]);
+    b.db.prepare('UPDATE ponude SET avans = 400 WHERE id = ?').run(ponudaId);
+    const r = await b.pozovi('nalog:createIzPonude', ponudaId);
+    expect(baza.red('SELECT dogovorenaCijena, avans FROM radni_nalozi WHERE id = ?', r.id)).toEqual({ dogovorenaCijena: 900, avans: 400 });
+  });
+
+  test('odbija negativan, nebrojčan i avans veći od dogovorene cijene (i kad se cijena spusti ispod avansa)', async () => {
+    const kupacId = dodajKupca();
+    await expect(b.call('nalog:create', { vrsta: 'narudzba', kupacId, opis: 'x', avans: -5 })).rejects.toThrow('Avans ne može biti negativan');
+    await expect(b.call('nalog:create', { vrsta: 'narudzba', kupacId, opis: 'x', avans: 'x' })).rejects.toThrow('Avans nije ispravan broj');
+    await expect(b.call('nalog:create', { vrsta: 'narudzba', kupacId, opis: 'x', dogovorenaCijena: 100, avans: 100.01 }))
+      .rejects.toThrow('Avans ne može biti veći od dogovorene cijene');
+    expect(baza.red('SELECT COUNT(*) AS n FROM radni_nalozi').n).toBe(0);
+
+    // Bez dogovorene cijene avans nema gornju granicu.
+    const id = await narudzba(kupacId, { avans: 200 });
+    await expect(b.call('nalog:update', id, { dogovorenaCijena: 150 })).rejects.toThrow('Avans ne može biti veći od dogovorene cijene');
+    await expect(b.call('nalog:update', id, { avans: -1 })).rejects.toThrow('Avans ne može biti negativan');
+    await b.call('nalog:update', id, { dogovorenaCijena: 150, avans: 150 });
+    expect(baza.red('SELECT dogovorenaCijena, avans FROM radni_nalozi WHERE id = ?', id)).toEqual({ dogovorenaCijena: 150, avans: 150 });
+  });
+});
+
 // ─── nalog:update ───────────────────────────────────────────
 
 describe('nalog:update', () => {

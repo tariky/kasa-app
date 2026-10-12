@@ -8,6 +8,7 @@ import { provjeriStavke } from './provjeraRacuna';
 import { provjeriNacinPlacanja } from './placanje';
 import { formatBroja, nastavakNumeracije, ZADANE_DOKUMENT_POSTAVKE, type FormatBroja } from './dokumentPostavke';
 import { baciAkoCekaNezavrsen, snapshotKupca, type SnapshotPonude } from './pendingRacun';
+import { avansIzUnosa } from './avans';
 
 export interface PonudaStavka {
   productId: number;
@@ -23,6 +24,8 @@ export interface PonudaInput {
   datum?: string;
   vaziDo?: string;
   napomena?: string;
+  /** Uplaćeni avans (sa PDV-om) — ide na štampu ponude; bez njega 0. */
+  avans?: number | null;
   stavke: PonudaStavka[];
 }
 
@@ -79,11 +82,13 @@ export function createPonuda(
   const broj = nextBrojPonude(db, godina);
   const vaziDo = data.vaziDo || plusDana(datum, DEFAULT_ROK_DANA);
   const { ukupno, pdvIznos } = izracunajTotale(stavke);
+  const avans = avansIzUnosa(data.avans);
+  baciAkoAvansVeci(avans, ukupno);
 
   const result = db.prepare(`
-    INSERT INTO ponude (broj, godina, kupacId, korisnikId, datum, vaziDo, napomena, ukupno, pdvIznos)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(broj, godina, data.kupacId, data.korisnikId, datum, vaziDo, data.napomena ?? null, ukupno, pdvIznos);
+    INSERT INTO ponude (broj, godina, kupacId, korisnikId, datum, vaziDo, napomena, ukupno, pdvIznos, avans)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(broj, godina, data.kupacId, data.korisnikId, datum, vaziDo, data.napomena ?? null, ukupno, pdvIznos, avans);
 
   const id = Number(result.lastInsertRowid);
 
@@ -95,6 +100,10 @@ export function createPonuda(
   }
 
   return { id, broj, godina };
+}
+
+function baciAkoAvansVeci(avans: number, ukupno: number): void {
+  if (avans > ukupno) throw new Error('Avans ne može biti veći od iznosa ponude');
 }
 
 export type PonudaStatus = 'draft' | 'poslana' | 'prihvacena' | 'odbijena' | 'konvertovana';
@@ -166,14 +175,14 @@ export function deletePonuda(db: SqlDb, id: number): { changes: number } {
 export function updatePonuda(
   db: SqlDb,
   id: number,
-  data: { kupacId?: number; datum?: string; vaziDo?: string; napomena?: string; stavke: PonudaStavka[] }
+  data: { kupacId?: number; datum?: string; vaziDo?: string; napomena?: string; avans?: number | null; stavke: PonudaStavka[] }
 ): void {
   if (!data.stavke || data.stavke.length === 0) {
     throw new Error('Ponuda mora imati najmanje jednu stavku');
   }
 
-  const ponuda = db.prepare('SELECT id, status, kupacId, datum, vaziDo FROM ponude WHERE id = ?')
-    .get(id) as { id: number; status: string; kupacId: number; datum: string; vaziDo: string } | undefined;
+  const ponuda = db.prepare('SELECT id, status, kupacId, datum, vaziDo, avans FROM ponude WHERE id = ?')
+    .get(id) as { id: number; status: string; kupacId: number; datum: string; vaziDo: string; avans: number } | undefined;
   if (!ponuda) throw new Error('Ponuda ne postoji');
   // Snapshot računa koji čeka nosi stare stavke — izmjena bi ih razdvojila od ponude.
   baciAkoCekaNezavrsen(db, 'ponudaId', id, 'Račun po ovoj ponudi', 'prije izmjene ponude');
@@ -181,14 +190,17 @@ export function updatePonuda(
   const stavke = provjeriStavke(db, data.stavke);
 
   const { ukupno, pdvIznos } = izracunajTotale(stavke);
+  // Izostavljen avans ostaje; null ga briše.
+  const avans = data.avans === undefined ? ponuda.avans : avansIzUnosa(data.avans);
+  baciAkoAvansVeci(avans, ukupno);
 
   db.prepare(`
     UPDATE ponude SET kupacId = ?, datum = ?, vaziDo = ?, napomena = COALESCE(?, napomena),
-      ukupno = ?, pdvIznos = ?
+      ukupno = ?, pdvIznos = ?, avans = ?
     WHERE id = ?
   `).run(
     data.kupacId ?? ponuda.kupacId, data.datum ?? ponuda.datum, data.vaziDo ?? ponuda.vaziDo,
-    data.napomena ?? null, ukupno, pdvIznos, id
+    data.napomena ?? null, ukupno, pdvIznos, avans, id
   );
 
   db.prepare('DELETE FROM ponuda_stavke WHERE ponudaId = ?').run(id);

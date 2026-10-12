@@ -77,6 +77,8 @@ const s = StyleSheet.create({
     paddingVertical: 6, borderTop: '1.5pt solid #000', marginTop: 4,
   },
   ukupnoZavrsniTekst: { fontSize: 11, fontFamily: FB, fontWeight: 700 },
+  ukupnoOstatak: { borderTop: '0.75pt solid #000', marginTop: 2, paddingTop: 4 },
+  ukupnoOstatakTekst: { fontSize: 9.5, fontFamily: FB, fontWeight: 700 },
 
   /* ── Uokviren blok (uslovi, reklamacija, opis posla) ── */
   okvir: { border: '1pt solid #000', padding: 8 },
@@ -250,7 +252,10 @@ export function MetaRed({ polja, razmak = 22 }: {
 }
 
 /** Rekapitulacija desno ispod tabele: redovi (osnovica, PDV) pa podebljan završni red. */
-export function Ukupno({ redovi, ukupno }: { redovi: Array<readonly [string, string]>; ukupno: readonly [string, string] }) {
+/** `poslije` — redovi ispod UKUPNO (avans); posljednji je podebljan (ostatak za uplatu). */
+export function Ukupno({ redovi, ukupno, poslije = [] }: {
+  redovi: Array<readonly [string, string]>; ukupno: readonly [string, string]; poslije?: Array<readonly [string, string]>;
+}) {
   return (
     <View style={s.ukupnoOkvir}>
       <View style={s.ukupnoKutija}>
@@ -264,6 +269,15 @@ export function Ukupno({ redovi, ukupno }: { redovi: Array<readonly [string, str
           <Text style={s.ukupnoZavrsniTekst}>{ukupno[0]}</Text>
           <Text style={[s.ukupnoZavrsniTekst, { textAlign: 'right' }]}>{ukupno[1]}</Text>
         </View>
+        {poslije.map(([naziv, iznos], i) => {
+          const zadnji = i === poslije.length - 1;
+          return (
+            <View key={i} style={[s.ukupnoRed, zadnji ? s.ukupnoOstatak : {}]}>
+              <Text style={[s.ukupnoNaziv, zadnji ? s.ukupnoOstatakTekst : {}]}>{naziv}</Text>
+              <Text style={[s.ukupnoIznos, zadnji ? s.ukupnoOstatakTekst : {}]}>{iznos}</Text>
+            </View>
+          );
+        })}
       </View>
     </View>
   );

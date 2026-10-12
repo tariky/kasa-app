@@ -3,7 +3,9 @@ import type { FirmaSettings, RadniNalog, RadniNalogStavka } from '@/types';
 import { formatBrojNaloga } from '@/lib/proizvodnja';
 import { formatBrojPonude } from '@/lib/ponuda';
 import type { DokumentPostavke } from '@/lib/dokumentPostavke';
-import { A4Dokument, Blok, BlokNaziv, BlokRed, DvaBloka, Izdavac, MetaRed, Okvir } from './pdf/A4Dokument';
+import { formatKM } from '@/lib/utils';
+import { ostatakPoslijeAvansa } from '@/lib/avans';
+import { A4Dokument, Blok, BlokNaziv, BlokRed, DvaBloka, Izdavac, MetaRed, Okvir, Ukupno } from './pdf/A4Dokument';
 import { TabelaStavki, type KolonaStavke } from './pdf/TabelaStavki';
 import { datumIzBaze } from './pdf/stil';
 
@@ -55,6 +57,23 @@ export function RadniNalogPdf({ nalog, firma, postavke }: { nalog: RadniNalog; f
       </Okvir>
 
       <TabelaStavki kolone={KOLONE} redovi={nalog.stavke ?? []} prazno="Utrošak materijala nije unesen." />
+
+      <Avans nalog={nalog} />
     </A4Dokument>
+  );
+}
+
+/** Uplaćeni avans ispod utroška — uz dogovorenu cijenu i ostatak za naplatu kad je cijena poznata. */
+function Avans({ nalog }: { nalog: RadniNalog }) {
+  const avans = nalog.avans ?? 0;
+  if (!(avans > 0)) return null;
+  const cijena = nalog.dogovorenaCijena;
+  if (cijena == null || !(cijena > 0)) return <Ukupno redovi={[]} ukupno={['UPLAĆENI AVANS', formatKM(avans)]} />;
+  return (
+    <Ukupno
+      redovi={[]}
+      ukupno={['DOGOVORENA CIJENA', formatKM(cijena)]}
+      poslije={[['Uplaćeni avans', formatKM(avans)], ['Preostalo za naplatu', formatKM(ostatakPoslijeAvansa(cijena, avans))]]}
+    />
   );
 }

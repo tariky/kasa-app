@@ -274,6 +274,8 @@ export interface Ponuda {
   napomena?: string | null;
   ukupno: number;
   pdvIznos: number;
+  /** Uplaćeni avans; 0 = nema. */
+  avans: number;
   racunId?: number | null;
   racunBroj?: string | null;
   kupacNaziv?: string;
@@ -332,6 +334,8 @@ export interface RadniNalog {
   productId?: number | null;
   kolicina: number;
   dogovorenaCijena?: number | null;
+  /** Uplaćeni avans; 0 = nema. */
+  avans: number;
   trosakRada: number;
   status: NalogStatus;
   racunId?: number | null;
