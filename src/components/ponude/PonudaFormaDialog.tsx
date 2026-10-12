@@ -16,7 +16,8 @@ import { formatBrojPonude, plusDana, danaIzmedju } from '@/lib/ponuda';
 import { pdvStavke } from '@/lib/racun';
 import { primijeniRabatKupca, formatRabat } from '@/lib/dokumentPostavke';
 import { localDateStr } from '@/lib/novac';
-import { formatKM } from '@/lib/utils';
+import { formatKM, parseDecimal } from '@/lib/utils';
+import { ostatakPoslijeAvansa } from '@/lib/avans';
 import type { Kupac, Product } from '@/types';
 
 /** "8 dana od datuma ponude" — bosanska množina: 1/21/31 dan, ostalo dana. */
@@ -33,6 +34,7 @@ export interface PonudaZaFormu {
   datum: string;
   vaziDo: string;
   napomena?: string | null;
+  avans?: number | null;
   stavke?: RedStavke[];
 }
 
@@ -59,6 +61,8 @@ export function PonudaFormaDialog({ zahtjev, kupci: sifarnikKupaca, onZatvori, o
   const [datum, setDatum] = useState('');
   const [vaziDo, setVaziDo] = useState('');
   const [napomena, setNapomena] = useState('');
+  /** Uplaćeni avans kako je upisan; prazno = nema avansa. */
+  const [avansTekst, setAvansTekst] = useState('');
   const {
     stavke, postavi: postaviStavke, dodaj: dodajStavku, izmijeni: izmijeniStavku, ukloni: ukloniStavku, totali: formTotali,
   } = useStavkeDokumenta();
@@ -80,6 +84,7 @@ export function PonudaFormaDialog({ zahtjev, kupci: sifarnikKupaca, onZatvori, o
         setDatum(p.datum);
         setVaziDo(p.vaziDo);
         setNapomena(p.napomena || '');
+        setAvansTekst(p.avans ? String(p.avans).replace('.', ',') : '');
         postaviStavke((p.stavke || []).map(izReda));
       } else {
         setEditId(null);
@@ -88,6 +93,7 @@ export function PonudaFormaDialog({ zahtjev, kupci: sifarnikKupaca, onZatvori, o
         setDatum(danasnji);
         setVaziDo(plusDana(danasnji, postavke.ponuda.vaziDana));
         setNapomena('');
+        setAvansTekst('');
         postaviStavke([]);
       }
       setFormError('');
@@ -121,6 +127,8 @@ export function PonudaFormaDialog({ zahtjev, kupci: sifarnikKupaca, onZatvori, o
     } else setFormInfo('');
   };
 
+  const avans = avansTekst.trim() ? parseDecimal(avansTekst) : 0;
+
   const addStavka = (p: Product, kol: number | null) => dodajStavku(p, kol, { rabat: rabatKupca });
 
   const savePonuda = async () => {
@@ -130,6 +138,8 @@ export function PonudaFormaDialog({ zahtjev, kupci: sifarnikKupaca, onZatvori, o
     if (stavke.some(s => !s.kolicina || s.kolicina <= 0 || isNaN(s.cijena) || s.cijena < 0)) {
       setFormError('Provjerite količine i cijene stavki'); return;
     }
+    if (isNaN(avans) || avans < 0) { setFormError('Avans nije ispravan'); return; }
+    if (avans > formTotali.ukupno) { setFormError('Avans ne može biti veći od iznosa ponude'); return; }
     setSaving(true);
     try {
       const payload = {
@@ -137,6 +147,7 @@ export function PonudaFormaDialog({ zahtjev, kupci: sifarnikKupaca, onZatvori, o
         datum,
         vaziDo,
         napomena: napomena.trim() || undefined,
+        avans,
         stavke: uPayload(stavke),
       };
       if (editId != null) {
@@ -290,13 +301,28 @@ export function PonudaFormaDialog({ zahtjev, kupci: sifarnikKupaca, onZatvori, o
             )}
           </div>
 
-          {/* Napomena */}
-          <div className="space-y-1.5">
-            <Eyebrow className="block">Napomena</Eyebrow>
-            <Input
-              value={napomena} onChange={e => setNapomena(e.target.value)}
-              placeholder="Napomena na ponudi (opcionalno)" className="h-9 text-[13px]"
-            />
+          {/* Napomena + avans */}
+          <div className="grid grid-cols-[minmax(0,1fr)_140px] gap-3">
+            <div className="space-y-1.5">
+              <Eyebrow className="block">Napomena</Eyebrow>
+              <Input
+                value={napomena} onChange={e => setNapomena(e.target.value)}
+                placeholder="Napomena na ponudi (opcionalno)" className="h-9 text-[13px]"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Eyebrow className="block">Avans</Eyebrow>
+              <DecimalInput
+                value={avansTekst} onValueChange={t => setAvansTekst(t)}
+                placeholder="0,00" aria-label="Avans"
+                className="h-9 text-[13px] text-right font-mono tabular-nums"
+              />
+              {avans > 0 && avans <= formTotali.ukupno && (
+                <p className="text-[10px] text-slate-400">
+                  ostaje {formatKM(ostatakPoslijeAvansa(formTotali.ukupno, avans))}
+                </p>
+              )}
+            </div>
           </div>
 
           {formError && (

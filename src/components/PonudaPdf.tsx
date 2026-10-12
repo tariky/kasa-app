@@ -4,6 +4,7 @@ import { formatBrojPonude } from '@/lib/ponuda';
 import { PDV_STOPA_E_PCT } from '@/lib/pdv';
 import { linijaDokumenta } from '@/lib/dokumentStavke';
 import { formatKM } from '@/lib/utils';
+import { ostatakPoslijeAvansa } from '@/lib/avans';
 import { formatRabat, type DokumentPostavke } from '@/lib/dokumentPostavke';
 import { A4Dokument, DvaBloka, Izdavac, Kupac, MetaRed, Okvir, Ukupno } from './pdf/A4Dokument';
 import { TabelaStavki, type KolonaStavke } from './pdf/TabelaStavki';
@@ -22,6 +23,8 @@ export interface PonudaPdfProps {
     napomena?: string | null;
     ukupno: number;
     pdvIznos: number;
+    /** Uplaćeni avans; 0 ili bez njega = ne ispisuje se. */
+    avans?: number | null;
     korisnikIme?: string;
     kupacNaziv?: string | null;
     kupacIdBroj?: string | null;
@@ -41,6 +44,7 @@ export function PonudaPdf({ ponuda, firma, postavke }: PonudaPdfProps) {
   const uslovi = postavke.ponuda.uslovi;
   const pdvIznos = ponuda.pdvIznos;
   const osnovica = ponuda.ukupno - pdvIznos;
+  const avans = ponuda.avans ?? 0;
 
   // Cijena je sa PDV-om; iznos reda zaokružen po redu kao na računu — kolona se zbraja u UKUPNO.
   const kolone: KolonaStavke<StavkaPdf>[] = [
@@ -75,6 +79,7 @@ export function PonudaPdf({ ponuda, firma, postavke }: PonudaPdfProps) {
       <Ukupno
         redovi={[['Osnovica', formatKM(osnovica)], [`PDV (${PDV_STOPA_E_PCT}%)`, formatKM(pdvIznos)]]}
         ukupno={['UKUPNO', formatKM(ponuda.ukupno)]}
+        poslije={avans > 0 ? [['Uplaćeni avans', formatKM(avans)], ['Preostalo za uplatu', formatKM(ostatakPoslijeAvansa(ponuda.ukupno, avans))]] : []}
       />
 
       <Okvir naslov="Uslovi ponude" style={{ marginTop: 16 }}>

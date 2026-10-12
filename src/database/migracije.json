@@ -80,5 +80,10 @@
   {
     "opis": "PIN-ovi iz starijih verzija (i uvezenih backup-a) su bili čist tekst.",
     "kod": "hesirajStarePinove"
-  }
+  },
+  {
+    "opis": "Avans koji je kupac uplatio po ponudi / radnom nalogu — samo za ispis na dokumentu (0 = nema avansa).",
+    "tabela": "ponude", "kolona": "avans", "sql": ["ALTER TABLE ponude ADD COLUMN avans REAL NOT NULL DEFAULT 0"], "samoAkoTabelaPostoji": true
+  },
+  { "tabela": "radni_nalozi", "kolona": "avans", "sql": ["ALTER TABLE radni_nalozi ADD COLUMN avans REAL NOT NULL DEFAULT 0"], "samoAkoTabelaPostoji": true }
 ]

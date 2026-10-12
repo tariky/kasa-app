@@ -8,6 +8,7 @@ import { useDokumentPostavke } from '@/components/DokumentPostavkeProvider';
 import { rokOznaka, uskladiIzbor, proizvodiIzIzbora } from '@/lib/nalogPrikaz';
 import { localDateStr } from '@/lib/novac';
 import { cn, formatKM, formatDate } from '@/lib/utils';
+import { ostatakPoslijeAvansa } from '@/lib/avans';
 import { otvoriPdf, spremiPdf, ucitajZaStampu } from '@/lib/stampa';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -239,6 +240,14 @@ export function NalogDetailDialog({ nalogId, redoslijed, uloga, onClose, onNavig
                           {nalog.dogovorenaCijena != null
                             ? <span className="font-mono tabular-nums font-semibold">{formatKM(nalog.dogovorenaCijena)}</span>
                             : <span className="text-amber-600 text-[12px]">nije upisana</span>}
+                        </Fact>
+                      )}
+                      {nalog.vrsta === 'narudzba' && nalog.avans > 0 && (
+                        <Fact label="Avans">
+                          <span className="font-mono tabular-nums">{formatKM(nalog.avans)}</span>
+                          {nalog.dogovorenaCijena != null && nalog.dogovorenaCijena > 0 && (
+                            <span className="ml-2 text-[11.5px] text-slate-400">ostatak {formatKM(ostatakPoslijeAvansa(nalog.dogovorenaCijena, nalog.avans))}</span>
+                          )}
                         </Fact>
                       )}
                       {nalog.ponudaBroj && <Fact label="Iz ponude"><span className="font-mono">{formatBrojPonude({ broj: nalog.ponudaBroj, godina: nalog.ponudaGodina ?? 0 }, postavke.ponuda.broj)}</span></Fact>}

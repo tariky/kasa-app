@@ -10,6 +10,7 @@ import { konvertujPonudu, type KonverzijaDeps, type KonverzijaResult } from './p
 import { fiskalizuj, uToku } from './fiskalizacija';
 import { baciAkoCekaNezavrsen, snapshotKupca, type SnapshotNaloga } from './pendingRacun';
 import { formatBroja, nastavakNumeracije, ZADANE_DOKUMENT_POSTAVKE, type FormatBroja } from './dokumentPostavke';
+import { avansIzUnosa } from './avans';
 import type {
   NalogStatus, NalogVrsta, NormativStavka, ProizvodPonude, RadniNalog, RadniNalogProizvod, RadniNalogStavka,
 } from '@/types';
@@ -25,6 +26,8 @@ export interface NalogInput {
   datum?: string;
   rok?: string | null;
   dogovorenaCijena?: number | null;
+  /** Uplaćeni avans (sa PDV-om) — ide na štampu naloga; bez njega 0. */
+  avans?: number | null;
   trosakRada?: number;
   napomena?: string | null;
 }
@@ -86,8 +89,11 @@ function baciAkoDupliMaterijal(db: SqlDb, stavke: NalogStavkaInput[]): void {
   }
 }
 
-function ucitajNalogIliBaci(db: SqlDb, id: number): { status: NalogStatus; vrsta: NalogVrsta; kolicina: number; productId: number | null; ponudaId: number | null } {
-  const n = db.prepare('SELECT status, vrsta, kolicina, productId, ponudaId FROM radni_nalozi WHERE id = ?').get(id) as any;
+function ucitajNalogIliBaci(db: SqlDb, id: number): {
+  status: NalogStatus; vrsta: NalogVrsta; kolicina: number; productId: number | null; ponudaId: number | null;
+  dogovorenaCijena: number | null; avans: number;
+} {
+  const n = db.prepare('SELECT status, vrsta, kolicina, productId, ponudaId, dogovorenaCijena, avans FROM radni_nalozi WHERE id = ?').get(id) as any;
   if (!n) throw new Error('Radni nalog ne postoji');
   return n;
 }
@@ -150,17 +156,20 @@ export function createNalog(db: SqlDb, input: NalogInput): { id: number; broj: n
     throw new Error('Nepoznata vrsta naloga');
   }
 
+  const avans = avansIzUnosa(input.avans);
+  baciAkoAvansVeci(avans, input.dogovorenaCijena);
+
   const broj = nextBrojNaloga(db, godina);
   const res = db.prepare(`
     INSERT INTO radni_nalozi (broj, godina, datum, rok, vrsta, kupacId, ponudaId, opis, productId, kolicina,
-      dogovorenaCijena, trosakRada, korisnikId, napomena)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      dogovorenaCijena, avans, trosakRada, korisnikId, napomena)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     broj, godina, datum, input.rok ?? null, input.vrsta,
     input.vrsta === 'narudzba' ? input.kupacId : null,
     input.ponudaId ?? null, opis,
     input.vrsta === 'zaliha' ? input.productId : null, kolicina,
-    input.dogovorenaCijena ?? null, input.trosakRada ?? 0, input.korisnikId, input.napomena ?? null
+    input.dogovorenaCijena ?? null, avans, input.trosakRada ?? 0, input.korisnikId, input.napomena ?? null
   );
   const id = Number(res.lastInsertRowid);
 
@@ -172,15 +181,20 @@ export function createNalog(db: SqlDb, input: NalogInput): { id: number; broj: n
   return { id, broj, godina };
 }
 
+/** Avans je dio dogovorene cijene; bez cijene (ili 0) nema gornje granice. */
+function baciAkoAvansVeci(avans: number, cijena: number | null | undefined): void {
+  if (cijena != null && cijena > 0 && avans > cijena) throw new Error('Avans ne može biti veći od dogovorene cijene');
+}
+
 /**
- * Nalog iz prihvaćene ponude: kupac, opis (nazivi stavki) i cijena sa ponude, te
+ * Nalog iz prihvaćene ponude: kupac, opis (nazivi stavki), cijena i avans sa ponude, te
  * stavke ponude koje nalog izrađuje. Bez izbora (`proizvodi` nije niz) važi
  * zadani iz `proizvodiPonude`. U transakciji.
  */
 export function createNalogIzPonude(
   db: SqlDb, ponudaId: number, korisnikId: number, proizvodi?: NalogProizvodInput[] | null
 ): { id: number; broj: number; godina: number } {
-  const ponuda = db.prepare('SELECT id, kupacId, status, ukupno FROM ponude WHERE id = ?').get(ponudaId) as any;
+  const ponuda = db.prepare('SELECT id, kupacId, status, ukupno, avans FROM ponude WHERE id = ?').get(ponudaId) as any;
   if (!ponuda) throw new Error('Ponuda ne postoji');
   if (ponuda.status !== 'prihvacena') throw new Error('Ponuda mora biti prihvaćena da bi se otvorio radni nalog');
   if (nalogZaPonudu(db, ponudaId)) throw new Error('Za ovu ponudu radni nalog već postoji');
@@ -193,7 +207,7 @@ export function createNalogIzPonude(
 
   const r = createNalog(db, {
     vrsta: 'narudzba', korisnikId, kupacId: ponuda.kupacId, ponudaId, opis,
-    dogovorenaCijena: ponuda.ukupno,
+    dogovorenaCijena: ponuda.ukupno, avans: ponuda.avans,
   });
   const izbor = Array.isArray(proizvodi) ? proizvodi
     : proizvodiPonude(db, ponudaId).filter(p => p.zadano).map(p => ({ productId: p.productId, kolicina: p.kolicina }));
@@ -271,7 +285,7 @@ export function nalogZaPonudu(db: SqlDb, ponudaId: number): { id: number; broj: 
 }
 
 /** Polja koja se smiju mijenjati na završenom nalogu bez cijene — dogovor sa kupcem stigne i poslije. */
-const DOZVOLJENO_ZAVRSEN = new Set(['dogovorenaCijena', 'rok', 'napomena']);
+const DOZVOLJENO_ZAVRSEN = new Set(['dogovorenaCijena', 'avans', 'rok', 'napomena']);
 
 export function updateNalog(
   db: SqlDb, id: number,
@@ -317,6 +331,11 @@ export function updateNalog(
   }
   if (patch.rok !== undefined) set('rok', patch.rok || null);
   if (patch.dogovorenaCijena !== undefined) set('dogovorenaCijena', patch.dogovorenaCijena ?? null);
+  if (patch.avans !== undefined || patch.dogovorenaCijena !== undefined) {
+    const avans = patch.avans !== undefined ? avansIzUnosa(patch.avans) : n.avans;
+    baciAkoAvansVeci(avans, patch.dogovorenaCijena !== undefined ? patch.dogovorenaCijena : n.dogovorenaCijena);
+    if (patch.avans !== undefined) set('avans', avans);
+  }
   if (patch.trosakRada !== undefined) set('trosakRada', patch.trosakRada ?? 0);
   if (patch.napomena !== undefined) set('napomena', patch.napomena || null);
 

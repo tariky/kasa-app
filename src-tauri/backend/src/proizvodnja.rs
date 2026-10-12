@@ -70,7 +70,7 @@ fn baci_ako_dupli_materijal(db: &Db, stavke: &[Value]) -> R<()> {
 
 /// `{ status, vrsta, kolicina, productId, ponudaId }` naloga.
 fn ucitaj_nalog_ili_baci(db: &Db, id: &Value) -> R<Value> {
-    match db.get("SELECT status, vrsta, kolicina, productId, ponudaId FROM radni_nalozi WHERE id = ?", p![id])? {
+    match db.get("SELECT status, vrsta, kolicina, productId, ponudaId, dogovorenaCijena, avans FROM radni_nalozi WHERE id = ?", p![id])? {
         Some(n) => Ok(n),
         None => baci!("Radni nalog ne postoji"),
     }
@@ -165,20 +165,23 @@ pub fn create_nalog(db: &Db, input: &Value, danas: &str) -> R<Value> {
         baci!("Nepoznata vrsta naloga");
     }
 
+    let avans = ponude::avans_iz_unosa(&input["avans"])?;
+    baci_ako_avans_veci(avans, &input["dogovorenaCijena"])?;
+
     let broj = next_broj_naloga(db, &godina)?;
     let zaliha = vrsta == "zaliha";
     let res = db.run(
         "
     INSERT INTO radni_nalozi (broj, godina, datum, rok, vrsta, kupacId, ponudaId, opis, productId, kolicina,
-      dogovorenaCijena, trosakRada, korisnikId, napomena)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      dogovorenaCijena, avans, trosakRada, korisnikId, napomena)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ",
         p![
             broj, godina, datum, input["rok"], vrsta,
             if vrsta == "narudzba" { input["kupacId"].clone() } else { Value::Null },
             input["ponudaId"], opis,
             if zaliha { input["productId"].clone() } else { Value::Null }, js::f(kolicina),
-            input["dogovorenaCijena"], js::nn(&input["trosakRada"], &json!(0)), input["korisnikId"], input["napomena"]
+            input["dogovorenaCijena"], js::f(avans), js::nn(&input["trosakRada"], &json!(0)), input["korisnikId"], input["napomena"]
         ],
     )?;
     let id = json!(res.last_insert_rowid);
@@ -193,11 +196,19 @@ pub fn create_nalog(db: &Db, input: &Value, danas: &str) -> R<Value> {
     Ok(json!({ "id": id, "broj": broj, "godina": godina }))
 }
 
-/// Nalog iz prihvaćene ponude: kupac, opis (nazivi stavki) i cijena sa ponude, te
+/// Avans je dio dogovorene cijene; bez cijene (ili 0) nema gornje granice.
+fn baci_ako_avans_veci(avans: f64, cijena: &Value) -> R<()> {
+    if !cijena.is_null() && to_number(cijena) > 0.0 && avans > to_number(cijena) {
+        baci!("Avans ne može biti veći od dogovorene cijene");
+    }
+    Ok(())
+}
+
+/// Nalog iz prihvaćene ponude: kupac, opis (nazivi stavki), cijena i avans sa ponude, te
 /// stavke ponude koje nalog izrađuje. Bez izbora (`proizvodi` nije niz) važi
 /// zadani iz `proizvodi_ponude`. U transakciji.
 pub fn create_nalog_iz_ponude(db: &Db, ponuda_id: &Value, korisnik_id: &Value, proizvodi: &Value, danas: &str) -> R<Value> {
-    let Some(ponuda) = db.get("SELECT id, kupacId, status, ukupno FROM ponude WHERE id = ?", p![ponuda_id])? else {
+    let Some(ponuda) = db.get("SELECT id, kupacId, status, ukupno, avans FROM ponude WHERE id = ?", p![ponuda_id])? else {
         baci!("Ponuda ne postoji");
     };
     if ponuda["status"] != "prihvacena" {
@@ -221,7 +232,7 @@ pub fn create_nalog_iz_ponude(db: &Db, ponuda_id: &Value, korisnik_id: &Value, p
         db,
         &json!({
             "vrsta": "narudzba", "korisnikId": korisnik_id, "kupacId": ponuda["kupacId"], "ponudaId": ponuda_id, "opis": opis,
-            "dogovorenaCijena": ponuda["ukupno"],
+            "dogovorenaCijena": ponuda["ukupno"], "avans": ponuda["avans"],
         }),
         danas,
     )?;
@@ -339,7 +350,7 @@ pub fn nalog_za_ponudu(db: &Db, ponuda_id: &Value) -> R<Value> {
 }
 
 /// Polja koja se smiju mijenjati na završenom nalogu bez cijene — dogovor sa kupcem stigne i poslije.
-const DOZVOLJENO_ZAVRSEN: [&str; 3] = ["dogovorenaCijena", "rok", "napomena"];
+const DOZVOLJENO_ZAVRSEN: [&str; 4] = ["dogovorenaCijena", "avans", "rok", "napomena"];
 
 /// `patch.x !== undefined` — ključ je poslan (i `null` je poslana vrijednost).
 pub fn update_nalog(db: &Db, id: &Value, patch: &Value) -> R<()> {
@@ -410,6 +421,13 @@ pub fn update_nalog(db: &Db, id: &Value, patch: &Value) -> R<()> {
     }
     if has(patch, "dogovorenaCijena") {
         set("dogovorenaCijena", patch["dogovorenaCijena"].clone());
+    }
+    if has(patch, "avans") || has(patch, "dogovorenaCijena") {
+        let avans = if has(patch, "avans") { ponude::avans_iz_unosa(&patch["avans"])? } else { to_number(&n["avans"]) };
+        baci_ako_avans_veci(avans, if has(patch, "dogovorenaCijena") { &patch["dogovorenaCijena"] } else { &n["dogovorenaCijena"] })?;
+        if has(patch, "avans") {
+            set("avans", js::f(avans));
+        }
     }
     if has(patch, "trosakRada") {
         set("trosakRada", js::nn(&patch["trosakRada"], &json!(0)).clone());

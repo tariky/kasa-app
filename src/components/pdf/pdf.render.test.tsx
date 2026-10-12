@@ -117,6 +117,12 @@ for (const [ime, postavke] of [['zadano', ZADANE_DOKUMENT_POSTAVKE], ['sve uklju
   });
 }
 
+test('avans: ponuda (ukupno → avans → preostalo), nalog s cijenom i bez nje', async () => {
+  await renderuj(<PonudaPdf ponuda={{ ...PONUDA, avans: 10 }} firma={FIRMA} postavke={SVE_UKLJUCENO} />);
+  await renderuj(<RadniNalogPdf nalog={{ ...NALOG, dogovorenaCijena: 2500, avans: 1000 }} firma={FIRMA} postavke={SVE_UKLJUCENO} />);
+  await renderuj(<RadniNalogPdf nalog={{ ...NALOG, dogovorenaCijena: null, avans: 1000 }} firma={FIRMA} postavke={ZADANE_DOKUMENT_POSTAVKE} />);
+});
+
 test('šifra se lomi na svakom znaku bez crtice (prazan slog = prelom nulte širine)', async () => {
   expect(prelomNaZnaku('A1')).toEqual(['A', '', '1']);
   expect(prelomNaZnaku('123').join('')).toBe('123');

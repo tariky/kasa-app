@@ -81,6 +81,31 @@ fn provjerene_stavke(db: &Db, stavke: &Value) -> R<Vec<Value>> {
     Ok(provjera_racuna::provjeri_stavke(db, stavke)?.into_iter().map(|s| s.stavka).collect())
 }
 
+/// Avans iz unosa (ponuda, radni nalog): bez vrijednosti 0, inače nenegativan
+/// broj zaokružen na pfening. Avans je samo podatak za dokument — ne dira kasu.
+/// Par `avansIzUnosa` u lib/avans.ts.
+pub fn avans_iz_unosa(v: &Value) -> R<f64> {
+    let n = match v {
+        Value::Null => return Ok(0.0),
+        Value::Number(n) => n.as_f64().unwrap_or(f64::NAN),
+        _ => f64::NAN,
+    };
+    if !n.is_finite() {
+        baci!("Avans nije ispravan broj");
+    }
+    if n < 0.0 {
+        baci!("Avans ne može biti negativan");
+    }
+    Ok(js::round2(n))
+}
+
+fn baci_ako_avans_veci(avans: f64, ukupno: f64) -> R<()> {
+    if avans > ukupno {
+        baci!("Avans ne može biti veći od iznosa ponude");
+    }
+    Ok(())
+}
+
 /// Upiše ponudu sa stavkama. Cijene stavki se zamrzavaju kopiranjem u
 /// `ponuda_stavke` — kasnija promjena cjenovnika ne smije mijenjati ponudu,
 /// jer je ponuda obećanje kupcu. Poziva se unutar transakcije.
@@ -98,13 +123,15 @@ pub fn create_ponuda(db: &Db, data: &Value, danas: &str) -> R<Value> {
     let broj = next_broj_ponude(db, &godina)?;
     let vazi_do = if truthy(&data["vaziDo"]) { js::to_string(&data["vaziDo"]) } else { plus_dana(&datum, DEFAULT_ROK_DANA) };
     let (ukupno, pdv_iznos) = izracunaj_totale(stavke);
+    let avans = avans_iz_unosa(&data["avans"])?;
+    baci_ako_avans_veci(avans, ukupno)?;
 
     let r = db.run(
         "
-    INSERT INTO ponude (broj, godina, kupacId, korisnikId, datum, vaziDo, napomena, ukupno, pdvIznos)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO ponude (broj, godina, kupacId, korisnikId, datum, vaziDo, napomena, ukupno, pdvIznos, avans)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ",
-        p![broj, godina, data["kupacId"], data["korisnikId"], datum, vazi_do, data["napomena"], js::f(ukupno), js::f(pdv_iznos)],
+        p![broj, godina, data["kupacId"], data["korisnikId"], datum, vazi_do, data["napomena"], js::f(ukupno), js::f(pdv_iznos), js::f(avans)],
     )?;
     let id = r.last_insert_rowid;
     upisi_stavke(db, &json!(id), stavke)?;
@@ -182,7 +209,7 @@ pub fn update_ponuda(db: &Db, id: &Value, data: &Value) -> R<()> {
         baci!("Ponuda mora imati najmanje jednu stavku");
     }
 
-    let Some(ponuda) = db.get("SELECT id, status, kupacId, datum, vaziDo FROM ponude WHERE id = ?", p![id])? else {
+    let Some(ponuda) = db.get("SELECT id, status, kupacId, datum, vaziDo, avans FROM ponude WHERE id = ?", p![id])? else {
         baci!("Ponuda ne postoji");
     };
     // Snapshot računa koji čeka nosi stare stavke — izmjena bi ih razdvojila od ponude.
@@ -193,11 +220,14 @@ pub fn update_ponuda(db: &Db, id: &Value, data: &Value) -> R<()> {
     let stavke = &provjerene_stavke(db, &data["stavke"])?;
 
     let (ukupno, pdv_iznos) = izracunaj_totale(stavke);
+    // Izostavljen avans ostaje; null ga briše.
+    let avans = if js::has(data, "avans") { avans_iz_unosa(&data["avans"])? } else { js::to_number(&ponuda["avans"]) };
+    baci_ako_avans_veci(avans, ukupno)?;
 
     db.run(
         "
     UPDATE ponude SET kupacId = ?, datum = ?, vaziDo = ?, napomena = COALESCE(?, napomena),
-      ukupno = ?, pdvIznos = ?
+      ukupno = ?, pdvIznos = ?, avans = ?
     WHERE id = ?
   ",
         p![
@@ -207,6 +237,7 @@ pub fn update_ponuda(db: &Db, id: &Value, data: &Value) -> R<()> {
             data["napomena"],
             js::f(ukupno),
             js::f(pdv_iznos),
+            js::f(avans),
             id
         ],
     )?;
